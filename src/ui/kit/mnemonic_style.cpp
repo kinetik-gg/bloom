@@ -4,7 +4,10 @@
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <QAbstractItemView>
+#include <QAbstractScrollArea>
 #include <QApplication>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QFocusEvent>
@@ -12,13 +15,18 @@
 #include <QGuiApplication>
 #include <QHeaderView>
 #include <QIcon>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMargins>
 #include <QMenu>
 #include <QMenuBar>
 #include <QPainter>
+#include <QPushButton>
 #include <QRect>
 #include <QRectF>
 #include <QStyleFactory>
 #include <QStyleOptionMenuItem>
+#include <QStyleOptionViewItem>
 #include <QWidget>
 
 #include <algorithm>
@@ -28,6 +36,32 @@ namespace bloom::ui::kit {
 namespace {
 
 constexpr auto kKeyboardFocusProperty = "bloomKeyboardFocus";
+constexpr auto kRestyleProperty = "bloomFocusRestyle";
+
+[[nodiscard]] bool restylesOnFocus(const QWidget& widget) {
+    return widget.property(kRestyleProperty).toBool() ||
+           qobject_cast<const QPushButton*>(&widget) != nullptr ||
+           qobject_cast<const QComboBox*>(&widget) != nullptr ||
+           qobject_cast<const QLineEdit*>(&widget) != nullptr ||
+           qobject_cast<const QHeaderView*>(&widget) != nullptr;
+}
+
+void applyKeyboardFocus(QWidget& widget, const bool keyboard) {
+    if (widget.property(kKeyboardFocusProperty).toBool() == keyboard &&
+        widget.property(kKeyboardFocusProperty).isValid()) {
+        widget.update();
+        return;
+    }
+    widget.setProperty(kKeyboardFocusProperty, keyboard);
+    if (restylesOnFocus(widget)) {
+        widget.style()->unpolish(&widget);
+        widget.style()->polish(&widget);
+    }
+    widget.update();
+    // An item view paints its current-item focus inset in its viewport.
+    if (auto* view = qobject_cast<QAbstractScrollArea*>(&widget); view && view->viewport())
+        view->viewport()->update();
+}
 
 class KeyboardFocusTracker final : public QObject {
   public:
@@ -35,23 +69,17 @@ class KeyboardFocusTracker final : public QObject {
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() != QEvent::FocusIn && event->type() != QEvent::FocusOut) {
+            return QObject::eventFilter(watched, event);
+        }
         auto* widget = qobject_cast<QWidget*>(watched);
         if (widget == nullptr) {
             return QObject::eventFilter(watched, event);
         }
-        if (event->type() == QEvent::FocusIn) {
-            const auto reason = static_cast<QFocusEvent*>(event)->reason();
-            widget->setProperty(kKeyboardFocusProperty,
-                                reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason);
-            widget->style()->unpolish(widget);
-            widget->style()->polish(widget);
-            widget->update();
-        } else if (event->type() == QEvent::FocusOut) {
-            widget->setProperty(kKeyboardFocusProperty, false);
-            widget->style()->unpolish(widget);
-            widget->style()->polish(widget);
-            widget->update();
-        }
+        const auto reason = static_cast<QFocusEvent*>(event)->reason();
+        applyKeyboardFocus(*widget,
+                           event->type() == QEvent::FocusIn &&
+                               (reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason));
         return QObject::eventFilter(watched, event);
     }
 };
@@ -63,6 +91,38 @@ void installKeyboardFocusTracker(QApplication& application) {
     auto* tracker = new KeyboardFocusTracker(&application);
     application.installEventFilter(tracker);
     application.setProperty(kKeyboardFocusProperty, true);
+}
+
+// The menu's shadow gutter on its right and bottom edges: the Popup elevation's blur, plus its
+// vertical offset below.
+[[nodiscard]] QMargins menuShadowGutter() {
+    const Shadow popup = shadow(Elevation::Popup);
+    return {0, 0, popup.blurRadius / 2, popup.blurRadius / 2 + popup.offsetY};
+}
+
+// Wraps a plain-text tooltip that would run wider than Size::TooltipMaxWidth.
+class TooltipWrapper final : public QObject {
+  public:
+    using QObject::QObject;
+
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::Show) {
+            if (auto* tip = qobject_cast<QLabel*>(watched)) {
+                const int cap = px(Size::TooltipMaxWidth);
+                if (!tip->wordWrap() && tip->sizeHint().width() > cap) {
+                    tip->setWordWrap(true);
+                    tip->resize(cap, tip->heightForWidth(cap));
+                }
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
+
+QObject* tooltipWrapper() {
+    static auto* wrapper = new TooltipWrapper(QCoreApplication::instance());
+    return wrapper;
 }
 
 // The gap between the icon column and the label, and between the label and the shortcut column.
@@ -86,6 +146,67 @@ struct MenuText {
     return {text.left(tab), text.mid(tab + 1)};
 }
 
+// The current row of a keyboard-focused item view: one Accent hairline inset inside the row, the
+// list form of "the control's own border turns Accent".
+void paintItemFocusInset(QPainter& painter, const QRectF& row) {
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    applyHairlinePen(painter, color(Color::Accent));
+    painter.setBrush(Qt::NoBrush);
+    const QRectF box = snappedToDevicePixels(painter, row);
+    const qreal inset = painter.pen().widthF() / 2.0;
+    painter.drawRect(box.adjusted(inset, inset, -inset, -inset));
+    painter.restore();
+}
+
+// Item-view rows and cells: alternating rows one ladder step apart, the hover step, and the one
+// selected-row recipe (paintSelectedRow) -- painted for the branch area and every cell alike, so a
+// selected tree row has no notch at its indentation.
+void paintItemViewBackground(const QStyle::PrimitiveElement element, const QStyleOption& option,
+                             QPainter& painter, const QAbstractItemView& view) {
+    const auto* item = qstyleoption_cast<const QStyleOptionViewItem*>(&option);
+    const QRectF rect(option.rect);
+    const bool selected = (option.state & QStyle::State_Selected) != 0;
+    const bool alternate =
+        item != nullptr && item->features.testFlag(QStyleOptionViewItem::Alternate);
+    const Color base = alternate ? Color::Surface : Color::Background;
+    if (selected) {
+        // The leading Accent edge belongs to the row's first painted cell only.
+        const bool leading = element == QStyle::PE_PanelItemViewRow && rect.left() <= 0.0;
+        paintSelectedRow(painter, rect, base, leading);
+        return;
+    }
+    if (element == QStyle::PE_PanelItemViewRow) {
+        if (alternate)
+            painter.fillRect(rect, color(Color::Surface));
+        return;
+    }
+    if ((option.state & QStyle::State_MouseOver) != 0 && view.isEnabled() &&
+        (option.state & QStyle::State_Enabled) != 0) {
+        painter.fillRect(rect, color(surfaceStep(base, 1)));
+    } else if (item != nullptr && item->backgroundBrush.style() != Qt::NoBrush) {
+        painter.fillRect(rect, item->backgroundBrush);
+    }
+}
+
+// A tree's expand/collapse affordance: the same Phosphor carets the Timeline discloses with.
+void paintBranchIndicator(const QStyleOption& option, QPainter& painter) {
+    if ((option.state & QStyle::State_Children) == 0)
+        return;
+    const bool open = (option.state & QStyle::State_Open) != 0;
+    const qreal ratio = painter.device()->devicePixelRatio();
+    const QPixmap glyph = iconPixmap(
+        open ? IconId::CaretDown : IconId::CaretRight, IconRole::Chrome, Color::Muted,
+        (option.state & QStyle::State_MouseOver) != 0 ? kit::State::Hover : kit::State::Normal,
+        ratio);
+    const QSizeF extent = glyph.deviceIndependentSize();
+    const QRectF rect(option.rect);
+    painter.drawPixmap(
+        QPointF(std::round((rect.center().x() - extent.width() / 2.0) * ratio) / ratio,
+                std::round((rect.center().y() - extent.height() / 2.0) * ratio) / ratio),
+        glyph);
+}
+
 } // namespace
 
 bool showMnemonicUnderline(const Qt::KeyboardModifiers modifiers) noexcept {
@@ -104,11 +225,16 @@ void ensureKeyboardFocusTracking(QWidget& widget) {
     Q_UNUSED(widget)
 }
 
+void restyleOnKeyboardFocus(QWidget& widget) {
+    ensureKeyboardFocusTracking(widget);
+    widget.setProperty(kRestyleProperty, true);
+}
+
 bool hasKeyboardFocus(const QWidget& widget) noexcept {
     return widget.hasFocus() && widget.property(kKeyboardFocusProperty).toBool();
 }
 
-int menuIconColumnWidth() { return px(Size::IconSmall); }
+int menuIconColumnWidth() { return px(Size::IconMedium); }
 
 int menuItemTextOffset() {
     return px(Spacing::MenuItemX) + menuIconColumnWidth() + menuColumnGap();
@@ -129,9 +255,14 @@ int AltUnderlineProxyStyle::styleHint(const StyleHint hint, const QStyleOption* 
 
 void AltUnderlineProxyStyle::polish(QWidget* widget) {
     if (qobject_cast<QMenu*>(widget) != nullptr) {
-        // The frame below is drawn with rounded corners; without this the four corner pixels would
-        // be an opaque plate the rounding cannot remove.
+        // The frame below is drawn with rounded corners and casts the Popup shadow; without this
+        // the corner pixels and the shadow gutter would be an opaque plate.
         widget->setAttribute(Qt::WA_TranslucentBackground, true);
+        // The shadow falls right and below, in a transparent gutter the menu lays its rows out
+        // inside of (QMenu honours contents margins). Top and left stay flush, so a menu still
+        // opens exactly at its anchor.
+        const QMargins gutter = menuShadowGutter();
+        widget->setContentsMargins(0, 0, gutter.right(), gutter.bottom());
         // The UI type role, set on the widget itself. Qt resolves a menu's default font from the
         // platform theme's per-class MenuFont, which outranks the application-wide default, and
         // that entry is re-applied whenever the application style changes -- so the only place the
@@ -140,21 +271,59 @@ void AltUnderlineProxyStyle::polish(QWidget* widget) {
     }
     if (qobject_cast<QMenuBar*>(widget) || qobject_cast<QHeaderView*>(widget))
         widget->setFont(font(TypeRole::Ui));
+    if (widget->inherits("QTipLabel")) {
+        // The platform theme's per-class tooltip font would otherwise win; and a plain-text tip
+        // never wraps in Qt, so the tip wraps itself once it would pass TooltipMaxWidth.
+        widget->setFont(font(TypeRole::Ui));
+        // The tip's frame is rounded (Radius::Small); its corners stay unpainted.
+        widget->setAttribute(Qt::WA_TranslucentBackground, true);
+        widget->installEventFilter(tooltipWrapper());
+    }
     QProxyStyle::polish(widget);
 }
 
 void AltUnderlineProxyStyle::drawPrimitive(const PrimitiveElement element,
                                            const QStyleOption* option, QPainter* painter,
                                            const QWidget* widget) const {
+    const auto* view = qobject_cast<const QAbstractItemView*>(widget);
+    if (view == nullptr && element == QStyle::PE_FrameFocusRect && painter != nullptr) {
+        // A tree's full-row focus rectangle arrives without its widget; the painter's device is
+        // the view's viewport.
+        if (const auto* viewport = dynamic_cast<const QWidget*>(painter->device()))
+            view = qobject_cast<const QAbstractItemView*>(viewport->parentWidget());
+    }
     if (element == QStyle::PE_FrameFocusRect) {
+        // Never Qt's dotted rectangle. The one exception is an item view's current row under
+        // KEYBOARD focus: an Accent inset, because a list's only focus affordance is the row.
+        if (view != nullptr && option != nullptr && painter != nullptr && hasKeyboardFocus(*view)) {
+            paintItemFocusInset(*painter, QRectF(option->rect));
+        }
+        return;
+    }
+    if (view != nullptr && option != nullptr && painter != nullptr &&
+        (element == QStyle::PE_PanelItemViewRow || element == QStyle::PE_PanelItemViewItem)) {
+        paintItemViewBackground(element, *option, *painter, *view);
+        return;
+    }
+    if (element == QStyle::PE_IndicatorBranch && option != nullptr && painter != nullptr) {
+        paintBranchIndicator(*option, *painter);
         return;
     }
     if (element == QStyle::PE_PanelMenu && option != nullptr && painter != nullptr) {
         // The menu frame, task F1 item F5: SurfaceRaised, one Border hairline, Radius::Small --
         // the same shape and ladder rung the dropdown popup uses, so a menu and a dropdown are
-        // visibly the same kind of surface.
-        fillRoundedSurface(*painter, QRectF(option->rect), color(Color::SurfaceRaised),
-                           color(Color::Border), Radius::Small);
+        // visibly the same kind of surface -- casting the same Popup elevation.
+        const QMargins gutter = widget != nullptr ? widget->contentsMargins() : QMargins{};
+        const QRectF frame =
+            QRectF(option->rect)
+                .adjusted(gutter.left(), gutter.top(), -gutter.right(), -gutter.bottom());
+        // The casting shape is pulled in so the soft edge lands inside the right/bottom gutter
+        // and never shows a cut where the gutter ends.
+        const qreal blur = shadow(Elevation::Popup).blurRadius;
+        drawElevationShadow(*painter, frame.adjusted(blur, blur, -blur / 2.0, -blur / 2.0),
+                            Radius::Small, Elevation::Popup);
+        fillRoundedSurface(*painter, frame, color(Color::SurfaceRaised), color(Color::Border),
+                           Radius::Small);
         return;
     }
     if (element == QStyle::PE_FrameMenu) {
@@ -218,30 +387,55 @@ void AltUnderlineProxyStyle::drawControl(const ControlElement element, const QSt
     using kit::State;
     const State inkState =
         !enabled ? State::Disabled : (selected ? State::Selected : State::Normal);
-    const QColor labelInk = inkForState(Color::Foreground, inkState);
-    // The shortcut is deliberately the quietest thing in the row.
-    const QColor shortcutInk = inkForState(Color::Faint, enabled ? State::Normal : State::Disabled);
+    const QColor labelInk =
+        selected ? color(Color::OnAccent) : inkForState(Color::Foreground, inkState);
+    // The shortcut is deliberately the quietest thing in the row -- and on the Accent hover bar
+    // it is OnAccent at the secondary-ink opacity, because Faint on Accent is unreadable.
+    const QColor shortcutInk =
+        selected ? withOpacity(color(Color::OnAccent), kSecondaryInkOnAccentOpacity)
+                 : inkForState(Color::Faint, enabled ? State::Normal : State::Disabled);
     const qreal ratio = painter->device()->devicePixelRatio();
+    const auto drawGlyph = [&](const QRect& box, const QPixmap& pixmap) {
+        const QSizeF extent = pixmap.deviceIndependentSize();
+        painter->drawPixmap(
+            QPointF(std::round((box.x() + (box.width() - extent.width()) / 2.0) * ratio) / ratio,
+                    std::round((box.y() + (box.height() - extent.height()) / 2.0) * ratio) / ratio),
+            pixmap);
+    };
 
     const int iconColumn = menuIconColumnWidth();
     const QRect iconRect(rect.left() + px(Spacing::MenuItemX), rect.center().y() - iconColumn / 2,
                          iconColumn, iconColumn);
+    const bool checked = item->checkType != QStyleOptionMenuItem::NotCheckable && item->checked;
     if (!item->icon.isNull()) {
-        painter->drawPixmap(iconRect, item->icon.pixmap(QSize(iconColumn, iconColumn),
-                                                        enabled ? QIcon::Normal : QIcon::Disabled));
-    } else if (item->checkType != QStyleOptionMenuItem::NotCheckable && item->checked) {
+        const QIcon::Mode mode =
+            !enabled ? QIcon::Disabled : (selected ? QIcon::Selected : QIcon::Normal);
+        drawGlyph(iconRect, item->icon.pixmap(QSize(iconColumn, iconColumn), ratio, mode,
+                                              checked ? QIcon::On : QIcon::Off));
+        if (checked) {
+            // A checkable action that carries its own icon shows its checked state as a hairline
+            // frame around that icon (and the icon's Fill weight), never by hiding the icon.
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            fillRoundedSurface(*painter,
+                               QRectF(iconRect).adjusted(-px(Spacing::XXS), -px(Spacing::XXS),
+                                                         px(Spacing::XXS), px(Spacing::XXS)),
+                               {}, labelInk, Radius::Small);
+            painter->restore();
+        }
+    } else if (checked) {
         // A checked item with no icon of its own marks itself in the SAME reserved column, so a
         // check mark never shifts a label either.
-        painter->drawPixmap(iconRect, iconPixmap(IconId::Check, Size::IconSmall, labelInk, ratio,
-                                                 iconWeight(IconRole::Chrome)));
+        drawGlyph(iconRect, iconPixmap(IconId::Check, Size::IconMedium, labelInk, ratio,
+                                       iconWeight(IconRole::Chrome)));
     }
 
     int right = rect.right() - px(Spacing::MenuItemX);
     if (item->menuItemType == QStyleOptionMenuItem::SubMenu) {
         const int arrow = menuArrowWidth();
         const QRect arrowRect(right - arrow, rect.center().y() - arrow / 2, arrow, arrow);
-        painter->drawPixmap(arrowRect, iconPixmap(IconId::CaretRight, Size::IconSmall, labelInk,
-                                                  ratio, iconWeight(IconRole::Chrome)));
+        drawGlyph(arrowRect, iconPixmap(IconId::CaretRight, Size::IconSmall, labelInk, ratio,
+                                        iconWeight(IconRole::Chrome)));
         right = arrowRect.left() - menuColumnGap();
     }
 

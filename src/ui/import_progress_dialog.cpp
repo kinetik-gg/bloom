@@ -18,12 +18,6 @@
 namespace bloom::ui {
 namespace {
 
-void setInk(QWidget& widget, const kit::Color ink) {
-    QPalette palette = widget.palette();
-    palette.setColor(QPalette::WindowText, kit::color(ink));
-    widget.setPalette(palette);
-}
-
 // A sequence named by its first member, without the frame number: "SC020_SH070_image_0001.png"
 // reads "SC020_SH070_image" (the separator before the number goes with it).
 QString sequenceName(const QString& file) {
@@ -88,7 +82,7 @@ ImportProgressDialog::ImportProgressDialog(QWidget* parent) : QDialog(parent) {
     layout->addWidget(heading_);
     detail_ = new kit::KLabel(QString{}, this, kit::TypeRole::UiSmall);
     detail_->setObjectName(QStringLiteral("importProgressFile"));
-    setInk(*detail_, kit::Color::Muted);
+    detail_->setTone(kit::Color::Muted);
     layout->addWidget(detail_);
     bar_ = new kit::KProgressBar(this);
     bar_->setObjectName(QStringLiteral("importProgressBar"));
@@ -102,7 +96,7 @@ ImportProgressDialog::ImportProgressDialog(QWidget* parent) : QDialog(parent) {
     note_ = new kit::KLabel(QString{}, this, kit::TypeRole::UiSmall);
     note_->setObjectName(QStringLiteral("importSummaryNote"));
     note_->setWordWrap(true);
-    setInk(*note_, kit::Color::Muted);
+    note_->setTone(kit::Color::Muted);
     note_->hide();
     layout->addWidget(note_);
 
@@ -232,7 +226,7 @@ void ImportProgressDialog::showSummary(const AssetController::ImportReport& repo
         auto* reason = new kit::KLabel(skipped.reason, row, kit::TypeRole::UiSmall);
         reason->setObjectName(QStringLiteral("importSkippedReason"));
         reason->setWordWrap(true);
-        setInk(*reason, kit::Color::Muted);
+        reason->setTone(kit::Color::Muted);
         column->addWidget(name);
         column->addWidget(reason);
         skippedRows_->addWidget(row);

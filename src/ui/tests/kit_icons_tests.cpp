@@ -193,6 +193,29 @@ void testTheCacheReturnsTheSamePixmapForTheSameIdentity(Expectations& expectatio
     }
 }
 
+// The QIcon engine (menus, item views, header buttons) renders through the same cache: a repeat
+// paint of the same identity re-reads no SVG, and a toggled-on icon takes the Fill weight.
+void testTheQIconEngineIsCachedAndMapsOnToFill(Expectations& expectations) {
+    kit::clearIconCache();
+    const QIcon glyph = kit::icon(kit::IconId::Visible, kit::IconRole::Chrome, kit::Color::Muted);
+    const QPixmap first = glyph.pixmap(QSize(16, 16), 1.0, QIcon::Normal, QIcon::Off);
+    const std::size_t afterFirst = kit::iconCacheEntryCount();
+    expectations.expect(afterFirst == 1, "the first engine render populates one cache entry");
+    const QPixmap second = glyph.pixmap(QSize(16, 16), 1.0, QIcon::Normal, QIcon::Off);
+    expectations.expect(
+        kit::iconCacheEntryCount() == afterFirst && first.cacheKey() == second.cacheKey(),
+        "a repeat engine render is a cache hit: the same pixmap, nothing re-parsed");
+    const QPixmap on = glyph.pixmap(QSize(16, 16), 1.0, QIcon::Normal, QIcon::On);
+    const QPixmap fill =
+        kit::iconPixmap(kit::IconId::Visible, kit::Size::IconMedium, kit::Color::Muted,
+                        kit::State::Normal, kit::IconWeight::Fill, 1.0);
+    expectations.expect(on.cacheKey() == fill.cacheKey(),
+                        "QIcon::On renders the Fill weight, from the same cache entry");
+    const QPixmap twoX = glyph.pixmap(QSize(16, 16), 2.0, QIcon::Normal, QIcon::Off);
+    expectations.expect(twoX.devicePixelRatio() == 2.0 && twoX.width() == 32,
+                        "the engine honours the requested device pixel ratio");
+}
+
 void testPixmapsAreDevicePixelRatioAware(Expectations& expectations) {
     const QPixmap oneX =
         kit::iconPixmap(kit::IconId::Settings, kit::Size::IconMedium, kit::Color::Muted,
@@ -278,14 +301,15 @@ int main(int argc, char** argv) {
     testIconIdsAreUniqueAndTotal(expectations);
     testTintDiffersByRoleAndByState(expectations);
     testTheCacheReturnsTheSamePixmapForTheSameIdentity(expectations);
+    testTheQIconEngineIsCachedAndMapsOnToFill(expectations);
     testPixmapsAreDevicePixelRatioAware(expectations);
     testQIconCarriesTheStateMachine(expectations);
     for (const qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
         for (const auto id : kit::iconIds()) {
             for (const auto weight : {kit::IconWeight::Regular, kit::IconWeight::Fill}) {
-                const auto direct = kit::iconPixmap(id, kit::Size::IconChrome, kit::Color::Muted,
+                const auto direct = kit::iconPixmap(id, kit::Size::IconMedium, kit::Color::Muted,
                                                     kit::State::Normal, weight, dpr);
-                const auto engine = kit::icon(id, kit::Size::IconChrome, kit::Color::Muted, weight)
+                const auto engine = kit::icon(id, kit::Size::IconMedium, kit::Color::Muted, weight)
                                         .pixmap(QSize(16, 16), dpr);
                 expectations.expect(direct.size() == QSize(qRound(16 * dpr), qRound(16 * dpr)),
                                     "SVG rasterization has integer device-pixel dimensions");

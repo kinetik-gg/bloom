@@ -305,33 +305,18 @@ QString viewerResolutionText(const CompositionPreviewController& controller) {
 }
 
 void drawCheckerboard(QPainter& painter, const QRectF& bounds) {
-    // 22px pattern from the SurfaceRaised/Surface pair (decision 1): the WHOLE canvas surround, not
-    // just an under-image alpha indicator -- the image is drawn on top of it with its own alpha
-    // honored, so a transparent pixel already reads as "checkerboard showing through" with no
-    // separate under-image pass needed. Task VIEW-1 made it one of four choices rather than the
-    // only one; see drawCanvasBackground().
-    constexpr qreal tileSize = kit::px(kit::Size::ViewerChecker);
-    painter.save();
-    painter.setClipRect(bounds);
-    painter.fillRect(bounds, kit::color(kit::Color::Surface));
-    const int columns = static_cast<int>(bounds.width() / tileSize) + 2;
-    const int rows = static_cast<int>(bounds.height() / tileSize) + 2;
-    for (int row = 0; row < rows; ++row) {
-        for (int column = row % 2; column < columns; column += 2) {
-            painter.fillRect(QRectF(bounds.left() + column * tileSize,
-                                    bounds.top() + row * tileSize, tileSize, tileSize),
-                             kit::color(kit::Color::SurfaceRaised));
-        }
-    }
-    painter.restore();
+    // The WHOLE canvas surround, not just an under-image alpha indicator -- the image is drawn on
+    // top of it with its own alpha honored, so a transparent pixel already reads as "checkerboard
+    // showing through" with no separate under-image pass needed. The kit's one checkerboard, in
+    // its mid-grey CheckerLight/CheckerDark tones at the Viewer's own cell size.
+    kit::drawAlphaCheckerboard(painter, bounds, kit::px(kit::Size::ViewerChecker));
 }
 
 // The canvas surround (task VIEW-1), chosen by the footer's Background dropdown and persisted under
-// "viewer/background". Black and White are literal, because that is exactly what an artist asks for
-// when checking edges against a known value -- a token would be a different, softer colour and
-// would defeat the purpose of the choice. Solid paints the panel's own background token, so the
-// surround blends with the panel chrome rather than reading as a separate black rectangle; literal
-// black is the Black choice.
+// "viewer/background". Black and White are the exact CanvasBlack/CanvasWhite tokens, because that
+// is exactly what an artist asks for when checking edges against a known value. Solid paints the
+// panel's own background token, so the surround blends with the panel chrome rather than reading as
+// a separate black rectangle; literal black is the Black choice.
 void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
                           const ViewerBackground background) {
     switch (background) {
@@ -339,10 +324,10 @@ void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
         drawCheckerboard(painter, bounds);
         return;
     case ViewerBackground::Black:
-        painter.fillRect(bounds, QColor(Qt::black));
+        painter.fillRect(bounds, kit::color(kit::Color::CanvasBlack));
         return;
     case ViewerBackground::White:
-        painter.fillRect(bounds, QColor(Qt::white));
+        painter.fillRect(bounds, kit::color(kit::Color::CanvasWhite));
         return;
     case ViewerBackground::Solid:
         break;

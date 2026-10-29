@@ -9,8 +9,6 @@
 namespace bloom::ui::kit {
 namespace {
 
-// One sweep across the track and back; slow enough to read as "working", never as an alarm.
-constexpr int kSweepMs = 1600;
 // The indeterminate segment's share of the track.
 constexpr double kSweepShare = 1.0 / 3.0;
 
@@ -24,8 +22,8 @@ KProgressBar::KProgressBar(QWidget* parent) : QWidget(parent) {
     animation_.setStartValue(0.0);
     animation_.setKeyValueAt(0.5, 1.0);
     animation_.setEndValue(0.0);
-    animation_.setDuration(kSweepMs);
-    animation_.setEasingCurve(QEasingCurve::InOutSine);
+    animation_.setDuration(durationMs(Motion::Sweep));
+    animation_.setEasingCurve(easing(Motion::Sweep));
     animation_.setLoopCount(-1);
     connect(&animation_, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
         sweep_ = value.toDouble();

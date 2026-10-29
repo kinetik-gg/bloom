@@ -15,8 +15,8 @@
 namespace bloom::ui::kit {
 namespace {
 
-constexpr int kTrackHeight = 6;
-constexpr int kHandleWidth = 8;
+constexpr int kTrackHeight = px(Size::RangeTrack);
+constexpr int kHandleWidth = px(Size::RangeHandle);
 
 } // namespace
 
@@ -155,13 +155,9 @@ State KRangeSelector::visualState() const {
     return State::Normal;
 }
 
-QSize KRangeSelector::sizeHint() const {
-    return {px(Size::ControlRoomy) * 5, px(Size::ControlCompact)};
-}
+QSize KRangeSelector::sizeHint() const { return {px(Size::ControlRoomy) * 5, px(Size::Control)}; }
 
-QSize KRangeSelector::minimumSizeHint() const {
-    return {kHandleWidth * 6, px(Size::ControlCompact)};
-}
+QSize KRangeSelector::minimumSizeHint() const { return {kHandleWidth * 6, px(Size::Control)}; }
 
 void KRangeSelector::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton || !isEnabled()) {

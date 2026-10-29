@@ -1,3 +1,4 @@
+#include <bloom/ui/kit/surfaces.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
@@ -129,77 +130,99 @@ void testTheStyleSheetPreservesEveryStyledObjectName(Expectations& expectations)
         expectations.expect(sheet.contains(QString::fromLatin1(objectName)),
                             std::string{"the generated sheet still styles "} + objectName);
     }
-    expectations.expect(sheet.contains(QStringLiteral("QFrame#editorArea[active=\"true\"]")),
-                        "the active-area border rule survives, property selector and all");
+    // Dead rules stay dead: the maximize button paints itself (KIconButton) and the custom title
+    // bar is not installed, so the sheet carries neither.
+    expectations.expect(!sheet.contains(QStringLiteral("maximizeAreaButton")),
+                        "no rule for the self-painted maximize button");
+    expectations.expect(!sheet.contains(QStringLiteral("kinetikTitleBar")),
+                        "no rule for the uninstalled title bar");
+    expectations.expect(!sheet.contains(QStringLiteral("font-size")) &&
+                            !sheet.contains(QStringLiteral("font-weight")),
+                        "type comes from TypeRole, never from the sheet");
 }
 
-// The active-panel border is the blue Accent, matching the playhead, so the active panel is
-// unambiguous; panel bodies take their own corner radius.
-void testTheActivePanelBorderUsesAccent(Expectations& expectations) {
+// The panel border is drawn once, by KPanelFrame (Accent while active); the sheet gives the panel
+// its background and no border of its own, so the two can never double up.
+void testThePanelBorderIsDrawnOnce(Expectations& expectations) {
     const QString sheet = kit::kinetikStyleSheet();
-    const qsizetype activeRule =
-        sheet.indexOf(QStringLiteral("QFrame#editorArea[active=\"true\"]"));
-    expectations.expect(activeRule >= 0, "the active-area rule exists");
-    if (activeRule < 0) {
-        return;
-    }
-    const QString block = sheet.mid(activeRule, 80);
-    expectations.expect(block.contains(kit::hex(kit::Color::Accent)),
-                        "the active border paints Accent (#0C8CE9), matching the playhead");
-    expectations.expect(!block.contains(kit::hex(kit::Color::BorderActive)),
-                        "the neutral BorderActive is no longer the active-panel border");
-
     const qsizetype restRule = sheet.indexOf(QStringLiteral("QFrame#editorArea {"));
     expectations.expect(restRule >= 0, "the resting-area rule exists");
-    if (restRule < 0) {
-        return;
+    if (restRule >= 0) {
+        const QString restBlock = sheet.mid(restRule, sheet.indexOf('}', restRule) - restRule);
+        expectations.expect(restBlock.contains(QStringLiteral("solid transparent;")),
+                            "the sheet's panel border is transparent: it keeps the content inset "
+                            "and draws nothing");
     }
-    const QString restBlock = sheet.mid(restRule, 160);
-    // task U8, formal amendment 1, A3: panel bodies moved from Radius::Small to their own
-    // Radius::Panel (4) -- still the smallest step reserved for the panel body specifically.
-    expectations.expect(
-        restBlock.contains(
-            QStringLiteral("border-radius: %1px;").arg(kit::radiusPx(kit::Radius::Panel, 0))),
-        "panel bodies take Radius::Panel");
-    expectations.expect(restBlock.contains(kit::hex(kit::Color::Border)),
-                        "the resting border is the plain Border token");
+    expectations.expect(!sheet.contains(QStringLiteral("QFrame#editorArea[active")),
+                        "the active state is the frame overlay's, not a sheet rule");
+
+    QWidget panel;
+    panel.resize(40, 30);
+    kit::KPanelFrame frame(&panel);
+    const auto inkAt = [&frame](const QPoint point) {
+        return frame.grab().toImage().pixelColor(point);
+    };
+    expectations.expect(inkAt({20, 0}) == kit::color(kit::Color::Border),
+                        "a resting panel's single border is Border");
+    frame.setActive(true);
+    expectations.expect(inkAt({20, 0}) == kit::color(kit::Color::Accent) &&
+                            inkAt({0, 15}) == kit::color(kit::Color::Accent),
+                        "an active panel's single border is Accent");
+    expectations.expect(inkAt({20, 15}).alpha() == 0, "the frame paints nothing inside the panel");
 }
 
-// task U8, issue #131, formal amendment 1, A2: ControlSurface backs header-variant icon buttons
-// and every dropdown closed field (here, the app-wide QComboBox QSS); Border (#222222) still
-// borders panels, the header button, and the dropdown closed field, verified as asked.
-void testControlSurfaceBacksHeaderButtonsAndDropdownFieldsBorderStaysConsistent(
-    Expectations& expectations) {
+// The stock buttons wear the ONE button recipe: the generated QPushButton rules are the Secondary
+// recipe, a dialog's default button is the Primary one, and keyboard focus has a rule of its own.
+void testStockButtonsWearTheKitButtonRecipe(Expectations& expectations) {
     const QString sheet = kit::kinetikStyleSheet();
+    // The generated state rules follow the template's box rules, so the LAST block for a selector
+    // is the recipe's.
+    const auto block = [&sheet](const QString& selector) {
+        const qsizetype at = sheet.lastIndexOf(selector + QStringLiteral(" {"));
+        return at < 0 ? QString{} : sheet.mid(at, sheet.indexOf('}', at) - at);
+    };
+    const QString rest = block(QStringLiteral("QPushButton"));
+    expectations.expect(rest.contains(kit::hex(kit::Color::SurfaceRaised)) &&
+                            rest.contains(kit::hex(kit::Color::Border)),
+                        "a QPushButton rests on the Secondary plate and hairline");
+    expectations.expect(
+        block(QStringLiteral("QPushButton:default")).contains(kit::hex(kit::Color::Accent)),
+        "the default push button wears the Primary Accent plate");
+    expectations.expect(block(QStringLiteral("QPushButton[bloomKeyboardFocus=\"true\"]"))
+                            .contains(kit::hex(kit::Color::Accent)),
+                        "a keyboard-focused push button's border turns Accent");
+    expectations.expect(block(QStringLiteral("QPushButton:default[bloomKeyboardFocus=\"true\"]"))
+                            .contains(kit::hex(kit::Color::Foreground)),
+                        "a focused default button's border is Foreground, never Accent on Accent");
+    expectations.expect(block(QStringLiteral("QToolButton[headerMenuButton=\"true\"]:hover"))
+                            .contains(kit::hex(kit::Color::Accent)),
+                        "a menu-strip button hovers to the Accent bar, from the MenuItem recipe");
+    expectations.expect(
+        !block(
+             QStringLiteral("QToolButton[headerMenuButton=\"true\"][bloomKeyboardFocus=\"true\"]"))
+             .isEmpty(),
+        "a menu-strip button has a keyboard-focus rule");
+    // The dropdown closed field keeps ControlSurface and the Border hairline.
+    const QString combo = block(QStringLiteral("QComboBox"));
+    expectations.expect(combo.contains(kit::hex(kit::Color::ControlSurface)) &&
+                            combo.contains(kit::hex(kit::Color::Border)),
+                        "the dropdown closed field is ControlSurface with a Border hairline");
+}
 
-    const qsizetype maximizeRule =
-        sheet.indexOf(QStringLiteral("QToolButton#maximizeAreaButton {"));
-    expectations.expect(maximizeRule >= 0, "the header maximize button rule exists");
-    if (maximizeRule >= 0) {
-        const QString block = sheet.mid(maximizeRule, 160);
-        expectations.expect(block.contains(kit::hex(kit::Color::ControlSurface)),
-                            "the header button's background is ControlSurface");
-        expectations.expect(block.contains(kit::hex(kit::Color::Border)),
-                            "the header button borders with Border (#222222)");
-    }
-
-    const qsizetype comboRule = sheet.indexOf(QStringLiteral("QComboBox {"));
-    expectations.expect(comboRule >= 0, "the app-wide QComboBox rule exists");
-    if (comboRule >= 0) {
-        const QString block = sheet.mid(comboRule, 220);
-        expectations.expect(block.contains(kit::hex(kit::Color::ControlSurface)),
-                            "the dropdown closed field's background is ControlSurface");
-        expectations.expect(block.contains(kit::hex(kit::Color::Border)),
-                            "the dropdown closed field borders with Border (#222222)");
-    }
-
-    const qsizetype panelRule = sheet.indexOf(QStringLiteral("QFrame#editorArea {"));
-    expectations.expect(panelRule >= 0, "the panel rule exists");
-    if (panelRule >= 0) {
-        const QString block = sheet.mid(panelRule, 160);
-        expectations.expect(block.contains(kit::hex(kit::Color::Border)),
-                            "the panel borders with Border (#222222)");
-    }
+// Scrollbars keep one track width in every state, so hovering never relayouts a view; the thumb
+// changes colour and fills the track instead.
+void testScrollbarsKeepOneWidth(Expectations& expectations) {
+    const QString sheet = kit::kinetikStyleSheet();
+    expectations.expect(!sheet.contains(QStringLiteral("QScrollBar:vertical:hover")) &&
+                            !sheet.contains(QStringLiteral("QScrollBar:horizontal:hover")),
+                        "no scrollbar rule changes the bar's own width on hover");
+    expectations.expect(sheet.contains(QStringLiteral("QScrollBar::handle:hover")) &&
+                            sheet.contains(QStringLiteral("QScrollBar::handle:pressed")),
+                        "the thumb has hover and pressed states");
+    const qsizetype tip = sheet.indexOf(QStringLiteral("QToolTip {"));
+    const QString tipBlock = tip < 0 ? QString{} : sheet.mid(tip, sheet.indexOf('}', tip) - tip);
+    expectations.expect(tipBlock.contains(QStringLiteral("border-radius")),
+                        "tooltips round with the popup radius");
 }
 
 void testTokenExpansionResolvesNumbersAndColors(Expectations& expectations) {
@@ -232,8 +255,9 @@ int main(int argc, char** argv) {
     testTheInstallerIsReRunnable(application, expectations);
     testTheStyleSheetIsGeneratedEntirelyFromTokens(expectations);
     testTheStyleSheetPreservesEveryStyledObjectName(expectations);
-    testTheActivePanelBorderUsesAccent(expectations);
-    testControlSurfaceBacksHeaderButtonsAndDropdownFieldsBorderStaysConsistent(expectations);
+    testThePanelBorderIsDrawnOnce(expectations);
+    testStockButtonsWearTheKitButtonRecipe(expectations);
+    testScrollbarsKeepOneWidth(expectations);
     testTokenExpansionResolvesNumbersAndColors(expectations);
     testThemedWidgetsResolveTheirTokenColors(application, expectations);
     return expectations.failures() == 0 ? 0 : 1;

@@ -392,7 +392,7 @@ void testTheRowsAreRectangularAndClippedByTheFrame(Expectations& expectations) {
 
     // The rows fill the frame exactly: no list padding leaving a sliver of SurfaceRaised above the
     // first bar.
-    const int rowHeight = std::max(kit::px(kit::Size::ControlCompact), view->sizeHintForRow(0));
+    const int rowHeight = std::max(kit::px(kit::Size::Control), view->sizeHintForRow(0));
     expectations.expect(view->height() == rowHeight * view->model()->rowCount(),
                         "the list is exactly its rows tall, with no padding of its own (height " +
                             std::to_string(view->height()) + ", rows " +

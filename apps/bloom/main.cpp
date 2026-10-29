@@ -39,7 +39,6 @@
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
 #include <bloom/ui/jobs_editor.hpp>
-#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
@@ -83,17 +82,10 @@ int main(int argc, char* argv[]) try {
     // application stylesheet, and the interface font belong to the application, not to one window,
     // and installing them first means no surface is ever constructed under the default Qt theme.
     bloom::ui::kit::installKinetikTheme(application);
-    // Mnemonic underlines only while Alt is held (task U2, issue #118, decision 2): a small
-    // QProxyStyle installed application-wide, right after the theme's own Fusion style, so every
-    // menu -- title-bar-embedded or classic -- shares the same behavior. QApplication::setStyle()
-    // takes ownership of the style object (Qt's own documented contract); the static analyzer
-    // cannot see through that ownership transfer and reports a path-sensitive "leak" anchored
-    // wherever later in main() its analysis happens to conclude the object is unreachable, not at
-    // this allocation -- hence the function-scoped suppression markers below rather than a
-    // single-line one.
-    // NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- QApplication::setStyle() owns it.
-    auto* mnemonicStyle = new bloom::ui::kit::AltUnderlineProxyStyle();
-    QApplication::setStyle(mnemonicStyle);
+    // The theme installs kit::AltUnderlineProxyStyle (Alt-held mnemonic underlines, menu and
+    // item-view painting) itself, so every window built after this line -- and every test window
+    // built under the same theme -- shares one style.
+    // NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- Qt parent ownership below.
 
     // ProjectHost (task U1, issue #72) replaces the hand-rolled document/command-stack pair: it
     // owns the application's single live bloom::host::ProjectSession and constructs an initial

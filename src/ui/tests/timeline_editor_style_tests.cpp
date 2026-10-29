@@ -902,7 +902,7 @@ void testClipBarSpansTheCompositionRangeInItsDataTypeColor(Expectations& expecta
 
 // The selected row is a SurfaceRaised ROW FILL across both halves -- never the accent-outlined
 // cells the owner rejected.
-void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expectations) {
+void testSelectedRowIsTheKitSelectionRecipe(Expectations& expectations) {
     using namespace bloom;
     SessionFixture fixture(makeTestProject("Selection Fill Test"));
     (void)fixture.session.addSolidLayer(QStringLiteral("A"), core::Color4d{0.2, 0.3, 0.4, 1.0});
@@ -927,7 +927,7 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
     // so row 0 is selected and row 1 is not.
     expectations.expect(stack->currentRow() == 0, "row 0 is the selected row (test precondition)");
 
-    const QColor raised = ui::kit::color(ui::kit::Color::SurfaceRaised);
+    const QColor wash = ui::kit::selectionWash(ui::kit::Color::Surface);
     const QColor surface = ui::kit::color(ui::kit::Color::Surface);
     const QColor accent = ui::kit::color(ui::kit::Color::Accent);
 
@@ -938,15 +938,15 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
     const int sampleX = laneImage.width() - 3;
     const QColor selectedLane = laneImage.pixelColor(sampleX, 1);
     const QColor unselectedLane = laneImage.pixelColor(sampleX, 64 + 1);
-    expectations.expect(near(selectedLane, raised, 4),
-                        "the selected row's lane is a SurfaceRaised fill");
+    expectations.expect(near(selectedLane, wash, 4),
+                        "the selected row's lane is the kit selection wash");
     expectations.expect(near(unselectedLane, surface, 4),
                         "an unselected row's lane uses the alternating Surface step");
     expectations.expect(!near(selectedLane, accent, 24),
-                        "the selected row is NOT accent-filled or accent-outlined");
+                        "the selected lane is a wash, never a full Accent fill");
 
     const auto rows = editor->findChildren<QWidget*>(QStringLiteral("timelineLayerRow"));
-    bool sawRaisedRow = false;
+    bool sawSelectedRow = false;
     bool sawPlainRow = false;
     for (auto* row : rows) {
         if (!row->isVisible()) {
@@ -955,17 +955,20 @@ void testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(Expectations& expecta
         const QImage rowImage = row->grab().toImage();
         // Between the toggle strip and the Name cell: no glyph, no text, just the row's own fill.
         const QColor fill = rowImage.pixelColor(rowImage.width() - 3, 1);
-        if (near(fill, raised, 4)) {
-            sawRaisedRow = true;
+        if (near(fill, wash, 4)) {
+            sawSelectedRow = true;
+            expectations.expect(near(rowImage.pixelColor(0, 1), accent, 4),
+                                "the selected left row carries the leading Accent edge");
         }
         if (near(fill, surface, 4)) {
             sawPlainRow = true;
         }
         expectations.expect(!near(fill, accent, 24),
-                            "no row paints an Accent fill or edge in the left column either");
+                            "no row paints a full Accent fill in the left column either");
     }
-    expectations.expect(sawRaisedRow && sawPlainRow,
-                        "the selected left row is raised and unselected rows are flat");
+    expectations.expect(
+        sawSelectedRow && sawPlainRow,
+        "the selected left row carries the selection wash; unselected rows are flat");
 
     delete editor;
     finishFixture(fixture);
@@ -2776,7 +2779,7 @@ void testTimelinePolishInteractions(Expectations& expectations) {
             (void)fixture.session.undo();
             expectations.expect(audio->isChecked(), "undo restores video audio");
             expectations.expect(audio->glyphPixmap().deviceIndependentSize().width() ==
-                                    ui::kit::px(ui::kit::Size::IconChrome),
+                                    ui::kit::px(ui::kit::Size::IconMedium),
                                 "switch ink is 16px in the existing 24px cell");
             QTest::mouseClick(row->disclosureButton(), Qt::LeftButton);
             QCoreApplication::processEvents();
@@ -2821,7 +2824,7 @@ void testTimelinePolishInteractions(Expectations& expectations) {
     expectations.expect(editor.verticalScrollBarForTest()->isVisible(),
                         "scrollbar appears when layer rows overflow");
     expectations.expect(editor.findChild<QWidget*>("timelineBodyScrollGutter")->width() ==
-                            ui::kit::px(ui::kit::Size::ScrollBarHover),
+                            ui::kit::px(ui::kit::Size::ScrollBarTrack),
                         "overflow reserves only the shared scrollbar hover width");
     editor.resize(1200, 500);
     QCoreApplication::processEvents();
@@ -2947,7 +2950,7 @@ int main(int argc, char** argv) {
         testRowsAreFlatThirtyTwoPixelRows(expectations);
         testOneScrollbarMovesBothHalvesTogether(expectations);
         testClipBarSpansTheCompositionRangeInItsDataTypeColor(expectations);
-        testSelectedRowIsASurfaceRaisedFillNotAnAccentOutline(expectations);
+        testSelectedRowIsTheKitSelectionRecipe(expectations);
         testToggleColumnsCommitLayerFlags(expectations);
         testRangeRowsAndWorkAreaCommands(expectations);
         testBlendingAndParentAreLiveKDropdowns(expectations);

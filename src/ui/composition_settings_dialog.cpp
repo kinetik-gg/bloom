@@ -403,14 +403,13 @@ QWidget* CompositionSettingsDialog::withError(QWidget* field, QLabel*& error,
     column->setContentsMargins(0, 0, 0, 0);
     column->setSpacing(kit::px(kit::Spacing::XXS));
     column->addWidget(field);
-    error = new kit::KLabel(QString{}, holder, kit::TypeRole::UiSmall);
-    error->setObjectName(objectName);
-    error->setWordWrap(true);
-    QPalette palette = error->palette();
-    palette.setColor(QPalette::WindowText, kit::color(kit::Color::Error));
-    error->setPalette(palette);
-    error->hide();
-    column->addWidget(error);
+    auto* reason = new kit::KLabel(QString{}, holder, kit::TypeRole::UiSmall);
+    reason->setObjectName(objectName);
+    reason->setWordWrap(true);
+    reason->setTone(kit::Color::Error);
+    reason->hide();
+    column->addWidget(reason);
+    error = reason;
     return holder;
 }
 
@@ -451,13 +450,10 @@ void CompositionSettingsDialog::buildBasic(kit::KSection& section) {
     form->addRow(formLabel(tr("Preset"), body),
                  withError(row(body, {preset_, savePreset_, renamePreset_, deletePreset_}, preset_),
                            presetError_, QStringLiteral("compositionSettingsPresetError")));
-    summary_ = new kit::KLabel(QString{}, body, kit::TypeRole::UiSmall);
-    summary_->setObjectName(QStringLiteral("compositionSettingsSummary"));
-    {
-        QPalette palette = summary_->palette();
-        palette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
-        summary_->setPalette(palette);
-    }
+    auto* summary = new kit::KLabel(QString{}, body, kit::TypeRole::UiSmall);
+    summary->setObjectName(QStringLiteral("compositionSettingsSummary"));
+    summary->setTone(kit::Color::Muted);
+    summary_ = summary;
     auto* summarySpacer = formLabel(QString{}, body);
     summarySpacer->setMinimumHeight(0);
     form->addRow(summarySpacer, summary_);

@@ -14,37 +14,6 @@
 #include <utility>
 
 namespace bloom::ui::kit {
-namespace {
-
-// The surface a variant rests on, before any state step. Ghost and Danger share Surface as their
-// resting rung: neither draws a raised plate at rest, and both step up from the panel surface.
-[[nodiscard]] Color restingSurface(const KButton::Variant variant) {
-    switch (variant) {
-    case KButton::Variant::Primary:
-        return Color::Accent;
-    case KButton::Variant::Secondary:
-        return Color::SurfaceRaised;
-    case KButton::Variant::Ghost:
-    case KButton::Variant::Danger:
-        return Color::Surface;
-    }
-    return Color::SurfaceRaised;
-}
-
-[[nodiscard]] Color restingInk(const KButton::Variant variant) {
-    switch (variant) {
-    case KButton::Variant::Primary:
-    case KButton::Variant::Secondary:
-        return Color::Foreground;
-    case KButton::Variant::Ghost:
-        return Color::Muted;
-    case KButton::Variant::Danger:
-        return Color::Error;
-    }
-    return Color::Foreground;
-}
-
-} // namespace
 
 KButton::KButton(QWidget* parent) : QAbstractButton(parent) {
     ensureKeyboardFocusTracking(*this);
@@ -53,6 +22,20 @@ KButton::KButton(QWidget* parent) : QAbstractButton(parent) {
     setAttribute(Qt::WA_Hover, true);
     setCursor(Qt::PointingHandCursor);
     setFont(kit::font(TypeRole::Ui));
+}
+
+ButtonKind KButton::buttonKind() const noexcept {
+    switch (variant_) {
+    case Variant::Primary:
+        return ButtonKind::Primary;
+    case Variant::Secondary:
+        return ButtonKind::Secondary;
+    case Variant::Ghost:
+        return dangerOnHover_ ? ButtonKind::GhostDanger : ButtonKind::Ghost;
+    case Variant::Danger:
+        return ButtonKind::Danger;
+    }
+    return ButtonKind::Secondary;
 }
 
 KButton::KButton(const QString& text, QWidget* parent) : KButton(parent) { setText(text); }
@@ -101,14 +84,6 @@ void KButton::setDangerOnHover(const bool dangerOnHover) {
 
 bool KButton::dangerOnHover() const noexcept { return dangerOnHover_; }
 
-bool KButton::paintsAsDanger(const State state) const noexcept {
-    if (variant_ == Variant::Danger) {
-        return true;
-    }
-    return variant_ == Variant::Ghost && dangerOnHover_ &&
-           (state == State::Hover || state == State::Pressed || state == State::Selected);
-}
-
 State KButton::visualState() const {
     // One rule, consulted by both painting and tests. Order matters: disabled outranks everything,
     // because a disabled control has no hover and no press response at all.
@@ -135,64 +110,17 @@ Color KButton::borderToken() const {
 }
 
 QColor KButton::fillForState(const State state) const {
-    const bool filled = variant_ == Variant::Primary || paintsAsDanger(state);
-
-    if (variant_ == Variant::Primary) {
-        // The accent triple states the recipe outright; nothing derived is needed.
-        switch (state) {
-        case State::Hover:
-            return color(Color::AccentHover);
-        case State::Pressed:
-            return color(Color::AccentPressed);
-        case State::Disabled:
-            return withOpacity(color(Color::Accent), kDisabledOpacity);
-        case State::Normal:
-        case State::Focused:
-        case State::Selected:
-            return color(Color::Accent);
-        }
-    }
-    if (filled) {
-        // Danger, once committed (or Ghost with dangerOnHover, once hovered/pressed): the same
-        // rest/hover/press relation the accent triple states, applied to Error.
-        const QColor base = color(Color::Error);
-        return state == State::Pressed ? pressedFillFor(base) : hoverFillFor(base);
-    }
-    if (variant_ == Variant::Ghost &&
-        (state == State::Normal || state == State::Focused || state == State::Disabled)) {
-        // Chrome weight: no surface of its own at rest.
-        return {};
-    }
-    return color(surfaceForState(restingSurface(variant_), state));
+    return buttonColors(buttonKind(), state, false).fill;
 }
 
 QColor KButton::inkForVisualState(const State state) const {
-    if (variant_ == Variant::Primary) {
-        return state == State::Disabled ? withOpacity(color(Color::OnAccent), kDisabledOpacity)
-                                        : color(Color::OnAccent);
-    }
-    if (variant_ == Variant::Danger || (variant_ == Variant::Ghost && dangerOnHover_)) {
-        switch (state) {
-        case State::Hover:
-        case State::Pressed:
-        case State::Selected:
-            return color(Color::Foreground);
-        case State::Disabled:
-            return variant_ == Variant::Danger ? withOpacity(color(Color::Error), kDisabledOpacity)
-                                               : inkForState(restingInk(variant_), state);
-        case State::Normal:
-        case State::Focused:
-            return variant_ == Variant::Danger ? color(Color::Error)
-                                               : inkForState(restingInk(variant_), state);
-        }
-    }
-    return inkForState(restingInk(variant_), state);
+    return buttonColors(buttonKind(), state, false).ink;
 }
 
 int KButton::controlExtent() const {
     switch (controlSize_) {
     case ControlSize::Compact:
-        return px(Size::ControlCompact);
+        return px(Size::Control);
     case ControlSize::Default:
         return px(Size::Control);
     case ControlSize::Roomy:
@@ -214,10 +142,6 @@ Size KButton::iconBox() const {
 }
 
 QSize KButton::sizeHint() const {
-    // The focus ring is drawn outside the control rectangle, so the widget reserves room for it on
-    // every side and focusing never shifts a layout.
-    const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
-
     // task U8, issue #131, fix 7: a button with an icon and no text sizes to controlExtent x
     // controlExtent exactly -- the Spacing::M side padding below is a TEXT button's own margin
     // recipe and does not apply once there is no label to pad.
@@ -226,7 +150,7 @@ QSize KButton::sizeHint() const {
     }
 
     const QFontMetrics metrics(font());
-    int width = px(Spacing::M) * 2;
+    int width = px(Spacing::M) * 2 + px(Spacing::ControlInset) * 2;
     if (icon_.has_value()) {
         width += px(iconBox());
         if (!text().isEmpty()) {
@@ -236,7 +160,7 @@ QSize KButton::sizeHint() const {
     if (!text().isEmpty()) {
         width += metrics.horizontalAdvance(text());
     }
-    return {std::max(width, controlExtent()) + ringMargin, controlExtent()};
+    return {std::max(width, controlExtent()), controlExtent()};
 }
 
 QSize KButton::minimumSizeHint() const { return {controlExtent(), controlExtent()}; }
@@ -256,9 +180,12 @@ void KButton::leaveEvent(QEvent* event) {
 }
 
 void KButton::changeEvent(QEvent* event) {
-    if (event->type() == QEvent::EnabledChange && !isEnabled()) {
-        // Losing enablement while hovered must not leave a stale hover behind.
-        hovered_ = false;
+    if (event->type() == QEvent::EnabledChange) {
+        // Losing enablement while hovered must not leave a stale hover behind, and a disabled
+        // button does not invite a click.
+        if (!isEnabled())
+            hovered_ = false;
+        setCursor(isEnabled() ? Qt::PointingHandCursor : Qt::ArrowCursor);
     }
     QAbstractButton::changeEvent(event);
 }
@@ -267,27 +194,11 @@ void KButton::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event)
     QPainter painter(this);
     const State state = visualState();
-    const auto ringMargin = kFocusRingWidth;
-    const QRectF bounds = QRectF(rect()).adjusted(ringMargin, ringMargin, -ringMargin, -ringMargin);
+    const QRectF bounds = controlBounds(*this);
+    const ButtonColors colors = buttonColors(buttonKind(), state, hasKeyboardFocus(*this));
+    fillRoundedSurface(painter, bounds, colors.fill, colors.border, Radius::Small);
 
-    const QColor fill = fillForState(state);
-    const Color borderRole = borderToken();
-    QColor border = color(borderRole);
-    // Focus wins over every variant's own resting outline: when the kit rule says Accent, nothing
-    // below gets to replace it. That single border IS the focus affordance now -- no ring.
-    if (borderRole != Color::Accent) {
-        if (variant_ == Variant::Primary || paintsAsDanger(state)) {
-            border = fill;
-        } else if (variant_ == Variant::Danger &&
-                   (state == State::Normal || state == State::Disabled)) {
-            border = inkForVisualState(state);
-        } else if (variant_ == Variant::Ghost && borderRole == Color::Border) {
-            border = QColor{};
-        }
-    }
-    fillRoundedSurface(painter, bounds, fill, border, Radius::Small);
-
-    const QColor ink = inkForVisualState(state);
+    const QColor ink = colors.ink;
     QRectF content = bounds.adjusted(px(Spacing::M), 0.0, -px(Spacing::M), 0.0);
     if (icon_.has_value()) {
         // The icon takes exactly the ink the label does, so a button reads as one object in every
@@ -302,7 +213,7 @@ void KButton::paintEvent(QPaintEvent* event) {
             text().isEmpty()
                 ? QRectF(bounds.center().x() - box / 2.0, bounds.center().y() - box / 2.0, box, box)
                 : QRectF(content.left(), content.center().y() - box / 2.0, box, box);
-        painter.drawPixmap(iconRect.toRect(), pixmap);
+        painter.drawPixmap(snappedToDevicePixels(painter, iconRect).topLeft(), pixmap);
         content.setLeft(iconRect.right() + (text().isEmpty() ? 0.0 : px(Spacing::S)));
     }
 

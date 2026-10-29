@@ -1,8 +1,10 @@
 #include <bloom/ui/kit/color_swatches.hpp>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 
 #include <bloom/ui/kit/painting.hpp>
 
 #include <QContextMenuEvent>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -29,7 +31,7 @@ constexpr int kLongPressMs = static_cast<int>(std::chrono::milliseconds(500).cou
 // A larger cell than the token-minimum spacing step: at these control sizes (a ~26px chip,
 // a 22px-tall alpha bar) a 2px checker reads as noise once anti-aliased, and pixel-sampling
 // it in a test would be sampling blend artifacts rather than the pattern itself.
-[[nodiscard]] int checkerCellPx() { return px(Spacing::S); }
+[[nodiscard]] int checkerCellPx() { return px(Size::CheckerCell); }
 
 } // namespace
 
@@ -62,7 +64,11 @@ void KRecentColorStore::setCapacity(const int capacity) {
 const std::vector<KColor>& KRecentColorStore::colors() const noexcept { return colors_; }
 
 KColorSwatchRow::KColorSwatchRow(QWidget* parent) : QWidget(parent) {
+    ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kColorSwatchRow"));
+    // Tab reaches the row; the arrow keys walk its slots and Space/Enter applies one. A click
+    // applies directly and does not take focus.
+    setFocusPolicy(Qt::TabFocus);
     setMouseTracking(true);
     setAttribute(Qt::WA_Hover, true);
     pinned_.resize(static_cast<std::size_t>(slotCount_));
@@ -75,6 +81,7 @@ void KColorSwatchRow::setSlotCount(const int count) {
     }
     slotCount_ = clamped;
     pinned_.resize(static_cast<std::size_t>(slotCount_));
+    focusedSlot_ = std::min(focusedSlot_, slotCount_ - 1);
     updateGeometry();
     update();
 }
@@ -213,6 +220,39 @@ void KColorSwatchRow::mouseReleaseEvent(QMouseEvent* event) {
     QWidget::mouseReleaseEvent(event);
 }
 
+int KColorSwatchRow::focusedSlot() const noexcept { return focusedSlot_; }
+
+void KColorSwatchRow::keyPressEvent(QKeyEvent* event) {
+    int next = focusedSlot_;
+    switch (event->key()) {
+    case Qt::Key_Left:
+        next = std::max(0, focusedSlot_ - 1);
+        break;
+    case Qt::Key_Right:
+        next = std::min(slotCount_ - 1, focusedSlot_ + 1);
+        break;
+    case Qt::Key_Home:
+        next = 0;
+        break;
+    case Qt::Key_End:
+        next = slotCount_ - 1;
+        break;
+    case Qt::Key_Space:
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+        if (const auto resolved = slotColor(focusedSlot_); resolved.has_value())
+            Q_EMIT colorActivated(*resolved);
+        event->accept();
+        return;
+    default:
+        QWidget::keyPressEvent(event);
+        return;
+    }
+    focusedSlot_ = next;
+    update();
+    event->accept();
+}
+
 void KColorSwatchRow::contextMenuEvent(QContextMenuEvent* event) {
     const int slot = slotAt(event->pos());
     if (slot >= 0 && isEnabled()) {
@@ -248,7 +288,10 @@ void KColorSwatchRow::paintEvent(QPaintEvent* event) {
         const QRectF rect = slotRect(index);
         const auto resolved = slotColor(index);
         const bool hovered = index == hoveredSlot_ && isEnabled();
-        const Color borderToken = hovered ? Color::BorderHover : Color::Border;
+        // A slot's border is the state channel, so the keyboard-focused slot is the one whose
+        // single border turns Accent.
+        const Color borderToken = borderForInteraction(
+            isEnabled(), hasKeyboardFocus(*this) && index == focusedSlot_, hovered);
 
         if (resolved.has_value()) {
             const QColor swatch = resolved->toQColor();
@@ -268,12 +311,13 @@ void KColorSwatchRow::paintEvent(QPaintEvent* event) {
             // A pinned slot keeps a 2px inset accent edge -- the token vocabulary's own "selected"
             // recipe (visual-language.md: "a 2px inset accent edge where a fill would hide
             // content") -- so "explicitly set" reads as a real state, not a hover accident.
+            const auto edge = static_cast<qreal>(px(Size::SelectionEdge));
             QPen pen(color(Color::Accent));
-            pen.setWidthF(kFocusRingWidth);
+            pen.setWidthF(edge);
             painter.save();
             painter.setPen(pen);
             painter.setBrush(Qt::NoBrush);
-            const qreal inset = kFocusRingWidth;
+            const qreal inset = edge;
             painter.drawRoundedRect(
                 rect.adjusted(inset, inset, -inset, -inset),
                 static_cast<qreal>(radiusPx(Radius::Small, static_cast<int>(rect.width()))),

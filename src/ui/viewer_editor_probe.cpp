@@ -178,6 +178,23 @@ void ViewerEditor::refreshProbe(QPointF position) {
     emit probeChanged(readout);
 }
 
+std::optional<kit::KColor> ViewerEditor::sampleColorAt(const QPoint& localPoint) {
+    refreshProbe(QPointF(localPoint));
+    if (!probeReadout_.valid)
+        return std::nullopt;
+    if (const auto& working = probeReadout_.working; working.has_value()) {
+        // Reference space is the composition's working space: the colour converter a picker
+        // authors through maps between exactly that space and the display.
+        return kit::KColor::fromRgba(
+            static_cast<float>(working->red), static_cast<float>(working->green),
+            static_cast<float>(working->blue), static_cast<float>(working->alpha),
+            kit::ColorSpace::Reference);
+    }
+    // No working value yet (the probe is still resolving it, or it failed): the rendered pixel is
+    // the honest fallback, and the sampler takes it.
+    return std::nullopt;
+}
+
 void ViewerEditor::consumeProbe() {
     if (!probeTask_)
         return;

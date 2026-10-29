@@ -49,8 +49,8 @@ template <typename Expect> void auditUi3(WindowFixture& fixture, const Expect& e
 
     KValueField value;
     value.resize(120, px(Size::Control));
-    expect(value.cellRect().top() == px(Spacing::FieldMargin) &&
-               value.cellRect().left() == px(Spacing::FieldMargin),
+    expect(value.cellRect().top() == px(Spacing::ControlInset) &&
+               value.cellRect().left() == px(Spacing::ControlInset),
            &value, "B5 primitive field margin");
     auto* propertiesEditor = window->findChild<QWidget*>("propertiesEditor");
     for (auto* section : window->findChildren<KSection*>()) {
@@ -151,8 +151,11 @@ template <typename Expect> void auditUi3(WindowFixture& fixture, const Expect& e
     expect(even == plain.grab().toImage(), &plain, "D15 no alternating row stripes");
     plain.setRowState(0, true);
     const auto selected = plain.grab().toImage();
-    expect(selected.pixelColor(0, 0) == color(Color::SurfaceRaised), &plain,
-           "D14 selected row is lighter with no side stripe");
+    // The one selected-row recipe: the Accent wash over the row, under a SelectionEdge Accent edge
+    // at its leading side.
+    expect(selected.pixelColor(selected.width() / 2, 1) == selectionWash(Color::Surface) &&
+               selected.pixelColor(0, 1) == color(Color::Accent),
+           &plain, "D14 selected row is the Accent wash with a leading Accent edge");
 
     const auto category = [](std::string_view type) {
         const auto* definition = document::builtInNodeDefinitions().find(type, 1);

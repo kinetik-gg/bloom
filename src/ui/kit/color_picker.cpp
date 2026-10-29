@@ -7,6 +7,7 @@
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
+#include <QCursor>
 #include <QHideEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -19,6 +20,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
+#include <utility>
 
 namespace bloom::ui::kit {
 namespace {
@@ -26,19 +29,14 @@ namespace {
 // The custom-painted canvas (SV square + hue bar + alpha bar) has a fixed geometry rather than one
 // that grows with the widget: every drag test can then assert against a known rect, and the
 // picker's overall size is simply whatever that fixed canvas plus its token-spaced chrome rows
-// need. Every number below reads off an existing Size/Spacing token, never a bare pixel count.
-// The SV square's side is 5x ControlRoomy (160px at the current token value): big enough for a
-// precise drag target, small enough that the whole popup fits comfortably inside a normal window.
-[[nodiscard]] int squareSidePx() { return px(Size::ControlRoomy) * 5; }
-[[nodiscard]] int hueBarWidthPx() { return px(Size::ControlCompact); }
-[[nodiscard]] int alphaBarHeightPx() { return px(Size::ControlCompact); }
+// need. Every number below reads off a Size/Spacing token of its own, never a bare pixel count.
+[[nodiscard]] int squareSidePx() { return px(Size::PickerSquare); }
+[[nodiscard]] int hueBarWidthPx() { return px(Size::Control); }
+[[nodiscard]] int alphaBarHeightPx() { return px(Size::Control); }
 [[nodiscard]] int barGapPx() { return px(Spacing::S); }
 [[nodiscard]] int contentWidthPx() { return squareSidePx() + barGapPx() + hueBarWidthPx(); }
-// A larger cell than the token-minimum spacing step: at these control sizes (a ~26px chip,
-// a 22px-tall alpha bar) a 2px checker reads as noise once anti-aliased, and pixel-sampling
-// it in a test would be sampling blend artifacts rather than the pattern itself.
-[[nodiscard]] int checkerCellPx() { return px(Spacing::S); }
-[[nodiscard]] qreal markerRadiusPx() { return static_cast<qreal>(px(Spacing::S)) / 2.0; }
+[[nodiscard]] int checkerCellPx() { return px(Size::CheckerCell); }
+[[nodiscard]] qreal markerRadiusPx() { return static_cast<qreal>(px(Size::PickerMarker)) / 2.0; }
 
 [[nodiscard]] QString hexFieldStyleSheet() {
     return expandTokens(QStringLiteral(R"(
@@ -65,15 +63,88 @@ void paintMarkerDot(QPainter& painter, const QPointF& center) {
     painter.save();
     painter.setBrush(Qt::NoBrush);
     QPen halo(color(Color::Background));
-    halo.setWidthF(kFocusRingWidth * 2.0);
+    halo.setWidthF(kMarkerStroke * 2.0);
     painter.setPen(halo);
     painter.drawEllipse(center, markerRadiusPx(), markerRadiusPx());
     QPen ring(color(Color::Foreground));
-    ring.setWidthF(kFocusRingWidth);
+    ring.setWidthF(kMarkerStroke);
     painter.setPen(ring);
     painter.drawEllipse(center, markerRadiusPx(), markerRadiusPx());
     painter.restore();
 }
+
+// The hue and alpha bars' position marker: the SV dot's same two rings, as a pill across the
+// bar, so it reads on a light stretch of the gradient (the dark halo) and on a dark one (the
+// light ring) alike. `along` is the marker's centre along the bar; `vertical` names the bar.
+void paintBarMarker(QPainter& painter, const QRectF& bar, const qreal along, const bool vertical) {
+    const qreal thickness = markerRadiusPx();
+    const QRectF marker = vertical
+                              ? QRectF(bar.left(), along - thickness / 2.0, bar.width(), thickness)
+                              : QRectF(along - thickness / 2.0, bar.top(), thickness, bar.height());
+    const qreal corner = thickness / 2.0;
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(Qt::NoBrush);
+    QPen halo(color(Color::Background));
+    halo.setWidthF(kMarkerStroke * 2.0);
+    painter.setPen(halo);
+    painter.drawRoundedRect(marker, corner, corner);
+    QPen ring(color(Color::Foreground));
+    ring.setWidthF(kMarkerStroke);
+    painter.setPen(ring);
+    painter.drawRoundedRect(marker, corner, corner);
+    painter.restore();
+}
+
+// One focusable stand-in per canvas region (SV square, hue bar, alpha bar). The picker paints and
+// drags every region itself; these carry only keyboard focus, so Tab reaches each region, the
+// arrow keys step it, and its focus ring shows. Mouse events pass straight through to the picker.
+class PickerRegion final : public QWidget {
+  public:
+    using Step = std::function<void(int dx, int dy, bool coarse)>;
+    PickerRegion(QWidget* picker, QString name, Step step)
+        : QWidget(picker), step_(std::move(step)) {
+        ensureKeyboardFocusTracking(*this);
+        setFocusPolicy(Qt::TabFocus);
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        setAttribute(Qt::WA_NoSystemBackground, true);
+        setAccessibleName(std::move(name));
+    }
+
+  protected:
+    void keyPressEvent(QKeyEvent* event) override {
+        const bool coarse = event->modifiers().testFlag(Qt::ShiftModifier);
+        switch (event->key()) {
+        case Qt::Key_Left:
+            step_(-1, 0, coarse);
+            break;
+        case Qt::Key_Right:
+            step_(1, 0, coarse);
+            break;
+        case Qt::Key_Up:
+            step_(0, -1, coarse);
+            break;
+        case Qt::Key_Down:
+            step_(0, 1, coarse);
+            break;
+        default:
+            QWidget::keyPressEvent(event);
+            return;
+        }
+        event->accept();
+    }
+    void focusInEvent(QFocusEvent* event) override {
+        QWidget::focusInEvent(event);
+        parentWidget()->update();
+    }
+    void focusOutEvent(QFocusEvent* event) override {
+        QWidget::focusOutEvent(event);
+        parentWidget()->update();
+    }
+
+  private:
+    Step step_;
+};
 
 // KColorPicker declares its own color() accessor, which hides the free bloom::ui::kit::color(
 // Color) token lookup inside every one of its member functions (plain C++ name hiding: a member
@@ -126,6 +197,29 @@ void KColorPicker::buildChrome() {
     connect(sampler_, &KColorSampler::colorPicked, this, &KColorPicker::onColorSampled);
     connect(sampler_, &KColorSampler::sampleCancelled, this,
             [this]() { eyedropperButton_->setChecked(false); });
+
+    // Created here, after the top row and before the model row, so Tab walks the picker in
+    // reading order: form, Sample, square, hue, alpha, model, channels, hex, swatches.
+    const auto stepFraction = [](const bool coarse) {
+        return static_cast<float>(kKeyStepFraction * (coarse ? kCoarseStepMultiple : 1.0));
+    };
+    svRegion_ =
+        new PickerRegion(this, tr("Saturation and value"),
+                         [this, stepFraction](const int dx, const int dy, const bool coarse) {
+                             const float step = stepFraction(coarse);
+                             stepColor(hue_, saturation_ + static_cast<float>(dx) * step,
+                                       value_ - static_cast<float>(dy) * step, alpha_);
+                         });
+    hueRegion_ = new PickerRegion(
+        this, tr("Hue"), [this, stepFraction](const int dx, const int dy, const bool coarse) {
+            const float step = stepFraction(coarse) * 360.0F;
+            stepColor(hue_ + static_cast<float>(dy + dx) * step, saturation_, value_, alpha_);
+        });
+    alphaRegion_ = new PickerRegion(
+        this, tr("Alpha"), [this, stepFraction](const int dx, const int dy, const bool coarse) {
+            stepColor(hue_, saturation_, value_,
+                      alpha_ + static_cast<float>(dx - dy) * stepFraction(coarse));
+        });
 
     modelSelector_ = new KDropdown(this);
     modelSelector_->setControlSize(KDropdown::ControlSize::Compact);
@@ -203,6 +297,9 @@ void KColorPicker::layoutRegions() {
 
     alphaBarRect_ = QRectF(margin, y, contentWidthPx(), alphaBarHeightPx());
     y += alphaBarHeightPx() + rowGap;
+    svRegion_->setGeometry(svSquareRect_.toRect());
+    hueRegion_->setGeometry(hueBarRect_.toRect());
+    alphaRegion_->setGeometry(alphaBarRect_.toRect());
 
     modelSelector_->move(margin, y);
     modelSelector_->resize(contentWidthPx(), modelSelector_->sizeHint().height());
@@ -506,8 +603,15 @@ void KColorPicker::onEyedropperToggled(const bool active) {
 }
 
 void KColorPicker::onColorSampled(const KColor& sampledColor) {
+    KColor picked = sampledColor;
+    if (picked.space == ColorSpace::Reference && !converter_) {
+        // A source answered with an authored value this picker cannot convert for display; take
+        // the rendered pixel under the pointer instead of refusing the pick.
+        if (const auto rendered = sampler_->renderedSampleAt(QCursor::pos()))
+            picked = *rendered;
+    }
     beginEdit();
-    setColor(sampledColor);
+    setColor(picked);
     finishEdit();
     eyedropperButton_->setChecked(false);
 }
@@ -542,6 +646,27 @@ void KColorPicker::applyHsva(const float hue, const float saturation, const floa
             sourceColor_ = *authored;
             Q_EMIT colorChanged(sourceColor_);
         }
+    }
+}
+
+void KColorPicker::stepColor(const float hue, const float saturation, const float value,
+                             const float alpha) {
+    // One key press is one edit, exactly as one drag is.
+    beginEdit();
+    applyHsva(hue, saturation, value, alpha);
+    finishEdit();
+}
+
+QWidget* KColorPicker::canvasRegion(const int index) const {
+    switch (index) {
+    case 0:
+        return svRegion_;
+    case 1:
+        return hueRegion_;
+    case 2:
+        return alphaRegion_;
+    default:
+        return nullptr;
     }
 }
 
@@ -672,8 +797,9 @@ void KColorPicker::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
+    // Radius::Small: the same frame every other popup (menus, dropdowns) rounds with.
     fillRoundedSurface(painter, QRectF(rect()), tokenColor(Color::SurfaceRaised),
-                       tokenColor(Color::Border), Radius::Medium);
+                       tokenColor(Color::Border), Radius::Small);
 
     // SV square: a solid hue fill, a white-to-transparent gradient left to right, and a
     // transparent-to-black gradient top to bottom -- the standard three-layer composition, so the
@@ -701,19 +827,13 @@ void KColorPicker::paintEvent(QPaintEvent* event) {
     }
     painter.fillRect(hueBarRect_, hueGradient);
     strokeHairline(painter, hueBarRect_);
-    {
-        const qreal y = hueBarRect_.top() + huePosition() * hueBarRect_.height();
-        painter.save();
-        QPen pen(tokenColor(Color::Foreground));
-        pen.setWidthF(kFocusRingWidth);
-        painter.setPen(pen);
-        painter.drawLine(QPointF(hueBarRect_.left(), y), QPointF(hueBarRect_.right(), y));
-        painter.restore();
-    }
+    paintBarMarker(painter, hueBarRect_, hueBarRect_.top() + huePosition() * hueBarRect_.height(),
+                   true);
 
     // Alpha bar: the checkerboard ground, then a transparent-to-opaque fade of the fully-opaque
     // current hue/sat/val -- alpha itself is what the gradient sweeps, not the RGB underneath it.
-    drawAlphaCheckerboard(painter, alphaBarRect_, checkerCellPx(), Radius::Small);
+    // Square, like the gradient and the hairline drawn over it.
+    drawAlphaCheckerboard(painter, alphaBarRect_, checkerCellPx());
     const QColor opaqueCurrent = KColor::fromHsva(hue_, saturation_, value_, 1.0F).toQColor();
     QColor faded = opaqueCurrent;
     faded.setAlpha(0);
@@ -722,14 +842,16 @@ void KColorPicker::paintEvent(QPaintEvent* event) {
     alphaGradient.setColorAt(1.0, opaqueCurrent);
     painter.fillRect(alphaBarRect_, alphaGradient);
     strokeHairline(painter, alphaBarRect_);
-    {
-        const qreal x = alphaBarRect_.left() + alphaPosition() * alphaBarRect_.width();
-        painter.save();
-        QPen pen(tokenColor(Color::Foreground));
-        pen.setWidthF(kFocusRingWidth);
-        painter.setPen(pen);
-        painter.drawLine(QPointF(x, alphaBarRect_.top()), QPointF(x, alphaBarRect_.bottom()));
-        painter.restore();
+    paintBarMarker(painter, alphaBarRect_,
+                   alphaBarRect_.left() + alphaPosition() * alphaBarRect_.width(), false);
+
+    // Keyboard focus on a canvas region: the colour widgets' outside ring, because the region's
+    // own edge is colour data and cannot carry a state.
+    for (const auto& [region, bounds] :
+         {std::pair{svRegion_, svSquareRect_}, std::pair{hueRegion_, hueBarRect_},
+          std::pair{alphaRegion_, alphaBarRect_}}) {
+        if (region != nullptr && hasKeyboardFocus(*region))
+            drawFocusRing(painter, bounds, Radius::Small);
     }
 }
 

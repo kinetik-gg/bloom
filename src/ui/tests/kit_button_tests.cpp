@@ -8,12 +8,14 @@
 #include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
+#include <QCursor>
 #include <QImage>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPoint>
 #include <QRect>
+#include <QRegion>
 #include <QString>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -203,7 +205,7 @@ void testControlSizesAndTheOutsideFocusRing(Expectations& expectations) {
     const int roomy = button.sizeHint().height();
 
     expectations.expect(
-        compact == kit::px(kit::Size::ControlCompact),
+        compact == kit::px(kit::Size::Control),
         "the compact size is the compact control token including the focus-ring margin");
     expectations.expect(normal == kit::px(kit::Size::Control),
                         "the default size is the control token including the focus-ring margin");
@@ -307,6 +309,81 @@ void testGhostDangerOnHoverStaysGhostAtRest(Expectations& expectations) {
                         "dangerOnHover has no effect outside Variant::Ghost");
 }
 
+// Danger rests OUTLINED (no plate, Error border and ink) and fills only once the pointer commits;
+// a checked button reads as checked (the Accent plate every toggle uses); a disabled button stops
+// inviting a click.
+void testDangerSelectedAndDisabledRecipes(Expectations& expectations) {
+    kit::KButton button(QStringLiteral("Delete"));
+    button.setVariant(kit::KButton::Variant::Danger);
+    const auto rest = kit::buttonColors(kit::ButtonKind::Danger, kit::State::Normal, false);
+    expectations.expect(!button.fillForState(kit::State::Normal).isValid() && !rest.fill.isValid(),
+                        "Danger has no plate at rest");
+    expectations.expect(rest.border == kit::color(kit::Color::Error) &&
+                            rest.ink == kit::color(kit::Color::Error),
+                        "Danger rests outlined in Error with Error ink");
+    expectations.expect(button.fillForState(kit::State::Hover).isValid(),
+                        "Danger fills on hover: the hover state is visibly different from rest");
+
+    for (const auto variant : {kit::KButton::Variant::Secondary, kit::KButton::Variant::Ghost,
+                               kit::KButton::Variant::Danger}) {
+        button.setVariant(variant);
+        expectations.expect(
+            button.fillForState(kit::State::Selected) == kit::color(kit::Color::Accent) &&
+                button.inkForVisualState(kit::State::Selected) == kit::color(kit::Color::OnAccent),
+            "a checked button of any variant takes the Accent plate");
+    }
+
+    // Focus on an Accent plate is never Accent-on-Accent.
+    expectations.expect(
+        kit::buttonColors(kit::ButtonKind::Primary, kit::State::Normal, true).border ==
+            kit::color(kit::Color::Foreground),
+        "a focused Primary button's border is Foreground");
+    expectations.expect(
+        kit::buttonColors(kit::ButtonKind::Secondary, kit::State::Hover, true).border ==
+            kit::color(kit::Color::Accent),
+        "focus wins over hover in the button recipe");
+
+    button.setEnabled(false);
+    expectations.expect(button.cursor().shape() == Qt::ArrowCursor,
+                        "a disabled button shows the arrow, not the pointing hand");
+    button.setEnabled(true);
+    expectations.expect(button.cursor().shape() == Qt::PointingHandCursor,
+                        "an enabled button invites the click again");
+}
+
+// The button paints its plate Spacing::ControlInset inside its widget: exactly one toggle cell
+// tall, so it matches every other control in a row, with its hairline on whole device pixels.
+void testTheBorderIsCrispAndTheBoxIsOneToggleCellTall(Expectations& expectations) {
+    kit::KButton button(QStringLiteral("Render"));
+    button.resize(120, kit::px(kit::Size::Control));
+    const QColor border = kit::color(kit::Color::Border);
+    for (const qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+        QImage image(static_cast<int>(std::ceil(120 * dpr)),
+                     static_cast<int>(std::ceil(kit::px(kit::Size::Control) * dpr)),
+                     QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::transparent);
+        button.render(&image, QPoint(), QRegion(), QWidget::DrawChildren);
+        const int x = image.width() / 2;
+        int top = -1;
+        int bottom = -1;
+        for (int y = 0; y < image.height(); ++y) {
+            if (image.pixelColor(x, y).alpha() > 0) {
+                if (top < 0)
+                    top = y;
+                bottom = y;
+            }
+        }
+        const std::string at = " at DPR " + std::to_string(dpr);
+        expectations.expect(top >= 0 && near(image.pixelColor(x, top), border, 1) &&
+                                image.pixelColor(x, top).alpha() == 255,
+                            "the top hairline lands on one opaque device-pixel row" + at);
+        expectations.expect(std::abs((bottom - top + 1) - kit::px(kit::Size::ToggleCell) * dpr) <=
+                                1.0,
+                            "the painted box is one toggle cell tall" + at);
+    }
+}
+
 } // namespace
 
 // Regression (owner, 2026-09-15): a flowed Add submenu rebuilt its entries as header menu TITLE
@@ -401,6 +478,8 @@ int main(int argc, char** argv) {
     testAnIconButtonRendersBothGlyphAndLabel(expectations);
     testIconOnlyButtonsAreSquareAcrossEverySize(expectations);
     testGhostDangerOnHoverStaysGhostAtRest(expectations);
+    testDangerSelectedAndDisabledRecipes(expectations);
+    testTheBorderIsCrispAndTheBoxIsOneToggleCellTall(expectations);
     testFlowMenuBodyUsesTheMenuItemPrimitive(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

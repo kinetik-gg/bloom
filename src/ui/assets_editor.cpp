@@ -55,7 +55,7 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     tree_->setRootIsDecorated(true);
     tree_->setIndentation(kit::px(kit::Size::ToggleCell));
     tree_->setUniformRowHeights(true);
-    tree_->setIconSize(QSize(kit::px(kit::Size::IconChrome), kit::px(kit::Size::IconChrome)));
+    tree_->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
     tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     tree_->setSelectionBehavior(QAbstractItemView::SelectRows);
     tree_->setAllColumnsShowFocus(true);

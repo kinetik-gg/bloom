@@ -6,9 +6,9 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPixmap>
+#include <QRect>
+#include <QSize>
 #include <QWidget>
-
-#include <cmath>
 
 namespace bloom::ui::kit {
 
@@ -23,15 +23,11 @@ std::optional<KColor> sampleWidgetPixel(QWidget& widget, const QPoint& localPoin
     if (!widget.rect().contains(localPoint)) {
         return std::nullopt;
     }
-    const QPixmap grabbed = widget.grab();
+    const QPixmap grabbed = widget.grab(QRect(localPoint, QSize(1, 1)));
     if (grabbed.isNull()) {
         return std::nullopt;
     }
-    const qreal dpr = grabbed.devicePixelRatio();
-    const QPoint devicePoint(
-        static_cast<int>(std::lround(static_cast<qreal>(localPoint.x()) * dpr)),
-        static_cast<int>(std::lround(static_cast<qreal>(localPoint.y()) * dpr)));
-    return sampleImagePixel(grabbed.toImage(), devicePoint);
+    return sampleImagePixel(grabbed.toImage(), QPoint(0, 0));
 }
 
 KColorSampler::KColorSampler(QObject* parent) : QObject(parent) {}
@@ -70,6 +66,23 @@ std::optional<KColor> KColorSampler::sampleAt(const QPoint& globalPos) const {
     // QApplication::widgetAt() only ever resolves to a widget this process created: that is the
     // whole of the "app windows only" scope from decision 5, enforced by what Qt itself can see
     // rather than by a manual bounds check that something could bypass.
+    QWidget* target = QApplication::widgetAt(globalPos);
+    if (target == nullptr) {
+        return std::nullopt;
+    }
+    for (QWidget* owner = target; owner != nullptr; owner = owner->parentWidget()) {
+        if (auto* source = dynamic_cast<KColorSampleSource*>(owner); source != nullptr) {
+            if (auto value = source->sampleColorAt(owner->mapFromGlobal(globalPos)))
+                return value;
+            break;
+        }
+        if (owner->isWindow())
+            break;
+    }
+    return sampleWidgetPixel(*target, target->mapFromGlobal(globalPos));
+}
+
+std::optional<KColor> KColorSampler::renderedSampleAt(const QPoint& globalPos) const {
     QWidget* target = QApplication::widgetAt(globalPos);
     if (target == nullptr) {
         return std::nullopt;

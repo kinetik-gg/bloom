@@ -2,6 +2,7 @@
 #include <QResizeEvent>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
@@ -43,13 +44,8 @@ class PropertyRowLabel final : public KLabel {
 QLabel* makePropertyRowLabel(const QString& text, QWidget* parent) {
     auto* label = new PropertyRowLabel(text, px(Size::PropertiesLabelWidth), parent);
     label->setObjectName(QStringLiteral("propertiesRowLabel"));
-    auto labelFont = kit::font(kit::TypeRole::UiSmall);
-    labelFont.setCapitalization(QFont::MixedCase);
-    labelFont.setLetterSpacing(QFont::PercentageSpacing, 100.0);
-    label->setFont(labelFont);
-    QPalette palette = label->palette();
-    palette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
-    label->setPalette(palette);
+    label->setTypeRole(TypeRole::UiSmall);
+    label->setTone(Color::Muted);
     label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     return label;
 }
@@ -205,8 +201,9 @@ void KRow::setLeadingInset(int inset) {
 }
 void KRow::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    painter.fillRect(rect(), color(selected_ ? Color::SurfaceRaised : Color::Surface));
-    painter.setPen(color(Color::Background));
-    painter.drawLine(rect().bottomLeft(), rect().bottomRight());
+    painter.fillRect(rect(), color(Color::Surface));
+    if (selected_)
+        paintSelectedRow(painter, QRectF(rect()), Color::Surface, true);
+    paintRowSeparator(painter, QRectF(rect()));
 }
 } // namespace bloom::ui::kit

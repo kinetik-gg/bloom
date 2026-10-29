@@ -26,10 +26,30 @@ inline constexpr const char* kSamplerScopeTooltip = "Samples inside Bloom";
 // point outside the image, never a default-constructed KColor that could be mistaken for black.
 [[nodiscard]] std::optional<KColor> sampleImagePixel(const QImage& image, const QPoint& point);
 
-// Grabs `widget` and samples at `localPoint` (in the widget's logical pixel coordinates, scaled to
-// the grabbed pixmap's own device pixel ratio internally) -- the "widget grab" half of decision 5's
-// "a provided QImage/widget grab under the cursor".
+// Renders only the one logical pixel of `widget` at `localPoint` (widget logical coordinates) and
+// reads it -- the "widget grab" half of decision 5's "a provided QImage/widget grab under the
+// cursor". Never the whole widget: the sampler calls this on every pointer move.
 [[nodiscard]] std::optional<KColor> sampleWidgetPixel(QWidget& widget, const QPoint& localPoint);
+
+// A widget that knows a truer colour than its own rendered pixels -- the Viewer, whose pixels are
+// a display-referred 8-bit rendering of a working-space image -- answers the eyedropper itself.
+// The sampler asks the nearest such ancestor of the widget under the pointer first; nullopt from
+// it means "nothing better here", and the sampler falls back to the rendered pixel.
+class KColorSampleSource {
+  public:
+    KColorSampleSource() = default;
+    KColorSampleSource(const KColorSampleSource&) = delete;
+    KColorSampleSource& operator=(const KColorSampleSource&) = delete;
+    KColorSampleSource(KColorSampleSource&&) = delete;
+    KColorSampleSource& operator=(KColorSampleSource&&) = delete;
+
+    // `localPoint` is in the source widget's own logical coordinates. A Reference-space KColor is
+    // the authored value itself; a Display-space one is converted like any other display sample.
+    [[nodiscard]] virtual std::optional<KColor> sampleColorAt(const QPoint& localPoint) = 0;
+
+  protected:
+    ~KColorSampleSource() = default;
+};
 
 // The interactive affordance: while active, tracks the application's own mouse events (installed
 // as an application-wide event filter, but QApplication::widgetAt() -- which every sample resolves
@@ -51,6 +71,10 @@ class KColorSampler final : public QObject {
     // and independent of begin()/cancel() so a test can drive it directly against a widget it
     // constructed and shows, without simulating global cursor motion.
     [[nodiscard]] std::optional<KColor> sampleAt(const QPoint& globalPos) const;
+
+    // The rendered pixel alone, skipping any KColorSampleSource: what a consumer without a colour
+    // converter falls back to when the source answered in Reference space.
+    [[nodiscard]] std::optional<KColor> renderedSampleAt(const QPoint& globalPos) const;
 
   Q_SIGNALS:
     void colorHovered(const KColor& color);

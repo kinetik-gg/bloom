@@ -3,12 +3,14 @@
 #include <QPainter>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPalette>
@@ -24,7 +26,7 @@ KButton* makeHeaderButton(QWidget* parent, const QString& objectName) {
     auto* button = new KButton(parent);
     button->setObjectName(objectName);
     button->setVariant(KButton::Variant::Ghost);
-    button->setFixedSize(px(Size::ControlCompact), px(Size::ControlCompact));
+    button->setFixedSize(px(Size::Control), px(Size::Control));
     button->setFocusPolicy(Qt::NoFocus);
     return button;
 }
@@ -41,8 +43,13 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
 
     header_ = new QWidget(this);
     header_->setObjectName(QStringLiteral("kSectionHeader"));
-    header_->setMinimumHeight(px(Size::ControlCompact));
+    header_->setMinimumHeight(px(Size::Control));
     header_->setCursor(Qt::PointingHandCursor);
+    // The header is the keyboard target too: Tab reaches it, Space or Enter toggles it, and its
+    // keyboard focus shows as the section's Accent header border.
+    ensureKeyboardFocusTracking(*header_);
+    header_->setFocusPolicy(Qt::StrongFocus);
+    header_->setAccessibleName(title);
     // The whole header toggles, not just the chevron: the chevron is the affordance, the header is
     // the target, which is how every twirl-down in the application already behaves.
     header_->installEventFilter(this);
@@ -61,11 +68,7 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
     title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     title_->installEventFilter(this);
     title_->setTextFormat(Qt::PlainText);
-    auto titleFont = kit::font(TypeRole::UiSmall);
-    titleFont.setWeight(QFont::DemiBold);
-    titleFont.setCapitalization(QFont::MixedCase);
-    titleFont.setLetterSpacing(QFont::PercentageSpacing, 100.0);
-    title_->setFont(titleFont);
+    title_->setFont(kit::font(TypeRole::UiSmallStrong));
     QPalette titlePalette = title_->palette();
     titlePalette.setColor(QPalette::WindowText, color(Color::Foreground));
     title_->setPalette(titlePalette);
@@ -98,12 +101,21 @@ void KSection::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     fillRoundedSurface(painter, QRectF(rect()), color(Color::Surface), color(Color::Border),
                        Radius::Panel);
+    if (hasKeyboardFocus(*header_)) {
+        fillRoundedSurface(painter, QRectF(header_->geometry()), {}, color(Color::Accent),
+                           Radius::Small);
+    }
 }
+
+bool KSection::headerHasKeyboardFocus() const { return hasKeyboardFocus(*header_); }
+
+QWidget* KSection::header() const noexcept { return header_; }
 
 QString KSection::title() const { return title_->toolTip(); }
 
 void KSection::setTitle(const QString& title) {
     title_->setToolTip(title);
+    header_->setAccessibleName(title);
     title_->setText(
         QFontMetrics(title_->font()).elidedText(title, Qt::ElideRight, title_->width()));
 }
@@ -160,6 +172,17 @@ void KSection::applyCollapsedState() {
 bool KSection::eventFilter(QObject* watched, QEvent* event) {
     if (watched == title_ && event->type() == QEvent::Resize)
         setTitle(title());
+    if (watched == header_ &&
+        (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut)) {
+        update();
+    }
+    if (watched == header_ && event->type() == QEvent::KeyPress) {
+        const int key = static_cast<QKeyEvent*>(event)->key();
+        if (key == Qt::Key_Space || key == Qt::Key_Return || key == Qt::Key_Enter) {
+            setCollapsed(!collapsed_);
+            return true;
+        }
+    }
     if (watched == header_ && event->type() == QEvent::MouseButtonRelease) {
         const auto* mouse = static_cast<QMouseEvent*>(event);
         // Only a plain left click on the header's own background toggles; a click that landed on

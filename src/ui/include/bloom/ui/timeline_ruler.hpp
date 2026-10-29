@@ -79,7 +79,7 @@ parseTimelineFrameLabel(const QString& text, document::FrameRate rate, bool time
 // keyframe lanes underneath them all step by exactly this much, so the left column's rows, the
 // clip bars beside them, and the key rows below read as one grid.
 //
-inline constexpr int kTimelineRowHeight = kit::px(kit::Size::TimelineRow);
+inline constexpr int kTimelineRowHeight = kit::px(kit::Size::ListRow);
 
 // The playhead stroke every time-axis surface shares (task T1): a 1px Accent vertical line through
 // the ruler and all lanes, with exactly ONE small head marker at its top, painted in the work-area

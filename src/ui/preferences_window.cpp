@@ -53,9 +53,7 @@ constexpr auto kRestartBadgeObjectName = "preferencesRestartBadge";
 [[nodiscard]] kit::KLabel* makeRestartBadge(QWidget* parent) {
     auto* badge = new kit::KLabel(QObject::tr("Restart"), parent, kit::TypeRole::UiSmall);
     badge->setObjectName(QLatin1StringView(kRestartBadgeObjectName));
-    QPalette palette = badge->palette();
-    palette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
-    badge->setPalette(palette);
+    badge->setTone(kit::Color::Muted);
     badge->setToolTip(
         QObject::tr("This value is read when Bloom starts and takes effect after restart."));
     return badge;

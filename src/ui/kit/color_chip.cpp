@@ -19,7 +19,7 @@ namespace {
 // A larger cell than the token-minimum spacing step: at these control sizes (a ~26px chip,
 // a 22px-tall alpha bar) a 2px checker reads as noise once anti-aliased, and pixel-sampling
 // it in a test would be sampling blend artifacts rather than the pattern itself.
-[[nodiscard]] int checkerCellPx() { return px(Spacing::S); }
+[[nodiscard]] int checkerCellPx() { return px(Size::CheckerCell); }
 
 // KColorChip and KColorABPair both declare their own color()/colorA()/colorB() accessors, which
 // hides the free bloom::ui::kit::color(Color) token lookup inside their member functions (plain
@@ -154,7 +154,7 @@ State KColorChip::visualState() const {
 int KColorChip::controlExtent() const {
     switch (controlSize_) {
     case ControlSize::Compact:
-        return px(Size::ControlCompact);
+        return px(Size::Control);
     case ControlSize::Default:
         return px(Size::Control);
     case ControlSize::Roomy:
@@ -331,7 +331,7 @@ void KColorABPair::paintEvent(QPaintEvent* event) {
                        Radius::Full);
     painter.save();
     QPen pen(color(Color::Foreground));
-    pen.setWidthF(kFocusRingWidth);
+    pen.setWidthF(kMarkerStroke);
     pen.setCapStyle(Qt::RoundCap);
     painter.setPen(pen);
     const qreal armLength = glyphBox.width() * 0.28;

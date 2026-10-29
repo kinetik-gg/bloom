@@ -5,6 +5,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_native_surface.hpp>
+#include <bloom/ui/kit/color_sampler.hpp>
 #include <bloom/ui/path_editing.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preferences_aware.hpp>
@@ -215,11 +216,17 @@ struct ViewerDisplayDescriptor final {
 class ViewerEditor final : public QWidget,
                            public EditorChromeProvider,
                            public EditorNativeSurface,
-                           public PreferencesAware {
+                           public PreferencesAware,
+                           public kit::KColorSampleSource {
     Q_OBJECT
 
   public:
     [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
+    // The eyedropper over the Viewer reads the pixel probe's working-space value at the pointer --
+    // the authored colour itself -- rather than the display-referred 8-bit pixel on screen. Until
+    // the probe has that value, and outside the image, it answers nothing and the sampler takes
+    // the rendered pixel.
+    [[nodiscard]] std::optional<kit::KColor> sampleColorAt(const QPoint& localPoint) override;
     // Applies the Preferences window's committed viewer preferences by driving this panel's own
     // controls, so their existing persistence and preview-controller updates stay the single code
     // path.

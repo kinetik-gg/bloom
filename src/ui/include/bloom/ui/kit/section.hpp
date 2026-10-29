@@ -56,6 +56,10 @@ class KSection final : public QWidget {
     void setResetEnabled(bool enabled);
     [[nodiscard]] bool isResetEnabled() const noexcept;
 
+    // The focusable header row (Space/Enter toggle it), and whether it holds keyboard focus.
+    [[nodiscard]] QWidget* header() const noexcept;
+    [[nodiscard]] bool headerHasKeyboardFocus() const;
+
     // Overrides the body's inner padding (default SectionPadding). Properties uses the
     // inter-panel Gutter so its content density matches the workspace around it.
     void setBodyPadding(int padding);

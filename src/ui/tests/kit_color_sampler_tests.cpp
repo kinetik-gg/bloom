@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <source_location>
 #include <string>
 
@@ -111,6 +112,57 @@ void testBeginAndCancelToggleActiveState(Expectations& expectations) {
     expectations.expect(!sampler.isActive(), "cancelling an inactive sampler is a harmless no-op");
 }
 
+// A widget that knows a truer colour than its pixels (the Viewer) answers the eyedropper itself,
+// and the sampler reads only the one pixel under the pointer otherwise.
+class TruerSource final : public QWidget, public kit::KColorSampleSource {
+  public:
+    using QWidget::QWidget;
+    std::optional<kit::KColor> answer;
+    QPoint asked{-1, -1};
+    std::optional<kit::KColor> sampleColorAt(const QPoint& localPoint) override {
+        asked = localPoint;
+        return answer;
+    }
+};
+
+void testASampleSourceAnswersBeforeThePixels(Expectations& expectations) {
+    TruerSource source;
+    source.resize(40, 40);
+    source.setAutoFillBackground(true);
+    QPalette palette = source.palette();
+    palette.setColor(QPalette::Window, QColor(10, 10, 240));
+    source.setPalette(palette);
+    auto* child = new QWidget(&source);
+    child->setGeometry(10, 10, 20, 20);
+    source.move(150, 50);
+    source.show();
+    QCoreApplication::processEvents();
+
+    kit::KColorSampler sampler;
+    source.answer = kit::KColor::fromRgba(2.5F, 0.25F, 0.0F, 1.0F, kit::ColorSpace::Reference);
+    const auto overChild = sampler.sampleAt(child->mapToGlobal(QPoint(5, 5)));
+    expectations.expect(overChild.has_value() && overChild->space == kit::ColorSpace::Reference &&
+                            overChild->red > 2.0F,
+                        "the nearest sample-source ancestor answers with its authored value, HDR "
+                        "and all, rather than an 8-bit rendered pixel");
+    expectations.expect(source.asked == QPoint(15, 15),
+                        "the source is asked in its own coordinates");
+
+    source.answer.reset();
+    const auto fallback = sampler.sampleAt(source.mapToGlobal(QPoint(2, 2)));
+    expectations.expect(fallback.has_value() && fallback->toQColor() == QColor(10, 10, 240),
+                        "a source with nothing better falls back to the rendered pixel");
+    const auto rendered = sampler.renderedSampleAt(source.mapToGlobal(QPoint(2, 2)));
+    expectations.expect(rendered.has_value() && rendered->toQColor() == QColor(10, 10, 240),
+                        "the rendered pixel is available on its own, for a picker without a "
+                        "colour converter");
+
+    // One pixel, not the widget: a 1x1 render of the point under the pointer.
+    const auto single = kit::sampleWidgetPixel(source, QPoint(39, 39));
+    expectations.expect(single.has_value() && single->toQColor() == QColor(10, 10, 240),
+                        "the last pixel of the widget samples correctly from a one-pixel grab");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -121,5 +173,6 @@ int main(int argc, char** argv) {
     testSampleWidgetPixelGrabsTheWidgetItself(expectations);
     testSamplerIsScopedToTheApplicationsOwnWidgets(expectations);
     testBeginAndCancelToggleActiveState(expectations);
+    testASampleSourceAnswersBeforeThePixels(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

@@ -82,8 +82,15 @@ class AltUnderlineProxyStyle final : public QProxyStyle {
 // Focus is a visible affordance only when Qt says focus arrived through keyboard traversal. The
 // tracker records that reason on each widget so custom kit painters and QSS selectors share one
 // application-wide decision instead of treating pointer focus as a focus ring.
+//
+// A focus change only REPAINTS the widget: a custom-painted kit control reads hasKeyboardFocus()
+// in its paintEvent and needs nothing more. Re-resolving stylesheet rules (unpolish + polish) is
+// costly and is done only for widgets whose look comes from a [bloomKeyboardFocus] sheet rule:
+// stock QPushButton, QComboBox, QLineEdit and QHeaderView, and any widget that opted in through
+// restyleOnKeyboardFocus().
 void installKeyboardFocusTracking(QApplication& application);
 void ensureKeyboardFocusTracking(QWidget& widget);
+void restyleOnKeyboardFocus(QWidget& widget);
 [[nodiscard]] bool hasKeyboardFocus(const QWidget& widget) noexcept;
 
 // Where a menu row's text starts, measured from the row's own left edge, in design pixels

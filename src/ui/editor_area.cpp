@@ -116,10 +116,8 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     headerCellsLayout_->addWidget(headerLeft_, 1);
     headerLayout_ = new QHBoxLayout(headerLeft_);
     auto*& headerLayout = headerLayout_;
-    // task U8, issue #131, formal amendment 2, A10: 10px side padding (Spacing::PanelHeader,
-    // reused on all four edges now that the switcher and the header button are no longer sized
-    // off the header's own margins); contents are explicitly vertically centered below rather
-    // than relying on margin arithmetic to land them in the 48px row (Size::EditorHeader).
+    // The ChromePadding inset on all four edges; contents are explicitly vertically centered below
+    // rather than relying on margin arithmetic to land them in the HeaderRow.
     const auto headerPadding = kit::px(kit::Spacing::ChromePadding);
     headerLayout->setContentsMargins(headerPadding, headerPadding, headerPadding, headerPadding);
     headerLayout->setSpacing(kit::px(kit::Spacing::ChromeGap));
@@ -182,34 +180,35 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // installs it on) opens this exact menu at the cursor instead.
     contextMenu_ = kit::makeMenu(this);
     contextMenu_->setObjectName("panelOptionsMenu");
-    auto* splitHorizontalAction = contextMenu_->addAction("Split Horizontally");
+    auto* splitHorizontalAction = contextMenu_->addAction(tr("Split Horizontally"));
     splitHorizontalAction->setObjectName("panelSplitHorizontalAction");
     connect(splitHorizontalAction, &QAction::triggered, this,
             [this] { emit splitRequested(this, Qt::Horizontal); });
-    auto* splitVerticalAction = contextMenu_->addAction("Split Vertically");
+    auto* splitVerticalAction = contextMenu_->addAction(tr("Split Vertically"));
     splitVerticalAction->setObjectName("panelSplitVerticalAction");
     connect(splitVerticalAction, &QAction::triggered, this,
             [this] { emit splitRequested(this, Qt::Vertical); });
     contextMenu_->addSeparator();
     // "Maximize" reads as "Fullscreen"/"Exit Fullscreen" (fix 6's wording), kept in lockstep with
     // the header button's own tooltip by setMaximizedAppearance() below.
-    auto* menuMaximizeAction = contextMenu_->addAction("Fullscreen");
+    auto* menuMaximizeAction = contextMenu_->addAction(tr("Fullscreen"));
     menuMaximizeAction->setObjectName("panelMaximizeAction");
     connect(menuMaximizeAction, &QAction::triggered, this,
             [this] { emit maximizeRequested(this); });
-    auto* menuCloseAction = contextMenu_->addAction("Close");
+    auto* menuCloseAction = contextMenu_->addAction(tr("Close"));
     menuCloseAction->setObjectName("panelCloseAction");
     connect(menuCloseAction, &QAction::triggered, this, [this] { emit closeRequested(this); });
 
     // task U8, issue #131, fix 5/6: the maximize button is the ONLY remaining header button --
     // closeAreaButton is gone (closing lives only in the menu now), and this one button both
     // toggles and restores fullscreen (icon/tooltip swap in setMaximizedAppearance()).
-    maximizeButton_ = makeHeaderButton(kit::IconId::Maximize, "Fullscreen", "maximizeAreaButton");
+    maximizeButton_ =
+        makeHeaderButton(kit::IconId::Maximize, tr("Fullscreen"), "maximizeAreaButton");
 
     headerLayout->addWidget(editorPicker_);
     headerLayout->addStretch(1);
     headerLayout->addWidget(maximizeButton_);
-    // task U8, formal amendment 2, A10: contents vertically centered within the 48px header row.
+    // Contents vertically centered within the HeaderRow.
     headerLayout->setAlignment(editorPicker_, Qt::AlignVCenter);
     headerLayout->setAlignment(maximizeButton_, Qt::AlignVCenter);
 
@@ -345,10 +344,9 @@ void EditorArea::setAreaActive(bool active) {
 
     active_ = active;
     setProperty("active", active);
+    // The one panel border is the frame overlay's; nothing in the sheet keys on "active" any more.
     if (frameOverlay_ != nullptr)
         frameOverlay_->setActive(active);
-    style()->unpolish(this);
-    style()->polish(this);
     update();
 }
 
@@ -380,7 +378,7 @@ void EditorArea::setMaximizedAppearance(bool maximized) {
     // Maximize/Restore, and the context menu's own action stays in lockstep with it.
     maximizeButton_->setIcon(
         kit::icon(maximized ? kit::IconId::Restore : kit::IconId::Maximize, kHeaderIconRole));
-    const QString toolTip = maximized ? "Exit Fullscreen" : "Fullscreen";
+    const QString toolTip = maximized ? tr("Exit Fullscreen") : tr("Fullscreen");
     maximizeButton_->setToolTip(toolTip);
     maximizeButton_->setAccessibleName(toolTip);
     if (auto* action = contextMenu_->findChild<QAction*>("panelMaximizeAction")) {
@@ -402,7 +400,7 @@ QSize EditorArea::minimumSizeHint() const {
     // Height is the header row plus the footer's own height when this editor offered one (Viewer
     // is the only one today) -- the content region itself contributes no height floor, since
     // nothing about the vertical axis was ever the bug being fixed here.
-    int height = kit::px(kit::Size::EditorHeader);
+    int height = kit::px(kit::Size::HeaderRow);
     if (footer_ != nullptr) {
         height += footer_->sizeHint().height();
     }
@@ -558,7 +556,7 @@ void EditorArea::rebuildEditor(int editorIndex) {
             headerLayout_->setStretch(2, 0);
             const int inset = static_cast<int>(kit::kHairlineWidth);
             headerCellsLayout_->setContentsMargins(inset, 0, inset, 0);
-            // task TL-FIX2: SplitHandle, not the hairline TimelineSeparator -- this gap continues
+            // task TL-FIX2: SplitHandle, not a bare hairline gap -- this gap continues
             // the SAME divider the timeline's body widens into a draggable handle (see
             // timeline_editor.cpp), and the ruler above must stay flush with the lanes below it.
             headerCellsLayout_->addSpacing(kit::px(kit::Size::SplitHandle));

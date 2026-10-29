@@ -170,6 +170,7 @@ QStringList fontFamiliesForRole(const TypeRole role) {
         families.append(platformFallback(QFontDatabase::GeneralFont));
         break;
     }
+    case TypeRole::UiSmallStrong:
     case TypeRole::Title: {
         const QString semiBold = resolvedRoleFamily(status, QStringLiteral("Inter SemiBold"));
         if (!semiBold.isEmpty()) {

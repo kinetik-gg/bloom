@@ -16,11 +16,8 @@
 namespace bloom::ui::kit {
 namespace {
 
-constexpr int kTrackHeight = 4;
-constexpr int kHandleDiameter = 12;
-
-// One arrow key press moves this fraction of the range; with Page it moves ten times as far.
-constexpr double kKeyStepFraction = 0.01;
+constexpr int kTrackHeight = px(Size::SliderTrack);
+constexpr int kHandleDiameter = px(Size::SliderHandle);
 
 } // namespace
 
@@ -111,9 +108,9 @@ Color KSlider::borderToken() const {
 
 bool KSlider::isDragging() const noexcept { return dragging_; }
 
-QSize KSlider::sizeHint() const { return {px(Size::ControlRoomy) * 4, px(Size::ControlCompact)}; }
+QSize KSlider::sizeHint() const { return {px(Size::ControlRoomy) * 4, px(Size::Control)}; }
 
-QSize KSlider::minimumSizeHint() const { return {kHandleDiameter * 3, px(Size::ControlCompact)}; }
+QSize KSlider::minimumSizeHint() const { return {kHandleDiameter * 3, px(Size::Control)}; }
 
 void KSlider::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton || !isEnabled()) {
@@ -161,11 +158,11 @@ void KSlider::keyPressEvent(QKeyEvent* event) {
         event->accept();
         return;
     case Qt::Key_PageDown:
-        commitValue(value_ - span * kKeyStepFraction * 10.0);
+        commitValue(value_ - span * kKeyStepFraction * kCoarseStepMultiple);
         event->accept();
         return;
     case Qt::Key_PageUp:
-        commitValue(value_ + span * kKeyStepFraction * 10.0);
+        commitValue(value_ + span * kKeyStepFraction * kCoarseStepMultiple);
         event->accept();
         return;
     case Qt::Key_Home:

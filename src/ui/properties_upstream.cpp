@@ -96,8 +96,7 @@ void PropertiesEditor::configureUpstream() {
             jump->setObjectName("propertiesJumpToNode");
             jump->setIconId(kit::IconId::Jump);
             jump->setVariant(kit::KButton::Variant::Ghost);
-            jump->setFixedSize(kit::px(kit::Size::ControlCompact),
-                               kit::px(kit::Size::ControlCompact));
+            jump->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
             jump->setToolTip(tr("Jump to node"));
             jump->setAccessibleName(tr("Jump to node"));
             jump->setProperty("rowLabel", section->title());

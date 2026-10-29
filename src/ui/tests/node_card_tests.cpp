@@ -89,13 +89,13 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
     expect(field != nullptr, "the X cell is a kit value field");
     if (field == nullptr)
         return;
-    expect(field->cellRect().top() == kit::px(kit::Spacing::FieldMargin) &&
+    expect(field->cellRect().top() == kit::px(kit::Spacing::ControlInset) &&
                field->cellRect().height() ==
-                   static_cast<qreal>(field->height() - 2 * kit::px(kit::Spacing::FieldMargin)),
+                   static_cast<qreal>(field->height() - 2 * kit::px(kit::Spacing::ControlInset)),
            "the cell spans the whole control, so the card shows no darker band around it");
-    expect(field->cellRect().left() == kit::px(kit::Spacing::FieldMargin) &&
+    expect(field->cellRect().left() == kit::px(kit::Spacing::ControlInset) &&
                field->cellRect().right() ==
-                   static_cast<qreal>(field->width() - kit::px(kit::Spacing::FieldMargin)),
+                   static_cast<qreal>(field->width() - kit::px(kit::Spacing::ControlInset)),
            "a card field carries no label column of its own: the card paints the row's name");
 }
 

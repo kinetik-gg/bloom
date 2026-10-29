@@ -2,6 +2,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPen>
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/surfaces.hpp>
 #include <cmath>
 namespace bloom::ui::kit {
@@ -34,6 +35,7 @@ void KDiamond::paintEvent(QPaintEvent*) {
     }
 }
 KAnchorGrid::KAnchorGrid(QWidget* parent) : QWidget(parent) {
+    ensureKeyboardFocusTracking(*this);
     const int pitch = px(Size::PropertiesAnchorDot) + px(Spacing::XS);
     setFixedSize(pitch * 3, pitch * 3);
 }
@@ -43,11 +45,14 @@ QRect KAnchorGrid::pointRect(int index) const {
 }
 void KAnchorGrid::paintEvent(QPaintEvent*) {
     QPainter painter(this);
+    // Round dots (Radius::Full), the selected one in Keyframe; keyboard focus rings the selected
+    // dot in Accent, a click does not.
+    const bool focused = hasKeyboardFocus(*this);
     for (int index = 0; index < 9; ++index)
         fillRoundedSurface(painter, pointRect(index),
                            color(index == selectedPoint() ? Color::Keyframe : Color::BorderHover),
-                           hasFocus() && index == selectedPoint() ? color(Color::Accent) : QColor{},
-                           Radius::Small);
+                           focused && index == selectedPoint() ? color(Color::Accent) : QColor{},
+                           Radius::Full);
 }
 void KAnchorGrid::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
@@ -89,10 +94,9 @@ void KListSurface::paintEvent(QPaintEvent*) {
     const int pitch = px(Size::ListRow);
     const int first = offset_ / pitch;
     for (int row = first; row <= (offset_ + height()) / pitch; ++row) {
-        const int y = row * pitch - offset_;
-        painter.fillRect(QRect(0, y, width(), pitch), color(Color::Surface));
-        painter.setPen(color(Color::Background));
-        painter.drawLine(0, y + pitch - 1, width(), y + pitch - 1);
+        const QRectF band(0, row * pitch - offset_, width(), pitch);
+        painter.fillRect(band, color(Color::Surface));
+        paintRowSeparator(painter, band);
     }
 }
 KPanelFrame::KPanelFrame(QWidget* panel) : QWidget(panel), panel_(panel) {
@@ -128,22 +132,32 @@ bool KPanelFrame::eventFilter(QObject* watched, QEvent* event) {
 }
 void KPanelFrame::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor ink = color(active_ ? Color::Accent : Color::Border);
     const qreal r = radiusPx();
-    const QRectF bounds = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    if (r <= 0.0) {
+        // Square panels: no corner wedges to fill, just the one snapped hairline.
+        fillRoundedSurface(painter, QRectF(rect()), {}, ink, Radius::Panel);
+        return;
+    }
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    applyHairlinePen(painter, ink);
+    const qreal inset = painter.pen().widthF() / 2.0;
+    const QRectF bounds = QRectF(rect()).adjusted(inset, inset, -inset, -inset);
     QPainterPath frame;
     frame.addRoundedRect(bounds, r, r);
     QPainterPath outside;
     outside.addRect(QRectF(rect()));
     painter.fillPath(outside.subtracted(frame), color(Color::Background));
-    painter.setPen(QPen(color(active_ ? Color::Accent : Color::Border), kHairlineWidth));
     painter.setBrush(Qt::NoBrush);
     painter.drawPath(frame);
 }
-KSurface::KSurface(QWidget* parent) : QWidget(parent) {
+KSurface::KSurface(QWidget* parent, const Color fill) : QWidget(parent) {
     setAutoFillBackground(true);
+    setFill(fill);
+}
+void KSurface::setFill(const Color fill) {
     auto colors = palette();
-    colors.setColor(QPalette::Window, color(Color::Surface));
+    colors.setColor(QPalette::Window, color(fill));
     setPalette(colors);
 }
 } // namespace bloom::ui::kit

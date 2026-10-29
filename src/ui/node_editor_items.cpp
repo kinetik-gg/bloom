@@ -548,7 +548,7 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
                 QRectF(cell.center() - QPointF(size.width() / 2, size.height() / 2), size),
                 thumbnail);
         } else if (waveform && !waveform->buckets.empty()) {
-            painter->setPen(QPen(kit::color(kit::Color::DataAudio), 1.0));
+            painter->setPen(QPen(kit::color(kit::Color::DataAudio), kit::kHairlineWidth));
             const auto bucketCount = waveform->buckets.size();
             for (std::size_t index = 0; index < bucketCount; ++index) {
                 float minimum = 0.0F;
@@ -879,7 +879,8 @@ void SocketItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidg
         // lands a link -- the pill is dimmed as incompatible at the same moment.
         const qreal pitch = length / slotCount;
         const qreal y = pill.top() + pitch * (static_cast<qreal>(*dropIndicator_) + 0.5);
-        painter->setPen(QPen(kit::color(kit::Color::Muted), 2.0, Qt::SolidLine, Qt::RoundCap));
+        painter->setPen(
+            QPen(kit::color(kit::Color::Muted), kit::kEmphasisStroke, Qt::SolidLine, Qt::RoundCap));
         painter->drawLine(QPointF(pill.left() - radius, y), QPointF(pill.right() + radius, y));
     }
 }
@@ -1018,7 +1019,7 @@ void NodeEdgeItem::updatePath() {
 }
 QPainterPath NodeEdgeItem::shape() const {
     QPainterPathStroker stroke;
-    stroke.setWidth(12);
+    stroke.setWidth(kit::px(kit::Size::NodeLinkHit));
     return stroke.createStroke(path());
 }
 void NodeEdgeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) {

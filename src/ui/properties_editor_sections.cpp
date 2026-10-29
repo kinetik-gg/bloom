@@ -399,7 +399,7 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     textContent_->installEventFilter(this);
     textContent_->setAccessibleName(tr("Text content"));
     textContent_->setFont(kit::font(kit::TypeRole::Value));
-    textContent_->setFixedHeight(kit::px(kit::Size::ControlCompact));
+    textContent_->setFixedHeight(kit::px(kit::Size::Control));
     textContent_->setClearButtonEnabled(false);
     addRow(rows, body, makeRowLabel(tr("Text"), body), nullptr, textContent_);
 
@@ -470,7 +470,7 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     expand->setObjectName("propertiesTextExpand");
     expand->setIconId(kit::IconId::CaretRight);
     expand->setVariant(kit::KButton::Variant::Ghost);
-    expand->setFixedSize(kit::px(kit::Size::ControlCompact), kit::px(kit::Size::ControlCompact));
+    expand->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
     expand->setToolTip(tr("Edit multiple lines"));
     expand->setCheckable(true);
     auto* textRowLayout = qobject_cast<QHBoxLayout*>(textContent_->parentWidget()->layout());

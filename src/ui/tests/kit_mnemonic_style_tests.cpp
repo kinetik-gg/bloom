@@ -10,10 +10,12 @@
 #include <QImage>
 #include <QKeySequence>
 #include <QMenu>
+#include <QPainter>
 #include <QRect>
 #include <QRegion>
 #include <QStyle>
 #include <QStyleFactory>
+#include <QStyleOptionMenuItem>
 
 #include <algorithm>
 #include <cstdlib>
@@ -198,6 +200,52 @@ void testMenuRowsReserveOneIconColumnAndDrawSubmenus(Expectations& expectations)
                         "and the label itself is still full-strength Foreground");
 }
 
+// On the Accent hover bar the shortcut is OnAccent at the secondary opacity (Faint would fall to
+// ~1.6:1 there); a checkable action that has its own icon still shows that it is checked; and the
+// icon column is the documented IconMedium.
+void testSelectedRowsAndCheckedIconRowsStayLegible(Expectations& expectations) {
+    expectations.expect(kit::menuIconColumnWidth() == kit::px(kit::Size::IconMedium),
+                        "menu icons are IconMedium (16)");
+    kit::AltUnderlineProxyStyle style;
+    QMenu menu;
+    menu.setFont(kit::font(kit::TypeRole::Ui));
+    const auto render = [&](const QStyle::State state, const bool checked, const QIcon& icon) {
+        QStyleOptionMenuItem option;
+        option.initFrom(&menu);
+        option.font = menu.font();
+        option.rect = QRect(0, 0, kit::px(kit::Size::MenuMinWidth), kit::px(kit::Size::ListRow));
+        option.menuItemType = QStyleOptionMenuItem::Normal;
+        option.checkType =
+            checked ? QStyleOptionMenuItem::NonExclusive : QStyleOptionMenuItem::NotCheckable;
+        option.checked = checked;
+        option.icon = icon;
+        option.text = QStringLiteral("Open\tCtrl+O");
+        option.state = state;
+        QImage canvas(option.rect.size(), QImage::Format_ARGB32_Premultiplied);
+        canvas.fill(kit::color(kit::Color::SurfaceRaised));
+        QPainter painter(&canvas);
+        style.drawControl(QStyle::CE_MenuItem, &option, &painter, &menu);
+        painter.end();
+        return canvas;
+    };
+    const QImage hovered = render(QStyle::State_Enabled | QStyle::State_Selected, false, QIcon());
+    const QColor accent = kit::color(kit::Color::Accent);
+    int brightestShortcut = 0;
+    for (int x = hovered.width() * 3 / 4; x < hovered.width(); ++x)
+        for (int y = 0; y < hovered.height(); ++y)
+            if (hovered.pixelColor(x, y) != accent)
+                brightestShortcut =
+                    std::max(brightestShortcut, hovered.pixelColor(x, y).lightness());
+    expectations.expect(brightestShortcut > kit::color(kit::Color::Faint).lightness() + 60,
+                        "the shortcut on the Accent bar is light OnAccent ink, not Faint");
+
+    const QIcon icon = kit::icon(kit::IconId::Snap, kit::IconRole::Chrome);
+    const QImage plain = render(QStyle::State_Enabled, false, icon);
+    const QImage checked = render(QStyle::State_Enabled, true, icon);
+    expectations.expect(plain != checked,
+                        "a checked action with its own icon looks different from an unchecked one");
+}
+
 // Task S1, item 3: no menu is narrower than Size::MenuMinWidth, and the rows still reach the
 // frame's own edges so their hover bars stay full width.
 void testEveryMenuIsAtLeastTheMinimumWidth(Expectations& expectations) {
@@ -216,11 +264,18 @@ void testEveryMenuIsAtLeastTheMinimumWidth(Expectations& expectations) {
     expectations.expect(menu.width() >= kit::px(kit::Size::MenuMinWidth),
                         "so the popup itself is at least that wide, got " +
                             std::to_string(menu.width()));
-    // The frame's own hairline on each side is all that separates a row from the popup's edge: the
-    // row is not inset any further, which is what makes its accent hover bar full width.
+    // The frame's own hairline on each side is all that separates a row from the frame's edge: the
+    // row is not inset any further, which is what makes its accent hover bar full width. The
+    // transparent shadow gutter lies outside the frame, on its right and bottom only.
     const int frame = menu.style()->pixelMetric(QStyle::PM_MenuPanelWidth, nullptr, &menu) +
                       menu.style()->pixelMetric(QStyle::PM_MenuHMargin, nullptr, &menu);
-    expectations.expect(row.left() == frame && row.right() == menu.width() - 1 - frame,
+    const QMargins gutter = menu.contentsMargins();
+    expectations.expect(gutter.left() == 0 && gutter.top() == 0 && gutter.right() > 0 &&
+                            gutter.bottom() > 0,
+                        "the Popup shadow gutter sits right and below, so the menu opens flush "
+                        "with its anchor");
+    expectations.expect(row.left() == frame &&
+                            row.right() == menu.width() - 1 - frame - gutter.right(),
                         "and the row runs edge to edge inside the frame");
 
     // A long label still widens the menu past the minimum: this is a floor, not a fixed width.
@@ -262,20 +317,18 @@ int main(int argc, char** argv) {
     // theme and style installed exactly as apps/bloom/main.cpp installs them.
     try {
         kit::installKinetikTheme(application);
-        // NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- QApplication::setStyle() owns
-        // it, exactly as at the real install site in apps/bloom/main.cpp.
-        auto* kitStyle = new kit::AltUnderlineProxyStyle;
-        QApplication::setStyle(kitStyle);
+        // The theme installs kit::AltUnderlineProxyStyle itself, exactly as the application gets
+        // it.
         Expectations expectations;
         testUnderlineShortcutDecisionBothWays(expectations);
         testInstalledProxyRoutesThroughToTheRealStyleHintQuery(expectations);
         testMenuRowsReserveOneIconColumnAndDrawSubmenus(expectations);
         testTheMenuFrameAndRowMetricsComeFromTokens(expectations);
+        testSelectedRowsAndCheckedIconRowsStayLegible(expectations);
         testEveryMenuIsAtLeastTheMinimumWidth(expectations);
         return expectations.failures() == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "kit mnemonic style test failed with an exception: " << error.what() << '\n';
         return 1;
     }
-    // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
 }

@@ -102,8 +102,8 @@ struct ViewerSample final {
 }
 
 // The CPU background colour a mode paints behind the composition (viewer_editor.cpp
-// drawCanvasBackground above): Solid is the panel Canvas token, Black/White literal, and
-// Checkerboard alternates Surface (base) and SurfaceRaised (raised) on the 22px kit ViewerChecker
+// drawCanvasBackground above): Solid is the panel Canvas token, Black/White exact, and
+// Checkerboard alternates CheckerLight (base) and CheckerDark (alternate) on the 22px ViewerChecker
 // grid. The checker cell for a device-pixel coordinate is derived from the CPU semantics, NOT by
 // reading the GPU request fields, so the two paths are compared independently.
 [[nodiscard]] render::Rgba8 cpuBackgroundColor(const ui::ViewerBackground mode, const int deviceX,
@@ -128,8 +128,8 @@ struct ViewerSample final {
     const int column = deviceX >= 0 ? deviceX / span : -((-deviceX + span - 1) / span);
     const int row = deviceY >= 0 ? deviceY / span : -((-deviceY + span - 1) / span);
     const bool raised = ((row + column) & 1) == 0;
-    const QColor color = raised ? ui::kit::color(ui::kit::Color::SurfaceRaised)
-                                : ui::kit::color(ui::kit::Color::Surface);
+    const QColor color = raised ? ui::kit::color(ui::kit::Color::CheckerDark)
+                                : ui::kit::color(ui::kit::Color::CheckerLight);
     return render::Rgba8{static_cast<std::uint8_t>(color.red()),
                          static_cast<std::uint8_t>(color.green()),
                          static_cast<std::uint8_t>(color.blue()), 255};

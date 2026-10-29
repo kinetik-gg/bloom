@@ -146,7 +146,7 @@ void paintRulers(QPainter& painter, const QRectF& canvasRect, const QRectF& disp
     const QFont font = kit::font(kit::TypeRole::Value);
     const QFontMetrics metrics(font);
     painter.setFont(font);
-    painter.setPen(QPen(tickColor, 1.0));
+    painter.setPen(QPen(tickColor, kit::kHairlineWidth));
     const int topHeight = metrics.height() + kit::px(kit::Spacing::XS);
     const int leftWidth =
         metrics.horizontalAdvance(QStringLiteral("0000")) + kit::px(kit::Spacing::XS);

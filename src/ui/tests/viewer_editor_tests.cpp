@@ -1436,15 +1436,15 @@ void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectati
             return request.background == static_cast<render::GpuPresentBackground>(mode) &&
                    gpuColor(request.backgroundColor) == surround;
         };
-        // The default Checkerboard: the resident checker tiles come from the panel Surface tokens.
+        // The default Checkerboard: the resident checker tiles are the kit checker tokens.
         {
             const auto request = fixture.viewer.buildResidentPresentRequestForTest();
             expectations.expect(
                 request.background == render::GpuPresentBackground::Checkerboard &&
-                    gpuColor(request.checkerColorA) == ui::kit::color(ui::kit::Color::Surface) &&
-                    gpuColor(request.checkerColorB) ==
-                        ui::kit::color(ui::kit::Color::SurfaceRaised),
-                "the GPU resident checkerboard uses the same panel Surface tokens as the CPU");
+                    gpuColor(request.checkerColorA) ==
+                        ui::kit::color(ui::kit::Color::CheckerLight) &&
+                    gpuColor(request.checkerColorB) == ui::kit::color(ui::kit::Color::CheckerDark),
+                "the GPU resident checkerboard uses the same checker tokens as the CPU");
         }
         // Choose Solid explicitly: it paints the panel's own background token, so the surround
         // blends with the panel chrome, and it is deliberately not the composition's black.

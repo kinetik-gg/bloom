@@ -74,6 +74,10 @@ class KColorPicker final : public QWidget {
     [[nodiscard]] qreal huePosition() const noexcept;
     [[nodiscard]] qreal alphaPosition() const noexcept;
 
+    // The keyboard stand-ins for the three canvas regions (0 SV square, 1 hue bar, 2 alpha bar):
+    // each takes Tab focus, steps with the arrow keys (Shift for coarse steps) and shows a ring.
+    [[nodiscard]] QWidget* canvasRegion(int index) const;
+
     [[nodiscard]] KDropdown* formSelector() const noexcept;
     [[nodiscard]] KDropdown* modelSelector() const noexcept;
     // index in [0, 3]; which channel each index names depends on colorModel().
@@ -132,6 +136,7 @@ class KColorPicker final : public QWidget {
     void onEyedropperToggled(bool active);
     void onColorSampled(const KColor& color);
     void updateDragFromPoint(const QPointF& point);
+    void stepColor(float hue, float saturation, float value, float alpha);
     // Pushes the current color into the bound recent-color store and refreshes the swatch row's
     // "what would 'set' write here" preview. Called only at discrete commit points (a drag
     // release, a finished field/hex edit) -- never every drag frame, or scrubbing would flood the
@@ -153,6 +158,9 @@ class KColorPicker final : public QWidget {
     QRectF hueBarRect_;
     QRectF alphaBarRect_;
 
+    QWidget* svRegion_ = nullptr;
+    QWidget* hueRegion_ = nullptr;
+    QWidget* alphaRegion_ = nullptr;
     KDropdown* formSelector_ = nullptr;
     KButton* eyedropperButton_ = nullptr;
     KColorSampler* sampler_ = nullptr;

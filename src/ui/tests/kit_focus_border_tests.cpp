@@ -8,12 +8,18 @@
 // the rule is that the six answers are identical.
 
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/color_picker.hpp>
+#include <bloom/ui/kit/color_swatches.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/panel_switcher.hpp>
+#include <bloom/ui/kit/radio_group.hpp>
+#include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
@@ -24,16 +30,20 @@
 #include <QEvent>
 #include <QIcon>
 #include <QImage>
+#include <QKeyEvent>
 #include <QPainter>
 #include <QPointF>
 #include <QRect>
 #include <QRgb>
+#include <QStandardItemModel>
 #include <QStyle>
 #include <QStyleOption>
+#include <QTreeView>
 #include <QVBoxLayout>
 #include <QWidget>
 
 #include <iostream>
+#include <optional>
 #include <source_location>
 #include <string>
 
@@ -243,6 +253,180 @@ void testQtsOwnFocusRectangleIsNeverDrawn(Expectations& expectations) {
                         "PE_FrameFocusRect paints nothing through the kit's proxy style");
 }
 
+// The rest of the focusable kit: icon buttons, radio groups (both presentations), the section
+// header, the swatch row and the picker canvases all show keyboard focus -- and only keyboard
+// focus: a click that lands focus on them leaves them looking exactly as at rest.
+void testTheRemainingFocusablePrimitives(Expectations& expectations) {
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto& iconButton = *new kit::KIconButton(&host);
+    iconButton.setIcon(kit::icon(kit::IconId::Settings, kit::IconRole::Chrome));
+    auto& radio = *new kit::KRadioGroup(&host);
+    radio.addOption(QStringLiteral("Corner"));
+    radio.addOption(QStringLiteral("Smooth"));
+    auto& section = *new kit::KSection(QStringLiteral("Advanced"), &host);
+    auto& swatches = *new kit::KColorSwatchRow(&host);
+    layout->addWidget(&iconButton);
+    layout->addWidget(&radio);
+    layout->addWidget(&section);
+    layout->addWidget(&swatches);
+    host.show();
+    host.activateWindow();
+    QCoreApplication::processEvents();
+
+    pinTheFourPoints(iconButton, "KIconButton", expectations);
+    iconButton.setFocus(Qt::MouseFocusReason);
+    QCoreApplication::processEvents();
+    expectations.expect(iconButton.hasFocus() && iconButton.borderToken() == kit::Color::Border,
+                        "a click-focused KIconButton does not light its focus border");
+    iconButton.clearFocus();
+
+    pinTheFourPoints(radio, "KRadioGroup (segmented)", expectations);
+    radio.setPresentation(kit::KRadioGroup::Presentation::Discrete);
+    pinTheFourPoints(radio, "KRadioGroup (discrete)", expectations);
+
+    section.header()->setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    expectations.expect(section.headerHasKeyboardFocus(),
+                        "the KSection header takes keyboard focus");
+    QKeyEvent space(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier, QStringLiteral(" "));
+    QCoreApplication::sendEvent(section.header(), &space);
+    expectations.expect(section.isCollapsed(), "Space on the focused header collapses it");
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(section.header(), &enter);
+    expectations.expect(!section.isCollapsed(), "Enter expands it again");
+    section.header()->clearFocus();
+    section.header()->setFocus(Qt::MouseFocusReason);
+    expectations.expect(!section.headerHasKeyboardFocus(),
+                        "a click on the header is not keyboard focus");
+
+    expectations.expect(swatches.focusPolicy() == Qt::TabFocus,
+                        "the swatch row is reached by Tab, not by a click");
+    swatches.setSlotColor(1, kit::KColor::fromRgba(1.0F, 0.0F, 0.0F));
+    swatches.setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    QKeyEvent right(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+    QCoreApplication::sendEvent(&swatches, &right);
+    expectations.expect(swatches.focusedSlot() == 1, "the arrow keys walk the swatch slots");
+    std::optional<kit::KColor> activated;
+    QObject::connect(&swatches, &kit::KColorSwatchRow::colorActivated,
+                     [&activated](const kit::KColor& value) { activated = value; });
+    QKeyEvent apply(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(&swatches, &apply);
+    expectations.expect(activated.has_value() && activated->red > 0.99F,
+                        "Enter applies the focused swatch");
+}
+
+void testThePickerCanvasesTakeKeyboardFocusAndStep(Expectations& expectations) {
+    kit::KColorPicker picker;
+    picker.setColor(kit::KColor::fromHsva(120.0F, 0.5F, 0.5F));
+    picker.show();
+    picker.activateWindow();
+    QCoreApplication::processEvents();
+    for (int index = 0; index < 3; ++index) {
+        auto* region = picker.canvasRegion(index);
+        expectations.expect(region != nullptr && region->focusPolicy() == Qt::TabFocus,
+                            "every picker canvas region is reachable by Tab");
+    }
+    const float before = picker.color().toHsva()[1];
+    auto* square = picker.canvasRegion(0);
+    square->setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    expectations.expect(kit::hasKeyboardFocus(*square), "the SV square holds keyboard focus");
+    QKeyEvent right(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+    QCoreApplication::sendEvent(square, &right);
+    expectations.expect(picker.color().toHsva()[1] > before,
+                        "Right on the SV square raises saturation");
+    const float hueBefore = picker.color().toHsva()[0];
+    auto* hue = picker.canvasRegion(1);
+    hue->setFocus(Qt::TabFocusReason);
+    QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::ShiftModifier);
+    QCoreApplication::sendEvent(hue, &down);
+    expectations.expect(picker.color().toHsva()[0] > hueBefore + 10.0F,
+                        "Shift+Down on the hue bar takes a coarse step");
+}
+
+// An item view's current row shows an Accent inset under keyboard focus and nothing under a click:
+// the list form of the one focus rule, painted by the kit proxy style.
+void testItemViewsShowKeyboardFocusOnTheCurrentRow(Expectations& expectations) {
+    QStandardItemModel model;
+    for (const char* name : {"Alpha", "Beta", "Gamma"})
+        model.appendRow(new QStandardItem(QString::fromLatin1(name)));
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto& other = *new kit::KButton(QStringLiteral("Other"), &host);
+    auto& tree = *new QTreeView(&host);
+    tree.setModel(&model);
+    tree.setRootIsDecorated(false);
+    tree.setHeaderHidden(true);
+    tree.setAllColumnsShowFocus(true);
+    layout->addWidget(&other);
+    layout->addWidget(&tree);
+    host.resize(240, 200);
+    host.show();
+    host.activateWindow();
+    QCoreApplication::processEvents();
+    tree.setCurrentIndex(model.index(1, 0));
+    tree.clearSelection();
+    const auto accentPixels = [&tree] {
+        const QImage image = tree.viewport()->grab().toImage();
+        const QColor accent = kit::color(kit::Color::Accent);
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                count += image.pixelColor(x, y) == accent;
+        return count;
+    };
+    tree.setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    expectations.expect(accentPixels() > 0,
+                        "a keyboard-focused item view insets its current row in Accent");
+    other.setFocus(Qt::TabFocusReason);
+    tree.setFocus(Qt::MouseFocusReason);
+    QCoreApplication::processEvents();
+    expectations.expect(accentPixels() == 0, "a click-focused item view shows no focus inset");
+}
+
+// The focus tracker repaints on every keyboard-focus change but re-resolves stylesheet rules only
+// for widgets that opted in -- a custom-painted kit control is never unpolished.
+void testTheFocusTrackerRestylesOnlyOptedInWidgets(Expectations& expectations) {
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto& menuButton = *new kit::KMenuButton(&host);
+    menuButton.setText(QStringLiteral("View"));
+    menuButton.setFocusPolicy(Qt::TabFocus);
+    auto& button = *new kit::KButton(QStringLiteral("Render"), &host);
+    layout->addWidget(&menuButton);
+    layout->addWidget(&button);
+    host.show();
+    host.activateWindow();
+    QCoreApplication::processEvents();
+
+    int polishes = 0;
+    struct PolishCounter final : QObject {
+        int* count;
+        explicit PolishCounter(int* target) : count(target) {}
+        bool eventFilter(QObject*, QEvent* event) override {
+            if (event->type() == QEvent::Polish || event->type() == QEvent::StyleChange ||
+                event->type() == QEvent::PaletteChange)
+                ++*count;
+            return false;
+        }
+    } counter(&polishes);
+    button.installEventFilter(&counter);
+    button.setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    button.clearFocus();
+    QCoreApplication::processEvents();
+    expectations.expect(polishes == 0, "a kit-painted button is repainted, never re-polished");
+    expectations.expect(menuButton.property("bloomFocusRestyle").toBool(),
+                        "a KMenuButton opts in to restyling: its focus rule is a sheet rule");
+    menuButton.setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    expectations.expect(kit::hasKeyboardFocus(menuButton),
+                        "a KMenuButton reports keyboard focus for its sheet rule");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -254,5 +438,10 @@ int main(int argc, char** argv) {
     testAnOpenPopupCountsAsActive(expectations);
     testTheValueFieldCellIsBorderlessAtRest(expectations);
     testQtsOwnFocusRectangleIsNeverDrawn(expectations);
+    testTheRemainingFocusablePrimitives(expectations);
+    testThePickerCanvasesTakeKeyboardFocusAndStep(expectations);
+    kit::installKinetikTheme(application);
+    testItemViewsShowKeyboardFocusOnTheCurrentRow(expectations);
+    testTheFocusTrackerRestylesOnlyOptedInWidgets(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

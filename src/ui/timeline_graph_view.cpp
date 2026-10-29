@@ -121,8 +121,9 @@ void TimelineGraphView::invalidatePlayhead() {
     ++work_.playheadInvalidations;
     const int margin = kit::px(kit::Spacing::XXS) + 1;
     const int next = static_cast<int>(std::floor(axis->pixelForTime(session_.currentTime())));
+    const int band = margin + kit::px(kit::Size::Hairline) + margin;
     for (const int x : {*paintedPlayheadX_, next})
-        update(QRect(x - margin, 0, margin * 2 + 1, height()));
+        update(QRect(x - margin, 0, band, height()));
 }
 
 const QPainterPath& TimelineGraphView::pathFor(const GraphCurveId& curve,
@@ -502,9 +503,9 @@ void TimelineGraphView::paintEvent(QPaintEvent* event) {
         painter.setPen(kit::color(kit::Color::Muted));
         for (const double value : valueTicks(viewport, step)) {
             const double y = pixelForValue(viewport, value, top, band);
-            const QRectF label(0, y - kit::px(kit::Size::TimelineRow) / 2.0,
+            const QRectF label(0, y - kit::px(kit::Size::ListRow) / 2.0,
                                gutter.width() - kit::px(kit::Spacing::XS),
-                               kit::px(kit::Size::TimelineRow));
+                               kit::px(kit::Size::ListRow));
             painter.drawText(label, Qt::AlignRight | Qt::AlignVCenter,
                              QString::number(value, 'g', 4));
         }

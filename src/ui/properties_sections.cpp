@@ -125,11 +125,9 @@ KeyframeDiamond* makeKeyframeDiamond(CompositionSession& session, const std::str
 
 QLabel* makeReadOnlyValueLabel(const kit::TypeRole role, QWidget* parent) {
     auto* label = new kit::KLabel(parent);
-    label->setFont(kit::font(role));
+    label->setTypeRole(role);
     label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    QPalette palette = label->palette();
-    palette.setColor(QPalette::WindowText, kit::color(kit::Color::Foreground));
-    label->setPalette(palette);
+    label->setTone(kit::Color::Foreground);
     label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     return label;
 }
@@ -199,7 +197,7 @@ QWidget* addColorRow(CompositionSession& session, const std::string_view role, Q
     expand->setIconId(kit::IconId::CaretRight);
     expand->setVariant(kit::KButton::Variant::Ghost);
     expand->setCheckable(true);
-    expand->setFixedSize(kit::px(kit::Size::ControlCompact), kit::px(kit::Size::ControlCompact));
+    expand->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
     expand->setToolTip(QObject::tr("Show RGBA components"));
     expand->setAccessibleName(QObject::tr("Show RGBA components"));
     auto* row =
@@ -257,7 +255,7 @@ QWidget* makeLinkToggle(const QString& objectName, const QString& tooltip, QWidg
     toggle->setObjectName(objectName);
     toggle->setVariant(kit::KButton::Variant::Ghost);
     toggle->setIconId(kit::IconId::Link);
-    toggle->setFixedSize(kit::px(kit::Size::ControlCompact), kit::px(kit::Size::ControlCompact));
+    toggle->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
     toggle->setCheckable(true);
     QObject::connect(toggle, &kit::KButton::toggled, toggle, [toggle](bool linked) {
         toggle->setVariant(linked ? kit::KButton::Variant::Primary : kit::KButton::Variant::Ghost);

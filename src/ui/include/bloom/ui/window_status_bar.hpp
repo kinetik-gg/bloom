@@ -19,6 +19,10 @@ class MediaDiskCache;
 struct MediaDiskCacheStatistics;
 } // namespace bloom::media::cache
 
+namespace bloom::ui::kit {
+class KLabel;
+}
+
 namespace bloom::ui {
 
 class CompositionPreviewController;
@@ -157,9 +161,9 @@ class WindowStatusBar final : public kit::KSurface {
     runtime::OperationCache* operationCache_ = nullptr;
     media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
     QWidget* colorChip_ = nullptr;
-    QLabel* previewState_ = nullptr;
-    QLabel* droppedFrames_ = nullptr;
-    QLabel* video_ = nullptr;
+    kit::KLabel* previewState_ = nullptr;
+    kit::KLabel* droppedFrames_ = nullptr;
+    kit::KLabel* video_ = nullptr;
     QLabel* cache_ = nullptr;
     QLabel* mediaDiskCacheCell_ = nullptr;
     QLabel* message_ = nullptr;

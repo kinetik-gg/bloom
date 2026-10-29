@@ -357,8 +357,8 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         gesture.mode = NodeInteraction::Mode::Reroute;
         gesture.origin = event->scenePos();
         gesture.revision = session_->snapshot().revision();
-        gesture.line =
-            addPath(QPainterPath(gesture.origin), QPen(kit::color(kit::Color::Accent), 2));
+        gesture.line = addPath(QPainterPath(gesture.origin),
+                               QPen(kit::color(kit::Color::Accent), kit::kEmphasisStroke));
         gesture.line->setZValue(10);
         gesture.line->setData(kNodeItemKindRole, QStringLiteral("reroute-preview"));
         event->accept();
@@ -370,8 +370,8 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         gesture.mode = NodeInteraction::Mode::Cut;
         gesture.origin = event->scenePos();
         gesture.revision = session_->snapshot().revision();
-        gesture.line =
-            addPath(QPainterPath(gesture.origin), QPen(kit::color(kit::Color::Error), 2));
+        gesture.line = addPath(QPainterPath(gesture.origin),
+                               QPen(kit::color(kit::Color::Error), kit::kEmphasisStroke));
         gesture.line->setZValue(10);
         gesture.line->setData(kNodeItemKindRole, QStringLiteral("cut-preview"));
         event->accept();
@@ -497,7 +497,7 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         gesture.baseSelection = session_->selectedNodes();
     else
         session_->clearSelection();
-    gesture.box = addRect({}, QPen(kit::color(kit::Color::Accent), 1));
+    gesture.box = addRect({}, QPen(kit::color(kit::Color::Accent), kit::kHairlineWidth));
     gesture.box->setZValue(10);
     gesture.box->setData(kNodeItemKindRole, QStringLiteral("selection-preview"));
     event->accept();
@@ -685,7 +685,7 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
                                                         card->cardWidth());
     } else if (gesture.mode == NodeInteraction::Mode::Reroute) {
         QPainterPathStroker stroke;
-        stroke.setWidth(2);
+        stroke.setWidth(kit::kEmphasisStroke);
         const auto crossing = stroke.createStroke(gesture.line->path());
         for (auto* item : items()) {
             const auto* edge = dynamic_cast<NodeEdgeItem*>(item);
@@ -700,7 +700,7 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
         return;
     } else if (gesture.mode == NodeInteraction::Mode::Cut) {
         QPainterPathStroker stroke;
-        stroke.setWidth(2);
+        stroke.setWidth(kit::kEmphasisStroke);
         const auto cut = stroke.createStroke(gesture.line->path());
         for (auto* item : items())
             if (const auto* edge = dynamic_cast<NodeEdgeItem*>(item);

@@ -296,7 +296,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                 selector_->addItem(name, QVariant::fromValue(stored));
         }
         selector_->setFixedSize(kit::px(kit::Size::PropertiesDropdownWidth),
-                                kit::px(kit::Size::ControlCompact));
+                                kit::px(kit::Size::Control));
         layout->addWidget(selector_);
         connect(selector_, &kit::KDropdown::currentIndexChanged, this, [this] { commit(); });
         if (isFontSchema(definition_.schemaKey))
@@ -309,7 +309,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                                                                  : "propertiesRegistryInteger");
         integer_->setAccessibleName(label);
         integer_->setFixedSize(kit::px(kit::Size::PropertiesFieldWidth),
-                               kit::px(kit::Size::ControlCompact));
+                               kit::px(kit::Size::Control));
         integer_->setFont(kit::font(kit::TypeRole::Value));
         layout->addWidget(integer_);
         connect(integer_, &QLineEdit::editingFinished, this, [this] { commit(); });
@@ -324,7 +324,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         text_ = new kit::KLineEdit(controls);
         text_->setObjectName("propertiesRegistryString");
         text_->setFont(kit::font(kit::TypeRole::Value));
-        text_->setFixedHeight(kit::px(kit::Size::ControlCompact));
+        text_->setFixedHeight(kit::px(kit::Size::Control));
         layout->addWidget(text_, 1);
         connect(text_, &QLineEdit::editingFinished, this, [this] { commit(); });
         if (definition_.schemaKey == document::kTextParameterSchemaKey) {
@@ -339,8 +339,8 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             expand->setIconId(kit::IconId::CaretRight);
             expand->setVariant(kit::KButton::Variant::Ghost);
             expand->setCheckable(true);
-            expand->setFixedSize(kit::px(kit::Size::ControlCompact),
-                                 kit::px(kit::Size::ControlCompact));
+            expand->setFixedSize(kit::px(kit::Size::Control),
+                                 kit::px(kit::Size::Control));
             expand->setToolTip(tr("Edit multiple lines"));
             layout->addWidget(expand);
             connect(expand, &kit::KButton::toggled, this, [this, expand](bool on) {

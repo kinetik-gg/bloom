@@ -37,7 +37,7 @@ KDropdown::KDropdown(QWidget* parent) : QWidget(parent) {
     model_ = new QStandardItemModel(this);
     popup_ = new KDropdownPopup(this);
     popup_->setModel(model_);
-    popup_->view()->setIconSize(QSize(px(Size::IconChrome), px(Size::IconChrome)));
+    popup_->view()->setIconSize(QSize(px(Size::IconMedium), px(Size::IconMedium)));
     connect(popup_, &KDropdownPopup::itemChosen, this, [this](const int index) {
         commitIndex(index);
         update();
@@ -175,7 +175,7 @@ QString KDropdown::displayedText() const {
         std::max(0, width() - horizontalPadding() * 2 - caretColumnWidth() - caretGap());
     return metrics.elidedText(
         currentText(), Qt::ElideRight,
-        available - (itemIcon(currentIndex_).isNull() ? 0 : px(Size::IconChrome) + caretGap()));
+        available - (itemIcon(currentIndex_).isNull() ? 0 : px(Size::IconMedium) + caretGap()));
 }
 
 void KDropdown::setControlSize(const ControlSize size) {
@@ -233,7 +233,7 @@ Color KDropdown::borderToken() const {
 int KDropdown::controlExtent() const {
     switch (controlSize_) {
     case ControlSize::Compact:
-        return px(Size::ControlCompact);
+        return px(Size::Control);
     case ControlSize::Default:
         return px(Size::Control);
     case ControlSize::Roomy:
@@ -248,7 +248,7 @@ QSize KDropdown::sizeHint() const {
     for (int index = 0; index < model_->rowCount(); ++index) {
         widest = std::max(widest,
                           metrics.horizontalAdvance(itemText(index)) +
-                              (itemIcon(index).isNull() ? 0 : px(Size::IconChrome) + caretGap()));
+                              (itemIcon(index).isNull() ? 0 : px(Size::IconMedium) + caretGap()));
     }
     const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
     const int width =
@@ -307,8 +307,11 @@ void KDropdown::leaveEvent(QEvent* event) {
 }
 
 void KDropdown::changeEvent(QEvent* event) {
-    if (event->type() == QEvent::EnabledChange && !isEnabled()) {
-        hovered_ = false;
+    if (event->type() == QEvent::EnabledChange) {
+        if (!isEnabled())
+            hovered_ = false;
+        // A disabled control does not invite a click.
+        setCursor(isEnabled() ? Qt::PointingHandCursor : Qt::ArrowCursor);
     }
     QWidget::changeEvent(event);
 }
@@ -346,7 +349,7 @@ void KDropdown::paintEvent(QPaintEvent* event) {
     qreal contentLeft = bounds.left() + horizontalPadding();
     const auto glyph = itemIcon(currentIndex_);
     if (!glyph.isNull()) {
-        const int box = px(Size::IconChrome);
+        const int box = px(Size::IconMedium);
         const auto pixmap = glyph.pixmap(QSize(box, box), devicePixelRatioF());
         const QPointF origin(contentLeft, bounds.center().y() - box / 2.0);
         painter.drawPixmap(origin, pixmap);

@@ -215,7 +215,7 @@ void buildGroup(CompositionSession& session, MasksState& state, const document::
     group.name->setObjectName(QStringLiteral("layerMaskNameEdit"));
     group.name->setAccessibleName(QObject::tr("Mask %1 name").arg(number));
     group.name->setFont(kit::font(kit::TypeRole::Value));
-    group.name->setFixedHeight(kit::px(kit::Size::ControlCompact));
+    group.name->setFixedHeight(kit::px(kit::Size::Control));
     headerLayout->addWidget(group.name, 1);
     const auto button = [&](const QString& name, const QString& tip, const kit::IconId icon) {
         auto* b = new kit::KButton(header);
@@ -224,7 +224,7 @@ void buildGroup(CompositionSession& session, MasksState& state, const document::
         b->setVariant(kit::KButton::Variant::Ghost);
         b->setToolTip(tip);
         b->setAccessibleName(tip);
-        b->setFixedSize(kit::px(kit::Size::ControlCompact), kit::px(kit::Size::ControlCompact));
+        b->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
         headerLayout->addWidget(b);
         return b;
     };

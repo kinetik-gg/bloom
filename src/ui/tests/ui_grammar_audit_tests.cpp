@@ -153,7 +153,7 @@ int run(int argc, char** argv) {
                     const auto icon = dropdown->itemIcon(index);
                     if (icon.isNull())
                         continue;
-                    const auto box = kit::px(kit::Size::IconChrome);
+                    const auto box = kit::px(kit::Size::IconMedium);
                     const auto pixmap = icon.pixmap(QSize(box, box), widget->devicePixelRatioF());
                     expect(pixmap.width() == qRound(box * widget->devicePixelRatioF()) &&
                                pixmap.devicePixelRatio() == widget->devicePixelRatioF(),
@@ -166,8 +166,8 @@ int run(int argc, char** argv) {
                 const bool layerSwitch = toggle->property("layerSwitch").toBool();
                 const int extent = layerSwitch && !toggle->isChecked()
                                        ? 0
-                                       : qRound(kit::px(layerSwitch ? kit::Size::IconChrome
-                                                                    : kit::Size::IconControl) *
+                                       : qRound(kit::px(layerSwitch ? kit::Size::IconMedium
+                                                                    : kit::Size::IconLarge) *
                                                 widget->devicePixelRatioF());
                 expect(pixmap.width() == extent, widget, "toggle integer physical glyph box");
                 ++icons;

@@ -11,7 +11,7 @@ namespace bloom::ui::kit {
 // single pixel value the owner keeps and re-applies to both halves, not two independently-sized
 // splitter children.
 //
-// KSplitHandle owns only the GESTURE and its own painting: a hairline (TimelineSeparator-width)
+// KSplitHandle owns only the GESTURE and its own painting: one snapped hairline
 // centered in a wider (Size::SplitHandle) hit zone, so it is easy to grab without widening the
 // visible divider. It never touches layout or persistence itself -- the owner reads dragged() and
 // resetRequested(), clamps and applies the result, and persists it.
@@ -36,6 +36,7 @@ class KSplitHandle final : public QWidget {
 
   protected:
     [[nodiscard]] QSize sizeHint() const override;
+    bool event(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;

@@ -15,9 +15,9 @@ namespace bloom::ui::kit {
 namespace {
 
 // The track is a pill two thumbs wide; the thumb is inset from it by a hairline's worth of air.
-constexpr int kTrackHeight = 16;
-constexpr int kTrackWidth = 30;
-constexpr int kThumbInset = 2;
+constexpr int kTrackHeight = px(Size::SwitchTrackHeight);
+constexpr int kTrackWidth = px(Size::SwitchTrackWidth);
+constexpr int kThumbInset = px(Spacing::XXS);
 
 } // namespace
 
@@ -66,8 +66,7 @@ Color KSwitch::borderToken() const {
 }
 
 QSize KSwitch::sizeHint() const {
-    const auto ringMargin = static_cast<int>(std::lround(kFocusRingWidth)) * 2;
-    return {kTrackWidth + ringMargin, px(Size::Control)};
+    return {kTrackWidth + px(Spacing::ControlInset) * 2, px(Size::Control)};
 }
 
 QSize KSwitch::minimumSizeHint() const { return sizeHint(); }

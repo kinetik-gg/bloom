@@ -43,29 +43,31 @@ void testEveryColorRoleResolvesToItsSpecifiedValue(Expectations& expectations) {
     };
 
     expectHex(kit::Color::Background, "#111111");
-    // task U8, issue #131, formal amendment 1, A2: darkened from #161616.
-    expectHex(kit::Color::Surface, "#141414");
-    expectHex(kit::Color::SurfaceRaised, "#1b1b1b");
-    expectHex(kit::Color::Field, "#202020");
+    // The widened ladder: each rung perceptibly above the one below it.
+    expectHex(kit::Color::Surface, "#181818");
+    expectHex(kit::Color::SurfaceRaised, "#222222");
+    expectHex(kit::Color::Field, "#2b2b2b");
     // task U8, issue #131, formal amendment 1, A2: header-variant icon buttons and every dropdown
     // closed field -- darker than Background itself, by design.
     expectHex(kit::Color::ControlSurface, "#0e0e0e");
     expectHex(kit::Color::Foreground, "#ffffff");
     expectHex(kit::Color::Muted, "#999999");
     expectHex(kit::Color::Faint, "#666666");
-    expectHex(kit::Color::Border, "#222222");
-    expectHex(kit::Color::BorderHover, "#454545");
-    // task U8, issue #131, fix 1 / formal amendment 1, A1: the active-panel indicator is a
-    // neutral border, never Accent. #444444 is the final value, superseding fix 1's #333333.
-    expectHex(kit::Color::BorderActive, "#444444");
-    expectHex(kit::Color::Accent, "#0c8ce9");
-    expectHex(kit::Color::AccentHover, "#3aa5f0");
-    expectHex(kit::Color::AccentPressed, "#0a73c2");
+    expectHex(kit::Color::Border, "#2e2e2e");
+    expectHex(kit::Color::BorderHover, "#4a4a4a");
+    // BorderActive is one clear step above BorderHover: hover and drag are two states.
+    expectHex(kit::Color::BorderActive, "#626262");
+    expectHex(kit::Color::Accent, "#0a78c8");
+    expectHex(kit::Color::AccentHover, "#3f96d5");
+    expectHex(kit::Color::AccentPressed, "#0863a6");
+    expectHex(kit::Color::CheckerLight, "#999999");
+    expectHex(kit::Color::CheckerDark, "#666666");
+    expectHex(kit::Color::CanvasBlack, "#000000");
+    expectHex(kit::Color::CanvasWhite, "#ffffff");
     expectHex(kit::Color::Keyframe, "#f5c542");
     expectHex(kit::Color::Ok, "#3fbf6b");
     expectHex(kit::Color::Warn, "#e6a23c");
     expectHex(kit::Color::Error, "#e0554e");
-    expectHex(kit::Color::Brand, "#e879ab");
     expectHex(kit::Color::DataSequence, "#e0554e");
     expectHex(kit::Color::DataClip, "#3fbf6b");
     expectHex(kit::Color::DataComposition, "#8b5cf6");
@@ -139,20 +141,19 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::px(kit::Spacing::MenuItemY) == 6, "Spacing::MenuItemY is 6");
     expectations.expect(kit::px(kit::Spacing::MenuItemX) == 10, "Spacing::MenuItemX is 10");
 
-    expectations.expect(kit::px(kit::Size::ControlCompact) == 26,
-                        "Compact controls share Control height");
     expectations.expect(kit::px(kit::Size::Control) == 26, "Control is 26");
+    expectations.expect(kit::px(kit::Spacing::ControlInset) == 1, "ControlInset is 1");
+    expectations.expect(kit::px(kit::Size::Control) - 2 * kit::px(kit::Spacing::ControlInset) ==
+                            kit::px(kit::Size::ToggleCell),
+                        "a control's painted box is exactly one toggle cell tall");
     expectations.expect(kit::px(kit::Size::ControlRoomy) == 32, "ControlRoomy is 32");
     expectations.expect(kit::px(kit::Size::IconSmall) == 12, "IconSmall is 12");
     expectations.expect(kit::px(kit::Size::IconMedium) == 16, "IconMedium is 16");
     expectations.expect(kit::px(kit::Size::IconLarge) == 20, "IconLarge is 20");
     expectations.expect(kit::px(kit::Size::TitleBar) == 34, "TitleBar is 34");
-    expectations.expect(kit::px(kit::Size::PanelHeader) == 30, "PanelHeader is 30");
-    // task U8, issue #131, formal amendment 2, A10: the EditorArea header's OWN height (48) is a
-    // distinct token from PanelHeader above, which stays 30 -- node_editor.cpp's card header
-    // height and row pitch still resolve through PanelHeader unchanged.
-    expectations.expect(kit::px(kit::Size::EditorHeader) == 32, "EditorHeader aliases HeaderRow");
-    expectations.expect(kit::px(kit::Size::TimelineRow) == 32, "TimelineRow is 32");
+    expectations.expect(kit::px(kit::Size::NodeGroupTitle) == 30, "NodeGroupTitle is 30");
+    expectations.expect(kit::px(kit::Size::HeaderRow) == 32, "HeaderRow is 32");
+    expectations.expect(kit::px(kit::Size::ListRow) == 32, "ListRow is 32");
     expectations.expect(kit::px(kit::Size::TimelineBar) == 20, "TimelineBar is 20");
     expectations.expect(kit::px(kit::Size::TimelineToggleColumn) == 108,
                         "TimelineToggleColumn is four 24 px cells plus three XS gaps");
@@ -163,8 +164,12 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
                         "TimelineWorkAreaHandle is 6");
     expectations.expect(kit::px(kit::Size::TimelineNavigatorThumb) == 10,
                         "TimelineNavigatorThumb is 10");
-    expectations.expect(kit::px(kit::Size::ScrollBar) == 8, "ScrollBar is 8");
-    expectations.expect(kit::px(kit::Size::ScrollBarHover) == 12, "ScrollBar hover width is 12");
+    expectations.expect(kit::px(kit::Size::ScrollBarThumb) == 8, "a resting thumb is 8");
+    expectations.expect(kit::px(kit::Size::ScrollBarTrack) == 12,
+                        "the scrollbar track is one constant 12");
+    expectations.expect(kit::px(kit::Size::RadioDot) % 2 == 0 &&
+                            kit::px(kit::Size::RadioMark) % 2 == 0,
+                        "the radio dot and mark are even, so the dot centres on the pixel grid");
     // task S1, item 3: the narrowest a menu popup may be.
     expectations.expect(kit::px(kit::Size::MenuMinWidth) == 200, "MenuMinWidth is 200");
 }
@@ -230,6 +235,15 @@ void testTypeRolesCarryTheSpecifiedFamiliesWeightsAndSizes(Expectations& expecta
     const auto title = kit::font(kit::TypeRole::Title);
     expectations.expect(title.weight() == QFont::DemiBold, "the title role is weight 600");
 
+    // Small emphasis is a role, never a call-site setWeight(): it names the SemiBold face, which a
+    // DemiBold weight on the Medium family could never reach.
+    const auto strong = kit::font(kit::TypeRole::UiSmallStrong);
+    expectations.expect(strong.weight() == QFont::DemiBold, "UiSmallStrong is weight 600");
+    expectations.expect(std::abs(strong.pointSizeF() - small.pointSizeF()) < 1e-9,
+                        "UiSmallStrong is UiSmall's size");
+    expectations.expect(strong.families().value(0) == title.families().value(0),
+                        "UiSmallStrong asks for the same SemiBold face Title does");
+
     // 1 design pixel is 1 Qt logical pixel: the point sizes are the design pixel sizes converted
     // through the screen's own logical DPI, so their ratios are exactly the design ratios.
     expectations.expect(std::abs(ui.pointSizeF() / small.pointSizeF() - 12.0 / 10.5) < 1e-6,
@@ -242,6 +256,7 @@ void testMotionDurationsAndTheReducedMotionKillSwitch(Expectations& expectations
     expectations.expect(kit::motionEnabled(), "motion is enabled without the kill switch");
     expectations.expect(kit::durationMs(kit::Motion::Fast) == 80, "Fast is 80ms");
     expectations.expect(kit::durationMs(kit::Motion::Pop) == 140, "Pop is 140ms");
+    expectations.expect(kit::durationMs(kit::Motion::Sweep) == 1600, "Sweep is 1600ms");
     expectations.expect(kit::durationMs(kit::Motion::None) == 0,
                         "editor feedback is never eased: None is 0ms");
     expectations.expect(kit::easing(kit::Motion::Fast).type() == QEasingCurve::OutCubic,
@@ -260,9 +275,64 @@ void testMotionDurationsAndTheReducedMotionKillSwitch(Expectations& expectations
     qunsetenv("BLOOM_REDUCED_MOTION");
 }
 
+void testTheSurfaceStepsAreEachPerceptible(Expectations& expectations) {
+    // WCAG relative-luminance contrast between neighbouring rungs. The previous ladder sat near
+    // 1.02:1 per step, which is what made hover, selection and alternating rows invisible.
+    const auto luminance = [](const QColor& value) {
+        const auto channel = [](const double c) {
+            return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * channel(static_cast<double>(value.redF())) +
+               0.7152 * channel(static_cast<double>(value.greenF())) +
+               0.0722 * channel(static_cast<double>(value.blueF()));
+    };
+    const auto contrast = [&](const kit::Color a, const kit::Color b) {
+        const double la = luminance(kit::color(a));
+        const double lb = luminance(kit::color(b));
+        return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+    };
+    expectations.expect(contrast(kit::Color::Background, kit::Color::Surface) >= 1.06,
+                        "Surface is a visible step above Background");
+    expectations.expect(contrast(kit::Color::Surface, kit::Color::SurfaceRaised) >= 1.1,
+                        "SurfaceRaised is a visible step above Surface");
+    expectations.expect(contrast(kit::Color::SurfaceRaised, kit::Color::Field) >= 1.1,
+                        "Field is a visible step above SurfaceRaised");
+    expectations.expect(contrast(kit::Color::BorderHover, kit::Color::BorderActive) >= 1.2,
+                        "BorderActive is visibly distinct from BorderHover");
+    expectations.expect(contrast(kit::Color::Accent, kit::Color::OnAccent) >= 4.5,
+                        "OnAccent text on Accent meets WCAG AA");
+    expectations.expect(contrast(kit::Color::CheckerLight, kit::Color::CheckerDark) >= 1.8,
+                        "the checker tones are far enough apart to read as a grid");
+
+    // The selection wash is a blend toward Accent over its own surface, still a dark row.
+    const QColor wash = kit::selectionWash(kit::Color::Surface);
+    expectations.expect(wash.blue() > kit::color(kit::Color::Surface).blue() &&
+                            wash.blue() < kit::color(kit::Color::Accent).blue(),
+                        "the selection wash sits between its surface and Accent");
+}
+
+void testTokenValuesDoNotSilentlyDuplicateWithinAFamily(Expectations& expectations) {
+    // The ladder and the border steps are each strictly increasing: a later edit cannot collapse
+    // two rungs back into one value without failing here.
+    const std::array ladder{kit::Color::Background, kit::Color::Surface, kit::Color::SurfaceRaised,
+                            kit::Color::Field};
+    for (std::size_t index = 1; index < ladder.size(); ++index)
+        expectations.expect(kit::color(ladder.at(index)).lightness() >
+                                kit::color(ladder.at(index - 1)).lightness(),
+                            "the surface ladder strictly brightens");
+    expectations.expect(kit::color(kit::Color::Border).lightness() <
+                                kit::color(kit::Color::BorderHover).lightness() &&
+                            kit::color(kit::Color::BorderHover).lightness() <
+                                kit::color(kit::Color::BorderActive).lightness(),
+                        "Border, BorderHover and BorderActive strictly brighten");
+    expectations.expect(kit::color(kit::Color::Border).lightness() >
+                            kit::color(kit::Color::SurfaceRaised).lightness(),
+                        "a raised plate keeps a visible hairline");
+}
+
 void testDisabledInkIsFortyPercent(Expectations& expectations) {
     const QColor ink = kit::color(kit::Color::Foreground);
-    const QColor disabled = kit::withOpacity(ink, kit::kDisabledOpacity);
+    const QColor disabled = kit::disabledInk(ink);
     expectations.expect(std::abs(kit::kDisabledOpacity - 0.40) < 1e-9, "disabled ink is 40%");
     expectations.expect(std::abs(static_cast<double>(disabled.alphaF()) - 0.40) < 1e-3,
                         "withOpacity applies the disabled opacity to the ink alpha");
@@ -282,6 +352,8 @@ int main(int argc, char** argv) {
     testElevationsCarryTheSpecifiedShadows(expectations);
     testTypeRolesCarryTheSpecifiedFamiliesWeightsAndSizes(expectations);
     testMotionDurationsAndTheReducedMotionKillSwitch(expectations);
+    testTheSurfaceStepsAreEachPerceptible(expectations);
+    testTokenValuesDoNotSilentlyDuplicateWithinAFamily(expectations);
     testDisabledInkIsFortyPercent(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

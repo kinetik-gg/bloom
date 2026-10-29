@@ -290,7 +290,7 @@ class TimelineKeyframeRow final : public QWidget {
             // updateKeyframeIndicator()) for exactly this "gold" meaning.
             const QColor fill =
                 selected ? kit::color(kit::Color::Accent) : kit::color(kit::Color::Keyframe);
-            painter.setPen(QPen(fill.darker(140), 1.0));
+            painter.setPen(QPen(kit::edgeInkFor(fill), kit::kHairlineWidth));
             painter.setBrush(fill);
             paintKeyGlyph(painter, QPointF(x, centerY), key.outgoingInterpolation);
         }
@@ -298,9 +298,9 @@ class TimelineKeyframeRow final : public QWidget {
         if (dragging_ && ghostTime_.has_value()) {
             // Presentation-only: paint the snapped drag target, never mutate the document mid-drag.
             const qreal x = axis->pixelForTime(*ghostTime_);
-            QColor ghostColor = kit::color(kit::Color::Accent);
-            ghostColor.setAlpha(150);
-            painter.setPen(QPen(ghostColor.darker(120), 1.5, Qt::DashLine));
+            const QColor ghostColor = kit::withOpacity(
+                kit::pressedFillFor(kit::color(kit::Color::Accent)), kit::kGhostOpacity);
+            painter.setPen(QPen(ghostColor, kit::kDiamondStroke, Qt::DashLine));
             painter.setBrush(Qt::NoBrush);
             // The ghost wears the DRAGGED key's own glyph, so a Hold key being moved still reads as
             // a Hold key rather than turning into a diamond for the duration of the gesture.

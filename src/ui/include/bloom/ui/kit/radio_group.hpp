@@ -54,6 +54,11 @@ class KRadioGroup final : public QWidget {
     // Hover for whichever the pointer is over, Normal otherwise.
     [[nodiscard]] State stateForOption(int index) const;
 
+    // The segmented bar's single border by the kit-wide rule: Border, BorderHover under the
+    // pointer, Accent under keyboard focus. In the Discrete presentation the same focus shows as
+    // an Accent border on the current option's mark.
+    [[nodiscard]] Color borderToken() const;
+
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
 
@@ -65,6 +70,7 @@ class KRadioGroup final : public QWidget {
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void changeEvent(QEvent* event) override;
 
@@ -86,6 +92,7 @@ class KRadioGroup final : public QWidget {
     QVector<Option> options_;
     int currentIndex_ = -1;
     int hoveredIndex_ = -1;
+    bool hovered_ = false;
     Presentation presentation_ = Presentation::Segmented;
 };
 

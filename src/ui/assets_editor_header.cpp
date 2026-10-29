@@ -180,7 +180,7 @@ void AssetsEditor::refreshSelectionHeader() {
         glyph = kit::IconId::Folder;
     }
     if (picture.isNull())
-        picture = kit::iconPixmap(glyph, kit::Size::IconControl, tint);
+        picture = kit::iconPixmap(glyph, kit::Size::IconLarge, tint);
     thumbnail_->setPixmap(picture);
     thumbnail_->setToolTip(name);
     selectionName_->setElidedText(name);

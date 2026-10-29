@@ -84,20 +84,22 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
     request.background = static_cast<render::GpuPresentBackground>(background_);
     // The surround must match drawCanvasBackground()'s CPU paint for every mode. Solid uses the
     // panel Canvas token -- the composition's authored background lives in the display image
-    // itself, never in the surround -- Black and White are literal, and Checkerboard comes from the
-    // checker colours below. The present shader overrides Black/White/Checkerboard from the mode,
-    // so this value is authoritative for Solid and consistent with the CPU path for the others.
+    // itself, never in the surround -- Black and White are CanvasBlack/CanvasWhite, and
+    // Checkerboard comes from the checker colours below. The present shader overrides
+    // Black/White/Checkerboard from the mode, so this value is authoritative for Solid and
+    // consistent with the CPU path for the others.
     QColor surround = kit::color(kit::Color::Canvas);
     if (background_ == ViewerBackground::Black) {
-        surround = QColor(Qt::black);
+        surround = kit::color(kit::Color::CanvasBlack);
     } else if (background_ == ViewerBackground::White) {
-        surround = QColor(Qt::white);
+        surround = kit::color(kit::Color::CanvasWhite);
     }
     request.backgroundColor = render::GpuPresentColor{static_cast<float>(surround.redF()),
                                                       static_cast<float>(surround.greenF()),
                                                       static_cast<float>(surround.blueF()), 1.0F};
-    const QColor checkerA = kit::color(kit::Color::Surface);
-    const QColor checkerB = kit::color(kit::Color::SurfaceRaised);
+    // The same two tones, base then alternate cell, kit::drawAlphaCheckerboard() paints on the CPU.
+    const QColor checkerA = kit::color(kit::Color::CheckerLight);
+    const QColor checkerB = kit::color(kit::Color::CheckerDark);
     request.checkerColorA = render::GpuPresentColor{static_cast<float>(checkerA.redF()),
                                                     static_cast<float>(checkerA.greenF()),
                                                     static_cast<float>(checkerA.blueF()), 1.0F};

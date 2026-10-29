@@ -28,7 +28,7 @@ namespace {
 // A result row and a section heading. A heading is deliberately the shorter of the two: it labels
 // the rows under it rather than competing with them.
 [[nodiscard]] int resultRowHeight() { return px(Size::Control); }
-[[nodiscard]] int sectionRowHeight() { return px(Size::ControlCompact); }
+[[nodiscard]] int sectionRowHeight() { return px(Size::Control); }
 
 // How much of the list may be on screen before it scrolls. A floor-free height means a short list
 // is exactly its own rows; this is the other end -- a long one stops growing instead of running off

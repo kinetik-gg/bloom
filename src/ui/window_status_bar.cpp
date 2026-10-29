@@ -51,20 +51,16 @@ class StatusColorChip final : public kit::KLabel {
         setText(state.text);
         setAccessibleName(state.text);
         setToolTip(state.text);
-        auto colors = palette();
-        colors.setColor(QPalette::WindowText, kit::color(state.colorToken));
-        setPalette(colors);
+        setTone(state.colorToken);
     }
 };
 
-QLabel* makeCell(const QString& objectName, const kit::TypeRole role, const kit::Color ink,
-                 QWidget* parent) {
+kit::KLabel* makeCell(const QString& objectName, const kit::TypeRole role, const kit::Color ink,
+                      QWidget* parent) {
     auto* label = new kit::KLabel(parent);
     label->setObjectName(objectName);
-    label->setFont(kit::font(role));
-    QPalette palette = label->palette();
-    palette.setColor(QPalette::WindowText, kit::color(ink));
-    label->setPalette(palette);
+    label->setTypeRole(role);
+    label->setTone(ink);
     return label;
 }
 
@@ -481,10 +477,7 @@ void WindowStatusBar::refreshVideoCell() {
         text += tr(" · ") + note;
     video_->setText(text);
     video_->setToolTip(lines.join(QLatin1Char('\n')));
-    QPalette palette = video_->palette();
-    palette.setColor(QPalette::WindowText,
-                     kit::color(note.isEmpty() ? kit::Color::Muted : kit::Color::Warn));
-    video_->setPalette(palette);
+    video_->setTone(note.isEmpty() ? kit::Color::Muted : kit::Color::Warn);
     video_->setVisible(!text.isEmpty());
 }
 
@@ -523,21 +516,14 @@ void WindowStatusBar::refreshPreviewCells() {
                        : PreviewColorState{tr("No visible viewer"), kit::Color::Muted});
 
     previewState_->setText(displayedViewer_ ? previewActivityText(preview) : QString{});
-    QPalette statePalette = previewState_->palette();
-    statePalette.setColor(QPalette::WindowText,
-                          kit::color(preview.activity == PreviewActivity::Failed
-                                         ? kit::Color::Error
-                                         : kit::Color::Muted));
-    previewState_->setPalette(statePalette);
+    previewState_->setTone(preview.activity == PreviewActivity::Failed ? kit::Color::Error
+                                                                       : kit::Color::Muted);
     previewState_->setToolTip(displayedViewer_ ? preview.message : QString{});
 
     const QString dropped = droppedFrameText(*previewController_);
     droppedFrames_->setText(dropped);
-    QPalette droppedPalette = droppedFrames_->palette();
-    droppedPalette.setColor(QPalette::WindowText, previewController_->droppedFrameCount() == 0
-                                                      ? kit::color(kit::Color::Muted)
-                                                      : kit::color(kit::Color::Warn));
-    droppedFrames_->setPalette(droppedPalette);
+    droppedFrames_->setTone(previewController_->droppedFrameCount() == 0 ? kit::Color::Muted
+                                                                         : kit::Color::Warn);
 
     const auto previewText = previewCacheText(*previewController_);
     const auto operationText =

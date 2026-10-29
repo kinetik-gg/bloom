@@ -111,7 +111,7 @@ void KValueField::setCompact(const bool compact) {
     if (compact) {
         setMinimumWidth(px(Size::PropertiesFieldMinWidth));
         setMaximumWidth(px(Size::PropertiesFieldWidth));
-        setFixedHeight(px(Size::ControlCompact));
+        setFixedHeight(px(Size::Control));
     }
     updateGeometry();
     update();
@@ -273,7 +273,7 @@ QRectF KValueField::labelRect() const {
 
 QRectF KValueField::cellRect() const {
     const qreal left = compact_ || label_.isEmpty() ? 0.0 : labelColumnWidth() + px(Spacing::S);
-    const auto margin = px(Spacing::FieldMargin);
+    const auto margin = px(Spacing::ControlInset);
     return QRectF(left, 0.0, std::max(0.0, width() - left), height())
         .adjusted(margin, margin, -margin, -margin);
 }
@@ -314,7 +314,7 @@ QSize KValueField::sizeHint() const {
         const auto specialWidth =
             QFontMetrics(kit::font(TypeRole::Value)).horizontalAdvance(specialValueText_) +
             px(Spacing::XS) * 2;
-        return {std::max(px(Size::PropertiesFieldWidth), specialWidth), px(Size::ControlCompact)};
+        return {std::max(px(Size::PropertiesFieldWidth), specialWidth), px(Size::Control)};
     }
     const QFontMetrics valueMetrics(kit::font(TypeRole::Value));
     // Sized for the widest number the range can produce, not for the number currently in it: the
@@ -334,7 +334,7 @@ QSize KValueField::sizeHint() const {
 
 QSize KValueField::minimumSizeHint() const {
     if (compact_)
-        return {minimumWidth(), px(Size::ControlCompact)};
+        return {minimumWidth(), px(Size::Control)};
     // task WIDTH-1: sizeHint() above is this field's PREFERRED width, sized for the widest number
     // its own range can produce so the cell never resizes as digits change. minimumSizeHint() is a
     // different question -- the FLOOR this cell may shrink to when the panel hosting it (Properties

@@ -114,7 +114,7 @@ const auto& allIconIds() {
 struct CacheKey {
     IconId id;
     IconWeight weight;
-    Size size;
+    int sizePx;
     QRgb tint;
     int ratioMilli;
 
@@ -124,8 +124,8 @@ struct CacheKey {
 [[nodiscard]] std::size_t qHash(const CacheKey& key, const std::size_t seed = 0) noexcept {
     // The interaction state and the palette role are not separate key components: both exist only
     // to choose a tint, and two states that resolve to the same tint render the same pixels.
-    return qHashMulti(seed, static_cast<int>(key.id), static_cast<int>(key.weight),
-                      static_cast<int>(key.size), key.tint, key.ratioMilli);
+    return qHashMulti(seed, static_cast<int>(key.id), static_cast<int>(key.weight), key.sizePx,
+                      key.tint, key.ratioMilli);
 }
 
 QHash<CacheKey, QPixmap>& cache() {
@@ -203,10 +203,10 @@ QString iconResourcePath(const IconId id, const IconWeight weight) {
             .arg(asset->upstreamName)
             .arg(QLatin1StringView(suffix));
     }
-    // Task VIEW-1: all three vendored weights are now COMPLETE subsets (48 ids each), so this is a
-    // total mapping rather than the five-id Bold exception it used to carry. IconRole::Chrome asks
-    // for Bold on every chrome glyph in the application, and an id without a Bold file would have
-    // rendered as a silent blank.
+    // Task VIEW-1: all three vendored weights are COMPLETE subsets over every Phosphor-backed id,
+    // so this is a total mapping rather than the five-id Bold exception it used to carry.
+    // IconRole::Chrome asks for Bold on every chrome glyph in the application, and an id without a
+    // Bold file would have rendered as a silent blank.
     switch (weight) {
     case IconWeight::Bold:
         return QStringLiteral(":/bloom/kit/phosphor-icons/bold/%1-bold.svg")
@@ -237,18 +237,30 @@ QColor iconTint(const Color role, const State state) {
     return color(role);
 }
 
-QPixmap iconPixmap(const IconId id, const Size size, const QColor& tint,
-                   const qreal devicePixelRatio, const IconWeight weight) {
+namespace {
+
+// The one cached render path. Both the iconPixmap() family and the QIcon engine below come through
+// here, so a menu row, an Assets row or a header button repainting never re-reads or re-parses SVG
+// on the UI thread once its exact identity has been drawn.
+QPixmap cachedIconPixmap(const IconId id, const IconWeight weight, const int sizePx,
+                         const QColor& tint, const qreal devicePixelRatio) {
     const qreal ratio = resolvedDevicePixelRatio(devicePixelRatio);
-    const CacheKey key{id, weight, size, tint.rgba(),
+    const CacheKey key{id, weight, sizePx, tint.rgba(),
                        static_cast<int>(std::lround(ratio * 1000.0))};
 
     if (const auto found = cache().constFind(key); found != cache().constEnd()) {
         return found.value();
     }
-    QPixmap rendered = renderIcon(iconResourcePath(id, weight), px(size), tint, ratio);
+    QPixmap rendered = renderIcon(iconResourcePath(id, weight), sizePx, tint, ratio);
     cache().insert(key, rendered);
     return rendered;
+}
+
+} // namespace
+
+QPixmap iconPixmap(const IconId id, const Size size, const QColor& tint,
+                   const qreal devicePixelRatio, const IconWeight weight) {
+    return cachedIconPixmap(id, weight, px(size), tint, devicePixelRatio);
 }
 
 QPixmap iconPixmap(const IconId id, const Size size, const Color role, const State state,
@@ -275,18 +287,27 @@ class SvgIconEngine final : public QIconEngine {
     QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override {
         return scaledPixmap(size, mode, state, 1.0);
     }
-    QPixmap scaledPixmap(const QSize& size, QIcon::Mode mode, QIcon::State, qreal scale) override {
-        const auto state = mode == QIcon::Disabled ? State::Disabled
-                           : mode == QIcon::Normal ? State::Normal
-                                                   : State::Hover;
-        return renderIcon(iconResourcePath(id_, weight_), std::min(size.width(), size.height()),
-                          iconTint(role_, state), scale);
+    QPixmap scaledPixmap(const QSize& size, QIcon::Mode mode, QIcon::State state,
+                         qreal scale) override {
+        const auto tintState = mode == QIcon::Disabled ? State::Disabled
+                               : mode == QIcon::Normal ? State::Normal
+                                                       : State::Hover;
+        // A toggled-on icon takes the Fill weight (visual-language.md: fill marks a selected or
+        // toggled state), whatever weight its role rests at.
+        const IconWeight weight = state == QIcon::On ? IconWeight::Fill : weight_;
+        return cachedIconPixmap(id_, weight, std::min(size.width(), size.height()),
+                                iconTint(role_, tintState), scale);
     }
     void paint(QPainter* painter, const QRect& rect, QIcon::Mode mode,
                QIcon::State state) override {
         const qreal dpr = painter->device()->devicePixelRatioF();
         const auto value = scaledPixmap(rect.size(), mode, state, dpr);
-        painter->drawPixmap(rect.topLeft(), value);
+        const QSizeF extent = value.deviceIndependentSize();
+        // Centered in the requested rect on whole device pixels.
+        const QPointF origin(
+            std::round((rect.x() + (rect.width() - extent.width()) / 2.0) * dpr) / dpr,
+            std::round((rect.y() + (rect.height() - extent.height()) / 2.0) * dpr) / dpr);
+        painter->drawPixmap(origin, value);
     }
 
   private:

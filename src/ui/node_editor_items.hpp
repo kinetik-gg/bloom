@@ -103,7 +103,7 @@ inline constexpr qreal kNodeSceneMargin = kit::px(kit::Spacing::XXL) * 2;
 inline constexpr qreal kSelectionEdgeWidth = kit::px(kit::Size::SelectionEdge);
 // A group frame's own title strip, and how faintly its body reads against the canvas: a frame is
 // background, so its fill is the raised surface at low opacity rather than a second opaque plate.
-inline constexpr qreal kGroupTitleHeight = kit::px(kit::Size::PanelHeader);
+inline constexpr qreal kGroupTitleHeight = kit::px(kit::Size::NodeGroupTitle);
 inline constexpr qreal kGroupFillOpacity = 0.35;
 inline constexpr auto kGroupRadius = kit::Radius::Panel;
 

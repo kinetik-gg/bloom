@@ -393,7 +393,7 @@ void testHeaderProportionsMatchTheDesignCrops(Expectations& expectations) {
     if (header == nullptr || picker == nullptr) {
         return;
     }
-    expectations.expect(kit::px(kit::Size::EditorHeader) == 32,
+    expectations.expect(kit::px(kit::Size::HeaderRow) == 32,
                         "the header row's own height token is 32");
     expectations.expect(picker->sizeHint().height() == kit::px(kit::Size::Control),
                         "the switcher field is Control (26) tall");

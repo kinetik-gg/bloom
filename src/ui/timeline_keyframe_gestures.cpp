@@ -505,9 +505,8 @@ void TimelineKeyframePanel::paintGridOverlay(QPainter& painter, const QWidget& r
     painter.translate(0, -row.y());
     if (box_) {
         painter.setPen(kit::color(kit::Color::Accent));
-        auto fill = kit::color(kit::Color::Accent);
-        fill.setAlphaF(0.15F);
-        painter.setBrush(fill);
+        painter.setBrush(
+            kit::withOpacity(kit::color(kit::Color::Accent), kit::kMarqueeFillOpacity));
         painter.drawRect(*box_);
     }
     painter.setPen(kit::color(kit::Color::Foreground));

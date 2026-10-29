@@ -145,6 +145,9 @@ JobsEditor::JobsEditor(TaskMonitorModel& model, QWidget* parent) : QWidget(paren
     table_->setAlternatingRowColors(true);
     table_->setSortingEnabled(false);
     table_->verticalHeader()->setVisible(false);
+    // The one list pitch, the same as Assets and the Timeline.
+    table_->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    table_->verticalHeader()->setDefaultSectionSize(kit::px(kit::Size::ListRow));
     table_->horizontalHeader()->setHighlightSections(false);
     table_->horizontalHeader()->setStretchLastSection(false);
     table_->horizontalHeader()->setSectionResizeMode(TaskMonitorModel::JobColumn,

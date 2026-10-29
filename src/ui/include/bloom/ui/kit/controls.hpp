@@ -5,6 +5,7 @@
 #include <QStyleOptionMenuItem>
 #include <QToolButton>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 
 class QVBoxLayout;
 class QButtonGroup;
@@ -50,13 +51,24 @@ class KMenuFlow final : public QWidget {
     QSize cell_;
     int hovered_ = -1;
 };
+// An icon-only button in a recessed ControlSurface well (header buttons), or plate-less as a
+// disclosure / header-row glyph. Colours come from kit::buttonColors(ButtonKind::Recessed); the
+// focus border follows keyboard focus only, never a click.
 class KIconButton : public QToolButton {
     Q_OBJECT
   public:
     explicit KIconButton(QWidget* parent = nullptr);
+    [[nodiscard]] State visualState() const;
+    // The single border's state channel (kit::borderForInteraction): keyboard focus only.
+    [[nodiscard]] Color borderToken() const;
 
   protected:
     void paintEvent(QPaintEvent* event) override;
+    void enterEvent(QEnterEvent* event) override;
+    void leaveEvent(QEvent* event) override;
+
+  private:
+    bool hovered_ = false;
 };
 class KIconToggle final : public KIconButton {
     Q_OBJECT
@@ -82,6 +94,9 @@ class KToolColumn final : public QWidget {
     QVBoxLayout* column_;
     QButtonGroup* group_;
 };
+// TypeRole-bound text. A single-line label is exactly one control tall, so it lines up with the
+// controls beside it; a word-wrapped label grows to its wrapped height (never below one control)
+// instead of clipping to its first line. setElidedText() is always single-line.
 class KLabel : public QLabel {
     Q_OBJECT
   public:
@@ -89,13 +104,23 @@ class KLabel : public QLabel {
     explicit KLabel(const QString& text, QWidget* parent = nullptr, TypeRole role = TypeRole::Ui);
     void setTypeRole(TypeRole role);
     void setElidedText(const QString& text);
+    // Hides QLabel::setWordWrap so the height rule follows the wrap mode; a wrap mode set through
+    // a QLabel pointer is picked up again when the label is shown.
+    void setWordWrap(bool on);
+    // The label's ink, by palette role. The one way to colour interface text: disabled text fades
+    // by the kit's disabled recipe from this tone rather than from Foreground.
+    void setTone(Color tone);
+    [[nodiscard]] Color tone() const noexcept { return tone_; }
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
   private:
+    void applyHeightRule();
     QString fullText_;
     bool elides_ = false;
+    Color tone_ = Color::Foreground;
 };
 class KLineEdit : public QLineEdit {
     Q_OBJECT

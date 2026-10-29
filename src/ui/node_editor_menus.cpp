@@ -105,7 +105,7 @@ QString addActionName(const std::string_view type) {
 
 // too narrow to hold all of them side by side, at which point every one of them folds into a
 // single "..." overflow button holding the same menus as submenus -- "never wrap": the header
-// row's height is fixed (Size::EditorHeader), so there is nowhere for a second row to go.
+// row's height is fixed (Size::HeaderRow), so there is nowhere for a second row to go.
 
 } // namespace
 
@@ -1260,10 +1260,8 @@ void NodeGraphEditor::buildFooter() {
 
     footerSelectionLabel_ = new kit::KLabel(this);
     footerSelectionLabel_->setObjectName(QStringLiteral("nodeSelectionReadout"));
-    footerSelectionLabel_->setFont(kit::font(kit::TypeRole::UiSmall));
-    QPalette palette = footerSelectionLabel_->palette();
-    palette.setColor(QPalette::WindowText, kit::color(kit::Color::Muted));
-    footerSelectionLabel_->setPalette(palette);
+    footerSelectionLabel_->setTypeRole(kit::TypeRole::UiSmall);
+    footerSelectionLabel_->setTone(kit::Color::Muted);
     layout->addWidget(footerSelectionLabel_);
 
     connect(&session_, &CompositionSession::selectionChanged, this,

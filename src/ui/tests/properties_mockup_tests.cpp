@@ -129,14 +129,14 @@ void run() {
     expect(xIn(positionX, panel) < xIn(positionLink, panel) &&
                xIn(positionLink, panel) < xIn(positionY, panel),
            "link is between X and Y fields");
-    expect(positionX->cellRect().left() == ui::kit::px(ui::kit::Spacing::FieldMargin) &&
+    expect(positionX->cellRect().left() == ui::kit::px(ui::kit::Spacing::ControlInset) &&
                positionX->labelRect().left() > 0,
            "axis prefix is inside the field");
     expect(positionX->width() >= 64 && positionX->width() <= 72 && opacity->width() >= 64 &&
                opacity->width() <= 72,
            "numeric widths are 64–72 px");
     const auto y = visible->mapTo(panel, QPoint{}).y();
-    expect(solo->mapTo(panel, QPoint{}).y() - y == ui::kit::px(ui::kit::Size::PropertiesRowPitch),
+    expect(solo->mapTo(panel, QPoint{}).y() - y == ui::kit::px(ui::kit::Size::PropertyRow),
            "switch row pitch is 28 px");
     expect(visible->isChecked() && !solo->isChecked() && visible->width() > visible->height(),
            "object flags are switches, wider than they are tall");

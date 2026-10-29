@@ -27,29 +27,39 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     {Color::Canvas, 0x131313U},
     {Color::CompositionFrame, 0x454545U},
     {Color::SurfaceSunken, 0x0B0B0BU},
-    // task U8 (issue 131), formal amendment 1, A2: panel body darkened from 0x161616.
-    {Color::Surface, 0x141414U},
-    {Color::SurfaceRaised, 0x1B1B1BU},
-    {Color::Field, 0x202020U},
+    // The ladder is spaced so every step reads on its own: hover, selected and alternating rows
+    // and the Secondary button each move one rung, and a rung that sat ~1.02:1 from its neighbour
+    // (0x141414 / 0x1B1B1B / 0x202020) made all of those invisible. Still a dark ladder: the
+    // brightest rung is an input cell, never a panel.
+    {Color::Surface, 0x181818U},
+    {Color::SurfaceRaised, 0x222222U},
+    {Color::Field, 0x2B2B2BU},
     // task U8 (issue 131), formal amendment 1, A2: the recessed fill for header-variant icon
     // buttons and every dropdown closed field -- darker than Background itself, by design.
     {Color::ControlSurface, 0x0E0E0EU},
     {Color::Foreground, 0xFFFFFFU},
     {Color::Muted, 0x999999U},
     {Color::Faint, 0x666666U},
-    {Color::Border, 0x222222U},
-    {Color::BorderHover, 0x454545U},
-    // task U8 (issue 131), formal amendment 1, A1: final value, supersedes 0x333333.
-    {Color::BorderActive, 0x444444U},
-    {Color::Accent, 0x0C8CE9U},
+    // Border sits one clear step above SurfaceRaised so a raised plate keeps a visible edge;
+    // BorderActive is one clear step above BorderHover so hover and drag are two states.
+    {Color::Border, 0x2E2E2EU},
+    {Color::BorderHover, 0x4A4A4AU},
+    {Color::BorderActive, 0x626262U},
+    // Accent is deep enough that OnAccent text on it meets WCAG AA at 12 px (4.6:1; the previous
+    // 0x0C8CE9 measured 3.5:1). Hover blends toward Foreground and press scales the channels down
+    // by the same relation the previous triple stated (kit_button_tests.cpp asserts both).
+    {Color::Accent, 0x0A78C8U},
     {Color::OnAccent, 0xFFFFFFU},
-    {Color::AccentHover, 0x3AA5F0U},
-    {Color::AccentPressed, 0x0A73C2U},
+    {Color::AccentHover, 0x3F96D5U},
+    {Color::AccentPressed, 0x0863A6U},
     {Color::Keyframe, 0xF5C542U},
     {Color::Ok, 0x3FBF6BU},
     {Color::Warn, 0xE6A23CU},
     {Color::Error, 0xE0554EU},
-    {Color::Brand, 0xE879ABU},
+    {Color::CheckerLight, 0x999999U},
+    {Color::CheckerDark, 0x666666U},
+    {Color::CanvasBlack, 0x000000U},
+    {Color::CanvasWhite, 0xFFFFFFU},
     {Color::DataSequence, 0xE0554EU},
     {Color::DataClip, 0x3FBF6BU},
     {Color::DataComposition, 0x8B5CF6U},
@@ -171,18 +181,16 @@ QFont font(const TypeRole role) {
     switch (role) {
     case TypeRole::Ui:
         value.setStyleHint(QFont::SansSerif);
-        // 12 design pixels, re-tuned down from 12.5 with the DejaVu Sans swap (task F1, item F1):
-        // DejaVu's x-height and advance widths run larger than the previous interface face's at the
-        // same pixel size, so the old number read oversized in dense chrome.
         value.setPointSizeF(pointSizeForDesignPixels(12.0));
         value.setWeight(QFont::Medium);
         break;
     case TypeRole::UiSmall:
+    case TypeRole::UiSmallStrong:
+        // Small chrome text: mixed case and natural tracking, stated here once so no call site
+        // re-applies them.
         value.setStyleHint(QFont::SansSerif);
-        // 10.5 design pixels, re-tuned down from 11 for the same reason; the uppercase
-        // transform and +0.07em tracking below are unchanged.
         value.setPointSizeF(pointSizeForDesignPixels(10.5));
-        value.setWeight(QFont::Medium);
+        value.setWeight(role == TypeRole::UiSmallStrong ? QFont::DemiBold : QFont::Medium);
         value.setCapitalization(QFont::MixedCase);
         value.setLetterSpacing(QFont::PercentageSpacing, 100.0);
         break;
@@ -207,6 +215,19 @@ QColor withOpacity(const QColor& value, const qreal opacity) {
     return faded;
 }
 
+QColor disabledInk(const QColor& resting) { return withOpacity(resting, kDisabledOpacity); }
+
+QColor selectionWash(const Color surface) {
+    const QColor base = color(surface);
+    const QColor accent = color(Color::Accent);
+    const auto mix = [](const int from, const int to) {
+        return static_cast<int>(std::lround(static_cast<qreal>(from) +
+                                            kSelectionWashOpacity * static_cast<qreal>(to - from)));
+    };
+    return {mix(base.red(), accent.red()), mix(base.green(), accent.green()),
+            mix(base.blue(), accent.blue())};
+}
+
 int durationMs(const Motion token) {
     if (!motionEnabled()) {
         return 0;
@@ -216,6 +237,8 @@ int durationMs(const Motion token) {
         return 80;
     case Motion::Pop:
         return 140;
+    case Motion::Sweep:
+        return 1600;
     case Motion::None:
         return 0;
     }
@@ -228,6 +251,8 @@ QEasingCurve easing(const Motion token) {
     case Motion::Pop:
         // Bloom's "ease-out": decelerating, no overshoot, no anticipation.
         return QEasingCurve(QEasingCurve::OutCubic);
+    case Motion::Sweep:
+        return QEasingCurve(QEasingCurve::InOutSine);
     case Motion::None:
         return QEasingCurve(QEasingCurve::Linear);
     }

@@ -1,7 +1,9 @@
 #include <bloom/ui/kit/radio_group.hpp>
 
+#include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 
+#include <QEnterEvent>
 #include <QEvent>
 #include <QFontMetrics>
 #include <QKeyEvent>
@@ -13,15 +15,17 @@
 namespace bloom::ui::kit {
 namespace {
 
-// A discrete row's radio mark, and the gap between it and its label.
-constexpr int kMarkDiameter = 14;
+// A discrete row's radio mark.
+constexpr int kMarkDiameter = px(Size::RadioMark);
 
 } // namespace
 
 KRadioGroup::KRadioGroup(QWidget* parent) : QWidget(parent) {
+    ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kRadioGroup"));
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+    setAttribute(Qt::WA_Hover, true);
     setFont(kit::font(TypeRole::Ui));
 }
 
@@ -139,7 +143,7 @@ int KRadioGroup::optionAt(const QPoint& point) const {
 
 QSize KRadioGroup::sizeHint() const {
     if (iconsOnly_)
-        return {px(Size::ControlCompact) * count(), px(Size::ControlCompact)};
+        return {px(Size::Control) * count(), px(Size::Control)};
     const QFontMetrics metrics(font());
     if (presentation_ == Presentation::Segmented) {
         int widest = 0;
@@ -160,7 +164,22 @@ QSize KRadioGroup::sizeHint() const {
             optionExtent() * std::max(1, count())};
 }
 
-QSize KRadioGroup::minimumSizeHint() const { return sizeHint(); }
+QSize KRadioGroup::minimumSizeHint() const {
+    // Labels elide, so the floor is an ellipsis and a letter per option (or the icon alone), not
+    // the widest label: a narrow panel squeezes the choice instead of overflowing.
+    const QFontMetrics metrics(font());
+    const int ellipsis = metrics.horizontalAdvance(QStringLiteral("A…"));
+    if (iconsOnly_)
+        return sizeHint();
+    if (presentation_ == Presentation::Segmented)
+        return {(ellipsis + px(Spacing::S) * 2) * std::max(1, count()), optionExtent()};
+    return {kMarkDiameter + px(Spacing::S) + px(Spacing::XS) * 2 + ellipsis,
+            optionExtent() * std::max(1, count())};
+}
+
+Color KRadioGroup::borderToken() const {
+    return borderForInteraction(isEnabled(), hasKeyboardFocus(*this), hovered_);
+}
 
 void KRadioGroup::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton && isEnabled()) {
@@ -182,17 +201,23 @@ void KRadioGroup::mouseMoveEvent(QMouseEvent* event) {
     QWidget::mouseMoveEvent(event);
 }
 
+void KRadioGroup::enterEvent(QEnterEvent* event) {
+    hovered_ = isEnabled();
+    update();
+    QWidget::enterEvent(event);
+}
+
 void KRadioGroup::leaveEvent(QEvent* event) {
-    if (hoveredIndex_ != -1) {
-        hoveredIndex_ = -1;
-        update();
-    }
+    hovered_ = false;
+    hoveredIndex_ = -1;
+    update();
     QWidget::leaveEvent(event);
 }
 
 void KRadioGroup::changeEvent(QEvent* event) {
     if (event->type() == QEvent::EnabledChange && !isEnabled()) {
         hoveredIndex_ = -1;
+        hovered_ = false;
     }
     QWidget::changeEvent(event);
 }
@@ -232,22 +257,26 @@ void KRadioGroup::keyPressEvent(QKeyEvent* event) {
 
 void KRadioGroup::paintSegmented(QPainter& painter) {
     const QRectF bar(rect());
-    fillRoundedSurface(painter, bar, color(Color::Surface), color(Color::Border), Radius::Small);
+    fillRoundedSurface(painter, bar, color(Color::Surface), color(borderToken()), Radius::Small);
+    // A segment sits one hairline inside the bar, so its corner is the bar's minus that inset:
+    // concentric, never a 3px corner pressed into a 3px frame.
+    const auto inset = static_cast<qreal>(px(Spacing::ControlInset));
+    const qreal segmentCorner = radiusPx(Radius::Small, 0) - inset;
 
     const QFontMetrics metrics(font());
     for (int index = 0; index < count(); ++index) {
         const State state = stateForOption(index);
         const QRectF segment(optionRect(index));
+        const QRectF inner = segment.adjusted(inset, inset, -inset, -inset);
         if (state == State::Selected) {
-            fillRoundedSurface(painter, segment.adjusted(1.0, 1.0, -1.0, -1.0),
-                               color(Color::Accent), {}, Radius::Small);
+            fillRoundedSurface(painter, inner, color(Color::Accent), {}, segmentCorner);
         } else if (state == State::Hover) {
-            fillRoundedSurface(painter, segment.adjusted(1.0, 1.0, -1.0, -1.0),
-                               color(surfaceStep(Color::Surface, 1)), {}, Radius::Small);
+            fillRoundedSurface(painter, inner, color(surfaceStep(Color::Surface, 1)), {},
+                               segmentCorner);
         }
 
         const QColor ink =
-            state == State::Selected ? color(Color::Foreground) : inkForState(Color::Muted, state);
+            state == State::Selected ? color(Color::OnAccent) : inkForState(Color::Muted, state);
         QRectF content = segment.adjusted(px(Spacing::S), 0.0, -px(Spacing::S), 0.0);
         if (const std::optional<IconId> glyph = options_.at(index).icon; glyph.has_value()) {
             const auto size = iconsOnly_ ? iconSize(IconRole::Chrome) : Size::IconSmall;
@@ -269,34 +298,53 @@ void KRadioGroup::paintSegmented(QPainter& painter) {
 }
 
 void KRadioGroup::paintDiscrete(QPainter& painter) {
+    const QFontMetrics metrics(font());
+    const bool focused = hasKeyboardFocus(*this);
     for (int index = 0; index < count(); ++index) {
         const State state = stateForOption(index);
         const QRectF row(optionRect(index));
         if (state == State::Hover) {
-            fillRoundedSurface(painter, row, color(surfaceStep(Color::Background, 1)), {},
+            // A wash rather than a ladder rung: the group cannot know which surface it sits on, so
+            // it lightens whatever is behind it by the hover amount instead of assuming one.
+            fillRoundedSurface(painter, row,
+                               withOpacity(color(Color::Foreground), kHoverWashOpacity), {},
                                Radius::Small);
         }
 
         const auto mark = static_cast<qreal>(kMarkDiameter);
-        const QRectF markRect(row.left() + px(Spacing::XS), row.center().y() - mark / 2.0, mark,
-                              mark);
-        const QColor markBorder =
-            state == State::Selected ? color(Color::Accent) : color(borderForState(state));
+        const QRectF markRect(row.left() + px(Spacing::XS),
+                              std::round(row.center().y() - mark / 2.0), mark, mark);
+        // The current mark carries keyboard focus: its own border turns Accent (the dot alone
+        // already marks selection in Accent), and with no current option the first mark does.
+        const bool focusMark =
+            focused && (index == currentIndex_ || (currentIndex_ < 0 && index == 0));
+        const QColor markBorder = state == State::Selected || focusMark
+                                      ? color(Color::Accent)
+                                      : color(borderForState(state));
         fillRoundedSurface(painter, markRect, color(Color::Field), markBorder, Radius::Full);
+        if (focusMark && state == State::Selected) {
+            // Selected already rings the mark in Accent, so focus adds a second hairline ring
+            // just outside it.
+            const qreal ring = kHairlineWidth;
+            fillRoundedSurface(painter, markRect.adjusted(-ring, -ring, ring, ring), {},
+                               color(Color::Accent), Radius::Full);
+        }
         if (state == State::Selected) {
-            const qreal dot = mark / 2.5;
+            const auto dot = static_cast<qreal>(px(Size::RadioDot));
             fillRoundedSurface(painter,
-                               QRectF(markRect.center().x() - dot / 2.0,
-                                      markRect.center().y() - dot / 2.0, dot, dot),
+                               QRectF(markRect.left() + (mark - dot) / 2.0,
+                                      markRect.top() + (mark - dot) / 2.0, dot, dot),
                                color(Color::Accent), {}, Radius::Full);
         }
 
         const QColor ink =
             inkForState(state == State::Selected ? Color::Foreground : Color::Muted, state);
         painter.setPen(ink);
-        painter.drawText(row.adjusted(markRect.width() + px(Spacing::S) + px(Spacing::XS), 0.0,
-                                      -px(Spacing::XS), 0.0),
-                         Qt::AlignVCenter | Qt::AlignLeft, options_.at(index).text);
+        const QRectF label = row.adjusted(markRect.width() + px(Spacing::S) + px(Spacing::XS), 0.0,
+                                          -px(Spacing::XS), 0.0);
+        painter.drawText(label, Qt::AlignVCenter | Qt::AlignLeft,
+                         metrics.elidedText(options_.at(index).text, Qt::ElideRight,
+                                            static_cast<int>(label.width())));
     }
 }
 

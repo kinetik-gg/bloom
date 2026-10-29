@@ -217,7 +217,7 @@ void KDropdownPopup::openBelow(const QWidget& anchor, const int currentIndex) {
     const Shadow elevation = shadow(Elevation::Popup);
     const int margin = elevation.blurRadius;
     const int rows = view_->model() == nullptr ? 0 : view_->model()->rowCount();
-    const int rowHeight = std::max(px(Size::ControlCompact), view_->sizeHintForRow(0));
+    const int rowHeight = std::max(px(Size::Control), view_->sizeHintForRow(0));
     // Exactly the rows, plus the frame's own hairline on each side. No list padding: a row that
     // stopped short of the frame edge would leave a sliver of SurfaceRaised above the first hover
     // bar, and the bar would no longer read as reaching the frame's rounded corner.

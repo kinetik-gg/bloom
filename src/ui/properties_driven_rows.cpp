@@ -168,7 +168,7 @@ void PropertiesEditor::configureDrivenRows() {
             jump->setObjectName("propertiesDriverLink");
             jump->setVariant(kit::KButton::Variant::Ghost);
             jump->setIconId(kit::IconId::Link);
-            jump->setFixedHeight(kit::px(kit::Size::ControlCompact));
+            jump->setFixedHeight(kit::px(kit::Size::Control));
             layout->addWidget(jump);
             auto* value = new kit::KLabel(display);
             value->setObjectName("propertiesDrivenValue");

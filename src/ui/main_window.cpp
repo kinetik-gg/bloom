@@ -988,7 +988,7 @@ QWidget* MainWindow::createReadOnlyPlaceholderPage() {
     auto* page = new QWidget(this);
     page->setObjectName("readOnlyPlaceholderPage");
 
-    auto* heading = new kit::KLabel(tr("Read-only project"), page);
+    auto* heading = new kit::KLabel(tr("Read-only project"), page, kit::TypeRole::Title);
     heading->setObjectName("readOnlyPlaceholderHeading");
 
     readOnlyPlaceholderFileNameLabel_ = new kit::KLabel(page);

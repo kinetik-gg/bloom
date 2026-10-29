@@ -78,6 +78,8 @@ class KColorSwatchRow final : public QWidget {
     [[nodiscard]] bool isSlotPinned(int index) const;
 
     [[nodiscard]] QRectF slotRect(int index) const;
+    // The slot the arrow keys have reached; its border turns Accent under keyboard focus.
+    [[nodiscard]] int focusedSlot() const noexcept;
     // -1 when `point` is not over any slot.
     [[nodiscard]] int slotAt(const QPointF& point) const;
 
@@ -96,6 +98,7 @@ class KColorSwatchRow final : public QWidget {
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void timerEvent(QTimerEvent* event) override;
 
@@ -110,6 +113,7 @@ class KColorSwatchRow final : public QWidget {
     int pressedSlot_ = -1;
     int longPressTimerId_ = 0;
     int hoveredSlot_ = -1;
+    int focusedSlot_ = 0;
 };
 
 } // namespace bloom::ui::kit

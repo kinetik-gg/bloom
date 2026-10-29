@@ -46,8 +46,9 @@ namespace bloom::ui {
 class CompositionSession;
 struct NodeInteraction;
 namespace kit {
+class KLabel;
 class KSearchPopup;
-}
+} // namespace kit
 
 inline constexpr int kNodeItemKindRole = Qt::UserRole + 1;
 inline constexpr int kNodeStableIdRole = Qt::UserRole + 2;
@@ -441,7 +442,7 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     kit::KDropdown* footerZoomDropdown_ = nullptr;
     kit::KSwitch* footerSnapSwitch_ = nullptr;
     kit::KDropdown* footerLinkStyleDropdown_ = nullptr;
-    QLabel* footerSelectionLabel_ = nullptr;
+    kit::KLabel* footerSelectionLabel_ = nullptr;
 };
 
 } // namespace bloom::ui

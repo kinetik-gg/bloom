@@ -471,6 +471,17 @@ void testViewerProbe(Expectations& expectations) {
                             latest.working && std::abs(latest.working->red - 0.125) < 1e-6 &&
                             near(latest.coordinate.x, 1.5) && near(latest.coordinate.y, 1.5),
                         "probe reports working/display values and composition coordinates");
+    // The eyedropper over the Viewer answers with that same working-space value -- the authored
+    // colour -- never the display-referred 8-bit pixel (99, 137, 188) on screen.
+    const auto sampled = fixture.viewer.sampleColorAt(toolScreen(fixture, {1.5, 1.5}).toPoint());
+    expectations.expect(sampled && sampled->space == ui::kit::ColorSpace::Reference &&
+                            std::abs(sampled->red - 0.125F) < 1e-5F &&
+                            std::abs(sampled->green - 0.25F) < 1e-5F &&
+                            std::abs(sampled->blue - 0.5F) < 1e-5F && sampled->alpha == 1.0F,
+                        "the Viewer answers the eyedropper with its working-space probe value");
+    expectations.expect(!fixture.viewer.sampleColorAt(QPoint(-10, -10)).has_value(),
+                        "outside the image the Viewer leaves the eyedropper to the rendered pixel");
+    toolMouse(fixture, QEvent::MouseMove, {1.5, 1.5});
     auto* cell = status.findChild<QLabel*>("windowStatusBarProbe");
     expectations.expect(cell && cell->toolTip().contains("Working space") &&
                             cell->toolTip().contains("Display"),

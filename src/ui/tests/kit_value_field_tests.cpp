@@ -144,7 +144,7 @@ void testANarrowCompactCellFitsItsValue(Expectations& expectations) {
     field.setUnit(QStringLiteral("px"));
     field.setRange(-1.0e9, 1.0e9);
     field.setDecimals(2);
-    field.resize(kit::px(kit::Size::PropertiesFieldWidth), kit::px(kit::Size::ControlCompact));
+    field.resize(kit::px(kit::Size::PropertiesFieldWidth), kit::px(kit::Size::Control));
     const QFontMetrics metrics(kit::font(kit::TypeRole::Value));
     const auto fitsColumn = [&] {
         const auto text = field.paintedText();
@@ -250,13 +250,13 @@ void testTheCellIsTheWholeControlAndEnteringEditDoesNotMoveTheValue(Expectations
                         "is reserved in it, got " +
                             std::to_string(field.sizeHint().height()));
     expectations.expect(
-        field.cellRect().top() == kit::px(kit::Spacing::FieldMargin) &&
+        field.cellRect().top() == kit::px(kit::Spacing::ControlInset) &&
             field.cellRect().height() ==
-                static_cast<qreal>(field.height() - 2 * kit::px(kit::Spacing::FieldMargin)),
+                static_cast<qreal>(field.height() - 2 * kit::px(kit::Spacing::ControlInset)),
         "and the cell spans the control's whole height, so nothing is left over to "
         "read as a darker band above or below it");
     expectations.expect(field.cellRect().right() ==
-                            static_cast<qreal>(field.width() - kit::px(kit::Spacing::FieldMargin)),
+                            static_cast<qreal>(field.width() - kit::px(kit::Spacing::ControlInset)),
                         "the cell also reaches the control's right edge");
     expectations.expect(
         field.cellTextRect().left() == field.cellRect().left() + kit::px(kit::Spacing::S) &&
@@ -312,7 +312,7 @@ void testGeometryPlacesTheLabelAndCell(Expectations& expectations) {
     unlabelled.resize(unlabelled.sizeHint());
     expectations.expect(unlabelled.labelRect().isNull(),
                         "a field with no label claims no label column");
-    expectations.expect(unlabelled.cellRect().left() == kit::px(kit::Spacing::FieldMargin),
+    expectations.expect(unlabelled.cellRect().left() == kit::px(kit::Spacing::ControlInset),
                         "and its cell starts at the control's edge");
 }
 

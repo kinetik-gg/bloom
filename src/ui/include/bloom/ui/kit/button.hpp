@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QAbstractButton>
@@ -15,9 +16,10 @@ namespace bloom::ui::kit {
 // The Kinetik button. Four variants across three control sizes, with an optional leading icon.
 //
 // A QAbstractButton subclass that paints itself rather than a QPushButton wearing a stylesheet:
-// the accent recipes, the surface-ladder hover step, the outside-drawn focus ring, and the exact
+// the accent recipes, the surface-ladder hover step, the single focus border, and the exact
 // hairline all need real painting, and a QSS rule cannot express "one step up the surface ladder"
-// or "snapped to a whole physical pixel at 150%".
+// or "snapped to a whole physical pixel at 150%". Its colours come from kit::buttonColors(), the
+// one button recipe it shares with KIconButton and KMenuButton.
 class KButton final : public QAbstractButton {
     Q_OBJECT
 
@@ -29,7 +31,7 @@ class KButton final : public QAbstractButton {
         Secondary,
         // Chrome-weight: no surface at rest, muted ink, surface only on hover.
         Ghost,
-        // Destructive: Error ink and border at rest, Error fill once the pointer commits.
+        // Destructive: outlined in Error at rest, Error fill once the pointer commits.
         Danger,
     };
 
@@ -52,10 +54,10 @@ class KButton final : public QAbstractButton {
     void setIconId(std::optional<IconId> icon);
     [[nodiscard]] std::optional<IconId> iconId() const noexcept;
 
-    // Opt-in, Ghost-only: hover/press take the Danger recipe (Error fill, Foreground ink) while
+    // Opt-in, Ghost-only: hover/press take the Danger fill (Error fill, Foreground ink) while
     // rest/focus stay plain ghost -- the "close button" convention (title bar, panel header) where
     // the control reads as chrome-weight until the pointer commits to the destructive action, never
-    // Error-colored at rest the way Variant::Danger itself is. False for every other variant.
+    // Error-outlined at rest the way Variant::Danger itself is. False for every other variant.
     void setDangerOnHover(bool dangerOnHover);
     [[nodiscard]] bool dangerOnHover() const noexcept;
 
@@ -68,10 +70,12 @@ class KButton final : public QAbstractButton {
     [[nodiscard]] QColor fillForState(State state) const;
     [[nodiscard]] QColor inkForVisualState(State state) const;
 
-    // The single border this control paints, by the kit-wide focus/hover rule
-    // (kit::borderForInteraction). Accent here outranks every variant's own resting outline; the
-    // variant recipes in paintEvent() only apply when this is not Accent.
+    // The single border's state channel, by the kit-wide focus/hover rule
+    // (kit::borderForInteraction). Accent here outranks every variant's own resting outline.
     [[nodiscard]] Color borderToken() const;
+
+    // The kit::buttonColors() recipe this variant resolves through.
+    [[nodiscard]] ButtonKind buttonKind() const noexcept;
 
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
@@ -85,8 +89,6 @@ class KButton final : public QAbstractButton {
   private:
     [[nodiscard]] int controlExtent() const;
     [[nodiscard]] Size iconBox() const;
-
-    [[nodiscard]] bool paintsAsDanger(State state) const noexcept;
 
     Variant variant_ = Variant::Secondary;
     ControlSize controlSize_ = ControlSize::Default;

@@ -2,13 +2,13 @@
 
 #include <bloom/ui/kit/fonts.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
+#include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QApplication>
 #include <QColor>
 #include <QLatin1StringView>
 #include <QStringList>
-#include <QStyleFactory>
 
 #include <array>
 #include <utility>
@@ -70,23 +70,23 @@ const auto& numberPlaceholders() {
         {QLatin1StringView("radius.Large"), radiusPx(Radius::Large, 0)},
         {QLatin1StringView("radius.XLarge"), radiusPx(Radius::XLarge, 0)},
         {QLatin1StringView("radius.Panel"), radiusPx(Radius::Panel, 0)},
-        {QLatin1StringView("size.ControlCompact"), px(Size::ControlCompact)},
         {QLatin1StringView("size.Control"), px(Size::Control)},
         {QLatin1StringView("size.ControlRoomy"), px(Size::ControlRoomy)},
         {QLatin1StringView("size.IconSmall"), px(Size::IconSmall)},
         {QLatin1StringView("size.IconMedium"), px(Size::IconMedium)},
         {QLatin1StringView("size.IconLarge"), px(Size::IconLarge)},
         {QLatin1StringView("size.TitleBar"), px(Size::TitleBar)},
-        {QLatin1StringView("size.PanelHeader"), px(Size::PanelHeader)},
-        {QLatin1StringView("size.EditorHeader"), px(Size::EditorHeader)},
-        {QLatin1StringView("size.TimelineRow"), px(Size::TimelineRow)},
-        {QLatin1StringView("size.ScrollBar"), px(Size::ScrollBar)},
-        {QLatin1StringView("size.ScrollBarHover"), px(Size::ScrollBarHover)},
+        {QLatin1StringView("size.HeaderRow"), px(Size::HeaderRow)},
+        {QLatin1StringView("size.ListRow"), px(Size::ListRow)},
+        {QLatin1StringView("size.ScrollBarTrack"), px(Size::ScrollBarTrack)},
+        {QLatin1StringView("size.ScrollBarThumbInset"),
+         (px(Size::ScrollBarTrack) - px(Size::ScrollBarThumb)) / 2},
         {QLatin1StringView("size.MenuMinWidth"), px(Size::MenuMinWidth)},
-        // A scrollbar thumb is a pill: Radius::Full against the scrollbar's own extent.
-        {QLatin1StringView("radius.ScrollBarThumb"), radiusPx(Radius::Full, px(Size::ScrollBar))},
+        // A scrollbar thumb is a pill: Radius::Full against its own width, resting and hovered.
+        {QLatin1StringView("radius.ScrollBarThumb"),
+         radiusPx(Radius::Full, px(Size::ScrollBarThumb))},
         {QLatin1StringView("radius.ScrollBarThumbHover"),
-         radiusPx(Radius::Full, px(Size::ScrollBarHover))},
+         radiusPx(Radius::Full, px(Size::ScrollBarTrack))},
         {QLatin1StringView("border.Hairline"), static_cast<int>(kHairlineWidth)},
         {QLatin1StringView("border.Window"), static_cast<int>(kWindowBorderWidth)},
     });
@@ -101,10 +101,37 @@ const auto& numberPlaceholders() {
         .arg(QString::number(static_cast<double>(value.alphaF()), 'f', 3));
 }
 
-// Disabled ink is the normal ink at kDisabledOpacity -- a real alpha, not a separate grey, so a
-// disabled control fades against whatever surface it happens to sit on.
-[[nodiscard]] QColor disabledInk() {
-    return withOpacity(color(Color::Foreground), kDisabledOpacity);
+// A colour as a QSS value: hex when opaque (so the token-hex audit can read it), rgba otherwise.
+[[nodiscard]] QString cssColor(const QColor& value) {
+    if (!value.isValid()) {
+        return QStringLiteral("transparent");
+    }
+    return value.alpha() == 255 ? value.name(QColor::HexRgb) : rgba(value);
+}
+
+// One QSS declaration block for a button in one state, straight from kit::buttonColors().
+[[nodiscard]] QString buttonDeclarations(const ButtonColors& colors) {
+    return QStringLiteral("    color: %1;\n    background: %2;\n    border-color: %3;\n")
+        .arg(cssColor(colors.ink), cssColor(colors.fill), cssColor(colors.border));
+}
+
+// The generated rules for a stock-painted button class, one per state of the ONE button recipe,
+// so a QPushButton or a KMenuButton cannot drift from what KButton paints. The keyboard-focus rule
+// comes last: it outranks hover at equal specificity, which is the "focus wins" rule.
+[[nodiscard]] QString buttonRules(const QString& selector, const ButtonKind kind) {
+    QString rules;
+    const auto rule = [&rules](const QString& target, const ButtonColors& colors) {
+        rules +=
+            target + QStringLiteral(" {\n") + buttonDeclarations(colors) + QStringLiteral("}\n");
+    };
+    rule(selector, buttonColors(kind, State::Normal, false));
+    rule(selector + QStringLiteral(":hover"), buttonColors(kind, State::Hover, false));
+    rule(selector + QStringLiteral(":pressed"), buttonColors(kind, State::Pressed, false));
+    rule(selector + QStringLiteral(":checked"), buttonColors(kind, State::Selected, false));
+    rule(selector + QStringLiteral(":disabled"), buttonColors(kind, State::Disabled, false));
+    rules += selector + QStringLiteral("[bloomKeyboardFocus=\"true\"] {\n    border-color: ") +
+             cssColor(buttonColors(kind, State::Normal, true).border) + QStringLiteral(";\n}\n");
+    return rules;
 }
 
 } // namespace
@@ -114,7 +141,8 @@ QString expandTokens(const QString& templateText) {
     for (const auto& [name, token] : colorPlaceholders()) {
         text.replace(QStringLiteral("{color.%1}").arg(name), hex(token));
     }
-    text.replace(QStringLiteral("{color.DisabledInk}"), rgba(disabledInk()));
+    text.replace(QStringLiteral("{color.DisabledInk}"),
+                 rgba(disabledInk(color(Color::Foreground))));
     for (const auto& [name, value] : numberPlaceholders()) {
         text.replace(QStringLiteral("{%1}").arg(name), QString::number(value));
     }
@@ -151,12 +179,12 @@ QPalette kinetikPalette() {
     palette.setColor(QPalette::Dark, color(Color::Border));
     palette.setColor(QPalette::Shadow, QColor(0, 0, 0));
 
-    // Disabled ink is the normal ink at 40%, in every text role.
-    const QColor disabled = disabledInk();
-    palette.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
-    palette.setColor(QPalette::Disabled, QPalette::Text, disabled);
-    palette.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
-    palette.setColor(QPalette::Disabled, QPalette::HighlightedText, disabled);
+    // The one disabled recipe (kit::disabledInk): each text role's own resting ink at 40%.
+    for (const auto role : {QPalette::WindowText, QPalette::Text, QPalette::ButtonText,
+                            QPalette::HighlightedText, QPalette::PlaceholderText}) {
+        palette.setColor(QPalette::Disabled, role,
+                         disabledInk(palette.color(QPalette::Active, role)));
+    }
     palette.setColor(QPalette::Disabled, QPalette::Highlight, color(Color::Surface));
     palette.setColor(QPalette::Disabled, QPalette::Base, color(Color::Background));
     palette.setColor(QPalette::Disabled, QPalette::Button, color(Color::Surface));
@@ -188,21 +216,10 @@ QMenuBar::item {
 }
 QMenuBar::item:selected {
     background: {color.Accent};
-    color: {color.Foreground};
+    color: {color.OnAccent};
 }
 QMenuBar::item:disabled {
     color: {color.DisabledInk};
-}
-QWidget#kinetikTitleBar {
-    background: {color.Surface};
-    border-bottom: {border.Hairline}px solid {color.Border};
-}
-QWidget#kinetikTitleBar QMenuBar {
-    background: {color.Surface};
-    border-bottom: none;
-}
-QLabel#titleBarTitleLabel {
-    color: {color.Foreground};
 }
 /* task F1, item F5: there is deliberately NO QMenu rule in this sheet at all. A menu's frame AND
    its rows are painted by kit::AltUnderlineProxyStyle, because a stylesheet cannot reach a menu
@@ -211,13 +228,14 @@ QLabel#titleBarTitleLabel {
    empirically: the instant ANY QMenu rule with a box exists, QStyleSheetStyle draws the whole
    item itself and the application style's drawControl(CE_MenuItem) is never called -- so the two
    cannot be mixed, and the proxy owns the lot. */
+/* A panel's border is painted once, by kit::KPanelFrame on top of its children (Accent while the
+   panel is active); the sheet only gives the panel its background. */
 QFrame#editorArea {
     background: {color.Background};
-    border: {border.Hairline}px solid {color.Border};
+    /* Transparent: it keeps the panel's one-hairline content inset, while KPanelFrame paints the
+       visible border on top of the children. */
+    border: {border.Hairline}px solid transparent;
     border-radius: {radius.Panel}px;
-}
-QFrame#editorArea[active="true"] {
-    border-color: {color.Accent};
 }
 QWidget#editorHeader {
     background: {color.Surface};
@@ -226,47 +244,27 @@ QWidget#editorHeader {
 QLabel#unavailableEditorPlaceholder {
     color: {color.Faint};
 }
-QToolButton#maximizeAreaButton {
-    background: {color.ControlSurface};
-    border: {border.Hairline}px solid {color.Border};
-    border-radius: {radius.Small}px;
-}
-QToolButton#maximizeAreaButton:hover {
-    border-color: {color.BorderHover};
-}
 /* Task NODES-1: the node editor's header-hosted menu buttons (Add/View/Select/Node, and the "..."
-   overflow button that replaces all four once the header gets too narrow -- node_editor_menus.cpp's
-   NodeHeaderMenuBar) read as bare text labels, the same flat/transparent-until-hovered treatment
-   QMenuBar::item already gets above, rather than the bordered ControlSurface square every OTHER
-   header button (maximizeAreaButton) uses -- there are up to five of them in a row here, and that
-   many bordered boxes would read as a toolbar, not a menu strip. Selected via a dynamic property
-   rather than an objectName because every instance is built the same way, from the same class,
-   the same way QMenuBar::item is a type selector rather than one objectName per bar. */
+   overflow button that replaces all four once the header gets too narrow) read as bare text
+   labels, the same flat/transparent-until-hovered treatment QMenuBar::item already gets above.
+   Their state rules are generated below from the MenuItem button recipe. */
 QToolButton[headerMenuButton="true"] {
-    background: transparent;
-    border: none;
+    border: {border.Hairline}px solid transparent;
     border-radius: {radius.Small}px;
     padding: {space.XXS}px {space.MenuItemX}px;
-    color: {color.Foreground};
 }
 QToolButton[headerMenuButton="true"]::menu-indicator {
     image: none;
     width: 0px;
-}
-QToolButton[headerMenuButton="true"]:hover {
-    background: {color.Accent};
 }
 QWidget#readOnlyPlaceholderPage {
     background: {color.Background};
 }
 QLabel#readOnlyPlaceholderHeading {
     color: {color.Foreground};
-    font-size: {space.XL}px;
-    font-weight: 600;
 }
 QLabel#readOnlyPlaceholderFileName {
     color: {color.Accent};
-    font-weight: 600;
 }
 QLabel#readOnlyPlaceholderBody {
     color: {color.Muted};
@@ -277,7 +275,7 @@ QComboBox {
     border: {border.Hairline}px solid {color.Border};
     border-radius: {radius.Small}px;
     padding: {space.XXS}px {space.S}px;
-    min-height: {size.ControlCompact}px;
+    min-height: {size.Control}px;
 }
 QComboBox:hover {
     border-color: {color.BorderHover};
@@ -292,24 +290,6 @@ QComboBox::drop-down {
     border: none;
     width: {size.IconLarge}px;
 }
-/* task U8 (issue 131, fix 3): the design sheet's double up/down chevron (IconId::CaretUpDown,
-   the same glyph KDropdown's own closed field paints) is not reachable here as a QSS down-arrow
-   image. Bloom's icon engine resolves the vendored SVGs' fill="currentColor" into a real tint by
-   rewriting a copy of the markup in C++ (icons.cpp's renderIcon()) before handing QSvgRenderer a
-   pixmap; Qt Style Sheets' own `image: url(...)` can only reference a static resource and never
-   invokes that C++ tinting step. Verified empirically: QSvgRenderer given the raw vendored file
-   as-is (currentColor unresolved) paints nothing at all, not a black glyph -- confirmed by
-   rendering caret-up-down.svg through QSvgRenderer with no substitution and finding zero opaque
-   pixels in the result. A second, non-vendored, pre-tinted copy of the glyph would either bake a
-   literal hex value into a checked-in asset (a token drifting silently out of sync with
-   tokens.cpp) or require writing a pixmap to disk at startup for QSS to reference by path, and
-   both are disproportionate to a chrome polish pass. The documented closest-faithful approach:
-   QComboBox keeps the Fusion style's own down-arrow indicator, which already paints in the
-   installed QPalette's Foreground/Button ink, so it stays legible even though it is Fusion's
-   single arrow rather than the vendored double chevron. Everything else in the design sheet
-   (bordered ControlSurface field per formal amendment 1's A2, BorderHover on hover,
-   Radius::Small, bordered SurfaceRaised popup at Radius::Small) is reproduced exactly,
-   including on the panel-switcher QComboBox. */
 QComboBox QAbstractItemView {
     background: {color.SurfaceRaised};
     color: {color.Foreground};
@@ -318,52 +298,24 @@ QComboBox QAbstractItemView {
     padding: {space.XXS}px;
     outline: none;
     selection-background-color: {color.Accent};
-    selection-color: {color.Foreground};
+    selection-color: {color.OnAccent};
 }
 QToolButton {
-    color: {color.Muted};
-    background: transparent;
     border: {border.Hairline}px solid transparent;
     border-radius: {radius.Small}px;
     padding: {space.XXS}px {space.XS}px;
 }
-QToolButton:hover {
-    background: {color.SurfaceRaised};
-    border-color: {color.BorderHover};
-    color: {color.Foreground};
-}
-QToolButton:pressed {
-    background: {color.Surface};
-}
-QToolButton:checked {
-    background: {color.Accent};
-    color: {color.Foreground};
-}
-QToolButton:disabled {
-    color: {color.DisabledInk};
-    border-color: transparent;
-    background: transparent;
-}
 QPushButton {
-    color: {color.Foreground};
-    background: {color.SurfaceRaised};
     border: {border.Hairline}px solid {color.Border};
     border-radius: {radius.Small}px;
     padding: {space.XXS}px {space.M}px;
     min-height: {size.Control}px;
 }
-QPushButton:hover {
-    background: {color.Field};
-    border-color: {color.BorderHover};
-}
-QPushButton:pressed {
-    background: {color.Surface};
-}
-QPushButton:disabled {
-    color: {color.DisabledInk};
-}
 QSplitter::handle {
     background: {color.Background};
+}
+QSplitter::handle:hover {
+    background: {color.SurfaceRaised};
 }
 QStatusBar {
     background: {color.Surface};
@@ -377,31 +329,22 @@ QToolTip {
     background: {color.SurfaceRaised};
     color: {color.Foreground};
     border: {border.Hairline}px solid {color.Border};
-    padding: {space.XXS}px {space.XS}px;
+    border-radius: {radius.Small}px;
+    padding: {space.XS}px {space.S}px;
 }
+/* Item views: rows, hover, selection, the current-row keyboard-focus inset and the tree carets
+   are painted by kit::AltUnderlineProxyStyle (PE_PanelItemViewRow/Item, PE_FrameFocusRect,
+   PE_IndicatorBranch), because a QSS ::item background cannot reach a tree's branch area -- that
+   is what notched a selected row at its indentation. The sheet keeps only the box. */
 QTreeView, QTableView, QListView {
     background: {color.Background};
     alternate-background-color: {color.Surface};
     color: {color.Foreground};
     border: none;
-    outline: none;
-    selection-background-color: {color.Accent};
     selection-color: {color.Foreground};
 }
 QTreeView::item, QTableView::item, QListView::item {
-    border: none;
     padding: {space.XXS}px {space.XS}px;
-}
-QTreeView::item:hover, QTableView::item:hover, QListView::item:hover {
-    background: {color.SurfaceRaised};
-}
-QTreeView::item:selected, QTableView::item:selected, QListView::item:selected {
-    background: {color.Accent};
-    color: {color.Foreground};
-}
-QTreeView[kitRows="true"]::item {
-    padding: 0;
-    background: transparent;
 }
 QHeaderView {
     background: {color.Surface};
@@ -419,31 +362,42 @@ QHeaderView::section:hover {
     background: {color.SurfaceRaised};
     color: {color.Foreground};
 }
+QHeaderView[bloomKeyboardFocus="true"]::section {
+    border-bottom-color: {color.Accent};
+}
+/* One constant track width, so hovering never relayouts the view; the thumb rests inset inside
+   the track and fills it under the pointer. */
 QScrollBar:vertical {
     background: transparent;
-    width: {size.ScrollBar}px;
+    width: {size.ScrollBarTrack}px;
     margin: 0px;
-}
-QScrollBar:vertical:hover {
-    width: {size.ScrollBarHover}px;
 }
 QScrollBar::handle:vertical {
     background: {color.BorderHover};
     border-radius: {radius.ScrollBarThumb}px;
     min-height: {space.XXL}px;
+    margin: 0px {size.ScrollBarThumbInset}px;
 }
 QScrollBar:horizontal {
     background: transparent;
-    height: {size.ScrollBar}px;
+    height: {size.ScrollBarTrack}px;
     margin: 0px;
-}
-QScrollBar:horizontal:hover {
-    height: {size.ScrollBarHover}px;
 }
 QScrollBar::handle:horizontal {
     background: {color.BorderHover};
     border-radius: {radius.ScrollBarThumb}px;
     min-width: {space.XXL}px;
+    margin: {size.ScrollBarThumbInset}px 0px;
+}
+QScrollBar::handle:hover {
+    background: {color.BorderActive};
+    border-radius: {radius.ScrollBarThumbHover}px;
+    margin: 0px;
+}
+QScrollBar::handle:pressed {
+    background: {color.Muted};
+    border-radius: {radius.ScrollBarThumbHover}px;
+    margin: 0px;
 }
 QScrollBar::add-line, QScrollBar::sub-line {
     width: 0px;
@@ -455,7 +409,18 @@ QScrollBar::add-page, QScrollBar::sub-page {
     background: none;
 }
 )");
-    return expandTokens(kTemplate);
+    // The stock buttons' states, generated from the one button recipe. Order matters: the generic
+    // QToolButton rules come before the menu-strip ones, and QPushButton:default (the Primary look
+    // of a dialog's default button) after the plain QPushButton rules.
+    static const QString kButtons =
+        buttonRules(QStringLiteral("QToolButton"), ButtonKind::Ghost) +
+        buttonRules(QStringLiteral("QToolButton[headerMenuButton=\"true\"]"),
+                    ButtonKind::MenuItem) +
+        QStringLiteral("QToolButton[headerMenuButton=\"true\"]:open {\n") +
+        buttonDeclarations(buttonColors(ButtonKind::MenuItem, State::Pressed, false)) +
+        QStringLiteral("}\n") + buttonRules(QStringLiteral("QPushButton"), ButtonKind::Secondary) +
+        buttonRules(QStringLiteral("QPushButton:default"), ButtonKind::Primary);
+    return expandTokens(kTemplate) + kButtons;
 }
 
 void installKinetikTheme(QApplication& application) {
@@ -463,9 +428,13 @@ void installKinetikTheme(QApplication& application) {
     // Fusion rather than the platform style: Kinetik is one interface on Linux, macOS, and Windows,
     // and only a style that honors the application palette and stylesheet uniformly can deliver
     // that. The native style on macOS and Windows overrides large parts of both.
-    if (auto* style = QStyleFactory::create(QStringLiteral("Fusion")); style != nullptr) {
-        QApplication::setStyle(style);
-    }
+    //
+    // The kit proxy style wraps Fusion and is part of the theme: menu rows, item-view rows, tree
+    // carets, the menu shadow and the suppressed focus rectangle are all painted there, so a
+    // window built under the theme looks the same in the application and in a test.
+    // NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- QApplication::setStyle() owns it.
+    QApplication::setStyle(new AltUnderlineProxyStyle());
+    // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
     // Bundled faces are registered before the application font is set, so the very first widget
     // already renders in Inter rather than flashing the platform family. A face that
     // will not load produces a diagnostic and a platform fallback, never a failure to open.
@@ -476,12 +445,13 @@ void installKinetikTheme(QApplication& application) {
     // from the platform theme's per-CLASS font (QPlatformTheme::MenuFont) before the
     // application-wide default -- which is exactly the "menu font size is too big" the interface
     // showed. Setting it here is not enough on its own: changing the application style re-applies
-    // the platform theme's class fonts, and apps/bloom/main.cpp installs the kit proxy style right
-    // after this call. kit::AltUnderlineProxyStyle::polish() sets it on every menu for that
-    // reason; this line covers a menu built before any style change.
+    // the platform theme's class fonts, so kit::AltUnderlineProxyStyle::polish() also sets it on
+    // every menu, menu bar, header and tooltip; these lines cover a widget built before any style
+    // change.
     QApplication::setFont(font(TypeRole::Ui), "QMenu");
     QApplication::setFont(font(TypeRole::Ui), "QMenuBar");
     QApplication::setFont(font(TypeRole::Ui), "QHeaderView");
+    QApplication::setFont(font(TypeRole::Ui), "QTipLabel");
     application.setStyleSheet(kinetikStyleSheet());
 }
 

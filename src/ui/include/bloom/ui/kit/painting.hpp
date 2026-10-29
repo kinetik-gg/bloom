@@ -5,6 +5,8 @@
 #include <QColor>
 #include <QRectF>
 
+#include <cstdint>
+
 class QPainter;
 class QWidget;
 
@@ -26,6 +28,10 @@ namespace bloom::ui::kit {
 
 [[nodiscard]] QColor hoverFillFor(const QColor& resting);
 [[nodiscard]] QColor pressedFillFor(const QColor& resting);
+
+// The outline a filled canvas glyph (a keyframe) strokes with: its fill taken two steps down the
+// same pressed relation, so the edge reads on the fill without a hand-picked darker shade.
+[[nodiscard]] QColor edgeInkFor(const QColor& fill);
 
 // The surface a control rests on in a given state, walking the token surface ladder: hover is one
 // step up, pressed is one step down, disabled does not move at all (a disabled control has no
@@ -56,14 +62,75 @@ namespace bloom::ui::kit {
 // The ink a control's text takes in a given state, already faded when disabled.
 [[nodiscard]] QColor inkForState(Color resting, State state);
 
+// The kit's ONE button state recipe. KButton's four variants, the recessed KIconButton, and the
+// menu-strip KMenuButton (whose rules the generated stylesheet emits from this same function) all
+// resolve their fill, border and ink here, so "checked", "danger", "hover" and "focused" read the
+// same on every kind of button.
+//
+//   Primary       Accent fill; the affirmative action.
+//   Secondary     A raised plate with a hairline; the ordinary action.
+//   Ghost         Chrome weight: no plate at rest, a plate under the pointer.
+//   Danger        Outlined in Error at rest, Error fill once the pointer commits.
+//   GhostDanger   Ghost at rest, the Danger fill under the pointer (close buttons).
+//   Recessed      The ControlSurface well of a header icon button.
+//   MenuItem      A menu-strip title: transparent at rest, the Accent hover bar under the pointer.
+//
+// Selected (a checked toggle) is Accent with OnAccent ink on every kind. Disabled keeps the plate
+// still and fades the ink by the one disabled recipe. Keyboard focus turns the single border
+// Accent -- or Foreground on an Accent plate, where an Accent border would be invisible -- and
+// focus wins over hover.
+enum class ButtonKind : std::uint8_t {
+    Primary,
+    Secondary,
+    Ghost,
+    Danger,
+    GhostDanger,
+    Recessed,
+    MenuItem,
+};
+
+struct ButtonColors {
+    // An invalid colour means "paint nothing" for that layer.
+    QColor fill;
+    QColor border;
+    QColor ink;
+};
+
+[[nodiscard]] ButtonColors buttonColors(ButtonKind kind, State state, bool keyboardFocus);
+
 // A pen exactly one physical pixel wide at the painter's device pixel ratio -- no blur at 125% or
 // 150% -- with the painter offset conventions the rounded-rect helpers below expect.
 void applyHairlinePen(QPainter& painter, const QColor& color);
 
 // Fills a rounded rectangle and strokes its hairline border inside `bounds`. An invalid border
-// color skips the stroke.
+// color skips the stroke. The rectangle is first snapped to whole device pixels under the
+// painter's own transform (device pixel ratio included), so the hairline lands on one physical
+// pixel row at 1x, 1.25x, 1.5x and 2x instead of straddling two.
 void fillRoundedSurface(QPainter& painter, const QRectF& bounds, const QColor& fill,
                         const QColor& border, Radius radius);
+
+// The same with an explicit corner radius in design pixels -- for a shape nested inside another
+// rounded shape, whose corner must be the outer radius minus the inset to stay concentric.
+void fillRoundedSurface(QPainter& painter, const QRectF& bounds, const QColor& fill,
+                        const QColor& border, qreal cornerPx);
+
+// `bounds` with its edges rounded to whole device pixels under `painter`'s transform. Only exact
+// for an unrotated transform; a rotated or sheared one returns `bounds` unchanged.
+[[nodiscard]] QRectF snappedToDevicePixels(const QPainter& painter, const QRectF& bounds);
+
+// The box a control paints inside its own widget rectangle: Spacing::ControlInset in on every
+// side. Every button, dropdown and value field draws its plate here, so they share one height.
+[[nodiscard]] QRectF controlBounds(const QWidget& widget);
+
+// A selected list row (timeline layer and lane rows, KRow, Assets and Jobs rows): the opaque
+// selectionWash() over the row's own surface, with a Size::SelectionEdge Accent edge at its
+// leading side when `leadingEdge` is set. The edge marks the row even where the wash is covered
+// by content; the wash keeps that content -- clip bars in their own colours -- readable.
+void paintSelectedRow(QPainter& painter, const QRectF& row, Color surface, bool leadingEdge);
+
+// The hairline that closes a list row, along `row`'s bottom edge inside it, snapped to one
+// physical pixel. The ONE row separator: KListSurface, KRow and the timeline grid all draw it.
+void paintRowSeparator(QPainter& painter, const QRectF& row);
 
 // Draws an accent ring OUTSIDE `bounds`, in the kFocusRingWidth of margin widgets reserve for it in
 // their size hints, so drawing it never changes a control's size or moves anything next to it.
@@ -77,15 +144,20 @@ void drawFocusRing(QPainter& painter, const QRectF& bounds, Radius radius);
 // Attaches (or clears, for Elevation::Flat) the token drop shadow for an elevated surface.
 void applyElevation(QWidget& widget, Elevation elevation);
 
-// Task U6 (issue #121): the two-tone grid every translucent-color surface paints behind itself --
-// a color chip, the alpha bar in KColorPicker's Square HSV form -- so partial alpha reads against
-// a neutral ground instead of silently blending into whatever the widget happens to sit on. Added
-// here rather than duplicated in each color widget because it is exactly what this header already
-// promises ("the painting primitives every kit widget draws with"), and it composes only from the
-// existing surface-ladder tokens: the two checker tones are Color::Surface and its neighbor one
-// step up the ladder, never a literal gray of their own. `cellPx` is the edge length of one square
-// in the checker in device-independent pixels; `radius` clips the pattern to `bounds`' rounded
-// corners so it never bleeds past a chip's own outline.
+// Paints an elevation token's soft shadow for a rounded surface whose shadow-casting shape is
+// `caster`, offset by the token's own offset, from a cached nine-patch (one blur per token,
+// radius and device pixel ratio -- never a per-paint blur). The caller reserves transparent room
+// around the surface for it and paints the surface itself on top. Flat paints nothing.
+void drawElevationShadow(QPainter& painter, const QRectF& caster, Radius radius,
+                         Elevation elevation);
+
+// The two-tone grid every translucent-color surface paints behind itself -- a color chip, the
+// picker's alpha bar, a swatch, and the Viewer's Checkerboard background -- so partial alpha reads
+// against a neutral ground. The tones are the CheckerLight/CheckerDark mid-greys, never interface
+// surfaces: a dark surface pair vanishes under any dark image. `cellPx` is one square's edge in
+// device-independent pixels; `radius` clips the pattern to `bounds`' rounded corners so it never
+// bleeds past a chip's own outline. The square overload clips to `bounds` alone.
 void drawAlphaCheckerboard(QPainter& painter, const QRectF& bounds, int cellPx, Radius radius);
+void drawAlphaCheckerboard(QPainter& painter, const QRectF& bounds, int cellPx);
 
 } // namespace bloom::ui::kit

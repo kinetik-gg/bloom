@@ -28,6 +28,7 @@
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/split_handle.hpp>
+#include <bloom/ui/kit/surfaces.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <bloom/commands/layer_time_operations.hpp>
@@ -105,12 +106,10 @@ constexpr int kLayerColumnWidthPx = kit::px(kit::Size::TimelineLeftColumn);
 constexpr double kDefaultLayerColumnShare = 0.37;
 constexpr auto kLayerColumnWidthSetting = "timeline/layer-column-width";
 
-// The scroll gutter reserved to the right of the lane region. It is the scrollbar's HOVER extent,
-// not its resting one: the kit stylesheet grows a hovered vertical scrollbar from Size::ScrollBar
-// to Size::ScrollBarHover, and if that growth came out of the lane region's own width the ruler
-// above it would stop agreeing with the lanes about where a frame is the instant the pointer
-// touched the scrollbar. Reserve the larger extent only while rows overflow vertically.
-constexpr int kScrollGutterWidth = kit::px(kit::Size::ScrollBarHover);
+// The scroll gutter reserved to the right of the lane region: the scrollbar's one constant track
+// width (the kit stylesheet never changes it on hover), so the ruler above always agrees with the
+// lanes about where a frame is. Reserved only while rows overflow vertically.
+constexpr int kScrollGutterWidth = kit::px(kit::Size::ScrollBarTrack);
 
 [[nodiscard]] int toggleCellX(const int index) {
     return kToggleStripX + index * (kToggleCellWidth + kCellGap);
@@ -294,19 +293,14 @@ kit::KDropdown* makeBlendingDropdown(QWidget* parent) {
 // -- task T1 replaces task U7's surface ladder), so the separator is the only thing giving the grid
 // its rhythm.
 void paintRowSeparator(QPainter& painter, const int top, const int widthPixels) {
-    kit::applyHairlinePen(painter, kit::color(kit::Color::Background));
-    const auto y = static_cast<qreal>(top + kTimelineRowHeight) - 0.5;
-    painter.drawLine(QPointF(0.0, y), QPointF(static_cast<qreal>(widthPixels), y));
+    kit::paintRowSeparator(painter, QRectF(0.0, top, widthPixels, kTimelineRowHeight));
 }
 
-// The selected row's own fill, in both halves. SurfaceRaised FILL rather than a BorderActive
-// outline (the task allows either): a fill is one rectangle per half that reads as a single
-// continuous row across the column/lane boundary, where an outline would have to be stitched out of
-// three edges in one widget and three in the other and would break wherever the two halves' widths
-// disagreed.
+// The selected row's lane half: the kit selected-row wash, continuous across the column/lane
+// boundary. The Accent edge belongs to the layer row's leading side (kit::KRow), not to the lane.
 void paintSelectedRowFill(QPainter& painter, const int top, const int widthPixels) {
-    painter.fillRect(QRect(0, top, widthPixels, kTimelineRowHeight),
-                     kit::color(kit::Color::SurfaceRaised));
+    kit::paintSelectedRow(painter, QRectF(0.0, top, widthPixels, kTimelineRowHeight),
+                          kit::Color::Surface, false);
 }
 
 } // namespace
@@ -530,9 +524,9 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
     for (int index = 0; index < kToggleCellCount; ++index) {
         auto* glyph = new kit::KIconButton(row);
         glyph->setObjectName(QStringLiteral("timelineHeaderToggle%1").arg(index));
-        glyph->setIcon(kit::icon(toggleIcon(index), kit::Size::IconChrome, kit::Color::Muted,
+        glyph->setIcon(kit::icon(toggleIcon(index), kit::Size::IconMedium, kit::Color::Muted,
                                  kit::IconWeight::Regular));
-        glyph->setIconSize(QSize(kit::px(kit::Size::IconChrome), kit::px(kit::Size::IconChrome)));
+        glyph->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
         glyph->setAttribute(Qt::WA_TransparentForMouseEvents);
         glyphs.append(glyph);
     }
@@ -876,13 +870,9 @@ void TimelineLayerStack::showInsertionIndicator(const int row) {
         return;
     }
     if (!insertion_) {
-        insertion_ = new QWidget(this);
+        insertion_ = new kit::KSurface(this, kit::Color::Accent);
         insertion_->setObjectName("timelineLayerInsertionIndicator");
         insertion_->setAttribute(Qt::WA_TransparentForMouseEvents);
-        insertion_->setAutoFillBackground(true);
-        auto palette = insertion_->palette();
-        palette.setColor(QPalette::Window, kit::color(kit::Color::Accent));
-        insertion_->setPalette(palette);
     }
     insertion_->setGeometry(0, rowTop(row), width(), kit::px(kit::Spacing::XXS));
     insertion_->show();
@@ -1220,8 +1210,9 @@ void TimelineLaneRegion::invalidatePlayhead() {
     // The playhead is a one-pixel line; a small margin covers the device-pixel snap either side.
     const int margin = kit::px(kit::Spacing::XXS) + 1;
     const int next = static_cast<int>(std::floor(axis->pixelForTime(session_.currentTime())));
+    const int band = margin + kit::px(kit::Size::Hairline) + margin;
     for (const int x : {*paintedPlayheadX_, next})
-        update(QRect(x - margin, 0, margin * 2 + 1, height()));
+        update(QRect(x - margin, 0, band, height()));
 }
 
 void TimelineLaneRegion::resizeEvent(QResizeEvent* event) {
@@ -1417,8 +1408,8 @@ void TimelineLaneRegion::paintContentExtent(QPainter& painter, const int row,
         return;
     const auto from = std::lround(axis->pixelForTime(*first));
     const auto to = std::lround(axis->pixelForTime(*last));
-    QColor shade = kit::color(kit::Color::SurfaceSunken);
-    shade.setAlphaF(0.6F);
+    const QColor shade =
+        kit::withOpacity(kit::color(kit::Color::SurfaceSunken), kit::kDimOverlayOpacity);
     const auto hairline = kit::px(kit::Size::Hairline);
     const auto inner = bar.adjusted(0, hairline, 0, -hairline);
     const auto top = inner.top();
@@ -1635,7 +1626,8 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
 
     if (guide_) {
         if (const auto mapping = ruler_.axisForWidth(width())) {
-            painter.setPen(QPen(kit::color(kit::Color::Foreground), 1, Qt::DashLine));
+            painter.setPen(
+                QPen(kit::color(kit::Color::Foreground), kit::kHairlineWidth, Qt::DashLine));
             const auto x = mapping->pixelForTime(*guide_);
             painter.drawLine(QPointF(x, 0), QPointF(x, height()));
         }
@@ -1663,13 +1655,9 @@ void TimelineLaneRegion::setDropMarker(const std::optional<core::RationalTime> t
     // expanded property rows never hide them.
     const auto marker = [this](QWidget*& widget, const char* name) {
         if (widget == nullptr) {
-            widget = new QWidget(this);
+            widget = new kit::KSurface(this, kit::Color::Accent);
             widget->setObjectName(QString::fromLatin1(name));
             widget->setAttribute(Qt::WA_TransparentForMouseEvents);
-            widget->setAutoFillBackground(true);
-            auto palette = widget->palette();
-            palette.setColor(QPalette::Window, kit::color(kit::Color::Accent));
-            widget->setPalette(palette);
         }
         return widget;
     };

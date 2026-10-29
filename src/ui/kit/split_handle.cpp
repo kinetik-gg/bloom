@@ -7,6 +7,8 @@
 #include <QMouseEvent>
 #include <QPainter>
 
+#include <cmath>
+
 namespace bloom::ui::kit {
 
 KSplitHandle::KSplitHandle(const Qt::Orientation orientation, QWidget* parent)
@@ -32,14 +34,23 @@ void KSplitHandle::paintEvent(QPaintEvent*) {
     // The painted line stays hairline-width and centered in the wider hit zone, so the divider
     // reads exactly as it did before this task -- only the draggable area grew.
     const auto ink = color((hovered_ || dragging_) ? Color::BorderHover : Color::Background);
-    applyHairlinePen(painter, ink);
-    if (orientation_ == Qt::Horizontal) {
-        const auto x = static_cast<qreal>(width()) / 2.0;
-        painter.drawLine(QPointF(x, 0.0), QPointF(x, static_cast<qreal>(height())));
-    } else {
-        const auto y = static_cast<qreal>(height()) / 2.0;
-        painter.drawLine(QPointF(0.0, y), QPointF(static_cast<qreal>(width()), y));
+    // One physical-pixel line on the device grid, never a pen straddling two pixel columns.
+    const qreal line = snappedHairlineWidth(devicePixelRatioF());
+    const QRectF band = orientation_ == Qt::Horizontal
+                            ? QRectF(std::floor(width() / 2.0), 0.0, line, height())
+                            : QRectF(0.0, std::floor(height() / 2.0), width(), line);
+    painter.fillRect(snappedToDevicePixels(painter, band), ink);
+}
+
+bool KSplitHandle::event(QEvent* event) {
+    // A grab lost mid-drag (a popup, a window switch) must not leave the handle "dragging": the
+    // next plain hover would otherwise resize the panes.
+    if (event->type() == QEvent::UngrabMouse && dragging_) {
+        dragging_ = false;
+        update();
+        Q_EMIT dragFinished();
     }
+    return QWidget::event(event);
 }
 
 void KSplitHandle::mousePressEvent(QMouseEvent* event) {

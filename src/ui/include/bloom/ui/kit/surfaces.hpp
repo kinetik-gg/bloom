@@ -77,8 +77,11 @@ class KListSurface : public QWidget {
   private:
     int offset_ = 0;
 };
+// A plain widget filled with one colour token: neutral panel surfaces by default, or a marker
+// such as an Accent insertion line. The one way product code fills a widget background.
 class KSurface : public QWidget {
   public:
-    explicit KSurface(QWidget* parent = nullptr);
+    explicit KSurface(QWidget* parent = nullptr, Color fill = Color::Surface);
+    void setFill(Color fill);
 };
 } // namespace bloom::ui::kit

@@ -1,5 +1,6 @@
 #include <QAction>
 #include <QButtonGroup>
+#include <QEnterEvent>
 #include <QFontMetrics>
 #include <QGridLayout>
 #include <QKeySequence>
@@ -16,6 +17,9 @@
 #include <bloom/ui/kit/painting.hpp>
 namespace bloom::ui::kit {
 KMenuButton::KMenuButton(QWidget* parent) : QToolButton(parent) {
+    // Styled by the generated sheet from the MenuItem button recipe, including its keyboard focus
+    // border, so a focus change must re-resolve its rules.
+    restyleOnKeyboardFocus(*this);
     setFont(kit::font(TypeRole::Ui));
     setFixedHeight(px(Size::Control));
     setAutoRaise(true);
@@ -120,37 +124,60 @@ void KMenuFlow::mouseReleaseEvent(QMouseEvent* event) {
     QWidget::mouseReleaseEvent(event);
 }
 KIconButton::KIconButton(QWidget* parent) : QToolButton(parent) {
+    ensureKeyboardFocusTracking(*this);
     setFont(kit::font(TypeRole::Ui));
     setFixedSize(px(Size::Control), px(Size::Control));
-    setIconSize(QSize(px(Size::IconChrome), px(Size::IconChrome)));
+    setIconSize(QSize(px(Size::IconMedium), px(Size::IconMedium)));
     setAutoRaise(true);
+    setAttribute(Qt::WA_Hover, true);
     setProperty("kitControl", true);
+}
+State KIconButton::visualState() const {
+    if (!isEnabled())
+        return State::Disabled;
+    if (isDown())
+        return State::Pressed;
+    if (isChecked())
+        return State::Selected;
+    return hovered_ ? State::Hover : State::Normal;
+}
+Color KIconButton::borderToken() const {
+    return borderForInteraction(isEnabled(), hasKeyboardFocus(*this), hovered_);
+}
+void KIconButton::enterEvent(QEnterEvent* event) {
+    hovered_ = isEnabled();
+    update();
+    QToolButton::enterEvent(event);
+}
+void KIconButton::leaveEvent(QEvent* event) {
+    hovered_ = false;
+    update();
+    QToolButton::leaveEvent(event);
 }
 void KIconButton::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     const bool heading = parentWidget() && parentWidget()->property("headerRow").toBool();
+    const State state = visualState();
+    const ButtonColors colors = buttonColors(ButtonKind::Recessed, state, hasKeyboardFocus(*this));
     if (!heading && !property("disclosure").toBool())
-        fillRoundedSurface(painter, rect(),
-                           color(isChecked() ? (isDown() ? Color::AccentPressed : Color::Accent)
-                                             : Color::ControlSurface),
-                           color(borderForInteraction(isEnabled(), hasFocus(), underMouse())),
+        fillRoundedSurface(painter, controlBounds(*this), colors.fill, colors.border,
                            Radius::Small);
-    auto glyph = icon().pixmap(iconSize(), devicePixelRatioF(),
-                               isEnabled() ? QIcon::Normal : QIcon::Disabled,
-                               isChecked() ? QIcon::On : QIcon::Off);
+    const QIcon::Mode mode = state == State::Disabled ? QIcon::Disabled
+                             : state == State::Hover  ? QIcon::Active
+                                                      : QIcon::Normal;
+    auto glyph =
+        icon().pixmap(iconSize(), devicePixelRatioF(), mode, isChecked() ? QIcon::On : QIcon::Off);
     if (isChecked() && !glyph.isNull()) {
         QPainter ink(&glyph);
         ink.setCompositionMode(QPainter::CompositionMode_SourceIn);
-        ink.fillRect(glyph.rect(), isEnabled()
-                                       ? color(Color::OnAccent)
-                                       : withOpacity(color(Color::OnAccent), kDisabledOpacity));
+        ink.fillRect(glyph.rect(), colors.ink);
     }
     const auto extent = glyph.deviceIndependentSize();
     const auto dpr = devicePixelRatioF();
     painter.drawPixmap(QPointF(std::round((width() - extent.width()) * dpr / 2) / dpr,
                                std::round((height() - extent.height()) * dpr / 2) / dpr),
                        glyph);
-    painter.setPen(color(isChecked() ? Color::OnAccent : Color::Muted));
+    painter.setPen(colors.ink);
     if (icon().isNull())
         painter.drawText(rect(), Qt::AlignCenter, text());
 }
@@ -168,14 +195,14 @@ QPixmap KIconToggle::glyphPixmap() const {
     if (property("layerSwitch").toBool()) {
         if (!isChecked())
             return {};
-        return iconPixmap(glyph_, Size::IconChrome, Color::Foreground,
+        return iconPixmap(glyph_, Size::IconMedium, Color::Foreground,
                           isEnabled() ? State::Normal : State::Disabled, IconWeight::Regular,
                           devicePixelRatioF());
     }
     if (property("toolChoice").toBool() && isChecked())
-        return iconPixmap(glyph_, Size::IconControl, Color::OnAccent, State::Normal,
-                          IconWeight::Fill, devicePixelRatioF());
-    return iconPixmap(glyph_, Size::IconControl, Color::Muted,
+        return iconPixmap(glyph_, Size::IconLarge, Color::OnAccent, State::Normal, IconWeight::Fill,
+                          devicePixelRatioF());
+    return iconPixmap(glyph_, Size::IconLarge, Color::Muted,
                       !isEnabled()  ? State::Disabled
                       : isChecked() ? State::Selected
                                     : State::Normal,
@@ -224,16 +251,53 @@ KIconToggle* KToolColumn::addTool(IconId id, const QString& label, const QString
 KLabel::KLabel(QWidget* parent) : KLabel(QString{}, parent) {}
 KLabel::KLabel(const QString& text, QWidget* parent, TypeRole role) : QLabel(text, parent) {
     setTypeRole(role);
-    setFixedHeight(px(Size::Control));
+    applyHeightRule();
 }
 void KLabel::setTypeRole(TypeRole role) { setFont(kit::font(role)); }
 void KLabel::setElidedText(const QString& text) {
     fullText_ = text;
     elides_ = true;
+    QLabel::setWordWrap(false);
+    applyHeightRule();
     setMinimumWidth(0);
     setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     setToolTip(text);
     setText(fontMetrics().elidedText(fullText_, Qt::ElideRight, width()));
+}
+void KLabel::setWordWrap(const bool on) {
+    QLabel::setWordWrap(on);
+    applyHeightRule();
+}
+void KLabel::setTone(const Color tone) {
+    tone_ = tone;
+    QPalette colors = palette();
+    colors.setColor(QPalette::Active, QPalette::WindowText, color(tone));
+    colors.setColor(QPalette::Inactive, QPalette::WindowText, color(tone));
+    colors.setColor(QPalette::Disabled, QPalette::WindowText, disabledInk(color(tone)));
+    setPalette(colors);
+}
+void KLabel::applyHeightRule() {
+    if (wordWrap()) {
+        // Wrapped text takes its height-for-width from QLabel; one control is only the floor.
+        setMinimumHeight(px(Size::Control));
+        setMaximumHeight(QWIDGETSIZE_MAX);
+        if (sizePolicy().verticalPolicy() == QSizePolicy::Fixed) {
+            auto policy = sizePolicy();
+            policy.setVerticalPolicy(QSizePolicy::Preferred);
+            setSizePolicy(policy);
+        }
+    } else {
+        setFixedHeight(px(Size::Control));
+    }
+    updateGeometry();
+}
+void KLabel::showEvent(QShowEvent* event) {
+    // QLabel::setWordWrap is not virtual: a wrap mode set through a QLabel pointer still gets the
+    // right height rule before the label is first seen.
+    const bool fixed = minimumHeight() == maximumHeight();
+    if (fixed == wordWrap())
+        applyHeightRule();
+    QLabel::showEvent(event);
 }
 void KLabel::resizeEvent(QResizeEvent* event) {
     QLabel::resizeEvent(event);
