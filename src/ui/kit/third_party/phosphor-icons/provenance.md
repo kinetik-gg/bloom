@@ -14,7 +14,7 @@ Reviewed: 2026-09-15
 | License | MIT |
 | License file | `LICENSE` (upstream `core-2.0.8/LICENSE`, byte-identical) |
 | License file SHA-256 | `b5b1f1da112d18ea2147decfd48ddc1bf2b5aeb6c265381579340e95b15a2bb2` |
-| Modified | Six pre-existing circle/magnet SVGs differ from the pinned archive; retained unchanged by this intake. All new MEDIA-1, #364 and #376 glyphs are byte-identical. |
+| Modified | Six pre-existing circle/magnet SVGs differ from the pinned archive; retained unchanged by this intake. All new MEDIA-1, #364, #376 and Viewer chrome glyphs are byte-identical. |
 
 MEDIA-1 downloaded the pinned codeload release archive on 2026-09-15 and computed its digest
 from the downloaded bytes. All twelve new files (folder-simple-plus, download-simple,
@@ -27,6 +27,10 @@ without modification.
 The Viewer chrome polish (lane V, 2026-10-29) downloaded the same pinned archive, verified its
 SHA-256 above from the downloaded bytes, and extracted `selection` in regular, fill and bold from
 `assets/` without modification, for the Viewer's region-of-interest toggle.
+The Viewer background split (lane V2, 2026-10-29) downloaded the same pinned archive, verified its
+SHA-256 above from the downloaded bytes, and extracted `square-half` in regular, fill and bold from
+`assets/` without modification, for the Viewer's Transparency Grid toggle. The pinned release has no
+checkerboard glyph; a half-filled square is its transparency mark.
 Issue #376 (Composition Settings preset rename) downloaded the same pinned archive on 2026-10-25,
 verified its SHA-256 above from the downloaded bytes, and extracted `pencil-simple` in regular,
 fill and bold from `assets/` without modification.
@@ -37,7 +41,7 @@ pre-existing exceptions; they do not claim that those exceptions are upstream-id
 
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
-embeds 63 of them in three weights (189 files). The three weights are exactly the three the
+embeds 64 of them in three weights (192 files). The three weights are exactly the three the
 Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
 
 - `regular` -- the resting interface weight, and the default of every non-role call.
@@ -47,7 +51,7 @@ Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp
 Task VIEW-1 completed the `bold` subset. It previously held five files (the timeline's own
 toggles); `IconRole::Chrome` asks for Bold on every chrome glyph in the application, so a partial
 subset would have rendered some chrome icons blank. All three weights are now complete over the
-same 63 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
+same 64 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
 exception list. The other three upstream weights (`thin`, `light`, `duotone`) are deliberately not
 vendored, because no Kinetik icon role names one.
 
@@ -89,6 +93,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/download-simple.svg` | `6450d3cf43dd9364eab343f1ada9bf4a77a85ded6e62d76deb17606ebfd62388` |
 | `regular/eyedropper.svg` | `87cad5a974a6f152cc7dce67fd6c41fdc21f75d59bed20508b68c95f65d9ebc5` |
 | `regular/selection.svg` | `5fff68fdc60d81f1855302416481dc69fe9f0abfbb353d3bc43f2c24150ab8d4` |
+| `regular/square-half.svg` | `09f561de8c5e6ed831723a1bc8f6f987fb453928a0028a3f95a0366bae055768` |
 | `regular/eye-slash.svg` | `070b0296a7df89ebf4cec12436e323b5531d458aa9aed3608924085889e1fd17` |
 | `regular/eye.svg` | `91d39f20bf95e0f36c07bd79b83a85fe6ff4ca20e2759c4afee7419ef80403fe` |
 | `regular/film-slate.svg` | `58b84e6c5a2950cfa0d8cae68c04e65dc32407dde463c3a2c79d265464726e0c` |
@@ -160,6 +165,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/eye-fill.svg` | `86381b51cb6f305019503b4c5d4b02fe8df5941bab3f1475ee873006a8708420` |
 | `fill/eyedropper-fill.svg` | `8fb839f52aaadbe156dc9982deab2288c1e23fe335d65f7a638ba21ac8078037` |
 | `fill/selection-fill.svg` | `39c98d739e03eecf38da5ccceb1093ca3b45826ee98a187e99bac2c3923fd8a2` |
+| `fill/square-half-fill.svg` | `b7de8273c0735917754a13552d4a1d84f5e4cbe40c8c1458e84ca1c4d0644628` |
 | `fill/eye-slash-fill.svg` | `c5c57b58e51b8b5eb30573a58fd1cc2672ef5d877759c01b948352ecb20b642c` |
 | `fill/film-slate-fill.svg` | `9b93a0c8e74ddaa01ee402f7c182c0189e25df713eb533b86eb4b9ef08ac7aca` |
 | `fill/film-strip-fill.svg` | `aae7abd682bd0985d015c90cd952e5fdb667c5c5e23a3494b30b422a6ab5ef5b` |
@@ -230,6 +236,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/eye-bold.svg` | `766b10b6ed7d8a899a76ba28f3f066ca49e8ce0a75ae68b65bfec0e615d8130d` |
 | `bold/eyedropper-bold.svg` | `84cca4e37e3c813098a0b4dada7bfce670c56ad5ec0e924d0e3002e7218b7786` |
 | `bold/selection-bold.svg` | `bca7ab4688ca03ed591ba3cfba90bda277b25596b649898388c51aebc7742fb3` |
+| `bold/square-half-bold.svg` | `2f8165874291b521ab54da329ffeb2628a0ba7cb20a38e4e81eaa23f6815c230` |
 | `bold/eye-slash-bold.svg` | `2c90457e608c86c1e880b897f2258eeea8ea7f60e7eaf61592b9674d7978647e` |
 | `bold/film-slate-bold.svg` | `b61683707f518cb825c158e3ea703887e6a787e40fa79f3cbdae1c7409a95287` |
 | `bold/film-strip-bold.svg` | `75f500a192705172ce51686fc8a9a2f62d22e91987419c3bd91448cec2760e38` |

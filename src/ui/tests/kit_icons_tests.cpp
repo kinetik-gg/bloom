@@ -79,8 +79,9 @@ void testEveryIconIdRendersAtEverySizeInEveryWeight(Expectations& expectations) 
     expectations.expect(rendered == static_cast<int>(kit::iconIds().size()) * 9,
                         "every id was rendered at all three sizes in all three weights");
     // The four media footer/kind glyphs extend the curated vocabulary by four, and #376's preset
-    // Rename (pencil-simple) by one, and the Viewer's region-of-interest toggle (selection) by one.
-    expectations.expect(kit::iconIds().size() >= 30 && kit::iconIds().size() <= 70,
+    // Rename (pencil-simple) by one, the Viewer's region-of-interest toggle (selection) by one, and
+    // its Transparency Grid toggle (square-half) by one.
+    expectations.expect(kit::iconIds().size() >= 30 && kit::iconIds().size() <= 80,
                         "the curated vocabulary stays a curated vocabulary");
 }
 

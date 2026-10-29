@@ -96,6 +96,7 @@ const auto& iconAssets() {
         {IconId::Snap, QLatin1StringView("magnet")},
         {IconId::Eyedropper, QLatin1StringView("eyedropper")},
         {IconId::RegionOfInterest, QLatin1StringView("selection")},
+        {IconId::TransparencyGrid, QLatin1StringView("square-half")},
     });
     return entries;
 }

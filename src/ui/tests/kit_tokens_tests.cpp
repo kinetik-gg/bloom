@@ -62,7 +62,10 @@ void testEveryColorRoleResolvesToItsSpecifiedValue(Expectations& expectations) {
     expectHex(kit::Color::AccentPressed, "#0863a6");
     expectHex(kit::Color::CheckerLight, "#999999");
     expectHex(kit::Color::CheckerDark, "#666666");
+    expectHex(kit::Color::ViewerCheckerLight, "#3a3a3a");
+    expectHex(kit::Color::ViewerCheckerDark, "#2a2a2a");
     expectHex(kit::Color::CanvasBlack, "#000000");
+    expectHex(kit::Color::CanvasGrey, "#808080");
     expectHex(kit::Color::CanvasWhite, "#ffffff");
     expectHex(kit::Color::Keyframe, "#f5c542");
     expectHex(kit::Color::Ok, "#3fbf6b");
@@ -303,6 +306,16 @@ void testTheSurfaceStepsAreEachPerceptible(Expectations& expectations) {
                         "OnAccent text on Accent meets WCAG AA");
     expectations.expect(contrast(kit::Color::CheckerLight, kit::Color::CheckerDark) >= 1.8,
                         "the checker tones are far enough apart to read as a grid");
+    // The Viewer's deeper grid still reads as a grid, and its darker tone stays a clear step above
+    // the Canvas surround so the composition frame edge reads against it.
+    expectations.expect(contrast(kit::Color::ViewerCheckerLight, kit::Color::ViewerCheckerDark) >=
+                            1.2,
+                        "the Viewer checker tones read as a grid");
+    expectations.expect(contrast(kit::Color::ViewerCheckerDark, kit::Color::Canvas) >= 1.2,
+                        "the Viewer checker stays distinct from the Canvas surround");
+    expectations.expect(kit::color(kit::Color::ViewerCheckerLight).lightness() <
+                            kit::color(kit::Color::CheckerDark).lightness(),
+                        "the Viewer checker is deeper than the small-swatch checker");
 
     // The selection wash is a blend toward Accent over its own surface, still a dark row.
     const QColor wash = kit::selectionWash(kit::Color::Surface);

@@ -102,6 +102,8 @@ enum class IconId : std::uint8_t {
     Eyedropper,
     // The Viewer's region-of-interest toggle (a dashed selection frame).
     RegionOfInterest,
+    // The Viewer's Transparency Grid toggle (a half-filled square: the pinned set has no checker).
+    TransparencyGrid,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add
