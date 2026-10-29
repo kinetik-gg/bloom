@@ -78,7 +78,16 @@ catalogue. The selected row creates or reuses a Font asset and stores only its s
 
 Panels return `EditorChromeSpec`: header switcher, selectors, menus and trailing actions;
 footer leading controls, transport, readouts and trailing controls. `EditorArea` owns their
-layout and one measure-only overflow algorithm, with hysteresis and a stable minimum.
+layout and one measure-only overflow algorithm, with hysteresis and a stable minimum. A row is
+either a menu-collapse row (menus fold into a "…" button once the row, with any elidable dropdown
+at its `setElideFloor` width, no longer fits) or a priority row: controls in Leading, Centre
+(`beginCentre`) and Trailing groups separated by `Spacing::ChromeGroupGap` (12), the Centre group
+centred while it fits, and controls that carry a collapse rank (`setCollapse`) or a compact form
+(`setCompactForm`) giving way in rank order into an icon overflow button whose menu offers each
+collapsed control as its own action or submenu. The row publishes `collapseThreshold` (the width
+everything needs), `collapsed` and `collapseLevel`; a control that changes width re-lays the row
+out. A panel declares `contentMinimumHeight` when its content cannot shrink to nothing; the panel
+minimum is header + footer + that floor.
 Panels do not construct or paint header/footer widgets. The old take-header/footer and split
 provider interfaces are removed. Object names remain stable for interaction and automation.
 Timeline declares a split `footerCanvas`, composed with `EditorArea::buildSplitChrome` and kit
@@ -116,8 +125,15 @@ and reports unavailable colour state when no preview controller exists. Readines
 use muted ink; a colour-state failure remains explicit. `UiSmall` preserves mixed case with
 natural tracking. `KSurface` owns neutral surface backgrounds.
 
-`KToolColumn` owns ten enabled, exclusive `KIconToggle` choices. Select (V), Hand (H), Zoom (Z),
-Text (T), Rectangle (R), Ellipse (E), Polygon, Star, Line and Pen (P) are viewer-local tools.
+`KToolColumn` owns eleven enabled, exclusive `KIconToggle` choices in four groups separated by
+`Border` hairlines: navigation (Select V, Hand H, Zoom Z), creation (Text T, Rectangle R, Ellipse E,
+Polygon, Star, Line), Pen (P), and the Cryptomatte eyedropper. Each is a `ToggleCell` with an
+`IconMedium` glyph in the Chrome (Bold) weight, Fill on `OnAccent` when chosen; the chosen tool takes
+the one Selected plate (the `Accent` plate every checked control shows), and the rest rest
+plate-less with the Ghost hover step. A tooltip is the tool's name and shortcut, then how to use
+it. A column too short for every tool collapses the trailing ones, last first, into a "More tools"
+button (`toolColumnMoreButton`) whose menu offers them by name and which carries the Selected
+plate while a collapsed tool is active; no tool is ever cut off.
 Hand pans; Zoom clicks zoom about the pointer, with Alt-click reversing the direction. Middle-button
 pan and keyboard zoom remain available. Choosing a tool alone never authors a node.
 
@@ -217,11 +233,66 @@ frame outline. `ViewerWorkPadding` reserves breathing room around the frame; the
 also includes `ToolColumnWidth`. Image fitting, picking, selection overlays and panning all
 use this same padded rectangle. View's Background choices remain presentation preferences.
 
-The declared footer order is Channel, ROI toggle, Clear ROI, exposure (EV), gamma, Display / View,
-Look, RAM Preview, transport, an expanding gap, timecode, Fit/zoom, and resolution. Background is available through
-View. The resolution dropdown is
-the only visible resolution readout; its tooltip reports the effective Auto factor. The old
-background and effective-resolution widget identities remain available to automation.
+### Viewer header and footer
+
+The header holds the panel switcher, then two selectors that say what they select: the
+composition shown (`viewerCompositionSelector`) and the selected layer (`viewerObjectSelector`),
+each item's tooltip naming its role ("Composition shown in the Viewer: …", "Selected layer: …").
+Empty, they read "No composition" and "No layers" (or "No layer selected" when a composition has
+layers and none is selected), disabled and muted. They elide down to `DropdownWidth` before the
+View, Select and Add menus collapse into the "…" overflow. The composition commands live in the
+application's Composition menu only.
+
+The footer (`viewerFooter`) is a priority row of three groups:
+
+| Group | Controls |
+| --- | --- |
+| Leading (view and display) | Channel (`ViewerChannelWidth`), ROI toggle, Clear ROI, exposure (EV) and gamma (`ViewerAdjustWidth`), Display / View (its items' widest, `DropdownWidth`..`ViewerDisplayViewWidth`), Look |
+| Centre (time) | Go to start, step back, play/pause, step forward, go to end, loop, the time readout (`ViewerTimecodeWidth`), centred in the row while there is room and never stranded from the transport |
+| Trailing (framing and quality) | Zoom (`ViewerZoomWidth` floor), Resolution (`ViewerResolutionWidth`), RAM Preview |
+
+As the footer narrows, controls leave the row in this order, each offered in the View options
+overflow (`viewerFooterOverflowButton`, `SlidersHorizontal`, menu `viewerFooterOverflowMenu`) under
+its full label: Look, Display / View, exposure and gamma (as labelled fields plus Reset Exposure
+and Gamma), ROI and Clear ROI, Channel; then Resolution compresses to Auto / Full / ½ / ¼ at
+`ViewerResolutionCompactWidth`; then RAM Preview, go to start/end, and finally Zoom and
+Resolution. Step back, play, step forward, loop and the readout never collapse. No control is
+clipped at any width down to the panel minimum.
+
+Every footer control is one `Control` slot painting a `ToggleCell` plate. The ROI, Look and loop
+toggles and the transport are `KIconButton`s with `IconRole::Control` glyphs; a checked toggle shows
+the one Selected plate. The ROI toggle carries the Phosphor `selection` glyph; Clear ROI shows only
+while a region exists. RAM Preview is a labelled Secondary `KButton` toggle whose label reads the
+controller's progress (Caching n%, RAM Cached). Exposure and gamma show an `NonDefaultMark` Accent
+dot while they differ from 0 / 1 and reset by a double-click on their label or from their context
+menu. Display / View shows the view name (qualified by its display only when several displays
+share it); the display, view and colour space are in its tooltip and the View menu. Background is
+chosen from View; the retired `viewerBackgroundDropdown` and `viewerResolutionReadout` identities
+remain for automation. With no composition the readout shows `00:00:00:00` (or `0`) disabled.
+
+### Viewer canvas and empty state
+
+The surround is the plain Canvas in Solid and Checkerboard modes (Black and White fill the whole
+content area); the checkerboard is drawn only inside the composition frame, under the image, on the
+content area's grid, on the CPU path and the GPU present alike. With no composition the canvas
+shows the surround under the `viewerEmptyState` invitation: a Title "No composition", a Muted hint
+that dropped media files are imported into Assets, and the Primary `viewerNewCompositionButton`,
+which runs the application's New Composition command. An active composition with no layers keeps
+the painted "Create a layer to begin" invitation. The Viewer's own minimum is `ViewerMinHeight`,
+independent of the tool column; hosted, the panel adds its header and footer.
+
+### Viewer menus
+
+One action object per command, shared by the menus, the footer and its overflow, and the canvas
+context menu. Dropdown-backed submenus mirror their footer dropdown item for item.
+
+| Menu | Contents |
+| --- | --- |
+| View | Fit (`Ctrl+0`), 100% (`Ctrl+1`), Zoom In, Zoom Out, Zoom ▸ (the zoom presets), Resolution ▸; Channel ▸, Display / View ▸, Look, Reset Exposure and Gamma, Region of Interest, Clear Region of Interest; Guides ▸ (Safe Areas `Ctrl+Alt+S`, Safe Area Preset ▸, Custom Safe Areas…, Centre Cross, Thirds, Rulers, Pixel Grid), Background ▸ |
+| Select | Select All / Deselect All / Invert (`Ctrl+A`, `Ctrl+Shift+A`, `Ctrl+Alt+A`), naming their target: anchors while a path is edited (the Pen tool, a selected mask, or an anchor selection), layers otherwise |
+| Add | Solid, Text; the shape kinds; Import and Add… (the drop path's import, then layers at the playhead) |
+| Canvas context menu | On a layer: Select it, Duplicate Layer, Delete Layer; then Fit, 100%, Zoom In, Zoom Out; Add ▸, Guides ▸; Composition Settings…. The anchor menu stays first while a path is edited |
+
 The time readout defaults to `HH:MM:SS:FF`, honors `timeline/time-format`, accepts either
 non-drop timecode or an exact frame index, clamps to the composition, and rejects invalid
 fields without changing time. It uses nominal-rate timecode and exact rational frame mapping.
@@ -343,7 +414,12 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `ViewerWorkPadding` | 48 | Padded image work area |
 | `ToolColumnWidth` | 32 | Exclusive tool column |
 | `ViewerChannelWidth` | 80 | Channel dropdown |
-| `ViewerModeWidth` | 108 | RAM Preview command |
+| `ViewerModeWidth` | 108 | RAM Preview command floor (widened to its widest label) |
+| `ViewerAdjustWidth` | 72 | Exposure and gamma fields |
+| `ViewerDisplayViewWidth` | 176 | Display / View at most |
+| `ViewerResolutionCompactWidth` | 64 | Resolution in its compact form |
+| `ViewerEmptyStateWidth` | 320 | No-composition invitation column |
+| `NonDefaultMark` | 4 | A value field's differs-from-default dot |
 | `ViewerTimecodeWidth` | 104 | Stable time readout |
 | `ViewerZoomWidth` | 64 | Fit/zoom dropdown |
 | `ViewerResolutionWidth` | 96 | Resolution dropdown |
@@ -362,7 +438,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `RulerLabelGap` | 10 | Timeline ruler labels |
 | `MinorTick / MajorTick` | 4 / 8 | Timeline tick extents |
 | `ViewerChecker` | 22 | Checkerboard cell |
-| `ViewerMinWidth / ViewerMinHeight` | 220 / 176 | Viewer fallback minimum |
+| `ViewerMinWidth / ViewerMinHeight` | 220 / 176 | Viewer minimum; the hosted panel adds header and footer |
 | `MultilineHeight` | 78 | Expanded text editors |
 | `PropertyLabelCompact` | 64 | Timeline property label |
 | `DialogTextWidth / DiagnosticHeight` | 520 / 140 | Read-only explanation / job diagnostics |
@@ -403,7 +479,7 @@ Existing object names remain stable. New names are `viewerToolColumn`, `viewerSe
 and `nodeReadOnlyValue`. Node row widgets expose `nodeParameterRole` and
 `nodeParameterRowPitch` for geometry audits; list headings expose `headerRow`.
 
-The metric audit covers the status line, ten enabled viewer tools,
+The metric audit covers the status line, eleven enabled viewer tools,
 card/control containment and socket-row alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
 1600 and 1920 logical-pixel window widths. Whole-window references and final captures run at
 DPR 1 and 1.5. Changed geometry tests use the viewer's real padded mapping.
@@ -412,8 +488,20 @@ Every panel's single border is painted by `KPanelFrame`, an overlay raised above
 children (Accent while the panel is active); the stylesheet gives the panel only its background.
 Panels are square (`Radius::Panel` is 0); a non-zero radius would also have the frame fill the
 corner wedges outside the curve. Header and footer share ChromePadding. Viewer declares
-View, Select, Add; Composition commands live under View. Only EditorArea exposes maximize.
-New automation names: `viewerAddMenu`, `viewerAddMenuButton`.
+View, Select, Add; Composition commands live in the application's Composition menu. Only
+EditorArea exposes maximize. New automation names: `viewerAddMenu`, `viewerAddMenuButton`,
+`viewerFooterOverflowButton`, `viewerFooterOverflowMenu`, `viewerRoiAction`,
+`viewerClearRoiAction`, `viewerLookAction`, `viewerResetViewAdjustAction`,
+`viewerViewAdjustOverflowAction`, `viewerOverflowExposure`, `viewerOverflowGamma`,
+`viewerRamPreviewAction`, `viewerZoomMenu`, `viewerZoomPreset<n>Action`, `viewerResolutionMenu`,
+`viewerResolution<n>Action`, `viewerDisplayViewMenu`, `viewerDisplayView<n>Action`,
+`viewerGuidesMenu`, `viewerCustomSafeAreasAction`, `viewerAddSolidAction`, `viewerAddTextAction`,
+`viewerImportAndAddAction`, `viewerCanvasContextMenu`, `viewerContextSelectLayerAction`,
+`viewerContextDuplicateLayerAction`, `viewerContextDeleteLayerAction`,
+`viewerContextCompositionSettingsAction`, `viewerEmptyState`, `viewerEmptyStateTitle`,
+`viewerEmptyStateHint`, `viewerNewCompositionButton`, `toolColumnMoreButton`. The retired
+`viewerCompositionMenuButton` and its `viewer*CompositionAction`s stay hidden, each running the
+application's own command when hosted.
 
 Rows own `Spacing::RowPadding` (1 on all edges); every control owns `ControlInset` (1)
 inside its allocation, including scene proxies. `PropertyGutter` (8) separates labels and
@@ -754,9 +842,10 @@ plain reason directly under the offending field: a word-wrapped `KLabel` in `UiS
 first invalid field shows a reason, so the reason always names what to fix next.
 
 The Composition dialog and the composition Properties section expose a `KColorChip` Background
-Colour for the composition itself. The Viewer surround is chosen separately in the Viewer footer: Solid paints
-the panel Canvas token, Black and White paint literal values, and Checkerboard is the default so
-alpha behind the composition is always visible. The surround does not alter composition pixels, the
+Colour for the composition itself. The Viewer background is chosen separately under View >
+Background: Solid paints the panel Canvas token, Black and White paint literal values, and
+Checkerboard is the default so alpha inside the composition frame is always visible (its surround
+stays Canvas). The surround does not alter composition pixels, the
 authored Background Colour, or export alpha.
 
 ## Live Value Editing

@@ -101,8 +101,10 @@ visible Viewer, the window makes no displayed qualification claim.
 | Drop Assets items onto the Viewer | Makes a layer of each, on top, starting at the playhead and centred in the composition, as one undoable step; Alt sequences them end to end (see "Layer drops" under Timeline) |
 | Drop files onto the Viewer | Imports them (the import progress modal), then makes layers of them the same way as one more undoable step |
 
-The transport lives in the Viewer footer: go to start, step back, play/pause, step forward, go to
-end, a loop toggle, and RAM Preview. **The keys are unchanged.** `Space`, `Ctrl+Shift+Space`, `Esc`,
+The transport lives in the Viewer footer's centred time group: go to start, step back, play/pause,
+step forward, go to end, a loop toggle and the time readout; RAM Preview is in the trailing group.
+A narrow footer offers collapsed controls (including Go to Start/End and RAM Preview) in its View
+options menu with the same actions and shortcuts (ui-grammar.md, "Viewer header and footer"). **The keys are unchanged.** `Space`, `Ctrl+Shift+Space`, `Esc`,
 `Left`, `Right`, `Home` and `End` all do exactly what they did when the transport sat in the
 Timeline, and each still has one owner: `Space` and RAM Preview's pair are window-wide commands,
 and the four frame-stepping actions are `Qt::WindowShortcut` actions owned by the Viewer.
@@ -133,8 +135,17 @@ the one entry form that needs no parsing rules of its own. Frames / Timecode wri
 and this readout cannot disagree about the format. Exact composition seconds stay visible beside
 either reading.
 
-The guide toggles use `Ctrl+Alt+S` for Safe Areas and `Ctrl+Shift+C`, `Ctrl+Shift+T`,
-`Ctrl+Shift+R`, and `Ctrl+Shift+P` for Centre Cross, Thirds, Rulers, and Pixel Grid. A pixel grid
+The guide toggles, under View > Guides, use `Ctrl+Alt+S` for Safe Areas and `Ctrl+Shift+C`,
+`Ctrl+Shift+T`, `Ctrl+Shift+R`, and `Ctrl+Shift+P` for Centre Cross, Thirds, Rulers, and Pixel Grid.
+Select All / Deselect All / Invert are `Ctrl+A`, `Ctrl+Shift+A` and `Ctrl+Alt+A`; they act on a
+path's anchors while it is being edited (the Pen tool, a selected mask, or an anchor selection) and
+on the composition's layers otherwise, and their labels name which. Every Viewer binding is scoped
+to the Viewer (`Qt::WidgetWithChildrenShortcut`), so the Nodes canvas's `Ctrl+Shift+A` / `Ctrl+Alt+A`
+(arrange) and the Timeline's `Ctrl+A` / `Ctrl+Shift+A` keep their own panels; none of these
+sequences is a window-wide shortcut. Zoom's 100% (`Ctrl+1`) has one name in View and the canvas
+menu. Exposure and gamma reset by a double-click on their EV / γ label or from their context menu.
+A right-click on a layer in the canvas offers Select, Duplicate Layer and Delete Layer for that
+layer. A pixel grid
 is suppressed below 400% even when enabled. Guides follow the viewer's active zoom/pan transform;
 they are not part of the display buffer or any export.
 
