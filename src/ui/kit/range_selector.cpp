@@ -1,26 +1,35 @@
 #include <bloom/ui/kit/range_selector.hpp>
 
+#include <bloom/ui/kit/accessibility.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 
+#include <QAccessible>
 #include <QEnterEvent>
 #include <QEvent>
+#include <QFocusEvent>
+#include <QKeyEvent>
+#include <QSignalBlocker>
 #include <QMouseEvent>
 #include <QPainter>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace bloom::ui::kit {
 namespace {
 
 constexpr int kTrackHeight = px(Size::RangeTrack);
 constexpr int kHandleWidth = px(Size::RangeHandle);
+// How far outside its painted body a handle still takes a press.
+constexpr qreal kHandleSlop = px(Spacing::XS);
 
 } // namespace
 
 KRangeSelector::KRangeSelector(QWidget* parent) : QWidget(parent) {
+    installKitAccessibility();
     ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kRangeSelector"));
     setFocusPolicy(Qt::StrongFocus);
@@ -112,8 +121,11 @@ QRectF KRangeSelector::handleRect(const Handle handle) const {
 KRangeSelector::Handle KRangeSelector::handleAt(const QPointF& point) const {
     // The nearer handle wins a tie, so a press exactly between them grabs one deterministically
     // rather than depending on comparison order.
-    const bool onLower = handleRect(Handle::Lower).adjusted(-4.0, -4.0, 4.0, 4.0).contains(point);
-    const bool onUpper = handleRect(Handle::Upper).adjusted(-4.0, -4.0, 4.0, 4.0).contains(point);
+    const auto slop = [this](const Handle handle) {
+        return handleRect(handle).adjusted(-kHandleSlop, -kHandleSlop, kHandleSlop, kHandleSlop);
+    };
+    const bool onLower = slop(Handle::Lower).contains(point);
+    const bool onUpper = slop(Handle::Upper).contains(point);
     if (onLower && onUpper) {
         const qreal toLower = std::abs(point.x() - handleRect(Handle::Lower).center().x());
         const qreal toUpper = std::abs(point.x() - handleRect(Handle::Upper).center().x());
@@ -159,28 +171,83 @@ QSize KRangeSelector::sizeHint() const { return {px(Size::ControlRoomy) * 5, px(
 
 QSize KRangeSelector::minimumSizeHint() const { return {kHandleWidth * 6, px(Size::Control)}; }
 
+void KRangeSelector::beginInteraction() {
+    if (interactionActive_)
+        return;
+    interactionActive_ = true;
+    lowerBase_ = lower_;
+    upperBase_ = upper_;
+    Q_EMIT editStarted();
+}
+
+void KRangeSelector::finishInteraction(const bool keep) {
+    if (!interactionActive_)
+        return;
+    interactionActive_ = false;
+    grabbed_ = Handle::None;
+    undecided_ = false;
+    keyStepping_ = false;
+    update();
+    if (keep) {
+        Q_EMIT editFinished();
+        return;
+    }
+    {
+        const QSignalBlocker blocker(this);
+        setValues(lowerBase_, upperBase_);
+    }
+    Q_EMIT editCancelled();
+}
+
+void KRangeSelector::cancelEdit() { finishInteraction(false); }
+
+void KRangeSelector::moveHandle(const Handle handle, const double value) {
+    if (handle == Handle::Lower)
+        setLowerValue(value);
+    else if (handle == Handle::Upper)
+        setUpperValue(value);
+    if (QAccessible::isActive()) {
+        QAccessibleValueChangeEvent change(this, handle == Handle::Upper ? upper_ : lower_);
+        QAccessible::updateAccessibility(&change);
+    }
+}
+
 void KRangeSelector::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton || !isEnabled()) {
         QWidget::mousePressEvent(event);
         return;
     }
+    beginInteraction();
     grabbed_ = handleAt(event->position());
+    pressX_ = event->position().x();
+    // Handles on top of each other: either could be meant, and only the first move says which.
+    undecided_ = grabbed_ != Handle::None && handleRect(Handle::Lower).center().x() ==
+                                                 handleRect(Handle::Upper).center().x();
     if (grabbed_ == Handle::None) {
         // A press on bare track moves whichever handle is nearer, rather than doing nothing: the
         // artist pointed at a boundary they want moved.
         const double target = valueForPosition(event->position().x());
         grabbed_ =
             std::abs(target - lower_) <= std::abs(target - upper_) ? Handle::Lower : Handle::Upper;
-        grabbed_ == Handle::Lower ? setLowerValue(target) : setUpperValue(target);
+        moveHandle(grabbed_, target);
     }
+    active_ = grabbed_;
     update();
     event->accept();
 }
 
 void KRangeSelector::mouseMoveEvent(QMouseEvent* event) {
     if (grabbed_ != Handle::None) {
-        const double target = valueForPosition(event->position().x());
-        grabbed_ == Handle::Lower ? setLowerValue(target) : setUpperValue(target);
+        if (undecided_) {
+            if (event->position().x() == pressX_) {
+                event->accept();
+                return;
+            }
+            grabbed_ = event->position().x() < pressX_ ? Handle::Lower : Handle::Upper;
+            active_ = grabbed_;
+            undecided_ = false;
+        }
+        moveHandle(grabbed_, valueForPosition(event->position().x()));
         event->accept();
         return;
     }
@@ -189,12 +256,137 @@ void KRangeSelector::mouseMoveEvent(QMouseEvent* event) {
 
 void KRangeSelector::mouseReleaseEvent(QMouseEvent* event) {
     if (grabbed_ != Handle::None && event->button() == Qt::LeftButton) {
-        grabbed_ = Handle::None;
-        update();
+        finishInteraction(true);
         event->accept();
         return;
     }
     QWidget::mouseReleaseEvent(event);
+}
+
+void KRangeSelector::keyPressEvent(QKeyEvent* event) {
+    const double span = maximum_ - minimum_;
+    const double current = active_ == Handle::Upper ? upper_ : lower_;
+    std::optional<double> target;
+    switch (event->key()) {
+    case Qt::Key_Left:
+    case Qt::Key_Down:
+        target = current - span * kKeyStepFraction;
+        break;
+    case Qt::Key_Right:
+    case Qt::Key_Up:
+        target = current + span * kKeyStepFraction;
+        break;
+    case Qt::Key_PageDown:
+        target = current - span * kKeyStepFraction * kCoarseStepMultiple;
+        break;
+    case Qt::Key_PageUp:
+        target = current + span * kKeyStepFraction * kCoarseStepMultiple;
+        break;
+    case Qt::Key_Home:
+        target = minimum_;
+        break;
+    case Qt::Key_End:
+        target = maximum_;
+        break;
+    case Qt::Key_Escape:
+        if (keyStepping_) {
+            finishInteraction(true);
+            event->accept();
+            return;
+        }
+        break;
+    default:
+        break;
+    }
+    if (target.has_value() && isEnabled()) {
+        if (!interactionActive_) {
+            beginInteraction();
+            keyStepping_ = true;
+        }
+        moveHandle(active_, *target);
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void KRangeSelector::keyReleaseEvent(QKeyEvent* event) {
+    if (keyStepping_ && !event->isAutoRepeat() && event->key() != Qt::Key_Tab &&
+        event->key() != Qt::Key_Backtab && event->key() != Qt::Key_Shift) {
+        finishInteraction(true);
+        event->accept();
+        return;
+    }
+    QWidget::keyReleaseEvent(event);
+}
+
+void KRangeSelector::focusInEvent(QFocusEvent* event) {
+    // Shift+Tab arrives on the Upper handle, as it would on the last of two separate controls.
+    if (event->reason() == Qt::TabFocusReason)
+        active_ = Handle::Lower;
+    else if (event->reason() == Qt::BacktabFocusReason)
+        active_ = Handle::Upper;
+    update();
+    QWidget::focusInEvent(event);
+}
+
+void KRangeSelector::focusOutEvent(QFocusEvent* event) {
+    if (keyStepping_)
+        finishInteraction(true);
+    QWidget::focusOutEvent(event);
+}
+
+bool KRangeSelector::focusNextPrevChild(const bool next) {
+    // Tab walks the two handles before it leaves the control.
+    if (next && active_ == Handle::Lower) {
+        active_ = Handle::Upper;
+        update();
+        return true;
+    }
+    if (!next && active_ == Handle::Upper) {
+        active_ = Handle::Lower;
+        update();
+        return true;
+    }
+    return QWidget::focusNextPrevChild(next);
+}
+
+bool KRangeSelector::event(QEvent* event) {
+    switch (event->type()) {
+    case QEvent::ShortcutOverride: {
+        const int key = static_cast<QKeyEvent*>(event)->key();
+        if (hasFocus() && (key == Qt::Key_Left || key == Qt::Key_Right || key == Qt::Key_Up ||
+                           key == Qt::Key_Down || key == Qt::Key_PageUp ||
+                           key == Qt::Key_PageDown || key == Qt::Key_Home || key == Qt::Key_End ||
+                           (key == Qt::Key_Escape && keyStepping_))) {
+            event->accept();
+            return true;
+        }
+        break;
+    }
+    case QEvent::KeyPress: {
+        // Tab between the handles is the control's own, so it never reaches the window's chain.
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if ((key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab) &&
+            !key->modifiers().testAnyFlags(Qt::ControlModifier | Qt::AltModifier)) {
+            const bool next = key->key() == Qt::Key_Tab &&
+                              !key->modifiers().testFlag(Qt::ShiftModifier);
+            if ((next && active_ == Handle::Lower) || (!next && active_ == Handle::Upper)) {
+                focusNextPrevChild(next);
+                return true;
+            }
+        }
+        break;
+    }
+    case QEvent::UngrabMouse:
+    case QEvent::WindowDeactivate:
+        if (grabbed_ != Handle::None || (event->type() == QEvent::WindowDeactivate && keyStepping_))
+            finishInteraction(true);
+        break;
+    default:
+        break;
+    }
+    return QWidget::event(event);
 }
 
 void KRangeSelector::enterEvent(QEnterEvent* event) {
@@ -214,7 +406,7 @@ void KRangeSelector::leaveEvent(QEvent* event) {
 void KRangeSelector::changeEvent(QEvent* event) {
     if (event->type() == QEvent::EnabledChange && !isEnabled()) {
         hovered_ = false;
-        grabbed_ = Handle::None;
+        finishInteraction(true);
     }
     QWidget::changeEvent(event);
 }
@@ -248,7 +440,7 @@ void KRangeSelector::paintEvent(QPaintEvent* event) {
         const QRectF bounds = handleRect(handle);
         fillRoundedSurface(painter, bounds, handleFill, color(borderForState(state)),
                            Radius::Small);
-        if (hasKeyboardFocus(*this) && state != State::Disabled && handle == Handle::Lower) {
+        if (hasKeyboardFocus(*this) && state != State::Disabled && handle == active_) {
             drawFocusRing(painter, bounds, Radius::Small);
         }
     }

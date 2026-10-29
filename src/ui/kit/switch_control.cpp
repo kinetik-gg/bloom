@@ -7,7 +7,9 @@
 #include <QEnterEvent>
 #include <QEvent>
 #include <QPainter>
+#include <QFontMetrics>
 #include <QPropertyAnimation>
+#include <QSignalBlocker>
 
 #include <algorithm>
 
@@ -49,11 +51,12 @@ State KSwitch::visualState() const {
     if (isDown()) {
         return State::Pressed;
     }
-    if (isChecked()) {
-        return State::Selected;
-    }
+    // Hover before Selected: an "on" switch under the pointer still answers it (AccentHover).
     if (hovered_) {
         return State::Hover;
+    }
+    if (isChecked()) {
+        return State::Selected;
     }
     if (hasKeyboardFocus(*this)) {
         return State::Focused;
@@ -72,22 +75,27 @@ QSize KSwitch::sizeHint() const {
 QSize KSwitch::minimumSizeHint() const { return sizeHint(); }
 
 void KSwitch::animateThumbTo(const qreal target) {
+    if (slide_ != nullptr)
+        slide_->stop();
     const int duration = durationMs(Motion::Fast);
     if (duration <= 0) {
         // Reduced motion: the toggle still toggles, it just does not travel.
         setThumbPosition(target);
         return;
     }
-    auto* slide = new QPropertyAnimation(this, "thumbPosition", this);
-    slide->setDuration(duration);
-    slide->setEasingCurve(easing(Motion::Fast));
-    slide->setStartValue(thumbPosition_);
-    slide->setEndValue(target);
-    slide->start(QAbstractAnimation::DeleteWhenStopped);
+    slide_ = new QPropertyAnimation(this, "thumbPosition", this);
+    slide_->setDuration(duration);
+    slide_->setEasingCurve(easing(Motion::Fast));
+    slide_->setStartValue(thumbPosition_);
+    slide_->setEndValue(target);
+    slide_->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
 void KSwitch::checkStateSet() {
-    animateThumbTo(isChecked() ? 1.0 : 0.0);
+    // A programmatic setChecked() is a projection, not a gesture: the thumb is simply there.
+    if (slide_ != nullptr)
+        slide_->stop();
+    setThumbPosition(isChecked() ? 1.0 : 0.0);
     QAbstractButton::checkStateSet();
 }
 
@@ -154,27 +162,81 @@ void KSwitch::paintEvent(QPaintEvent* event) {
     fillRoundedSurface(painter, thumb, thumbFill, {}, Radius::Full);
 }
 
-KCheckBox::KCheckBox(QWidget* parent) : KSwitch(parent) {
+KCheckBox::KCheckBox(QWidget* parent) : KCheckBox(QString{}, parent) {}
+
+KCheckBox::KCheckBox(const QString& label, QWidget* parent) : KSwitch(parent) {
     setObjectName(QStringLiteral("kCheckBox"));
-    setFixedSize(sizeHint());
+    setFont(kit::font(TypeRole::Ui));
+    setLabel(label);
 }
-QSize KCheckBox::sizeHint() const { return {px(Size::Control), px(Size::Control)}; }
+
+void KCheckBox::setLabel(const QString& label) {
+    setText(label);
+    setFixedSize(sizeHint());
+    update();
+}
+
+void KCheckBox::setMixed(const bool mixed) {
+    if (mixed_ == mixed)
+        return;
+    if (mixed) {
+        // Underneath, a mixed box is unchecked, so the click that resolves it is a real toggle.
+        const QSignalBlocker blocker(this);
+        setChecked(false);
+    }
+    mixed_ = mixed;
+    update();
+}
+
+void KCheckBox::nextCheckState() {
+    mixed_ = false;
+    KSwitch::nextCheckState();
+}
+
+void KCheckBox::checkStateSet() {
+    mixed_ = false;
+    KSwitch::checkStateSet();
+}
+
+QRectF KCheckBox::boxRect() const {
+    const auto boxSize = static_cast<qreal>(px(Size::PropertiesCheckBox));
+    const auto cell = static_cast<qreal>(px(Size::Control));
+    return {(cell - boxSize) / 2.0, (height() - boxSize) / 2.0, boxSize, boxSize};
+}
+
+QSize KCheckBox::sizeHint() const {
+    const int labelWidth =
+        text().isEmpty() ? 0
+                         : px(Spacing::XS) +
+                               QFontMetrics(kit::font(TypeRole::Ui)).horizontalAdvance(text());
+    return {px(Size::Control) + labelWidth, px(Size::Control)};
+}
+
 QSize KCheckBox::minimumSizeHint() const { return sizeHint(); }
+
 void KCheckBox::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     const auto state = visualState();
-    const auto boxSize = px(Size::PropertiesCheckBox);
-    const QRectF box((width() - boxSize) / 2.0, (height() - boxSize) / 2.0, boxSize, boxSize);
-    fillRoundedSurface(painter, box,
-                       isEnabled() ? color(isChecked() ? Color::Accent : Color::Field)
-                                   : withOpacity(color(isChecked() ? Color::Accent : Color::Field),
-                                                 kDisabledOpacity),
-                       isChecked() ? QColor{} : color(borderToken()), Radius::Small);
-    if (isChecked())
+    const QRectF box = boxRect();
+    const bool filled = isChecked() || mixed_;
+    const QColor fill = color(filled ? Color::Accent : Color::Field);
+    fillRoundedSurface(painter, box, isEnabled() ? fill : withOpacity(fill, kDisabledOpacity),
+                       filled ? QColor{} : color(borderToken()), Radius::Small);
+    // A filled box is Accent already, so its keyboard focus is a ring outside it.
+    if (filled && hasKeyboardFocus(*this) && isEnabled())
+        drawFocusRing(painter, box, Radius::Small);
+    if (filled)
         painter.drawPixmap(box.topLeft(),
-                           iconPixmap(IconId::Check, Size::IconSmall,
+                           iconPixmap(mixed_ ? IconId::Subtract : IconId::Check, Size::IconSmall,
                                       inkForState(Color::Foreground, state), devicePixelRatioF(),
                                       iconWeight(IconRole::Chrome)));
+    if (!text().isEmpty()) {
+        painter.setFont(kit::font(TypeRole::Ui));
+        painter.setPen(inkForState(Color::Foreground, isEnabled() ? State::Normal : state));
+        painter.drawText(QRectF(px(Size::Control) + px(Spacing::XS), 0.0,
+                                width() - px(Size::Control) - px(Spacing::XS), height()),
+                         Qt::AlignVCenter | Qt::AlignLeft, text());
+    }
 }
 
 } // namespace bloom::ui::kit

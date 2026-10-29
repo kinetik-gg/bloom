@@ -15,6 +15,13 @@ namespace bloom::ui::kit {
 //
 // Like KSlider, the handles follow the pointer with no easing: a range being dragged is direct
 // editor feedback, and an eased handle would show a span that is not the span.
+//
+// Keyboard: one handle is active (the Lower one first) and carries the focus ring. Left/Down and
+// Right/Up step it by kKeyStepFraction of the range, Page Up/Page Down by kCoarseStepMultiple times
+// that, Home/End send it to its limit, and Tab moves to the Upper handle (Shift+Tab back) before
+// focus leaves the control. Handles that sit on top of each other are told apart by the first
+// move: a drag to the left takes Lower, to the right Upper. A drag or a run of keys is one edit
+// (editStarted/editFinished, the same contract as KSlider).
 class KRangeSelector final : public QWidget {
     Q_OBJECT
 
@@ -45,6 +52,10 @@ class KRangeSelector final : public QWidget {
     [[nodiscard]] QRectF handleRect(Handle handle) const;
 
     [[nodiscard]] Handle grabbedHandle() const noexcept;
+    // The handle the keyboard moves.
+    [[nodiscard]] Handle activeHandle() const noexcept { return active_; }
+    [[nodiscard]] bool hasLiveEdit() const noexcept { return interactionActive_; }
+    void cancelEdit();
     [[nodiscard]] State visualState() const;
 
     [[nodiscard]] QSize sizeHint() const override;
@@ -53,12 +64,21 @@ class KRangeSelector final : public QWidget {
   Q_SIGNALS:
     void lowerValueChanged(double value);
     void upperValueChanged(double value);
+    void editStarted();
+    void editFinished();
+    void editCancelled();
 
   protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+    void keyReleaseEvent(QKeyEvent* event) override;
+    void focusInEvent(QFocusEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
+    bool focusNextPrevChild(bool next) override;
+    bool event(QEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void changeEvent(QEvent* event) override;
@@ -67,13 +87,24 @@ class KRangeSelector final : public QWidget {
     [[nodiscard]] double valueForPosition(double x) const;
     [[nodiscard]] double normalized(double value) const;
     [[nodiscard]] Handle handleAt(const QPointF& point) const;
+    void moveHandle(Handle handle, double value);
+    void beginInteraction();
+    void finishInteraction(bool keep);
 
     double minimum_ = 0.0;
     double maximum_ = 1.0;
     double lower_ = 0.0;
     double upper_ = 1.0;
     Handle grabbed_ = Handle::None;
+    Handle active_ = Handle::Lower;
+    // A press on coincident handles: which one it takes waits for the first move's direction.
+    bool undecided_ = false;
+    double pressX_ = 0.0;
     bool hovered_ = false;
+    bool keyStepping_ = false;
+    bool interactionActive_ = false;
+    double lowerBase_ = 0.0;
+    double upperBase_ = 0.0;
 };
 
 } // namespace bloom::ui::kit
