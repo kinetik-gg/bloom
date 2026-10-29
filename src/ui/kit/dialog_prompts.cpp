@@ -73,15 +73,18 @@ KDialog* buildConfirm(QWidget& owner, const KConfirmSpec& spec) {
     auto* text = new QVBoxLayout;
     text->setContentsMargins(0, 0, 0, 0);
     text->setSpacing(px(Spacing::XS));
-    auto* heading = new KLabel(spec.heading, dialog, TypeRole::Title);
-    heading->setObjectName(spec.objectName + QStringLiteral("Heading"));
-    heading->setWordWrap(true);
-    text->addWidget(heading);
+    if (!spec.heading.isEmpty()) {
+        auto* heading = new KLabel(spec.heading, dialog, TypeRole::Title);
+        heading->setObjectName(spec.objectName + QStringLiteral("Heading"));
+        heading->setWordWrap(true);
+        text->addWidget(heading);
+    }
     if (!spec.detail.isEmpty()) {
         auto* detail = new KLabel(spec.detail, dialog);
         detail->setObjectName(spec.objectName + QStringLiteral("Detail"));
         detail->setWordWrap(true);
-        detail->setTone(Color::Muted);
+        // Without a heading the detail is the message itself.
+        detail->setTone(spec.heading.isEmpty() ? Color::Foreground : Color::Muted);
         detail->setToolTip(spec.detailToolTip);
         text->addWidget(detail);
     }
