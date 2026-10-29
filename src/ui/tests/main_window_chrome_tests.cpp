@@ -24,6 +24,8 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/split_handle.hpp>
 #include <bloom/ui/licenses_window.hpp>
+#include <bloom/ui/context_bar.hpp>
+#include <bloom/ui/layer_alignment_actions.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/playback_controller.hpp>
@@ -823,6 +825,53 @@ void testMediaPurgeDropsCompletedSourceFrames(Expectations& expectations) {
     fixture.window.reset();
 }
 
+// ADR 0031: the context bar sits directly under the menu bar, above the workspace; Window > Context
+// Bar hides it and the choice persists with the workspace UI state; the bar acts on the Viewer the
+// status strip follows; Composition > Align offers the bar's own alignment actions.
+void testContextBarIsAFixedSurfaceUnderTheMenuBar(Expectations& expectations) {
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("bar.ini"));
+    {
+        bloom::ui::test::WindowFixture fixture;
+        auto* bar = fixture.window->contextBar();
+        auto* toggle = fixture.window->contextBarAction();
+        expectations.expect(bar != nullptr && bar->isVisible() && toggle != nullptr &&
+                                toggle->isCheckable() && toggle->isChecked() &&
+                                toggle->text() == QStringLiteral("Context Bar"),
+                            "the context bar is shown, with a checked Window > Context Bar");
+        if (bar == nullptr || toggle == nullptr)
+            return;
+        auto* workspace = fixture.window->workspaceHost();
+        expectations.expect(bar->mapTo(fixture.window.get(), QPoint()).y() <
+                                    workspace->mapTo(fixture.window.get(), QPoint()).y() &&
+                                bar->width() == workspace->width(),
+                            "the bar spans the window above the workspace");
+        QTest::qWait(20);
+        expectations.expect(bar->viewer() != nullptr &&
+                                bar->viewer() == fixture.window->statusStrip()->displayedViewerForTest(),
+                            "the bar acts on the Viewer the window follows");
+        auto* composition = fixture.window->findChild<QMenu*>(QStringLiteral("alignMenu"));
+        expectations.expect(composition != nullptr &&
+                                composition->actions().contains(bar->alignment().action(
+                                    bloom::commands::LayerArrangement::AlignLeft)),
+                            "Composition > Align offers the bar's own Align actions");
+        toggle->trigger();
+        expectations.expect(!bar->isVisible() && !toggle->isChecked(),
+                            "Window > Context Bar hides the bar");
+        QSettings settings(path, QSettings::IniFormat);
+        fixture.window->saveApplicationState(settings);
+        settings.sync();
+    }
+    {
+        bloom::ui::test::WindowFixture fixture;
+        QSettings settings(path, QSettings::IniFormat);
+        (void)fixture.window->restoreApplicationState(settings);
+        expectations.expect(!fixture.window->contextBar()->isVisible() &&
+                                !fixture.window->contextBarAction()->isChecked(),
+                            "a hidden context bar stays hidden in the next session");
+    }
+}
+
 void testDisplayedViewerStatusPolicy(Expectations& expectations) {
     bloom::ui::test::WindowFixture fixture;
     auto* workspace = fixture.window->workspaceHost();
@@ -1103,6 +1152,7 @@ int main(int argc, char** argv) {
     testWindowStatusBarMessagesClearThemselves(expectations);
     try {
         testDisplayedViewerStatusPolicy(expectations);
+        testContextBarIsAFixedSurfaceUnderTheMenuBar(expectations);
         testMediaPurgeDropsCompletedSourceFrames(expectations);
     } catch (const std::exception& error) {
         expectations.expect(false, std::string("displayed viewer fixture: ") + error.what());

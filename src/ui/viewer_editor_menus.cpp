@@ -326,7 +326,7 @@ bool ViewerEditor::selectsAnchors() const {
     const auto target = editablePath();
     if (!target || target->path.anchors.empty())
         return false;
-    return tool_ == Tool::Pen || target->owner == EditablePath::Owner::Mask ||
+    return tool() == ViewerTool::Pen || target->owner == EditablePath::Owner::Mask ||
            !anchorSelectionFor(*target).empty();
 }
 

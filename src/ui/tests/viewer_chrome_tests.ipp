@@ -1,6 +1,6 @@
 // Included inside viewer_editor_tests.cpp's anonymous namespace (after viewer_tools_tests.ipp): the
 // Viewer's chrome -- the footer's three groups and priority collapse, the header's empty states,
-// the no-composition invitation, the tool column at short heights, and the menu structure with its
+// the no-composition invitation, the absent tool column (ADR 0031), and the menu structure with its
 // shared actions (docs/ux/ui-grammar.md, "Viewer header and footer", "Viewer menus").
 
 // The footer's collapse ranks, lowest first (viewer_editor_internal.hpp).
@@ -20,6 +20,9 @@ constexpr std::array<FooterRank, 12> kFooterRanks{{{"viewerLookToggle", 1},
                                                    {"viewerStepToEndButton", 9},
                                                    {"viewerZoomDropdown", 10},
                                                    {"viewerResolutionDropdown", 10}}};
+// After every collapse rank, the frame field drops its duration (CompactFrameField).
+constexpr int kCompactFrameFieldRank = 11;
+static_assert(kFooterRanks.back().rank < kCompactFrameFieldRank);
 constexpr std::array<const char*, 5> kNeverCollapses{
     "timelineStepBackButton", "playPauseButton", "timelineStepForwardButton",
     "timelineLoopIndicator", "viewerTimeReadout"};
@@ -65,6 +68,16 @@ void testViewerFooterLayoutAtEveryWidth(Expectations& expectations) {
                                 "the frame field shows its duration unless the footer is at its "
                                 "narrowest" +
                                     at);
+        // CompactFrameField is last: the duration drops only once every collapse rank has gone.
+        if (auto* duration = footer->findChild<ui::kit::KLabel*>("viewerTimeReadoutDuration");
+            duration != nullptr && duration->isHidden())
+            expectations.expect(std::ranges::all_of(kFooterRanks,
+                                                    [&](const auto& entry) {
+                                                        return control(entry.name)->isHidden();
+                                                    }),
+                                "the frame field drops its duration (rank " +
+                                    std::to_string(kCompactFrameFieldRank) +
+                                    ") only after every collapse rank" + at);
         // The collapse order: once a rank has left the row, every lower rank has too.
         int highestCollapsed = 0;
         for (const auto& entry : kFooterRanks)
@@ -283,40 +296,30 @@ void testViewerChromeRoiClearFollowsTheRegion(Expectations& expectations) {
     toolShutdown(fixture, expectations);
 }
 
-void testViewerToolColumnAtShortHeights(Expectations& expectations) {
+// ADR 0031: the tools moved to the context bar; the Viewer has no tool column, its canvas takes
+// the full width, and a short Viewer keeps its canvas floor.
+void testViewerHasNoToolColumn(Expectations& expectations) {
     using namespace bloom;
-    ViewerFixture fixture(makeTestProject("Tool column heights"));
+    ViewerFixture fixture(makeTestProject("No tool column"));
     fixture.viewer.resize(500, ui::kit::px(ui::kit::Size::ViewerMinHeight));
     fixture.viewer.show();
     QCoreApplication::processEvents();
-    auto* column = fixture.viewer.findChild<ui::kit::KToolColumn*>("viewerToolColumn");
-    auto* more = column->moreButton();
     expectations.expect(fixture.viewer.minimumHeight() == ui::kit::px(ui::kit::Size::ViewerMinHeight),
-                        "the Viewer's minimum height is its canvas floor, not the tool column");
-    bool inside = true;
-    int hidden = 0;
-    for (auto* tool : column->findChildren<ui::kit::KIconToggle*>()) {
-        if (tool->isHidden())
-            ++hidden;
-        else
-            inside = inside && column->rect().contains(tool->geometry());
-    }
-    expectations.expect(inside && hidden > 0 && more->isVisible() &&
-                            column->rect().contains(more->geometry()),
-                        "a short column collapses its trailing tools into More, overflowing "
-                        "nothing");
-    const auto offered = more->menu()->actions();
-    expectations.expect(offered.size() == hidden &&
-                            offered.back()->text() == QStringLiteral("Cryptomatte"),
-                        "More offers exactly the hidden tools, by name");
-    offered.back()->trigger();
-    auto* cryptomatte = fixture.viewer.findChild<QToolButton*>("viewerCryptomatteTool");
-    expectations.expect(cryptomatte->isChecked() && more->isChecked(),
-                        "choosing a collapsed tool selects it, and More shows it is active");
-    fixture.viewer.findChild<QToolButton*>("viewerSelectTool")->click();
-    fixture.viewer.resize(500, 900);
-    QCoreApplication::processEvents();
-    expectations.expect(!more->isVisible(), "a tall column shows every tool and no More button");
+                        "the Viewer's minimum height is its canvas floor");
+    expectations.expect(fixture.viewer.findChild<QWidget*>("viewerToolColumn") == nullptr,
+                        "the Viewer has no tool column");
+    expectations.expect(fixture.viewer.contentRectForTest().left() == 0.0 &&
+                            fixture.viewer.canvasRectForTest().left() ==
+                                ui::kit::px(ui::kit::Size::ViewerWorkPadding),
+                        "the canvas runs from the Viewer's left edge, padded only by the work "
+                        "padding");
+    for (const auto tool : ui::kViewerTools)
+        expectations.expect(fixture.viewer.findChild<QWidget*>(
+                                QStringLiteral("viewer") +
+                                QString::fromLatin1(ui::viewerToolInfo(tool).objectStem.data()) +
+                                QStringLiteral("Tool")) == nullptr,
+                            "no Viewer-owned button for the " +
+                                ui::viewerToolInfo(tool).name.toStdString() + " tool");
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
 }
 

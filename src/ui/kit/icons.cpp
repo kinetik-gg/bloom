@@ -97,6 +97,15 @@ const auto& iconAssets() {
         {IconId::Eyedropper, QLatin1StringView("eyedropper")},
         {IconId::RegionOfInterest, QLatin1StringView("selection")},
         {IconId::TransparencyGrid, QLatin1StringView("square-half")},
+        {IconId::AlignLayersLeft, QLatin1StringView("align-left")},
+        {IconId::AlignLayersHorizontalCentre, QLatin1StringView("align-center-horizontal")},
+        {IconId::AlignLayersRight, QLatin1StringView("align-right")},
+        {IconId::AlignLayersTop, QLatin1StringView("align-top")},
+        {IconId::AlignLayersVerticalMiddle, QLatin1StringView("align-center-vertical")},
+        {IconId::AlignLayersBottom, QLatin1StringView("align-bottom")},
+        {IconId::DistributeHorizontal, QLatin1StringView("columns")},
+        {IconId::DistributeVertical, QLatin1StringView("rows")},
+        {IconId::Overflow, QLatin1StringView("caret-double-right")},
     });
     return entries;
 }

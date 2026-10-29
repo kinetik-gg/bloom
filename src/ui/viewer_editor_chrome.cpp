@@ -1,5 +1,5 @@
 // The Viewer's chrome: the header selectors and the footer's three groups with their priority
-// collapse. Their shared helpers, the footer's state updates, the tool column and the
+// collapse. Their shared helpers, the footer's state updates and the
 // no-composition invitation are in viewer_editor_controls.cpp. The menus they share actions with
 // are in viewer_editor_menus.cpp; docs/ux/ui-grammar.md ("Viewer header and footer") is the
 // specification.

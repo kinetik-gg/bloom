@@ -35,6 +35,7 @@ class ProjectHost;
 class RamPreviewController;
 class PlaybackController;
 class WindowStatusBar;
+class ContextBar;
 class WorkspaceHost;
 class ViewerEditor;
 enum class WorkspaceLayoutRestoreResult;
@@ -103,6 +104,9 @@ class MainWindow final : public QMainWindow {
     // The one persistent reporting surface (task VIEW-1). Exposed so a test can read what the
     // window is currently saying without grabbing pixels.
     [[nodiscard]] WindowStatusBar* statusStrip() const noexcept { return statusStrip_; }
+    // ADR 0031: the fixed contextual bar under the menu bar, and Window > Context Bar.
+    [[nodiscard]] ContextBar* contextBar() const noexcept { return contextBar_; }
+    [[nodiscard]] QAction* contextBarAction() const noexcept { return contextBarAction_; }
     // Test-only seam (same terms as the other test/diagnostic accessors): applies committed
     // preferences exactly as the Preferences dialog's approved path does, without presenting the
     // modal dialog, so a test can assert the View action mirror and the open-editor propagation.
@@ -176,6 +180,8 @@ class MainWindow final : public QMainWindow {
     // A kit strip under the workspace, NOT QMainWindow::statusBar(): that brings its own chrome,
     // size grip and item model, none of which the Kinetik language wants.
     WindowStatusBar* statusStrip_ = nullptr;
+    ContextBar* contextBar_ = nullptr;
+    QAction* contextBarAction_ = nullptr;
     WorkspaceHost* workspaceHost_ = nullptr;
     QWidget* readOnlyPlaceholderPage_ = nullptr;
     QLabel* readOnlyPlaceholderFileNameLabel_ = nullptr;

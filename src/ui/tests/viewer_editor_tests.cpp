@@ -5,6 +5,9 @@
 #include <bloom/render/image_types.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/context_bar.hpp>
+#include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/tool_controller.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -64,6 +67,8 @@
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <bloom/ui/kit/radio_group.hpp>
+#include <bloom/ui/kit/switch_control.hpp>
+#include <bloom/ui/layer_alignment_actions.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/path_editing.hpp>
 #include <bloom/ui/properties_editor.hpp>
@@ -526,6 +531,8 @@ struct ViewerFixture final {
     PipelineFixture pipeline;
     bloom::ui::CompositionPreviewController controller;
     bloom::ui::ViewerEditor viewer;
+    // ADR 0031: the context bar, built on demand for the tests that drive its options.
+    std::unique_ptr<bloom::ui::ContextBar> bar;
 
     explicit ViewerFixture(bloom::document::NewProject newProject)
         : document(std::move(newProject.project)), commands(document),
@@ -534,7 +541,17 @@ struct ViewerFixture final {
           controller(session, scheduler, bridge, pipeline.pipeline), viewer(session, controller) {
         viewer.resize(400, 300);
     }
+    ~ViewerFixture() { bar.reset(); }
 };
+
+bloom::ui::ContextBar& contextBar(ViewerFixture& fixture) {
+    if (!fixture.bar) {
+        fixture.bar = std::make_unique<bloom::ui::ContextBar>(fixture.session, &fixture.controller);
+        fixture.bar->resize(1600, fixture.bar->height());
+        fixture.bar->setViewer(&fixture.viewer);
+    }
+    return *fixture.bar;
+}
 
 void testToolColumnUsesViewGestures(Expectations& expectations) {
     using namespace bloom;
@@ -542,9 +559,11 @@ void testToolColumnUsesViewGestures(Expectations& expectations) {
     fixture.viewer.show();
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
                         "tool fixture ready");
-    auto* zoom = fixture.viewer.findChild<QToolButton*>("viewerZoomTool");
-    auto* hand = fixture.viewer.findChild<QToolButton*>("viewerHandTool");
-    auto* select = fixture.viewer.findChild<QToolButton*>("viewerSelectTool");
+    // ADR 0031: the bar's tool buttons choose the one app-wide tool the Viewer acts with.
+    auto& bar = contextBar(fixture);
+    auto* zoom = bar.toolButtonForTest(ui::ViewerTool::Zoom);
+    auto* hand = bar.toolButtonForTest(ui::ViewerTool::Hand);
+    auto* select = bar.toolButtonForTest(ui::ViewerTool::Select);
     const auto before = fixture.commands.size();
     zoom->click();
     const auto center = fixture.viewer.canvasRectForTest().center();
@@ -1994,6 +2013,7 @@ void testViewerAdjustments(Expectations& expectations) {
 #include "viewer_tools_tests.ipp"
 #include "viewer_chrome_tests.ipp"
 #include "viewer_background_tests.ipp"
+#include "context_bar_tests.ipp"
 
 } // namespace
 
@@ -2120,7 +2140,12 @@ int main(int argc, char** argv) {
     testViewerFooterLayoutAtEveryWidth(expectations);
     testViewerFooterControlsShareOneVocabulary(expectations);
     testViewerEmptyProjectChrome(expectations);
-    testViewerToolColumnAtShortHeights(expectations);
+    testViewerHasNoToolColumn(expectations);
+    testOneToolAcrossViewers(expectations);
+    testContextBarTools(expectations);
+    testContextBarOptions(expectations);
+    testContextBarAlignment(expectations);
+    testContextBarReturnsFocus(expectations);
     try {
         testViewerChromeRoiClearFollowsTheRegion(expectations);
         testViewerMenusAreOrganisedAndShared(expectations);

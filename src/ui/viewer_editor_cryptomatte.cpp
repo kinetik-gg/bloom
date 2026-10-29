@@ -19,7 +19,7 @@ namespace bloom::ui {
 // mapped into the Cryptomatte's channel-set frame through the displaying layer's world transform,
 // and the worker reads the source frame at the playhead through the layer's time.
 bool ViewerEditor::cryptomattePress(QMouseEvent* event) {
-    if (tool_ != Tool::Cryptomatte || event->button() != Qt::LeftButton)
+    if (tool() != ViewerTool::Cryptomatte || event->button() != Qt::LeftButton)
         return false;
     event->accept();
     setFocus(Qt::MouseFocusReason);

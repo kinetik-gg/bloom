@@ -5,6 +5,8 @@
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/context_bar.hpp>
+#include <bloom/ui/layer_alignment_actions.hpp>
 #include <bloom/ui/preferences_aware.hpp>
 #include <memory>
 
@@ -63,6 +65,8 @@ constexpr auto workspaceLayoutKey = "workspace/compositing/layout";
 constexpr auto timelineLayerColumnWidthKey = "timeline/layer-column-width";
 constexpr auto windowGeometryKey = "window/main/geometry";
 constexpr auto chromeModeKey = "appearance/chrome";
+// Session/UI state like the workspace layout: whether Window > Context Bar shows the bar.
+constexpr auto contextBarVisibleKey = "workspace/context-bar-visible";
 constexpr auto issueTrackerUrl = "https://github.com/kinetik-gg/bloom/issues/new";
 
 } // namespace
@@ -253,6 +257,10 @@ WorkspaceLayoutRestoreResult MainWindow::restoreApplicationState(QSettings& sett
         restoreGeometry(geometry);
     }
 
+    const bool barVisible = settings.value(QLatin1StringView(contextBarVisibleKey), true).toBool();
+    contextBar_->setVisible(barVisible);
+    contextBarAction_->setChecked(barVisible);
+
     const auto result = workspaceHost_->restorePersistedLayout(settings, workspaceLayoutKey);
     if (result == WorkspaceLayoutRestoreResult::Deferred) {
         // A live native surface must retire before the restored tree may replace the current one.
@@ -277,6 +285,7 @@ WorkspaceLayoutRestoreResult MainWindow::restoreApplicationState(QSettings& sett
 
 void MainWindow::saveApplicationState(QSettings& settings) const {
     settings.setValue(windowGeometryKey, saveGeometry());
+    settings.setValue(QLatin1StringView(contextBarVisibleKey), contextBarAction_->isChecked());
     if (workspaceLayoutWritable_) {
         workspaceHost_->persistLayout(settings, workspaceLayoutKey);
     }
@@ -428,6 +437,9 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     connect(deleteCompositionAction_, &QAction::triggered, this, [this] {
         (void)deleteComposition(compositionSession_, compositionSession_.compositionId());
     });
+    compositionMenu.addSeparator();
+    // ADR 0031: the same Align and Distribute actions as the context bar.
+    compositionMenu.addMenu(contextBar_->alignment().createMenu(&compositionMenu));
     compositionMenu.addSeparator();
 
     connect(&compositionSession_, &CompositionSession::snapshotChanged, this,
@@ -927,6 +939,9 @@ void MainWindow::updateContentSurface() {
     const auto snapshot = projectHost_.stateSnapshot();
     const bool readOnly =
         snapshot.contentKind == host::ProjectSessionContentKind::PreservedReadOnly;
+    // The bar authors through the session, which a read-only placeholder leaves bound to its stale
+    // document: it is disabled while the placeholder is authoritative.
+    contextBar_->setEnabled(!readOnly);
     if (!readOnly) {
         centralStack_->setCurrentWidget(workspaceHost_);
         return;
@@ -977,6 +992,13 @@ void MainWindow::createCentralStack() {
     column->setSpacing(0);
     statusStrip_ = new WindowStatusBar(compositionSession_, previewController_, mediaDiskCache_,
                                        operationCache_, central);
+    // ADR 0031: the contextual bar is the first row under the menu bar, above both pages. It is a
+    // widget of the central column rather than a QToolBar, so the native macOS menu bar is
+    // untouched and the bar can never be docked, floated or moved.
+    contextBar_ = new ContextBar(compositionSession_, previewController_, central);
+    connect(contextBar_, &ContextBar::notice, statusStrip_,
+            [this](const QString& message) { statusStrip_->showTransientMessage(message); });
+    column->addWidget(contextBar_);
     column->addWidget(centralStack_, 1);
     column->addWidget(statusStrip_);
     setCentralWidget(central);
@@ -1077,6 +1099,13 @@ void MainWindow::createWorkspaceActions() {
             [this] { workspaceHost_->toggleMaximizeActiveArea(); });
 
     windowMenu_->addSeparator();
+    contextBarAction_ = windowMenu_->addAction(tr("Context Bar"));
+    contextBarAction_->setObjectName(QStringLiteral("windowContextBarAction"));
+    contextBarAction_->setCheckable(true);
+    contextBarAction_->setChecked(true);
+    connect(contextBarAction_, &QAction::toggled, contextBar_, &QWidget::setVisible);
+
+    windowMenu_->addSeparator();
     auto* resetLayoutAction = windowMenu_->addAction("Reset Workspace");
     resetLayoutAction->setObjectName("resetWorkspaceAction");
     connect(resetLayoutAction, &QAction::triggered, this, [this] {
@@ -1142,6 +1171,7 @@ void MainWindow::updateDisplayedViewer() {
     if (!selected && !viewers.empty())
         selected = viewers.front();
     statusStrip_->setDisplayedViewer(selected);
+    contextBar_->setViewer(selected);
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {

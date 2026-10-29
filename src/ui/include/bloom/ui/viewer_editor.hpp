@@ -10,6 +10,7 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preferences_aware.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
+#include <bloom/ui/tool_controller.hpp>
 #include <bloom/ui/viewer_channel_display.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
 #include <bloom/ui/viewer_gpu_resident.hpp>
@@ -362,8 +363,20 @@ class ViewerEditor final : public QWidget,
     // only the handler.
     void forwardGpuInputForTest(const ViewerGpuInputEvent& event) { forwardGpuInput(event); }
 
+    // ADR 0031: the handle-mode state of the anchors this Viewer is editing, which the context
+    // bar's handle-mode switcher shows: no anchors selected (not editing), one common mode, or a
+    // mixed selection (no common mode). setAnchorHandleMode() is the switcher's command.
+    struct AnchorModeState final {
+        bool editing = false;
+        std::optional<document::PathAnchorMode> common;
+        friend bool operator==(const AnchorModeState&, const AnchorModeState&) = default;
+    };
+    [[nodiscard]] AnchorModeState anchorModeState() const;
+    bool setAnchorHandleMode(document::PathAnchorMode mode);
+
   signals:
     void displayedStateChanged();
+    void anchorModeStateChanged();
     void probeChanged(ProbeReadout readout);
 
   protected:
@@ -407,7 +420,7 @@ class ViewerEditor final : public QWidget,
     // already relocated that strip to an external footer slot (FORMAL AMENDMENT 1), in which case
     // the canvas is full-bleed with no inset at all. There is no other inset either way
     // (decision 1).
-    // The whole content area: right of the tool column, above the footer. The surround fills it.
+    // The whole content area above the footer. The surround fills it.
     [[nodiscard]] QRectF contentRect() const;
     [[nodiscard]] QRectF canvasRect() const;
     // The active composition's background colour as the Viewer presents it inside the frame (the
@@ -472,7 +485,6 @@ class ViewerEditor final : public QWidget,
     // footer, its overflow menu and the canvas context menu.
     void buildMenus();
     void buildTransportActions();
-    void buildToolColumn();
     void buildEmptyState();
     void layoutEmptyState();
     void updateEmptyState();
@@ -578,21 +590,11 @@ class ViewerEditor final : public QWidget,
 
     // Zoom/pan (decision 2).
     ViewTransform transform_;
-    enum class Tool {
-        Select,
-        Hand,
-        Zoom,
-        Rectangle,
-        Ellipse,
-        Polygon,
-        Star,
-        Line,
-        Pen,
-        Text,
-        // #364: picks Cryptomatte objects of the selected Cryptomatte node.
-        Cryptomatte
-    };
-    void selectTool(Tool tool);
+    // ADR 0031: the app-wide tool (session_.tools()). Choosing one here also confirms whatever
+    // this Viewer has in flight and takes keyboard focus; every Viewer follows the change.
+    [[nodiscard]] ViewerTool tool() const noexcept;
+    void selectTool(ViewerTool tool);
+    void toolChanged();
     struct CreationGesture {
         ViewerMapping mapping;
         document::Revision revision;
@@ -729,7 +731,6 @@ class ViewerEditor final : public QWidget,
     document::ParameterId selectedAnchorsParameter_;
     // Session-only: the curved mode an Alt-click returns a Corner to.
     std::map<std::pair<std::uint64_t, std::size_t>, document::PathAnchorMode> curvedModeMemory_;
-    kit::KRadioGroup* anchorModeSwitcher_ = nullptr;
     [[nodiscard]] path_editing::AnchorSet anchorSelectionFor(const EditablePath& target) const;
     void setAnchorSelection(const EditablePath& target, path_editing::AnchorSet anchors);
     [[nodiscard]] std::optional<AnchorHit>
@@ -751,8 +752,7 @@ class ViewerEditor final : public QWidget,
     bool deleteSelectedAnchors();
     bool setSelectedPathClosed(bool closed);
     [[nodiscard]] std::unique_ptr<QMenu> anchorContextMenu();
-    void buildAnchorModeSwitcher();
-    void refreshAnchorModeSwitcher();
+    void notifyAnchorModeState();
     void paintAnchorEditing(QPainter& painter) const;
     // The Pen continuing an open shape path from one of its ends; penPath_ is then in path space.
     std::optional<EditablePath> penContinuation_;
@@ -778,8 +778,6 @@ class ViewerEditor final : public QWidget,
     // Adds `compositionPath` (composition space) as a mask of the target layer.
     bool addMaskFromPath(const MaskCreationTarget& target, const document::PathValue& path);
     bool maskOutlinePress(QMouseEvent* event, const ViewerMapping& mapping);
-    Tool tool_ = Tool::Select;
-    QWidget* toolColumn_ = nullptr;
     bool panActive_ = false;
     Qt::MouseButton panButton_ = Qt::NoButton;
     QPointF panOrigin_;

@@ -77,7 +77,7 @@ path_editing::AnchorSet ViewerEditor::anchorSelectionFor(const EditablePath& tar
 void ViewerEditor::setAnchorSelection(const EditablePath& target, path_editing::AnchorSet anchors) {
     selectedAnchorsParameter_ = target.parameter;
     selectedAnchors_ = std::move(anchors);
-    refreshAnchorModeSwitcher();
+    notifyAnchorModeState();
     update();
 }
 
@@ -203,7 +203,7 @@ void ViewerEditor::commitAnchorGesture() {
             setAnchorSelection(original, {gesture.index});
         break;
     }
-    refreshAnchorModeSwitcher();
+    notifyAnchorModeState();
     update();
 }
 
@@ -213,7 +213,7 @@ bool ViewerEditor::anchorPress(QMouseEvent* event) {
         event->accept();
         return true;
     }
-    if (event->button() != Qt::LeftButton || (tool_ != Tool::Select && tool_ != Tool::Pen) ||
+    if (event->button() != Qt::LeftButton || (tool() != ViewerTool::Select && tool() != ViewerTool::Pen) ||
         creation_ || textEdit_)
         return false;
     const auto mapping = currentMapping();
@@ -245,7 +245,7 @@ bool ViewerEditor::anchorPress(QMouseEvent* event) {
         const auto screen = target->toWorld * toolScreenTransform(*mapping);
         auto selection = anchorSelectionFor(*target);
         if (const auto hit = hitAnchor(*target, screen, event->position())) {
-            if (hit->part == 0 && tool_ == Tool::Pen) {
+            if (hit->part == 0 && tool() == ViewerTool::Pen) {
                 // The Pen on an open shape path's end continues drawing from it; on any other
                 // anchor it removes the anchor.
                 if (beginPenContinuation(*target, hit->index, *mapping, event->position())) {
@@ -258,7 +258,7 @@ bool ViewerEditor::anchorPress(QMouseEvent* event) {
                         path_editing::minimumAnchors(target->owner == EditablePath::Owner::Mask)) &&
                     commitPathEdit(*target, std::move(next))) {
                     selectedAnchors_.clear();
-                    selectTool(Tool::Select);
+                    selectTool(ViewerTool::Select);
                 }
                 event->accept();
                 return true;
@@ -281,7 +281,7 @@ bool ViewerEditor::anchorPress(QMouseEvent* event) {
                          hit->part == 1 ? path_editing::HandleSide::In
                                         : path_editing::HandleSide::Out);
         }
-        if (tool_ == Tool::Pen) {
+        if (tool() == ViewerTool::Pen) {
             // The Pen on a segment adds an anchor there without changing the shape.
             const auto toScreen = [&screen](const document::Vec2d point) {
                 return toolValue(screen.map(toolPoint(point)));
@@ -292,7 +292,7 @@ bool ViewerEditor::anchorPress(QMouseEvent* event) {
                 auto next = target->path;
                 if (const auto added = path_editing::insertAnchor(next, *hit);
                     added && commitPathEdit(*target, std::move(next))) {
-                    selectTool(Tool::Select);
+                    selectTool(ViewerTool::Select);
                     setAnchorSelection(*target, {*added});
                 }
                 event->accept();
@@ -301,7 +301,7 @@ bool ViewerEditor::anchorPress(QMouseEvent* event) {
             return false;
         }
     }
-    if (tool_ != Tool::Select)
+    if (tool() != ViewerTool::Select)
         return false;
     if (maskOutlinePress(event, *mapping))
         return true;
@@ -385,7 +385,7 @@ bool ViewerEditor::setAnchorMode(const document::PathAnchorMode mode) {
     path_editing::setMode(next, anchors, mode);
     // A re-labelled anchor whose geometry is already right still records its new mode.
     const bool changed = commitPathEdit(*target, std::move(next));
-    refreshAnchorModeSwitcher();
+    notifyAnchorModeState();
     return changed;
 }
 
@@ -400,7 +400,7 @@ bool ViewerEditor::deleteSelectedAnchors() {
         !commitPathEdit(*target, std::move(next)))
         return false;
     selectedAnchors_.clear();
-    refreshAnchorModeSwitcher();
+    notifyAnchorModeState();
     return true;
 }
 
@@ -474,49 +474,24 @@ bool ViewerEditor::anchorContextMenuEvent(QContextMenuEvent* event) {
     return true;
 }
 
-void ViewerEditor::buildAnchorModeSwitcher() {
-    anchorModeSwitcher_ = new kit::KRadioGroup(this);
-    anchorModeSwitcher_->setObjectName(QStringLiteral("viewerAnchorModeSwitcher"));
-    anchorModeSwitcher_->setAccessibleName(tr("Anchor handle mode"));
-    anchorModeSwitcher_->setToolTip(
-        tr("Handle mode of the selected anchors: Corner, Mirrored, Aligned, Free or Auto"));
-    for (const auto mode : kAnchorModes)
-        anchorModeSwitcher_->addOption(anchorModeText(mode));
-    anchorModeSwitcher_->setFixedSize(anchorModeSwitcher_->sizeHint());
-    anchorModeSwitcher_->hide();
-    connect(anchorModeSwitcher_, &kit::KRadioGroup::currentIndexChanged, this,
-            [this](const int index) {
-                if (index >= 0 && index < static_cast<int>(kAnchorModes.size()))
-                    (void)setAnchorMode(kAnchorModes[static_cast<std::size_t>(index)]);
-            });
-}
+void ViewerEditor::notifyAnchorModeState() { emit anchorModeStateChanged(); }
 
-void ViewerEditor::refreshAnchorModeSwitcher() {
-    if (anchorModeSwitcher_ == nullptr)
-        return;
+ViewerEditor::AnchorModeState ViewerEditor::anchorModeState() const {
     const auto target = editablePath();
     const auto anchors = target ? anchorSelectionFor(*target) : path_editing::AnchorSet{};
-    if (anchors.empty()) {
-        anchorModeSwitcher_->hide();
-        return;
-    }
-    const QSignalBlocker blocker(anchorModeSwitcher_);
-    if (const auto common = path_editing::commonMode(target->path, anchors))
-        anchorModeSwitcher_->setCurrentIndex(static_cast<int>(*common));
-    else
-        anchorModeSwitcher_->setMixed();
-    // The Viewer's tool-options position: the top of the canvas, beside the tool column.
-    const int gap = kit::px(kit::Spacing::S);
-    anchorModeSwitcher_->move(toolColumn_->geometry().right() + gap,
-                              static_cast<int>(contentRect().top()) + gap);
-    anchorModeSwitcher_->show();
-    anchorModeSwitcher_->raise();
+    if (anchors.empty())
+        return {};
+    return {true, path_editing::commonMode(target->path, anchors)};
+}
+
+bool ViewerEditor::setAnchorHandleMode(const document::PathAnchorMode mode) {
+    return setAnchorMode(mode);
 }
 
 void ViewerEditor::paintAnchorEditing(QPainter& painter) const {
     const auto mapping = currentMapping();
     const auto target = editablePath();
-    if (!mapping || !target || (creation_ && tool_ == Tool::Pen && penContinuation_))
+    if (!mapping || !target || (creation_ && tool() == ViewerTool::Pen && penContinuation_))
         return;
     const auto transform = target->toWorld * toolScreenTransform(*mapping);
     const auto selection = anchorSelectionFor(*target);

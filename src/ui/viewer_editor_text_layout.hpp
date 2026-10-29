@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <QTransform>
 #include <atomic>
+#include <bloom/commands/operations.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/render/text_raster.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -79,6 +80,8 @@ struct ViewerTextEdit final {
         double size = 0.0;
         core::Color4d color;
         document::Vec2d position;
+        // The context bar's font and alignment for new text (ADR 0031).
+        commands::TextLayerStyle style;
     };
     std::optional<Created> created;
 };

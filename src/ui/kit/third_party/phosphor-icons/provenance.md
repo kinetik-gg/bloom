@@ -31,6 +31,11 @@ The Viewer background split (lane V2, 2026-10-29) downloaded the same pinned arc
 SHA-256 above from the downloaded bytes, and extracted `square-half` in regular, fill and bold from
 `assets/` without modification, for the Viewer's Transparency Grid toggle. The pinned release has no
 checkerboard glyph; a half-filled square is its transparency mark.
+The contextual bar (ADR 0031, lane E, 2026-10-30) downloaded the same pinned archive, verified its
+SHA-256 above from the downloaded bytes, and extracted `align-left`, `align-center-horizontal`,
+`align-right`, `align-top`, `align-center-vertical`, `align-bottom`, `columns`, `rows` and
+`caret-double-right` in regular, fill and bold from `assets/` without modification, for its layer
+alignment, distribution and overflow buttons.
 Issue #376 (Composition Settings preset rename) downloaded the same pinned archive on 2026-10-25,
 verified its SHA-256 above from the downloaded bytes, and extracted `pencil-simple` in regular,
 fill and bold from `assets/` without modification.
@@ -41,7 +46,7 @@ pre-existing exceptions; they do not claim that those exceptions are upstream-id
 
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
-embeds 64 of them in three weights (192 files). The three weights are exactly the three the
+embeds 75 of them in three weights (225 files). The three weights are exactly the three the
 Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
 
 - `regular` -- the resting interface weight, and the default of every non-role call.
@@ -51,7 +56,7 @@ Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp
 Task VIEW-1 completed the `bold` subset. It previously held five files (the timeline's own
 toggles); `IconRole::Chrome` asks for Bold on every chrome glyph in the application, so a partial
 subset would have rendered some chrome icons blank. All three weights are now complete over the
-same 64 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
+same 75 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
 exception list. The other three upstream weights (`thin`, `light`, `duotone`) are deliberately not
 vendored, because no Kinetik icon role names one.
 
@@ -94,6 +99,15 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/eyedropper.svg` | `87cad5a974a6f152cc7dce67fd6c41fdc21f75d59bed20508b68c95f65d9ebc5` |
 | `regular/selection.svg` | `5fff68fdc60d81f1855302416481dc69fe9f0abfbb353d3bc43f2c24150ab8d4` |
 | `regular/square-half.svg` | `09f561de8c5e6ed831723a1bc8f6f987fb453928a0028a3f95a0366bae055768` |
+| `regular/align-left.svg` | `37cf5a3b41f55b36b33623f5a987e3b4b6c4494e0c0ff46f5f16df8e305a39ab` |
+| `regular/align-center-horizontal.svg` | `d3303453f368cd0bb2ce243c695c9a02eac9d22bdddd728cfdac031e87aefd49` |
+| `regular/align-right.svg` | `8d09007324b1407441a93e79fec6fd3a9bd99af3ccbd53bc1ce8445090ad5978` |
+| `regular/align-top.svg` | `4fbaeb924b02da8b423747c502786fa50ec31e110994931bfb17399c758984dd` |
+| `regular/align-center-vertical.svg` | `da0ce9e796fbb26edc3562026db5dcc892c111c02ac9f679085357a62b8d87d6` |
+| `regular/align-bottom.svg` | `6f0032f4994aaa5d931c535da216a2031819351537b39c65f718c9482616914d` |
+| `regular/columns.svg` | `8b4196e037ffb15d68f031b437fa081c6c1907e17ca58225bdf6e3bd6c4e1ecd` |
+| `regular/rows.svg` | `746ea88f9c58e378af7d4ce442d7e79f2d994e26aa72889d6d2d81c08c8edecc` |
+| `regular/caret-double-right.svg` | `dfd87c77636b787a76f9fc3882b1ab4858440e6aa5890a4c02852374e8a9c362` |
 | `regular/eye-slash.svg` | `070b0296a7df89ebf4cec12436e323b5531d458aa9aed3608924085889e1fd17` |
 | `regular/eye.svg` | `91d39f20bf95e0f36c07bd79b83a85fe6ff4ca20e2759c4afee7419ef80403fe` |
 | `regular/film-slate.svg` | `58b84e6c5a2950cfa0d8cae68c04e65dc32407dde463c3a2c79d265464726e0c` |
@@ -166,6 +180,15 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/eyedropper-fill.svg` | `8fb839f52aaadbe156dc9982deab2288c1e23fe335d65f7a638ba21ac8078037` |
 | `fill/selection-fill.svg` | `39c98d739e03eecf38da5ccceb1093ca3b45826ee98a187e99bac2c3923fd8a2` |
 | `fill/square-half-fill.svg` | `b7de8273c0735917754a13552d4a1d84f5e4cbe40c8c1458e84ca1c4d0644628` |
+| `fill/align-left-fill.svg` | `704fc89bcaebb23f08b74b65cbb14b2c00d3a1f9409bc8f4790560f555afc65a` |
+| `fill/align-center-horizontal-fill.svg` | `29ca525e5d1e77854a15e3878836fc6e841d52b22a2f18176a5cacc7677bb160` |
+| `fill/align-right-fill.svg` | `b4df51b16a075237101d5b743d29c8d46e64b0243dd2c7fec85263664dc5bfbd` |
+| `fill/align-top-fill.svg` | `f283e303a25beab210d9b91630ca8eff65e5144da4f0f823b641bee3b48fc122` |
+| `fill/align-center-vertical-fill.svg` | `9efb3bf3b28fdc22918c3ff0b5ad148549f941782e37c686940423272e626a6a` |
+| `fill/align-bottom-fill.svg` | `73a92ca9590ed98d39d19a00ca4c43b6f780d42a2b9b16f0123ce9defc2d3418` |
+| `fill/columns-fill.svg` | `ad118a0007021058813da73cd5d6c8ac6972f3243ec6d1170b21beac7c8b47a1` |
+| `fill/rows-fill.svg` | `9c850e2830d5ce91300c8946beca8277b73a90d319238c3689771f32aa94d823` |
+| `fill/caret-double-right-fill.svg` | `36d3f2fc1cac6ac468ec9425e0bb87949ab6839de982d592fd560fa5a1facf23` |
 | `fill/eye-slash-fill.svg` | `c5c57b58e51b8b5eb30573a58fd1cc2672ef5d877759c01b948352ecb20b642c` |
 | `fill/film-slate-fill.svg` | `9b93a0c8e74ddaa01ee402f7c182c0189e25df713eb533b86eb4b9ef08ac7aca` |
 | `fill/film-strip-fill.svg` | `aae7abd682bd0985d015c90cd952e5fdb667c5c5e23a3494b30b422a6ab5ef5b` |
@@ -237,6 +260,15 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/eyedropper-bold.svg` | `84cca4e37e3c813098a0b4dada7bfce670c56ad5ec0e924d0e3002e7218b7786` |
 | `bold/selection-bold.svg` | `bca7ab4688ca03ed591ba3cfba90bda277b25596b649898388c51aebc7742fb3` |
 | `bold/square-half-bold.svg` | `2f8165874291b521ab54da329ffeb2628a0ba7cb20a38e4e81eaa23f6815c230` |
+| `bold/align-left-bold.svg` | `dcae6ce0e634a7ff0bca9a151d1d0767d1333828aa542e8fac9dc213a47f65b4` |
+| `bold/align-center-horizontal-bold.svg` | `d52108ade6324dc522a09ab70ffce7b054450a6c594453d818f418ac3f30f26d` |
+| `bold/align-right-bold.svg` | `d6ecb6f39a68d0b04af181ca568a13a48c0b20f125ed8270928501782fd0260b` |
+| `bold/align-top-bold.svg` | `5301a0f72ae68bff3d6913a16374c98e55917bfc64b4de237109bebf42cd7091` |
+| `bold/align-center-vertical-bold.svg` | `40ff1c0c27f3669981c1ec764e4d6d48a2a6dfaa0c8122c4b2a20102248b52aa` |
+| `bold/align-bottom-bold.svg` | `edfd1e93257a64c545723292c92e394892c86b0dd1546c06ca926358cc1360be` |
+| `bold/columns-bold.svg` | `d59f15294062296bb5c6572894ed00780407e122cf53fcbdf33677e8f572b910` |
+| `bold/rows-bold.svg` | `008c0bdc2d08615a91a1c081dd3c22d5e4ac0352c7b9b7bf39ad3eff99f42be9` |
+| `bold/caret-double-right-bold.svg` | `a552ee01736790060fea7c87ba66a8b45e358aa1a646db1d8769b3397272acb9` |
 | `bold/eye-slash-bold.svg` | `2c90457e608c86c1e880b897f2258eeea8ea7f60e7eaf61592b9674d7978647e` |
 | `bold/film-slate-bold.svg` | `b61683707f518cb825c158e3ea703887e6a787e40fa79f3cbdae1c7409a95287` |
 | `bold/film-strip-bold.svg` | `75f500a192705172ce51686fc8a9a2f62d22e91987419c3bd91448cec2760e38` |

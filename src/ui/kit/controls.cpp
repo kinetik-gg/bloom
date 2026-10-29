@@ -1,5 +1,4 @@
 #include <QAction>
-#include <QButtonGroup>
 #include <QEnterEvent>
 #include <QFontMetrics>
 #include <QGridLayout>
@@ -282,7 +281,7 @@ void KIconButton::paintEvent(QPaintEvent*) {
 KIconToggle::KIconToggle(IconId id, QWidget* parent) : KIconButton(parent), glyph_(id) {
     setCheckable(true);
     // A toggle is one control square like every icon button. A dense strip (the timeline's layer
-    // switches, the tool column) fixes its cells at ToggleCell instead: that IS the painted body,
+    // switches) fixes its cells at ToggleCell instead: that IS the painted body,
     // so the switches line up with the controls beside them (kit::controlBody()).
     setFixedSize(px(Size::Control), px(Size::Control));
     ensureKeyboardFocusTracking(*this);
@@ -292,19 +291,6 @@ void KIconToggle::setGlyph(IconId id) {
     update();
 }
 QPixmap KIconToggle::glyphPixmap() const {
-    const auto toolChoice = property("toolChoice").toBool();
-    if (toolChoice) {
-        // A tool reads at the chrome box and weight; the chosen one takes the Selected plate's
-        // OnAccent ink in the Fill weight.
-        if (isChecked())
-            return iconPixmap(glyph_, Size::IconMedium, Color::OnAccent, State::Normal,
-                              IconWeight::Fill, devicePixelRatioF());
-        return iconPixmap(glyph_, Size::IconMedium, Color::Muted,
-                          !isEnabled() ? State::Disabled
-                          : underMouse() ? State::Hover
-                                         : State::Normal,
-                          iconWeight(IconRole::Chrome), devicePixelRatioF());
-    }
     // A layer switch shows its state by the glyph itself (an eye that is there or not), so it
     // never takes the Accent plate; any other toggle does, with OnAccent ink in the Fill weight.
     const bool layerSwitch = property("layerSwitch").toBool();
@@ -328,15 +314,7 @@ State KIconToggle::visualState() const {
 }
 void KIconToggle::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    if (property("toolChoice").toBool()) {
-        // The tool column keeps its chrome-weight (Ghost) plate until the tools move to the
-        // contextual bar: nothing at rest, the hover step under the pointer, the Accent plate when
-        // chosen.
-        const auto colors = buttonColors(ButtonKind::Ghost, visualState(), hasKeyboardFocus(*this));
-        if (colors.fill.isValid() || colors.border.isValid())
-            fillRoundedSurface(painter, rect(), colors.fill.isValid() ? colors.fill : Qt::transparent,
-                               colors.border, Radius::Small);
-    } else {
+    {
         const auto colors =
             buttonColors(ButtonKind::Secondary, visualState(), hasKeyboardFocus(*this));
         fillRoundedSurface(painter, controlBody(*this), colors.fill, colors.border, Radius::Small);
@@ -347,128 +325,6 @@ void KIconToggle::paintEvent(QPaintEvent*) {
     const QPointF origin(std::round((width() - size.width()) * dpr / 2) / dpr,
                          std::round((height() - size.height()) * dpr / 2) / dpr);
     painter.drawPixmap(origin, glyph);
-}
-KToolColumn::KToolColumn(QWidget* parent) : QWidget(parent), group_(new QButtonGroup(this)) {
-    setFixedWidth(px(Size::ToolColumnWidth));
-    setAutoFillBackground(true);
-    auto colors = palette();
-    colors.setColor(QPalette::Window, color(Color::Surface));
-    setPalette(colors);
-    group_->setExclusive(true);
-    more_ = new KIconButton(this);
-    more_->setObjectName(QStringLiteral("toolColumnMoreButton"));
-    more_->setIcon(icon(IconId::ContextMenu, IconRole::Chrome));
-    more_->setToolTip(tr("More tools"));
-    more_->setAccessibleName(tr("More tools"));
-    more_->setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
-    more_->setPopupMode(QToolButton::InstantPopup);
-    more_->setMenu(makeMenu(this));
-    more_->hide();
-}
-KIconToggle* KToolColumn::addTool(IconId id, const QString& label, const QString& objectName,
-                                  bool enabled) {
-    auto* button = new KIconToggle(id, this);
-    button->setObjectName(objectName);
-    button->setAccessibleName(label.section(QLatin1Char('\n'), 0, 0));
-    button->setToolTip(label);
-    button->setProperty("toolChoice", true);
-    button->setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
-    button->setEnabled(enabled);
-    group_->addButton(button);
-    connect(button, &QAbstractButton::toggled, this, [this] {
-        if (more_->isVisible())
-            rebuildMoreMenu();
-    });
-    Item item;
-    item.tool = button;
-    items_.push_back(item);
-    arrange();
-    return button;
-}
-void KToolColumn::addSeparator() {
-    items_.push_back({});
-    arrange();
-}
-QSize KToolColumn::sizeHint() const {
-    int height = 2 * px(Spacing::ChromePadding);
-    for (const auto& item : items_)
-        height += (item.tool ? px(Size::ToggleCell) : px(Spacing::S)) + px(Spacing::ChromeGap);
-    return {px(Size::ToolColumnWidth), height};
-}
-QSize KToolColumn::minimumSizeHint() const {
-    // One tool and the More button.
-    return {px(Size::ToolColumnWidth), 2 * px(Spacing::ChromePadding) +
-                                           2 * px(Size::ToggleCell) + px(Spacing::ChromeGap)};
-}
-void KToolColumn::resizeEvent(QResizeEvent* event) {
-    QWidget::resizeEvent(event);
-    arrange();
-}
-void KToolColumn::arrange() {
-    const int padding = px(Spacing::ChromePadding);
-    const int gap = px(Spacing::ChromeGap);
-    const int cell = px(Size::ToggleCell);
-    const int x = (width() - cell) / 2;
-    const bool fitsAll = sizeHint().height() - gap <= height();
-    // Everything above this line is the column's; below it, the More button when tools collapse.
-    const int limit = fitsAll ? height() - padding : height() - padding - cell - gap;
-    int y = padding;
-    bool collapsing = false;
-    for (std::size_t index = 0; index < items_.size(); ++index) {
-        auto& item = items_[index];
-        if (!item.tool) {
-            // A separator shows only between two visible tools.
-            const bool next = index + 1 < items_.size() && items_[index + 1].tool &&
-                              y + px(Spacing::S) + cell <= limit;
-            item.separator = !collapsing && next && y > padding
-                                 ? QRectF(padding, y + px(Spacing::S) / 2.0 - gap / 2.0,
-                                          width() - 2 * padding, px(Size::Hairline))
-                                 : QRectF{};
-            if (!item.separator.isNull())
-                y += px(Spacing::S);
-            continue;
-        }
-        collapsing = collapsing || y + cell > limit;
-        item.tool->setVisible(!collapsing);
-        item.tool->move(x, collapsing ? 0 : y);
-        if (!collapsing)
-            y += cell + gap;
-    }
-    more_->setVisible(collapsing);
-    more_->move(x, height() - padding - cell);
-    rebuildMoreMenu();
-    update();
-}
-void KToolColumn::rebuildMoreMenu() {
-    auto* menu = more_->menu();
-    // Deferred deletion: this also runs from a tool the menu itself just chose.
-    for (auto* action : menu->actions()) {
-        menu->removeAction(action);
-        action->deleteLater();
-    }
-    bool activeHidden = false;
-    for (const auto& item : items_) {
-        if (!item.tool || item.tool->isVisibleTo(this))
-            continue;
-        auto* tool = item.tool;
-        auto* action = menu->addAction(icon(tool->glyph(), IconRole::Chrome),
-                                       tool->toolTip().section(QLatin1Char('\n'), 0, 0));
-        action->setCheckable(true);
-        action->setChecked(tool->isChecked());
-        action->setEnabled(tool->isEnabled());
-        connect(action, &QAction::triggered, tool, &QAbstractButton::click);
-        activeHidden = activeHidden || tool->isChecked();
-    }
-    // The active tool is never hidden from view: the More button carries its selected state.
-    more_->setCheckable(true);
-    more_->setChecked(activeHidden);
-}
-void KToolColumn::paintEvent(QPaintEvent* event) {
-    QWidget::paintEvent(event);
-    QPainter painter(this);
-    for (const auto& item : items_)
-        if (!item.separator.isNull())
-            painter.fillRect(snappedToDevicePixels(painter, item.separator), color(Color::Border));
 }
 KLabel::KLabel(QWidget* parent) : KLabel(QString{}, parent) {}
 KLabel::KLabel(const QString& text, QWidget* parent, TypeRole role) : QLabel(text, parent) {

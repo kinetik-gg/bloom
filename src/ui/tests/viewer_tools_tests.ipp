@@ -55,7 +55,7 @@ bool toolVector(ViewerFixture& fixture, std::string_view role, double x, double 
     return vector && near(vector->x, x) && near(vector->y, y);
 }
 bool selectToolActive(ViewerFixture& fixture) {
-    return fixture.viewer.findChild<QToolButton*>("viewerSelectTool")->isChecked();
+    return fixture.session.tools().tool() == bloom::ui::ViewerTool::Select;
 }
 std::size_t layerCount(ViewerFixture& fixture) {
     return fixture.session.composition()->graph().layerOutputs().size();
@@ -120,7 +120,7 @@ void testCreationTools(Expectations& expectations) {
                             "a click after the ellipse creates no second ellipse");
     }
     toolReady(fixture, expectations);
-    fixture.viewer.findChild<QToolButton*>("viewerStarTool")->click();
+    fixture.session.tools().setTool(bloom::ui::ViewerTool::Star);
     toolDrag(fixture, {160, 120}, {210, 140}, Qt::ShiftModifier | Qt::AltModifier);
     expectations.expect(toolVector(fixture, "size", 100,
                                    100 * (1 + std::cos(std::numbers::pi / 5)) /
@@ -129,14 +129,14 @@ void testCreationTools(Expectations& expectations) {
                             std::get<std::int64_t>(toolParameter(fixture, "points")) == 5,
                         "star defaults to five points and supports centred regular drag");
     toolReady(fixture, expectations);
-    fixture.viewer.findChild<QToolButton*>("viewerPolygonTool")->click();
+    fixture.session.tools().setTool(bloom::ui::ViewerTool::Polygon);
     toolDrag(fixture, {80, 80}, {150, 130});
     expectations.expect(std::get<std::int64_t>(toolParameter(fixture, "kind")) ==
                                 static_cast<std::int64_t>(document::ShapeKind::Polygon) &&
                             std::get<std::int64_t>(toolParameter(fixture, "points")) == 5,
                         "polygon creates five sides");
     toolReady(fixture, expectations);
-    fixture.viewer.findChild<QToolButton*>("viewerLineTool")->click();
+    fixture.session.tools().setTool(bloom::ui::ViewerTool::Line);
     toolDrag(fixture, {40, 40}, {110, 90}, Qt::ShiftModifier);
     const auto end = std::get<document::Vec2d>(toolParameter(fixture, "lineEnd"));
     expectations.expect(toolVector(fixture, "lineStart", 40, 40) && near(end.x - 40, end.y - 40),
@@ -759,7 +759,7 @@ double handleLength(const bloom::document::PathAnchor& anchor, const bool out) {
 }
 void clickSwitcher(ViewerFixture& fixture, const int option) {
     auto* switcher =
-        fixture.viewer.findChild<bloom::ui::kit::KRadioGroup*>("viewerAnchorModeSwitcher");
+        contextBar(fixture).findChild<bloom::ui::kit::KRadioGroup*>("contextBarAnchorMode");
     if (switcher == nullptr)
         return;
     const QPointF point = switcher->optionRect(option).center();
@@ -771,9 +771,10 @@ void clickSwitcher(ViewerFixture& fixture, const int option) {
     QCoreApplication::sendEvent(switcher, &release);
 }
 int switcherIndex(ViewerFixture& fixture) {
+    // ADR 0031: the switcher lives in the context bar, disabled while no anchors are selected.
     auto* switcher =
-        fixture.viewer.findChild<bloom::ui::kit::KRadioGroup*>("viewerAnchorModeSwitcher");
-    return switcher != nullptr && switcher->isVisible() ? switcher->currentIndex() : -2;
+        contextBar(fixture).findChild<bloom::ui::kit::KRadioGroup*>("contextBarAnchorMode");
+    return switcher != nullptr && switcher->isEnabled() ? switcher->currentIndex() : -2;
 }
 void triggerMenu(ViewerFixture& fixture, const char* name) {
     auto menu = fixture.viewer.anchorContextMenuForTest();
