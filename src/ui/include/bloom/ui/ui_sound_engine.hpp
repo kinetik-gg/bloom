@@ -6,7 +6,9 @@
 // in tests) and never touches the transport AudioEngine, so UI sounds cannot disturb timeline or
 // preview audio. All sounds are read and decoded once, on a worker thread, before the device is
 // opened; the UI thread only ever enqueues a small request into a lock-free ring that the device
-// callback drains. If the device cannot be opened the engine stays silent and reports a diagnostic.
+// callback drains. The device is opened lazily by the worker on the first play() and closed again
+// after a few idle seconds (decoded sounds stay resident), so Bloom does not hold an output open
+// while silent. If the device cannot be opened the engine stays silent and reports a diagnostic.
 
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/ui/ui_feedback.hpp>
@@ -15,6 +17,8 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -40,11 +44,15 @@ class UiSoundEngine final : public SoundPlayer {
     static constexpr std::uint32_t kRate = 48'000;
     static constexpr std::uint32_t kChannels = 2;
 
+    // Ready means the sounds are decoded; the device itself opens and closes on demand.
     enum class State : std::uint8_t { Starting, Ready, Unavailable, Stopped };
+
+    static constexpr std::chrono::milliseconds kDefaultIdleClose{3000};
 
     // `source` defaults to the bundled resources. `diagnostic` may be called on the worker thread.
     UiSoundEngine(std::unique_ptr<media::audio::playback::Backend> backend,
-                  SoundSource source = bundledFeedbackSoundBytes, Diagnostic diagnostic = {});
+                  SoundSource source = bundledFeedbackSoundBytes, Diagnostic diagnostic = {},
+                  std::chrono::milliseconds idleClose = kDefaultIdleClose);
     ~UiSoundEngine() override;
     UiSoundEngine(const UiSoundEngine&) = delete;
     UiSoundEngine& operator=(const UiSoundEngine&) = delete;
@@ -56,7 +64,11 @@ class UiSoundEngine final : public SoundPlayer {
     void shutdown() noexcept override;
 
     [[nodiscard]] State state() const noexcept { return state_.load(std::memory_order_acquire); }
-    // Blocks until the worker has finished (Ready, Unavailable or Stopped). For tests.
+    // True while the output device is open (between the first play and the idle close).
+    [[nodiscard]] bool deviceOpen() const noexcept {
+        return deviceOpen_.load(std::memory_order_acquire);
+    }
+    // Blocks until the sounds are decoded (Ready, Unavailable or Stopped). For tests.
     void waitUntilSettled();
     // The thread that decoded and started the backend; default-constructed before start().
     [[nodiscard]] std::thread::id workerThread() const;
@@ -90,6 +102,11 @@ class UiSoundEngine final : public SoundPlayer {
     std::atomic<State> state_{State::Starting};
     std::atomic<bool> stopRequested_{false};
     std::atomic<bool> started_{false};
+    std::atomic<bool> wantDevice_{false};
+    std::atomic<bool> deviceOpen_{false};
+    std::atomic<std::int64_t> activityTicks_{0};
+    std::chrono::milliseconds idleClose_;
+    std::condition_variable wake_;
     mutable std::mutex mutex_;
     std::thread worker_;
     std::thread::id workerId_;

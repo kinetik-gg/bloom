@@ -3,7 +3,7 @@ SND01 "sine" -- UI sounds
 UI sounds: SND01 "sine" by Yasuhiro Tsuchiya, from SND (snd.dev) by Dentsu Inc. CX Creative Center.
 
 Source: https://snd.dev/ (SND01_sine.zip)
-Licence: MIT, as published for the SND01 sound pack.
+Licence: snd.dev Terms of Use (free use including commercial; credit appreciated; no redistribution of the unprocessed materials by themselves; no use as a trademark sound logo). The snd-lib project that distributes these sounds publishes its source code under the MIT licence.
 
 Terms of Use (summary of the snd.dev Terms of Use as recorded when Bloom adopted the pack):
   - Free use, commercial use included. Credit is appreciated.

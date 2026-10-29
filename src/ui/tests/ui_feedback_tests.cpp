@@ -316,6 +316,17 @@ class RecordingBackend final : public playback::Backend {
     return best;
 }
 
+template <typename Predicate>
+[[nodiscard]] bool waitFor(Predicate predicate) {
+    const auto deadline = Clock::now() + std::chrono::seconds{5};
+    while (!predicate()) {
+        if (Clock::now() > deadline)
+            return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    return true;
+}
+
 void testEngineDecodesOffTheUiThread(Expectations& check) {
     auto backend = std::make_unique<RecordingBackend>();
     auto* raw = backend.get();
@@ -340,13 +351,17 @@ void testEngineDecodesOffTheUiThread(Expectations& check) {
                          !sourceThreads.contains(std::this_thread::get_id()),
                      "every sound is read and decoded on the worker, never the calling thread");
     }
-    check.expect(raw->startThread == engine.workerThread() &&
-                     raw->startThread != std::this_thread::get_id(),
-                 "the device is started on the worker");
-    check.expect(peak(raw->pull(256)) == 0.0F, "the output is silent until a sound is played");
-    check.expect(raw->starts == 1, "the device was started once");
+    check.expect(engine.workerThread() != std::this_thread::get_id(),
+                 "the worker is not the calling thread");
+    check.expect(raw->starts == 0 && !engine.deviceOpen(),
+                 "the device stays closed until the first sound is played");
 
     engine.play(ui::FeedbackSound::RenderSucceeded, 1.0F);
+    check.expect(waitFor([&] { return engine.deviceOpen(); }),
+                 "the first play opens the device");
+    check.expect(raw->startThread == engine.workerThread(),
+                 "and the worker opens it, not the calling thread");
+    check.expect(raw->starts == 1, "the device was started once");
     const auto loud = raw->pull(512);
     check.expect(peak(loud) > 0.01F && peak(loud) <= 1.0F, "a played sound reaches the callback");
     check.expect(loud[0] == loud[1] || peak(loud) > 0.0F, "the mono sound feeds both channels");
@@ -384,12 +399,13 @@ void testEngineStaysSilentWithoutADevice(Expectations& check) {
                              });
     engine.start();
     engine.waitUntilSettled();
-    check.expect(engine.state() == ui::UiSoundEngine::State::Unavailable,
-                 "an unavailable device leaves the engine unavailable, not failed");
     engine.play(ui::FeedbackSound::Button, 1.0F);
-    check.expect(peak(raw->pull(128)) == 0.0F, "and silent");
-    const std::lock_guard lock(mutex);
-    check.expect(diagnostics.size() == 1, "with one diagnostic and no dialog");
+    check.expect(waitFor([&] {
+                     const std::lock_guard lock(mutex);
+                     return diagnostics.size() == 1;
+                 }),
+                 "an output that cannot open reports one diagnostic and no dialog");
+    check.expect(peak(raw->pull(128)) == 0.0F && !engine.deviceOpen(), "and stays silent");
 }
 
 void testEngineSurvivesMissingSounds(Expectations& check) {
@@ -402,9 +418,36 @@ void testEngineSurvivesMissingSounds(Expectations& check) {
     engine.start();
     engine.waitUntilSettled();
     engine.play(ui::FeedbackSound::Button, 1.0F);
+    check.expect(waitFor([&] { return engine.deviceOpen(); }), "the device opens");
     check.expect(peak(raw->pull(128)) == 0.0F, "a sound that failed to load is skipped");
     engine.play(ui::FeedbackSound::Select, 1.0F);
     check.expect(peak(raw->pull(128)) > 0.0F, "the others still play");
+}
+
+void testDeviceOpensLazilyAndClosesWhenIdle(Expectations& check) {
+    auto backend = std::make_unique<RecordingBackend>();
+    auto* raw = backend.get();
+    ui::UiSoundEngine engine(std::move(backend), ui::bundledFeedbackSoundBytes, {},
+                             std::chrono::milliseconds{120});
+    engine.start();
+    engine.waitUntilSettled();
+    std::this_thread::sleep_for(std::chrono::milliseconds{250});
+    check.expect(raw->starts == 0 && raw->stops == 0 && !engine.deviceOpen(),
+                 "an engine that is never asked to play never opens the device");
+
+    engine.play(ui::FeedbackSound::Select, 1.0F);
+    check.expect(waitFor([&] { return engine.deviceOpen(); }) && raw->starts == 1,
+                 "the device opens on the first play");
+    check.expect(peak(raw->pull(256)) > 0.0F, "the sound plays through the lazily opened device");
+    check.expect(waitFor([&] { return !engine.deviceOpen(); }) && raw->stops == 1,
+                 "the device closes after the idle period");
+
+    engine.play(ui::FeedbackSound::Select, 1.0F);
+    check.expect(waitFor([&] { return engine.deviceOpen(); }) && raw->starts == 2,
+                 "a later play reopens it with the sounds still resident");
+    check.expect(peak(raw->pull(256)) > 0.0F, "and plays");
+    engine.shutdown();
+    check.expect(!engine.deviceOpen() && raw->stops == 2, "shutdown closes an open device");
 }
 
 void testBundledSoundsDecode(Expectations& check) {
@@ -554,6 +597,7 @@ int main(int argc, char** argv) {
     testImportMapping(check);
     testBundledSoundsDecode(check);
     testEngineDecodesOffTheUiThread(check);
+    testDeviceOpensLazilyAndClosesWhenIdle(check);
     testEngineStaysSilentWithoutADevice(check);
     testEngineSurvivesMissingSounds(check);
     testInteractionObserver(check);

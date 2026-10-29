@@ -15,7 +15,7 @@ UI sounds: SND01 "sine" by Yasuhiro Tsuchiya, from SND (snd.dev) by Dentsu Inc. 
 | Archive | <https://snd.dev/assets/sounds/SND01_sine.zip> |
 | Archive SHA-256 | `f662d9df0cf670b0d1a6f2d59d71494b7cc2f9631d100d60de1602ff72d937f2` |
 | Archive format | 28 mono 16-bit 44.1 kHz WAV files |
-| Licence | MIT (as published for the pack; see `src/ui/kit/third_party/snd01-sine/LICENSE`) |
+| Licence | snd.dev Terms of Use (free use including commercial; credit appreciated; no redistribution of the unprocessed materials by themselves; no use as a trademark sound logo). The snd-lib project that distributes these sounds publishes its source code under the MIT licence. See `src/ui/kit/third_party/snd01-sine/LICENSE`. |
 | Modified | Yes. Every file below is a processed derivative; the original files are not committed. |
 
 The archive SHA-256 above was computed over the bytes downloaded from that URL on 2026-10-30 with

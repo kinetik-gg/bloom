@@ -104,6 +104,11 @@ void testSoundCreditIsInTheCatalog(Expectations& expectations) {
         text.find("UI sounds: SND01 \"sine\" by Yasuhiro Tsuchiya, from SND (snd.dev) by Dentsu "
                   "Inc. CX Creative Center.") != std::string_view::npos,
         "the sound credit line is present verbatim");
+    expectations.expect(text.find("Licence: snd.dev Terms of Use") != std::string_view::npos &&
+                            text.find("source code under the MIT licence") !=
+                                std::string_view::npos &&
+                            text.find("Licence: MIT") == std::string_view::npos,
+                        "the sounds are under the snd.dev Terms; only snd-lib's source is MIT");
     expectations.expect(text.find("unprocessed materials") != std::string_view::npos &&
                             text.find("trademark sound logo") != std::string_view::npos,
                         "the snd.dev terms summary is present");

@@ -24,9 +24,12 @@ state, and it has no influence on evaluation or rendering.
 
 ## Threading
 
-- `start()` returns at once. One worker thread reads each bundled WAV from the Qt resources,
-  decodes it to float, then opens the output device. The UI thread never reads, decodes or opens a
-  device.
+- `start()` returns at once. One worker thread reads each bundled WAV from the Qt resources and
+  decodes it to float. The decoded sounds stay resident.
+- The output device is opened lazily by that worker on the first `play()` and closed again after
+  about 3 s without activity, so Bloom holds no output open while silent (and an exclusive ALSA
+  device is only touched briefly). A later `play()` reopens it. The UI thread never reads, decodes,
+  opens or closes a device.
 - `play()` writes a small request into a fixed single-producer single-consumer ring and returns.
   It never blocks, allocates or locks. A full ring drops the cue.
 - The device callback drains the ring into eight fixed voices and mixes mono into both channels. It

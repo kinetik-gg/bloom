@@ -68,9 +68,10 @@ QByteArray bundledFeedbackSoundBytes(const FeedbackSound sound) {
 }
 
 UiSoundEngine::UiSoundEngine(std::unique_ptr<media::audio::playback::Backend> backend,
-                             SoundSource source, Diagnostic diagnostic)
+                             SoundSource source, Diagnostic diagnostic,
+                             const std::chrono::milliseconds idleClose)
     : backend_(std::move(backend)), source_(std::move(source)),
-      diagnostic_(std::move(diagnostic)) {}
+      diagnostic_(std::move(diagnostic)), idleClose_(idleClose) {}
 
 UiSoundEngine::~UiSoundEngine() { shutdown(); }
 
@@ -108,16 +109,45 @@ void UiSoundEngine::run() {
         state_.store(State::Unavailable, std::memory_order_release);
         return;
     }
-    if (const auto error = backend_->start(kRate, kChannels, &UiSoundEngine::callback, this)) {
-        if (diagnostic_) {
-            diagnostic_("UI sounds disabled: no audio output device (backend error " +
-                        std::to_string(error->observed) + ")");
+    state_.store(State::Ready, std::memory_order_release);
+
+    // Device lifecycle: open on demand, close after idleClose_ without activity.
+    bool reportedFailure = false;
+    std::unique_lock lock(mutex_);
+    while (!stopRequested_.load()) {
+        wake_.wait_for(lock, std::chrono::milliseconds{50});
+        if (stopRequested_.load()) {
+            break;
         }
-        state_.store(State::Unavailable, std::memory_order_release);
-        return;
+        lock.unlock();
+        if (!deviceOpen_.load() && wantDevice_.load()) {
+            if (const auto error =
+                    backend_->start(kRate, kChannels, &UiSoundEngine::callback, this)) {
+                wantDevice_.store(false);
+                if (!reportedFailure && diagnostic_) {
+                    diagnostic_("UI sounds disabled: no audio output device (backend error " +
+                                std::to_string(error->observed) + ")");
+                }
+                reportedFailure = true;
+            } else {
+                reportedFailure = false;
+                deviceOpen_.store(true, std::memory_order_release);
+            }
+        } else if (deviceOpen_.load()) {
+            const auto now = std::chrono::steady_clock::now().time_since_epoch();
+            const auto last = std::chrono::steady_clock::duration{activityTicks_.load()};
+            if (head_.load() == tail_.load() && now - last >= idleClose_) {
+                backend_->stop();
+                deviceOpen_.store(false, std::memory_order_release);
+                wantDevice_.store(false);
+                // A sound requested while stopping reopens the device.
+                if (head_.load() != tail_.load()) {
+                    wantDevice_.store(true);
+                }
+            }
+        }
+        lock.lock();
     }
-    state_.store(stopRequested_.load() ? State::Stopped : State::Ready,
-                 std::memory_order_release);
 }
 
 void UiSoundEngine::play(const FeedbackSound sound, const float gain) noexcept {
@@ -131,6 +161,10 @@ void UiSoundEngine::play(const FeedbackSound sound, const float gain) noexcept {
     }
     ring_[tail] = Request{static_cast<std::uint8_t>(sound), gain};
     tail_.store(next, std::memory_order_release);
+    activityTicks_.store(std::chrono::steady_clock::now().time_since_epoch().count(),
+                         std::memory_order_release);
+    wantDevice_.store(true, std::memory_order_release);
+    wake_.notify_one();
 }
 
 void UiSoundEngine::callback(void* userData, std::span<float> output) noexcept {
@@ -164,10 +198,12 @@ void UiSoundEngine::render(std::span<float> output) noexcept {
     head_.store(head, std::memory_order_release);
 
     const std::size_t frames = output.size() / kChannels;
+    bool active = false;
     for (auto& voice : voices_) {
         if (voice.data == nullptr) {
             continue;
         }
+        active = true;
         const std::size_t count = std::min(frames, voice.length - voice.position);
         for (std::size_t f = 0; f < count; ++f) {
             const float s = voice.data[voice.position + f] * voice.gain;
@@ -180,6 +216,10 @@ void UiSoundEngine::render(std::span<float> output) noexcept {
             voice = Voice{};
         }
     }
+    if (active) {
+        activityTicks_.store(std::chrono::steady_clock::now().time_since_epoch().count(),
+                             std::memory_order_release);
+    }
     for (auto& s : output) {
         s = std::clamp(s, -1.0F, 1.0F);
     }
@@ -187,6 +227,7 @@ void UiSoundEngine::render(std::span<float> output) noexcept {
 
 void UiSoundEngine::shutdown() noexcept {
     stopRequested_.store(true);
+    wake_.notify_all();
     std::thread worker;
     {
         const std::lock_guard lock(mutex_);
@@ -198,6 +239,7 @@ void UiSoundEngine::shutdown() noexcept {
     if (backend_ != nullptr) {
         backend_->stop();
     }
+    deviceOpen_.store(false);
     state_.store(State::Stopped, std::memory_order_release);
 }
 
