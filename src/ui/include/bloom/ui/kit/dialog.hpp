@@ -161,6 +161,10 @@ class KDialog : public QDialog {
     bool activate(Role role);
     // Commits a value field whose text editor is open, as focus leaving it would.
     void commitOpenEditors();
+    // Grows the dialog to the height its content needs at its current width (wrapped reasons
+    // and notes included), so a row that appears or a reason that wraps is never squeezed or
+    // overlapped. Runs whenever the layout changes; it never shrinks the dialog.
+    void fitToContent();
 
     // Shows the dialog asynchronously with its modality and calls `done` once with the role that
     // closed it. The dialog deletes itself afterwards.
@@ -175,6 +179,7 @@ class KDialog : public QDialog {
     void keyPressEvent(QKeyEvent* event) override;
     void showEvent(QShowEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
+    bool event(QEvent* event) override;
 
   private:
     void watchKeys(QWidget* widget);

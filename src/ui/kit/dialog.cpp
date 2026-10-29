@@ -455,6 +455,25 @@ void KDialog::open(std::function<void(Role)> done) {
     activateWindow();
 }
 
+void KDialog::fitToContent() {
+    auto* own = layout();
+    if (own == nullptr)
+        return;
+    own->activate();
+    const int needed = std::max(own->hasHeightForWidth() ? own->totalHeightForWidth(width())
+                                                         : own->sizeHint().height(),
+                                own->totalMinimumSize().height());
+    if (height() < needed)
+        resize(width(), needed);
+}
+
+bool KDialog::event(QEvent* event) {
+    const bool handled = QDialog::event(event);
+    if (event->type() == QEvent::LayoutRequest && isVisible())
+        fitToContent();
+    return handled;
+}
+
 void KDialog::keyPressEvent(QKeyEvent* event) {
     if (isEnter(*event)) {
         if ((event->modifiers() & Qt::ControlModifier) != 0) {
@@ -536,6 +555,7 @@ void KDialog::showEvent(QShowEvent* event) {
     watchKeys(this);
     revalidate();
     QDialog::showEvent(event);
+    fitToContent();
     if (initialFocus_) {
         initialFocus_->setFocus(Qt::OtherFocusReason);
         if (auto* line = qobject_cast<QLineEdit*>(initialFocus_.data()))

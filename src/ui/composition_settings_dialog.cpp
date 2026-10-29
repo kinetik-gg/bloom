@@ -322,9 +322,15 @@ CompositionSettingsDialog::CompositionSettingsDialog(
     // Opening Advanced grows the dialog to fit it; closing it gives the height back.
     connect(advanced_, &kit::KSection::collapsedChanged, this, [this] {
         QTimer::singleShot(0, this, [this] {
-            if (auto* own = this->layout())
-                own->activate();
-            resize(width(), sizeHint().height());
+            auto* own = this->layout();
+            if (own == nullptr)
+                return;
+            own->activate();
+            // Wrapped reasons and notes make the height depend on the width: fit the dialog's
+            // actual width, never less than its minimum, so no row is squeezed below a control.
+            const int fitted =
+                own->hasHeightForWidth() ? own->totalHeightForWidth(width()) : sizeHint().height();
+            resize(width(), std::max(fitted, minimumSizeHint().height()));
         });
     });
     (void)basic;

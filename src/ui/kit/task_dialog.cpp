@@ -35,11 +35,14 @@ KTaskDialog::KTaskDialog(const QString& title, const QString& objectName, QWidge
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setMaximumHeight(px(Size::DiagnosticHeight));
+    // The list sits on the dialog's own surface, not in a darker well.
+    scroll->viewport()->setAutoFillBackground(false);
     auto* rows = new QWidget(scroll);
     listRows_ = new QVBoxLayout(rows);
     listRows_->setContentsMargins(0, 0, 0, 0);
     listRows_->setSpacing(px(Spacing::S));
     scroll->setWidget(rows);
+    rows->setAutoFillBackground(false);
     list_ = scroll;
     list_->hide();
     layout->addWidget(list_);

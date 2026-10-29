@@ -66,7 +66,10 @@ constexpr auto kRestartBadgeObjectName = "preferencesRestartBadge";
     scroll->setObjectName(objectName);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
+    // Pages sit on the dialog's own surface, like every other dialog's sections.
+    scroll->viewport()->setAutoFillBackground(false);
     scroll->setWidget(content);
+    content->setAutoFillBackground(false);
     return scroll;
 }
 

@@ -91,12 +91,15 @@ void AssetsEditor::editTags(document::AssetId id) {
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setMinimumHeight(kit::px(kit::Size::ListRow) * 4);
+    // The tag rows sit on the dialog's own surface, not in a darker well.
+    scroll->viewport()->setAutoFillBackground(false);
     auto* fields = new QWidget(scroll);
     auto* rows = new QVBoxLayout(fields);
     rows->setContentsMargins(0, 0, 0, 0);
     rows->setSpacing(kit::px(kit::Spacing::XS));
     rows->addStretch();
     scroll->setWidget(fields);
+    fields->setAutoFillBackground(false);
     layout->addWidget(scroll, 1);
     auto* add = new kit::KButton(tr("Add Tag"), dialog);
     add->setObjectName(QStringLiteral("assetsAddTagButton"));
