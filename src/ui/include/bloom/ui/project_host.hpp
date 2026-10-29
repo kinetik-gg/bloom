@@ -18,6 +18,9 @@
 #include <QString>
 #include <QTimer>
 class QWidget;
+namespace bloom::ui::kit {
+class KDialog;
+} // namespace bloom::ui::kit
 
 #include <cstddef>
 #include <cstdint>
@@ -201,6 +204,12 @@ class ProjectHost final : public QObject {
     // owner). The composition root sets it once the main window exists; until then the default
     // prompts decline (Cancel, no path, no recovery) rather than open unowned.
     void setDialogOwner(QWidget* owner);
+    // The default unsaved-change and recovery prompts, parented to `owner`'s window. Exposed so
+    // review captures and tests show exactly what the default seams show.
+    [[nodiscard]] static kit::KDialog*
+    buildUnsavedChangesPrompt(QWidget& owner, const QString& name, UnsavedChangeAction action);
+    [[nodiscard]] static kit::KDialog*
+    buildRecoveryPrompt(QWidget& owner, const std::filesystem::path& recoveryPath);
 
   public slots:
     // Composes the unsaved-change flow, then REPLACES the session in-place with a fresh

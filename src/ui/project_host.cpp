@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
@@ -111,35 +112,10 @@ ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
             return UnsavedChangeDecision::Cancel;
         const auto path = displayPath();
         const auto name = path ? QString::fromStdString(path->stem().string()) : tr("Untitled");
-        QString heading;
-        switch (pendingUnsavedAction_) {
-        case UnsavedChangeAction::NewProject:
-            heading = tr("Save changes to “%1” before starting a new project?").arg(name);
-            break;
-        case UnsavedChangeAction::OpenProject:
-            heading = tr("Save changes to “%1” before opening another project?").arg(name);
-            break;
-        case UnsavedChangeAction::RecoverProject:
-            heading = tr("Save changes to “%1” before recovering the unsaved project?").arg(name);
-            break;
-        case UnsavedChangeAction::Close:
-            heading = tr("Save changes to “%1” before closing?").arg(name);
-            break;
-        case UnsavedChangeAction::Continue:
-            heading = tr("Save changes to “%1”?").arg(name);
-            break;
-        }
-        kit::KConfirmSpec spec;
-        spec.title = tr("Unsaved Changes");
-        spec.objectName = QStringLiteral("projectUnsavedChanges");
-        spec.tone = kit::KPromptTone::Warning;
-        spec.heading = heading;
-        spec.detail = tr("If you don't save, your changes since the last save are lost.");
-        spec.acceptText = tr("Save");
-        spec.destructiveText = tr("Don't Save");
-        spec.rejectText = tr("Cancel");
-        spec.defaultRole = kit::KDialog::Role::Accept;
-        switch (kit::confirm(*dialogOwner_, spec)) {
+        const std::unique_ptr<kit::KDialog> prompt(
+            buildUnsavedChangesPrompt(*dialogOwner_, name, pendingUnsavedAction_));
+        prompt->exec();
+        switch (prompt->chosenRole()) {
         case kit::KDialog::Role::Accept:
             return UnsavedChangeDecision::Save;
         case kit::KDialog::Role::Destructive:
@@ -181,17 +157,10 @@ ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
     recoveryDecisionProvider_ = [this](const std::filesystem::path& recoveryPath) {
         if (!dialogOwner_)
             return false;
-        kit::KConfirmSpec spec;
-        spec.title = tr("Recover Unsaved Changes");
-        spec.objectName = QStringLiteral("projectRecoverUnsaved");
-        spec.tone = kit::KPromptTone::Question;
-        spec.heading = tr("Recover the changes Bloom had not saved when it closed unexpectedly?");
-        spec.detail = tr("They are kept in %1. Not now leaves them there.")
-                          .arg(QString::fromStdString(recoveryPath.filename().string()));
-        spec.acceptText = tr("Recover");
-        spec.rejectText = tr("Not Now");
-        spec.defaultRole = kit::KDialog::Role::Accept;
-        return kit::confirm(*dialogOwner_, spec) == kit::KDialog::Role::Accept;
+        const std::unique_ptr<kit::KDialog> prompt(
+            buildRecoveryPrompt(*dialogOwner_, recoveryPath));
+        prompt->exec();
+        return prompt->chosenRole() == kit::KDialog::Role::Accept;
     };
     recoveryDirectory_ = defaultRecoveryDirectory();
 
@@ -641,6 +610,55 @@ bool ProjectHost::hasDirtyDecodedContent() const {
 }
 
 void ProjectHost::setDialogOwner(QWidget* owner) { dialogOwner_ = owner; }
+
+kit::KDialog* ProjectHost::buildUnsavedChangesPrompt(QWidget& owner, const QString& name,
+                                                     const UnsavedChangeAction action) {
+    QString heading;
+    switch (action) {
+    case UnsavedChangeAction::NewProject:
+        heading = tr("Save changes to \u201c%1\u201d before starting a new project?").arg(name);
+        break;
+    case UnsavedChangeAction::OpenProject:
+        heading = tr("Save changes to \u201c%1\u201d before opening another project?").arg(name);
+        break;
+    case UnsavedChangeAction::RecoverProject:
+        heading =
+            tr("Save changes to \u201c%1\u201d before recovering the unsaved project?").arg(name);
+        break;
+    case UnsavedChangeAction::Close:
+        heading = tr("Save changes to \u201c%1\u201d before closing?").arg(name);
+        break;
+    case UnsavedChangeAction::Continue:
+        heading = tr("Save changes to \u201c%1\u201d?").arg(name);
+        break;
+    }
+    kit::KConfirmSpec spec;
+    spec.title = tr("Unsaved Changes");
+    spec.objectName = QStringLiteral("projectUnsavedChanges");
+    spec.tone = kit::KPromptTone::Warning;
+    spec.heading = heading;
+    spec.detail = tr("If you don't save, your changes since the last save are lost.");
+    spec.acceptText = tr("Save");
+    spec.destructiveText = tr("Don't Save");
+    spec.rejectText = tr("Cancel");
+    spec.defaultRole = kit::KDialog::Role::Accept;
+    return kit::buildConfirm(owner, spec);
+}
+
+kit::KDialog* ProjectHost::buildRecoveryPrompt(QWidget& owner,
+                                               const std::filesystem::path& recoveryPath) {
+    kit::KConfirmSpec spec;
+    spec.title = tr("Recover Unsaved Changes");
+    spec.objectName = QStringLiteral("projectRecoverUnsaved");
+    spec.tone = kit::KPromptTone::Question;
+    spec.heading = tr("Recover the changes Bloom had not saved when it closed unexpectedly?");
+    spec.detail = tr("They are kept in %1. Not now leaves them there.")
+                      .arg(QString::fromStdString(recoveryPath.filename().string()));
+    spec.acceptText = tr("Recover");
+    spec.rejectText = tr("Not Now");
+    spec.defaultRole = kit::KDialog::Role::Accept;
+    return kit::buildConfirm(owner, spec);
+}
 
 void ProjectHost::confirmUnsavedChanges(std::function<void()> onProceed,
                                         const bool retireRecoveryOnProceed,

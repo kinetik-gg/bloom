@@ -248,6 +248,13 @@ class FrameExportController final : public QObject {
     [[nodiscard]] static output::OutputPresetV1
     presetForDestination(const std::filesystem::path& destination);
 
+    // The default Export Frame Range dialog (destination, first and last frame up to `maximum`)
+    // and Approve Export prompt, parented to `owner`'s window. Exposed so review captures and
+    // tests can show exactly what the default seams show.
+    [[nodiscard]] static kit::KDialog* buildRangeDialog(QWidget& owner, std::int64_t maximum);
+    [[nodiscard]] static kit::KDialog* buildApprovalDialog(QWidget& owner,
+                                                           const FrameExportApprovalPrompt& prompt);
+
   public slots:
     // "File -> Export Frame..." entry point: refuses while busy or without a composition, else
     // invokes the destination-dialog seam, then beginExport() with the chosen path.
