@@ -1209,6 +1209,20 @@ foreach(scale IN ITEMS 1 1.5 2)
         LABELS "ui;grammar" TIMEOUT 60)
 endforeach()
 
+# Bloom's type roles win over the platform theme: the main-window fixture and every offscreen
+# surface under a hostile theme resolve and paint only the bundled faces.
+add_executable(bloom_kit_typography_test kit_typography_tests.cpp)
+target_include_directories(bloom_kit_typography_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_kit_typography_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_kit_typography_test PRIVATE BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_kit_typography_test)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.kit_typography.dpr${scale} COMMAND bloom_kit_typography_test)
+    set_tests_properties(bloom.ui.kit_typography.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;kit;grammar" TIMEOUT 120)
+endforeach()
+
 add_executable(bloom_window_golden_test window_golden_tests.cpp)
 target_link_libraries(bloom_window_golden_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_window_golden_test PRIVATE

@@ -5,6 +5,7 @@
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/kit/typography.hpp>
 
 #include <QAbstractItemView>
 #include <QAbstractScrollArea>
@@ -232,8 +233,8 @@ void paintMenuHoverBar(QPainter& painter, const QRect& row, const QWidget* widge
         return;
     }
     const QMargins gutter = menu->contentsMargins();
-    QRectF frame = QRectF(menu->rect()).adjusted(gutter.left(), gutter.top(), -gutter.right(),
-                                                 -gutter.bottom());
+    QRectF frame = QRectF(menu->rect())
+                       .adjusted(gutter.left(), gutter.top(), -gutter.right(), -gutter.bottom());
     if (const auto* target = dynamic_cast<const QWidget*>(painter.device());
         target != nullptr && target != menu && menu->isAncestorOf(target))
         frame.translate(QPointF(target->mapFrom(menu, QPoint(0, 0))));
@@ -332,6 +333,14 @@ void AltUnderlineProxyStyle::polish(QWidget* widget) {
         widget->installEventFilter(tooltipWrapper());
     }
     QProxyStyle::polish(widget);
+    // Every other widget that never named a font and still resolves a platform face takes its
+    // role here, the one place every widget passes.
+    enforceTypeRole(*widget);
+}
+
+void AltUnderlineProxyStyle::polish(QApplication* application) {
+    QProxyStyle::polish(application);
+    applyTypeRoleFonts();
 }
 
 void AltUnderlineProxyStyle::drawPrimitive(const PrimitiveElement element,

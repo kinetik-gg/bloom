@@ -46,6 +46,7 @@ target_sources(
         kit/thumbnail.cpp
         kit/title_bar.cpp
         kit/tokens.cpp
+        kit/typography.cpp
         kit/value_field.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -71,6 +72,7 @@ target_sources(
             include/bloom/ui/kit/panel_switcher.hpp
             include/bloom/ui/kit/surfaces.hpp
             include/bloom/ui/kit/thumbnail.hpp
+            include/bloom/ui/kit/typography.hpp
             include/bloom/ui/kit/controls.hpp
             include/bloom/ui/kit/row.hpp
             include/bloom/ui/kit/progress_bar.hpp
