@@ -411,7 +411,6 @@ int main(int argc, char** argv) {
         params.destination = bloom::render::GpuPresentRect{0.0F, 0.0F, static_cast<float>(width),
                                                            static_cast<float>(height)};
         params.source = bloom::render::GpuPresentSourceWindow{0.0, 0.0, 2.0, 2.0};
-        params.background = bloom::render::GpuPresentBackground::Black;
         return params;
     };
     const std::array<std::uint8_t, std::size_t{4} * 4 * 4> transparentOverlay{};

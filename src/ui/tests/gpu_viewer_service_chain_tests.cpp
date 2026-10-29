@@ -19,6 +19,8 @@
 
 #include <bloom/runtime/reference_display_preparation.hpp>
 
+#include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
@@ -101,38 +103,45 @@ struct ViewerSample final {
         add(multiply(rgba.blue, rgba.alpha), multiply(backdrop.blue, 255 - rgba.alpha)), 255};
 }
 
-// The CPU background colour a mode paints behind the composition (viewer_editor.cpp
-// drawCanvasBackground above): Solid is the panel Canvas token, Black/White exact, and
-// Checkerboard alternates CheckerLight (base) and CheckerDark (alternate) on the 22px ViewerChecker
-// grid. The checker cell for a device-pixel coordinate is derived from the CPU semantics, NOT by
-// reading the GPU request fields, so the two paths are compared independently.
-[[nodiscard]] render::Rgba8 cpuBackgroundColor(const ui::ViewerBackground mode, const int deviceX,
-                                               const int deviceY, const double dpr) {
+[[nodiscard]] render::Rgba8 rgba8Of(const QColor& color) {
+    return render::Rgba8{static_cast<std::uint8_t>(color.red()),
+                         static_cast<std::uint8_t>(color.green()),
+                         static_cast<std::uint8_t>(color.blue()), 255};
+}
+
+// The CPU surround a View > Background choice paints outside the frame (viewer_editor_controls.cpp
+// viewerSurroundColor): Solid is the panel Canvas token, Grey/Black/White exact.
+[[nodiscard]] render::Rgba8 cpuSurroundColor(const ui::ViewerBackground mode) {
     switch (mode) {
-    case ui::ViewerBackground::Solid: {
-        const QColor canvas = ui::kit::color(ui::kit::Color::Canvas);
-        return render::Rgba8{static_cast<std::uint8_t>(canvas.red()),
-                             static_cast<std::uint8_t>(canvas.green()),
-                             static_cast<std::uint8_t>(canvas.blue()), 255};
-    }
+    case ui::ViewerBackground::Grey:
+        return rgba8Of(ui::kit::color(ui::kit::Color::CanvasGrey));
     case ui::ViewerBackground::Black:
         return render::Rgba8{0, 0, 0, 255};
     case ui::ViewerBackground::White:
         return render::Rgba8{255, 255, 255, 255};
-    case ui::ViewerBackground::Checkerboard:
+    case ui::ViewerBackground::Solid:
         break;
     }
+    return rgba8Of(ui::kit::color(ui::kit::Color::Canvas));
+}
+
+// The CPU backdrop inside the frame (drawFrameBackground): the composition background, or, with
+// the Transparency Grid on, ViewerCheckerLight (base) and ViewerCheckerDark (alternate) on the 22px
+// ViewerChecker grid from the container origin. Derived from the CPU semantics, NOT by reading the
+// GPU request fields, so the two paths are compared independently.
+[[nodiscard]] render::Rgba8 cpuFrameBackdrop(const render::Rgba8 frame, const bool grid,
+                                             const int deviceX, const int deviceY,
+                                             const double dpr) {
+    if (!grid)
+        return frame;
     const auto tile =
         static_cast<int>(std::lround(ui::kit::px(ui::kit::Size::ViewerChecker) * dpr));
     const int span = std::max(1, tile);
     const int column = deviceX >= 0 ? deviceX / span : -((-deviceX + span - 1) / span);
     const int row = deviceY >= 0 ? deviceY / span : -((-deviceY + span - 1) / span);
     const bool raised = ((row + column) & 1) == 0;
-    const QColor color = raised ? ui::kit::color(ui::kit::Color::CheckerDark)
-                                : ui::kit::color(ui::kit::Color::CheckerLight);
-    return render::Rgba8{static_cast<std::uint8_t>(color.red()),
-                         static_cast<std::uint8_t>(color.green()),
-                         static_cast<std::uint8_t>(color.blue()), 255};
+    return rgba8Of(raised ? ui::kit::color(ui::kit::Color::ViewerCheckerDark)
+                          : ui::kit::color(ui::kit::Color::ViewerCheckerLight));
 }
 
 [[nodiscard]] render::Rgba8 channelReference(const render::Rgba8 rgba,
@@ -212,16 +221,17 @@ struct ViewerSample final {
     return samples;
 }
 
-// RGBA background phases: build mapped samples whose expected colour is the channel-remapped CPU
-// reference composited over the mode's own CPU background. At least one sample per mode lands on a
-// transparent composition pixel, so a mode whose GPU surround disagreed with the CPU paint (the
-// original Solid-as-authored-colour bug) would fail the external comparison. Checker geometry is
-// derived from the CPU 22px grid at the sample's device-pixel coordinate relative to the container
-// origin; the interior fractions keep every sample away from the tile edges.
+// RGBA backdrop phases: build mapped samples whose expected colour is the channel-remapped CPU
+// reference composited over the CPU frame backdrop (the composition background, or the grid), plus
+// one sample outside the frame whose expected colour is the CPU surround. At least one interior
+// sample per phase lands on a transparent composition pixel, so a phase whose GPU frame colour or
+// grid disagreed with the CPU paint -- or whose surround leaked into the frame -- would fail the
+// external comparison. The interior fractions keep every sample away from the tile edges.
 [[nodiscard]] std::vector<ViewerSample>
 buildBackgroundSamples(ui::ViewerEditor& viewer, QWidget& host,
                        const runtime::PreparedPreviewFrame& reference,
-                       const ui::ViewerBackground mode) {
+                       const ui::ViewerBackground surround, const render::Rgba8 frame,
+                       const bool grid) {
     std::vector<ViewerSample> samples;
     const auto view = reference.displayBufferView();
     if (!view.has_value()) {
@@ -260,13 +270,23 @@ buildBackgroundSamples(ui::ViewerEditor& viewer, QWidget& host,
                          static_cast<std::size_t>(compX - originX)];
         const int deviceX = static_cast<int>(std::lround((local.x() - container.left()) * dpr));
         const int deviceY = static_cast<int>(std::lround((local.y() - container.top()) * dpr));
-        const render::Rgba8 backdrop = cpuBackgroundColor(mode, deviceX, deviceY, dpr);
+        const render::Rgba8 backdrop = cpuFrameBackdrop(frame, grid, deviceX, deviceY, dpr);
         ViewerSample sample;
         sample.widgetLocal = local;
         sample.windowLocal = QPointF(viewer.mapTo(&host, local.toPoint()));
         sample.expected =
             compositeOver(backdrop, channelReference(referencePixel, ui::ViewerChannel::Rgba));
         sample.opaque = referencePixel.alpha == 255;
+        samples.push_back(sample);
+    }
+    // The surround, just inside the container's top-left corner: outside the destination.
+    const QPointF outside = container.topLeft() + QPointF(6.0, 6.0);
+    if (!destination.contains(outside)) {
+        ViewerSample sample;
+        sample.widgetLocal = outside;
+        sample.windowLocal = QPointF(viewer.mapTo(&host, outside.toPoint()));
+        sample.expected = cpuSurroundColor(surround);
+        sample.opaque = true;
         samples.push_back(sample);
     }
     return samples;
@@ -464,11 +484,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     viewer->show();
     phase("viewer-window", "title=" + host->windowTitle().toStdString() + " extent=960x640");
 
-    // Deterministic background Black (index 2 of Solid/Checkerboard/Black/White) and every viewer
-    // overlay action off, so the samples never race a handle/selection/overlay paint.
+    // Deterministic surround Black, the Transparency Grid off (the frame shows the composition's
+    // black default background) and every viewer overlay action off, so the samples never race a
+    // handle/selection/overlay paint.
     checks.expect(setDropdownIndex(*viewer, "viewerBackgroundDropdown",
                                    static_cast<int>(ui::ViewerBackground::Black)),
                   "the background is set deterministically to Black");
+    if (auto* grid = viewer->findChild<QAction*>(QStringLiteral("viewerTransparencyGridAction")))
+        grid->setChecked(false);
     for (QAction* action : viewer->findChildren<QAction*>()) {
         const QString text = action->text();
         if (action->isCheckable() &&
@@ -611,33 +634,59 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     emitSamples("red-rgba", buildSamples(*viewer, *host, *reference, ui::ViewerChannel::Red));
     holdForCapture(4s);
 
-    // Phase 4: RGBA background proofs. Each mode emits samples whose expected colour composites the
-    // CPU reference over that mode's own CPU background, including transparent composition pixels,
-    // so the external capture can prove the GPU surround matches the CPU paint for Solid (Canvas),
-    // Black, White, and Checkerboard. This is the binding background pixel proof, not a claim from
-    // the request fields. The channel is returned to RGBA so the surround, not the remap, is what
-    // these samples isolate.
+    // Phase 4: RGBA backdrop proofs. Each phase emits interior samples whose expected colour
+    // composites the CPU reference over that phase's CPU frame backdrop -- the composition's own
+    // background colour, or the Transparency Grid -- including transparent composition pixels, and
+    // one surround sample outside the frame, so the external capture proves the GPU surround,
+    // frame colour and grid each match the CPU paint and never leak into each other. This is the
+    // binding backdrop pixel proof, not a claim from the request fields. The channel is returned
+    // to RGBA so the backdrop, not the remap, is what these samples isolate.
     checks.expect(setDropdownIndex(*viewer, "viewerChannelDropdown",
                                    static_cast<int>(ui::ViewerChannel::Rgba)),
-                  "the channel dropdown is returned to RGBA for the background phases");
+                  "the channel dropdown is returned to RGBA for the backdrop phases");
     checks.expect(
         waitUntil([&] { return viewer->channelForTest() == ui::ViewerChannel::Rgba; }, 10s),
-        "the viewer reports the RGBA channel for the background phases");
-    struct BackgroundPhase final {
-        ui::ViewerBackground mode;
+        "the viewer reports the RGBA channel for the backdrop phases");
+    // A distinctive composition background: presentation only, so it re-presents the resident
+    // frame without a new evaluation.
+    const core::Color4d authoredBackground{0.75, 0.25, 0.5, 1.0};
+    {
+        commands::Transaction edit("Background", session.snapshot().revision());
+        edit.emplace<commands::SetCompositionBackgroundColor>(session.compositionId(),
+                                                              authoredBackground);
+        checks.expect(session.executeTransaction(std::move(edit)).succeeded(),
+                      "the composition background edit commits");
+    }
+    const render::Rgba8 frameColor{
+        static_cast<std::uint8_t>(std::lround(authoredBackground.red * 255.0)),
+        static_cast<std::uint8_t>(std::lround(authoredBackground.green * 255.0)),
+        static_cast<std::uint8_t>(std::lround(authoredBackground.blue * 255.0)), 255};
+    auto* gridAction = viewer->findChild<QAction*>(QStringLiteral("viewerTransparencyGridAction"));
+    checks.expect(gridAction != nullptr, "the Transparency Grid action is reachable");
+    struct BackdropPhase final {
+        ui::ViewerBackground surround;
+        bool grid;
         const char* label;
     };
-    const std::array<BackgroundPhase, 4> backgroundPhases{
-        BackgroundPhase{ui::ViewerBackground::Solid, "bg-solid-rgba"},
-        BackgroundPhase{ui::ViewerBackground::Black, "bg-black-rgba"},
-        BackgroundPhase{ui::ViewerBackground::White, "bg-white-rgba"},
-        BackgroundPhase{ui::ViewerBackground::Checkerboard, "bg-checker-rgba"}};
-    for (const auto& phaseSpec : backgroundPhases) {
-        checks.expect(
-            setDropdownIndex(*viewer, "viewerBackgroundDropdown", static_cast<int>(phaseSpec.mode)),
-            std::string("the background dropdown is set to ") + phaseSpec.label);
-        checks.expect(waitUntil([&] { return viewer->backgroundForTest() == phaseSpec.mode; }, 10s),
-                      std::string("the viewer reports the background mode for ") + phaseSpec.label);
+    const std::array<BackdropPhase, 5> backdropPhases{
+        BackdropPhase{ui::ViewerBackground::Solid, false, "bg-solid-frame-rgba"},
+        BackdropPhase{ui::ViewerBackground::Grey, false, "bg-grey-frame-rgba"},
+        BackdropPhase{ui::ViewerBackground::Black, false, "bg-black-frame-rgba"},
+        BackdropPhase{ui::ViewerBackground::White, false, "bg-white-frame-rgba"},
+        BackdropPhase{ui::ViewerBackground::Solid, true, "bg-grid-rgba"}};
+    for (const auto& phaseSpec : backdropPhases) {
+        checks.expect(setDropdownIndex(*viewer, "viewerBackgroundDropdown",
+                                       static_cast<int>(phaseSpec.surround)),
+                      std::string("the background dropdown is set for ") + phaseSpec.label);
+        if (gridAction != nullptr)
+            gridAction->setChecked(phaseSpec.grid);
+        checks.expect(waitUntil(
+                          [&] {
+                              return viewer->backgroundForTest() == phaseSpec.surround &&
+                                     viewer->transparencyGridForTest() == phaseSpec.grid;
+                          },
+                          10s),
+                      std::string("the viewer reports the backdrop for ") + phaseSpec.label);
         checks.expect(waitUntil([&] { return viewer->residentPresentationActiveForTest(); }, 15s),
                       std::string("the viewer re-presents for ") + phaseSpec.label);
         reference = referenceFor();
@@ -648,9 +697,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             break;
         }
         emitSamples(phaseSpec.label,
-                    buildBackgroundSamples(*viewer, *host, *reference, phaseSpec.mode));
+                    buildBackgroundSamples(*viewer, *host, *reference, phaseSpec.surround,
+                                           frameColor, phaseSpec.grid));
         holdForCapture(4s);
     }
+    if (gridAction != nullptr)
+        gridAction->setChecked(false);
     phase("viewer-checker",
           "residentActive=" + std::string(viewer->residentPresentationActiveForTest() ? "1" : "0"));
 

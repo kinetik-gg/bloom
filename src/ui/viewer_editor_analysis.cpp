@@ -1,3 +1,5 @@
+#include "viewer_editor_internal.hpp"
+
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <bloom/ui/composition_preview_controller.hpp>
@@ -8,6 +10,9 @@
 #include <QStringList>
 #include <QTimer>
 #include <QWindow>
+
+#include <algorithm>
+#include <cmath>
 
 namespace bloom::ui {
 
@@ -98,7 +103,15 @@ std::optional<ViewerDisplayDescriptor> ViewerEditor::actualDisplayDescriptor() c
         result.captureRect = applied.containerRect;
         result.devicePixelRatio = applied.devicePixelRatio;
         result.channel = static_cast<ViewerChannel>(applied.params.channel);
-        result.background = static_cast<ViewerBackground>(applied.params.background);
+        const auto rgbOf = [](const render::GpuPresentColor color) {
+            const auto byteOf = [](const float value) {
+                return static_cast<int>(std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F));
+            };
+            return qRgb(byteOf(color.red), byteOf(color.green), byteOf(color.blue));
+        };
+        result.surroundColor = rgbOf(applied.params.surroundColor);
+        result.frameColor = rgbOf(applied.params.frameColor);
+        result.transparencyGrid = applied.params.transparencyGrid;
         result.overlayRevision = applied.domainRevision;
         result.native = true;
         return result;
@@ -133,7 +146,10 @@ CompositionPreviewState ViewerEditor::displayedPreviewState() const {
     }
     const bool current = state.frame && state.desiredIdentity &&
                          state.frame->desiredIdentity() == *state.desiredIdentity && actual &&
-                         actual->channel == channel_ && actual->background == background_ &&
+                         actual->channel == channel_ &&
+                         actual->surroundColor == viewer_detail::viewerSurroundColor(background_).rgba() &&
+                         actual->frameColor == frameBackgroundColor().rgba() &&
+                         actual->transparencyGrid == transparencyGrid_ &&
                          actual->overlayRevision == gpuOverlayRevision_ &&
                          actual->captureRect == contentRect() && actual->mapping &&
                          actual->devicePixelRatio == devicePixelRatioF() &&
@@ -173,7 +189,10 @@ CompositionPreviewState ViewerEditor::displayedPreviewState() const {
         const auto shown = state.frame->desiredIdentity().viewAdjust;
         const QStringList channels{tr("RGBA"),  tr("RGB"),  tr("Red"),
                                    tr("Green"), tr("Blue"), tr("Alpha")};
-        const QStringList backgrounds{tr("Solid"), tr("Checkerboard"), tr("Black"), tr("White")};
+        const QString backdrop =
+            actual->transparencyGrid
+                ? tr("Transparency grid")
+                : tr("Background %1").arg(QColor(actual->frameColor).name().toUpper());
         state.viewerStatusText =
             state.activity == PreviewActivity::Failed ||
                     state.activity == PreviewActivity::Unsupported
@@ -189,7 +208,7 @@ CompositionPreviewState ViewerEditor::displayedPreviewState() const {
                             .arg(shown.exposure, 0, 'g', 5)
                             .arg(shown.gamma, 0, 'g', 5)
                             .arg(channels.value(static_cast<int>(actual->channel)))
-                            .arg(backgrounds.value(static_cast<int>(actual->background)))
+                            .arg(backdrop)
                             .arg(actual->cover ? tr(" · CPU cover") : QString{})
                             .arg(state.message);
         if (!actual->native && actual->channel != ViewerChannel::Rgba) {

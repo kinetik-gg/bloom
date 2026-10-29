@@ -16,6 +16,7 @@
 #include <bloom/ui/viewer_gpu_resident_overlay.hpp>
 #include <bloom/ui/viewer_overlays.hpp>
 
+#include <QColor>
 #include <QCursor>
 #include <QImage>
 #include <QLineF>
@@ -87,17 +88,18 @@ class ViewerTimecodeReadout;
 //   Red / Green / Blue -- that one channel as grey.
 //   Alpha -- the alpha channel as luminance.
 
-// What the Viewer paints behind (and around) the composition (task VIEW-1). Persisted under
-// "viewer/background"; Checkerboard is the default so alpha behind the composition is always
-// visible.
+// The Viewer's surround: the canvas OUTSIDE the composition frame (View > Background, the After
+// Effects model). Persisted under "viewer/background" by name; Solid is the default.
 //
 // Solid fills with the panel Canvas token, so the surround blends with the panel chrome rather
-// than reading as a separate black rectangle; it does not read the composition's authored
-// backgroundColor. Black and White are literal. It is viewer presentation only and never fills
-// process or export alpha.
+// than reading as a separate rectangle. Grey is a neutral mid grey for judging colour against, and
+// Black and White are literal. A surround never draws inside the frame: there the Viewer shows the
+// composition's own authored backgroundColor (Composition Settings), or the checkerboard while the
+// Transparency Grid is on. Both are viewer presentation only and never fill process or export
+// alpha. The pre-split "Checkerboard" value migrates to Solid with the Transparency Grid on.
 enum class ViewerBackground : std::uint8_t {
     Solid,
-    Checkerboard,
+    Grey,
     Black,
     White,
 };
@@ -173,15 +175,11 @@ struct ViewTransform final {
 viewerDisplayDescriptorForFrame(std::optional<runtime::PreviewDisplayBufferView> cpuView,
                                 std::optional<ResidentFrameGeometry> residentFrame) noexcept;
 
-// The composition-frame border and the active composition's empty-state invitation, painted exactly
-// as the CPU paint path draws them. The GPU-resident overlay recording is the only paint on the
-// resident route, so it shares these: a resident composition still shows its bounds and an empty
-// one still invites a layer. Kept as two functions (rather than one combined paint) because the CPU
-// path draws the border beneath the guides and the invitation above everything; both are directly
-// testable without a GPU device.
+// The composition-frame border, painted exactly as the CPU paint path draws it. The GPU-resident
+// overlay recording is the only paint on the resident route, so it shares this: a resident
+// composition still shows its bounds. A composition with no layers shows just its frame and
+// background; there is no layer invitation. Directly testable without a GPU device.
 void paintViewerCompositionFrame(QPainter& painter, const QRectF& displayRect);
-void paintViewerEmptyInvitation(QPainter& painter, const QRectF& canvasRect,
-                                const QString& invitation);
 
 // Returns a new (fitToWindow == false) transform stepped by `factor` (>1 zooms in, <1 zooms out)
 // such that the composition point under `screenPoint` -- expressed as `screenPoint`'s fractional
@@ -211,7 +209,12 @@ struct ViewerDisplayDescriptor final {
     QRectF captureRect;
     double devicePixelRatio = 1.0;
     ViewerChannel channel = ViewerChannel::Rgba;
-    ViewerBackground background = ViewerBackground::Solid;
+    // The backdrop actually presented: the surround colour outside the frame, the composition
+    // background inside it, and whether the transparency grid replaced that background. Colours,
+    // not choices, so a native present (which only carries colours) reads back the same way.
+    QRgb surroundColor = 0xFF000000U;
+    QRgb frameColor = 0xFF000000U;
+    bool transparencyGrid = false;
     std::uint64_t overlayRevision = 0;
     bool native = false;
     bool cover = false;
@@ -282,15 +285,12 @@ class ViewerEditor final : public QWidget,
         return cpuCoverDisplay_;
     }
     void setCpuCoverByteBudgetForTest(std::size_t bytes) { cpuCoverByteBudget_ = bytes; }
-    // The invitation the empty canvas paints ("Create a composition to begin" with no active
-    // composition, "Create a layer to begin" for an active composition that has no layers, empty
-    // once there is content).
-    [[nodiscard]] QString emptyStateInvitationTextForTest() const { return emptyStateInvitation(); }
     [[nodiscard]] QString statusBarReadoutTextForTest() const;
     [[nodiscard]] kit::KDropdown* zoomDropdownForTest() const noexcept;
     // Task VIEW-1's own seams, on the same terms as the four above.
     [[nodiscard]] ViewerChannel channelForTest() const noexcept;
     [[nodiscard]] ViewerBackground backgroundForTest() const noexcept;
+    [[nodiscard]] bool transparencyGridForTest() const noexcept { return transparencyGrid_; }
     [[nodiscard]] QString timeReadoutTextForTest() const;
     // The canvas context menu for a right-click at `point` (widget coordinates), without exec.
     [[nodiscard]] std::unique_ptr<QMenu> canvasContextMenuForTest(QPointF point);
@@ -410,9 +410,9 @@ class ViewerEditor final : public QWidget,
     // The whole content area: right of the tool column, above the footer. The surround fills it.
     [[nodiscard]] QRectF contentRect() const;
     [[nodiscard]] QRectF canvasRect() const;
-    // The empty-canvas invitation for the current session: composition wording when no composition
-    // is active, layer wording when an active composition has no layers, empty once it has content.
-    [[nodiscard]] QString emptyStateInvitation() const;
+    // The active composition's background colour as the Viewer presents it inside the frame (the
+    // display-referred authored value, opaque); the Canvas token with no composition.
+    [[nodiscard]] QColor frameBackgroundColor() const;
 
     // describe no longer belongs to this widget's own geometry.
     [[nodiscard]] QRectF statusBarRect() const;
@@ -466,6 +466,7 @@ class ViewerEditor final : public QWidget,
     void rebuildChannelDropdown();
     void chooseChannelDropdownIndex(int index);
     void setBackground(ViewerBackground background);
+    void setTransparencyGrid(bool enabled);
     void buildHeader();
     // viewer_editor_menus.cpp: the View, Select and Add menus and the actions they share with the
     // footer, its overflow menu and the canvas context menu.
@@ -800,6 +801,9 @@ class ViewerEditor final : public QWidget,
     QToolButton* viewerLookToggle_ = nullptr;
     QAction* lookAction_ = nullptr;
     kit::KDropdown* backgroundDropdown_ = nullptr;
+    // The Transparency Grid: one action behind the footer toggle, View and the overflow menu.
+    QAction* transparencyGridAction_ = nullptr;
+    QToolButton* transparencyGridButton_ = nullptr;
     // Part of the Resolution control rather than a footer item of its own: what the chosen
     // policy actually resolved to ("Auto · ¼"), which for Auto is visible nowhere else.
     QLabel* resolutionReadout_ = nullptr;
@@ -828,7 +832,12 @@ class ViewerEditor final : public QWidget,
     QAction* stepToEndAction_ = nullptr;
     QMetaObject::Connection focusConnection_;
     ViewerChannel channel_ = ViewerChannel::Rgba;
-    ViewerBackground background_ = ViewerBackground::Checkerboard;
+    ViewerBackground background_ = ViewerBackground::Solid;
+    // Off by default (After Effects): the composition's background colour shows in the frame.
+    bool transparencyGrid_ = false;
+    // The composition background last presented, so a non-render-affecting background edit
+    // re-presents (CPU repaint and native present) without any re-evaluation.
+    QRgb presentedFrameColor_ = 0xFF000000U;
     // One immutable completed channel product, one active worker and one newest intent. RGBA
     // borrows the original bytes; painting never scans/converts a full buffer.
     ViewerChannelDisplayHandle channelView_;

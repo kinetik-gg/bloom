@@ -53,11 +53,6 @@ namespace {
         message = "the present channel mode is out of range";
         return false;
     }
-    if (static_cast<std::uint32_t>(params.background) >
-        static_cast<std::uint32_t>(GpuPresentBackground::White)) {
-        message = "the present background mode is out of range";
-        return false;
-    }
     if (!finiteValue(params.destination.x) || !finiteValue(params.destination.y) ||
         !finitePositive(params.destination.width) || !finitePositive(params.destination.height)) {
         message = "the present destination rectangle is not finite and positive";
@@ -68,8 +63,8 @@ namespace {
         message = "the present source window is not finite and positive";
         return false;
     }
-    if (!finiteColor(params.backgroundColor) || !finiteColor(params.checkerColorA) ||
-        !finiteColor(params.checkerColorB)) {
+    if (!finiteColor(params.surroundColor) || !finiteColor(params.frameColor) ||
+        !finiteColor(params.checkerColorA) || !finiteColor(params.checkerColorB)) {
         message = "the present colors are not finite";
         return false;
     }
@@ -98,10 +93,14 @@ namespace {
     uniforms.imageWindow[3] = static_cast<float>(params.source.height);
     uniforms.sourceExtent[0] = static_cast<float>(sourceWidth);
     uniforms.sourceExtent[1] = static_cast<float>(sourceHeight);
-    uniforms.backgroundColor[0] = params.backgroundColor.red;
-    uniforms.backgroundColor[1] = params.backgroundColor.green;
-    uniforms.backgroundColor[2] = params.backgroundColor.blue;
-    uniforms.backgroundColor[3] = params.backgroundColor.alpha;
+    uniforms.surroundColor[0] = params.surroundColor.red;
+    uniforms.surroundColor[1] = params.surroundColor.green;
+    uniforms.surroundColor[2] = params.surroundColor.blue;
+    uniforms.surroundColor[3] = params.surroundColor.alpha;
+    uniforms.frameColor[0] = params.frameColor.red;
+    uniforms.frameColor[1] = params.frameColor.green;
+    uniforms.frameColor[2] = params.frameColor.blue;
+    uniforms.frameColor[3] = params.frameColor.alpha;
     uniforms.checkerColorA[0] = params.checkerColorA.red;
     uniforms.checkerColorA[1] = params.checkerColorA.green;
     uniforms.checkerColorA[2] = params.checkerColorA.blue;
@@ -115,7 +114,7 @@ namespace {
     uniforms.checkerParams[2] = params.checkerOriginX;
     uniforms.checkerParams[3] = params.checkerOriginY;
     uniforms.modes[0] = static_cast<std::uint32_t>(params.channel);
-    uniforms.modes[1] = static_cast<std::uint32_t>(params.background);
+    uniforms.modes[1] = params.transparencyGrid ? 1U : 0U;
     uniforms.modes[2] = hasOverlay ? 1U : 0U;
     uniforms.modes[3] = 0U;
     return uniforms;

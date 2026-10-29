@@ -152,12 +152,14 @@ void drawElevationShadow(QPainter& painter, const QRectF& caster, Radius radius,
                          Elevation elevation);
 
 // The two-tone grid every translucent-color surface paints behind itself -- a color chip, the
-// picker's alpha bar, a swatch, and the Viewer's Checkerboard background -- so partial alpha reads
-// against a neutral ground. The tones are the CheckerLight/CheckerDark mid-greys, never interface
-// surfaces: a dark surface pair vanishes under any dark image. `cellPx` is one square's edge in
+// picker's alpha bar, a swatch, and the Viewer's Transparency Grid -- so partial alpha reads
+// against a neutral ground. The base fill is `light`; `dark` takes the cells whose row + column is
+// odd. The small-swatch default is the CheckerLight/CheckerDark mid-grey pair; the Viewer passes
+// its deeper ViewerCheckerLight/ViewerCheckerDark pair. `cellPx` is one square's edge in
 // device-independent pixels; `radius` clips the pattern to `bounds`' rounded corners so it never
 // bleeds past a chip's own outline. The square overload clips to `bounds` alone.
 void drawAlphaCheckerboard(QPainter& painter, const QRectF& bounds, int cellPx, Radius radius);
-void drawAlphaCheckerboard(QPainter& painter, const QRectF& bounds, int cellPx);
+void drawAlphaCheckerboard(QPainter& painter, const QRectF& bounds, int cellPx,
+                           Color light = Color::CheckerLight, Color dark = Color::CheckerDark);
 
 } // namespace bloom::ui::kit

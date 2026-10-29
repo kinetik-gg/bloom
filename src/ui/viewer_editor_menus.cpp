@@ -245,6 +245,9 @@ void ViewerEditor::buildMenus() {
         QStringLiteral("viewerBackground"),
         [this](const int index) { return backgroundDropdown_->itemText(index); }, this);
     viewerViewMenu_->addMenu(backgroundMenu_);
+    // The surround (Background) and what shows inside the frame (the Transparency Grid, else the
+    // composition's own background colour) are two separate questions, side by side.
+    viewerViewMenu_->addAction(transparencyGridAction_);
 
     // ---- Select --------------------------------------------------------------------------------
     viewerSelectMenu_ = kit::makeMenu(tr("Select"), this);

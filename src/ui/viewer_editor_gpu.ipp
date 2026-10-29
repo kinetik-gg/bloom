@@ -5,16 +5,6 @@ void paintViewerCompositionFrame(QPainter& painter, const QRectF& displayRect) {
         displayRect.adjusted(0.0, 0.0, -kit::kCompositionFrameWidth, -kit::kCompositionFrameWidth));
 }
 
-void paintViewerEmptyInvitation(QPainter& painter, const QRectF& canvasRect,
-                                const QString& invitation) {
-    if (invitation.isEmpty()) {
-        return;
-    }
-    painter.setFont(kit::font(kit::TypeRole::Ui));
-    painter.setPen(kit::color(kit::Color::Muted));
-    painter.drawText(canvasRect, Qt::AlignCenter, invitation);
-}
-
 void ViewerEditor::setGpuPresentationDependencies(
     std::shared_ptr<runtime::GpuPresentationClient> client, runtime::TaskScheduler* scheduler,
     std::string vulkanLoaderPath, const double devicePixelRatio) {
@@ -81,31 +71,20 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
                                                          geometry->pixelAspect, transform_);
     }
     request.channel = static_cast<render::GpuPresentChannel>(channel_);
-    request.background = static_cast<render::GpuPresentBackground>(background_);
-    // The surround must match drawCanvasBackground()'s CPU paint for every mode. Solid uses the
-    // panel Canvas token -- the composition's authored background lives in the display image
-    // itself, never in the surround -- Black and White are CanvasBlack/CanvasWhite, and
-    // Checkerboard comes from the checker colours below. The present shader overrides
-    // Black/White/Checkerboard from the mode, so this value is authoritative for Solid and
-    // consistent with the CPU path for the others.
-    QColor surround = kit::color(kit::Color::Canvas);
-    if (background_ == ViewerBackground::Black) {
-        surround = kit::color(kit::Color::CanvasBlack);
-    } else if (background_ == ViewerBackground::White) {
-        surround = kit::color(kit::Color::CanvasWhite);
-    }
-    request.backgroundColor = render::GpuPresentColor{static_cast<float>(surround.redF()),
-                                                      static_cast<float>(surround.greenF()),
-                                                      static_cast<float>(surround.blueF()), 1.0F};
-    // The same two tones, base then alternate cell, kit::drawAlphaCheckerboard() paints on the CPU.
-    const QColor checkerA = kit::color(kit::Color::CheckerLight);
-    const QColor checkerB = kit::color(kit::Color::CheckerDark);
-    request.checkerColorA = render::GpuPresentColor{static_cast<float>(checkerA.redF()),
-                                                    static_cast<float>(checkerA.greenF()),
-                                                    static_cast<float>(checkerA.blueF()), 1.0F};
-    request.checkerColorB = render::GpuPresentColor{static_cast<float>(checkerB.redF()),
-                                                    static_cast<float>(checkerB.greenF()),
-                                                    static_cast<float>(checkerB.blueF()), 1.0F};
+    // The same three colours the CPU paint uses (drawCanvasBackground / drawFrameBackground), all
+    // display-referred: the surround outside the frame, the composition's own background inside
+    // it, and the Viewer checker when the Transparency Grid replaces that background.
+    const auto presentColor = [](const QColor& color) {
+        return render::GpuPresentColor{static_cast<float>(color.redF()),
+                                       static_cast<float>(color.greenF()),
+                                       static_cast<float>(color.blueF()), 1.0F};
+    };
+    request.surroundColor = presentColor(viewerSurroundColor(background_));
+    request.frameColor = presentColor(frameBackgroundColor());
+    request.transparencyGrid = transparencyGrid_;
+    // Base then alternate cell, exactly as kit::drawAlphaCheckerboard() paints them on the CPU.
+    request.checkerColorA = presentColor(kit::color(kit::Color::ViewerCheckerLight));
+    request.checkerColorB = presentColor(kit::color(kit::Color::ViewerCheckerDark));
     request.checkerTilePixels =
         static_cast<float>(kit::px(kit::Size::ViewerChecker) * request.devicePixelRatio);
 
@@ -137,10 +116,6 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
         paintPathTools(painter);
         paintAnchorEditing(painter);
         paintTextEditing(painter);
-        // The empty-state invitation is drawn by paintEvent() on the CPU path, which resident
-        // presentation skips entirely; record it here so an active composition with no layers still
-        // invites a layer instead of reading as a bare checkerboard.
-        paintViewerEmptyInvitation(painter, canvasRect(), emptyStateInvitation());
         painter.end();
         if (!picture.isNull()) {
             request.overlay.picture = picture;
@@ -170,6 +145,8 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
     mix(static_cast<std::uint64_t>(std::llround(transform_.pan.y() * 1000.0)));
     mix(static_cast<std::uint64_t>(channel_));
     mix(static_cast<std::uint64_t>(background_));
+    mix(transparencyGrid_ ? 1ULL : 0ULL);
+    mix(static_cast<std::uint64_t>(frameBackgroundColor().rgba()));
     mix(gpuOverlayRevision_);
     mix(static_cast<std::uint64_t>(overlayOptions_.safeAreas));
     mix(static_cast<std::uint64_t>(overlayOptions_.centreCross));
@@ -191,7 +168,10 @@ QPixmap ViewerEditor::renderCpuCoverSnapshot() {
                                                .captureRect = contentRect(),
                                                .devicePixelRatio = devicePixelRatioF(),
                                                .channel = channel_,
-                                               .background = background_,
+                                               .surroundColor =
+                                                   viewerSurroundColor(background_).rgba(),
+                                               .frameColor = frameBackgroundColor().rgba(),
+                                               .transparencyGrid = transparencyGrid_,
                                                .overlayRevision = gpuOverlayRevision_,
                                                .native = false,
                                                .cover = true};
@@ -225,7 +205,10 @@ QPixmap ViewerEditor::renderCpuCoverSnapshot() {
                                                    .captureRect = contentRect(),
                                                    .devicePixelRatio = devicePixelRatioF(),
                                                    .channel = channel_,
-                                                   .background = background_,
+                                                   .surroundColor =
+                                                       viewerSurroundColor(background_).rgba(),
+                                                   .frameColor = frameBackgroundColor().rgba(),
+                                                   .transparencyGrid = transparencyGrid_,
                                                    .overlayRevision = gpuOverlayRevision_,
                                                    .native = false,
                                                    .cover = true};

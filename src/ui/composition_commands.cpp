@@ -101,9 +101,23 @@ bool showCompositionSettingsDialog(CompositionSession& session, const document::
     const auto settings = dialog.settings();
     if (!settings)
         return false;
+    return applyCompositionSettings(session, id, *settings, dialog.anchor());
+}
+
+bool applyCompositionSettings(CompositionSession& session, const document::CompositionId id,
+                              const commands::CompositionSettings& settings,
+                              const commands::ResizeAnchor anchor) {
+    const auto* composition = session.snapshot().project().findComposition(id);
+    if (composition == nullptr)
+        return false;
     commands::Transaction transaction(QStringLiteral("Composition Settings").toStdString(),
                                       session.snapshot().revision());
-    transaction.emplace<commands::SetCompositionSettings>(id, *settings, dialog.anchor());
+    auto backgroundOnly = commands::compositionSettingsOf(*composition);
+    backgroundOnly.background = settings.background;
+    if (settings == backgroundOnly)
+        transaction.emplace<commands::SetCompositionBackgroundColor>(id, settings.background);
+    else
+        transaction.emplace<commands::SetCompositionSettings>(id, settings, anchor);
     return session.executeTransaction(std::move(transaction)).succeeded();
 }
 

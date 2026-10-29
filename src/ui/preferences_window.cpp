@@ -630,16 +630,17 @@ QWidget* PreferencesWindow::buildViewerPage() {
 
     auto* background = addDropdownRow(
         rows, content, QStringLiteral("preferencesViewerBackgroundDropdown"), tr("Background"));
+    background->setToolTip(tr("The canvas around the composition frame"));
     background->addItem(tr("Solid"), QStringLiteral("Solid"));
-    background->addItem(tr("Checkerboard"), QStringLiteral("Checkerboard"));
+    background->addItem(tr("Grey"), QStringLiteral("Grey"));
     background->addItem(tr("Black"), QStringLiteral("Black"));
     background->addItem(tr("White"), QStringLiteral("White"));
     background->setCurrentIndex(
         background->findData(QLatin1String(viewerBackgroundValue(draft_.viewerBackground))));
     connect(background, &kit::KDropdown::currentIndexChanged, this, [this, background](int) {
         const auto data = background->currentData().toString();
-        if (data == QLatin1StringView("Checkerboard"))
-            draft_.viewerBackground = ViewerBackgroundPreference::Checkerboard;
+        if (data == QLatin1StringView("Grey"))
+            draft_.viewerBackground = ViewerBackgroundPreference::Grey;
         else if (data == QLatin1StringView("Black"))
             draft_.viewerBackground = ViewerBackgroundPreference::Black;
         else if (data == QLatin1StringView("White"))
@@ -660,6 +661,8 @@ QWidget* PreferencesWindow::buildViewerPage() {
         bool ApplicationPreferences::* field;
     };
     const SwitchSpec overlays[] = {
+        {"preferencesViewerTransparencyGridSwitch", QT_TR_NOOP("Transparency grid"),
+         &ApplicationPreferences::viewerTransparencyGrid},
         {"preferencesViewerSafeAreasSwitch", QT_TR_NOOP("Safe areas"),
          &ApplicationPreferences::viewerSafeAreas},
         {"preferencesViewerCentreCrossSwitch", QT_TR_NOOP("Centre cross"),

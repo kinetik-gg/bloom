@@ -706,7 +706,11 @@ channel is negative or above 1, all four fields show the original reference numb
 out-of-range RGB value into a display field authors that channel as a reference value and switches
 the row to reference presentation. Unchanged channels retain their exact reference numbers, so
 editing alpha or one component cannot accumulate conversion error in the others. Composition
-background preferences already use Display values and retain that interpretation. The timeline
+background preferences already use Display values and retain that interpretation: the Viewer
+fills its composition frame with the composition Background Colour as display-encoded RGB (alpha
+ignored) and composites the display-referred image over it in display space, on the CPU paint and
+the GPU present alike, exactly as it composites over its surround and Transparency Grid; the colour
+therefore needs no display transform of its own and never enters a process image. The timeline
 colour rows apply the same boundary: an in-range colour presents normalized display numbers in its
 expanded R/G/B/A rows, a signed or HDR RGB channel switches the whole row to exact reference
 numbers, and commits convert back through the session `colorConverter` and existing commands.

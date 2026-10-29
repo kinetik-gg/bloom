@@ -70,7 +70,8 @@ void testFullRoundTrip(Expectations& check) {
     prefs.nodeSnap = true;
     prefs.nodeGridSize = 24.0;
     prefs.viewerResolution = ui::ViewerResolutionPreference::Half;
-    prefs.viewerBackground = ui::ViewerBackgroundPreference::Checkerboard;
+    prefs.viewerBackground = ui::ViewerBackgroundPreference::Grey;
+    prefs.viewerTransparencyGrid = true;
     prefs.viewerSafeAreas = true;
     prefs.viewerCentreCross = true;
     prefs.viewerThirds = true;
@@ -102,14 +103,44 @@ void testInvalidValuesFallBack(Expectations& check) {
                  "an unrecognized link style reads as Spline");
     check.expect(loaded.viewerResolution == ui::ViewerResolutionPreference::Auto,
                  "an unrecognized resolution reads as Auto");
-    check.expect(loaded.viewerBackground == ui::ViewerBackgroundPreference::Checkerboard,
-                 "an unrecognized background reads as Checkerboard");
+    check.expect(loaded.viewerBackground == ui::ViewerBackgroundPreference::Solid &&
+                     !loaded.viewerTransparencyGrid,
+                 "an unrecognized background reads as Solid with the grid off");
     check.expect(loaded.nodeGridSize == 16.0, "an unparseable grid size reads as 16");
     check.expect(loaded.operationCacheBytes == 0,
                  "an unparseable operation-cache budget reads as the default");
     check.expect(loaded.ramPreviewBytes == 0, "a negative RAM-preview budget reads as the default");
     check.expect(loaded.mediaDiskCacheBudgetBytes == 0,
                  "an explicit zero disk budget reads as the default");
+}
+
+// The pre-split Checkerboard background (which drew the checker in the frame) keeps showing a
+// checker: it reads as the Solid surround with the Transparency Grid on, and a grid value stored
+// since always wins.
+void testLegacyCheckerboardMigrates(Expectations& check) {
+    QTemporaryDir directory;
+    auto settings = openSettings(directory);
+    settings.setValue(QStringLiteral("viewer/background"), QStringLiteral("Checkerboard"));
+    auto loaded = ui::loadApplicationPreferences(settings);
+    check.expect(loaded.viewerBackground == ui::ViewerBackgroundPreference::Solid &&
+                     loaded.viewerTransparencyGrid,
+                 "a stored Checkerboard reads as Solid with the Transparency Grid on");
+    settings.setValue(QStringLiteral("viewer/transparency-grid"), false);
+    loaded = ui::loadApplicationPreferences(settings);
+    check.expect(loaded.viewerBackground == ui::ViewerBackgroundPreference::Solid &&
+                     !loaded.viewerTransparencyGrid,
+                 "a grid value stored since the migration is never overridden");
+    ui::saveApplicationPreferences(settings, loaded);
+    check.expect(settings.value(QStringLiteral("viewer/background")).toString() ==
+                         QStringLiteral("Solid") &&
+                     !settings.value(QStringLiteral("viewer/transparency-grid")).toBool(),
+                 "saving writes the migrated pair");
+    QTemporaryDir fresh;
+    auto empty = openSettings(fresh);
+    const auto defaults = ui::loadApplicationPreferences(empty);
+    check.expect(defaults.viewerBackground == ui::ViewerBackgroundPreference::Solid &&
+                     !defaults.viewerTransparencyGrid,
+                 "the defaults are the Solid surround with the grid off (After Effects)");
 }
 
 void testNonFiniteGridSizeFallsBack(Expectations& check) {
@@ -205,7 +236,7 @@ void testStoredSpellingsMatchReaders(Expectations& check) {
     check.expect(std::string_view(
                      ui::viewerBackgroundValue(ui::ViewerBackgroundPreference::Solid)) == "Solid" &&
                      std::string_view(ui::viewerBackgroundValue(
-                         ui::ViewerBackgroundPreference::Checkerboard)) == "Checkerboard",
+                         ui::ViewerBackgroundPreference::Grey)) == "Grey",
                  "the viewer background vocabulary matches the existing reader");
 }
 
@@ -218,6 +249,7 @@ int main(int argc, char** argv) {
     testDefaultsRoundTrip(check);
     testFullRoundTrip(check);
     testInvalidValuesFallBack(check);
+    testLegacyCheckerboardMigrates(check);
     testNonFiniteGridSizeFallsBack(check);
     testDirectoryOverrideMustBeAbsolute(check);
     testZeroBudgetClearsOverride(check);

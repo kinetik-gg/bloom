@@ -23,7 +23,6 @@
 
 namespace {
 
-using bloom::render::GpuPresentBackground;
 using bloom::render::GpuPresentChannel;
 using bloom::render::GpuPresentColor;
 using bloom::render::GpuPresentImageParams;
@@ -119,8 +118,9 @@ struct SourceImage final {
                  top.b + (bottom.b - top.b) * fy, top.a + (bottom.a - top.a) * fy};
 }
 
-// The checkerboard covers the destination rectangle only; outside it the surround is the solid
-// background colour, exactly as the fragment shader composes it.
+// Outside the destination the backdrop is the surround colour; inside it is the frame colour (the
+// composition background), or the checkerboard when the transparency grid is on -- exactly as the
+// fragment shader composes it.
 [[nodiscard]] bool insideDestination(const GpuPresentImageParams& params, const float x,
                                      const float y) {
     const GpuPresentRect& d = params.destination;
@@ -129,13 +129,11 @@ struct SourceImage final {
 }
 
 [[nodiscard]] Pixel background(const GpuPresentImageParams& params, const float x, const float y) {
-    if (params.background == GpuPresentBackground::Black) {
-        return Pixel{0.0F, 0.0F, 0.0F, 1.0F};
+    if (!insideDestination(params, x, y)) {
+        return Pixel{params.surroundColor.red, params.surroundColor.green,
+                     params.surroundColor.blue, params.surroundColor.alpha};
     }
-    if (params.background == GpuPresentBackground::White) {
-        return Pixel{1.0F, 1.0F, 1.0F, 1.0F};
-    }
-    if (params.background == GpuPresentBackground::Checkerboard && insideDestination(params, x, y)) {
+    if (params.transparencyGrid) {
         const float tile = params.checkerTilePixels > 0.0F ? params.checkerTilePixels : 1.0F;
         const int cx = static_cast<int>(std::floor((x - params.checkerOriginX) / tile));
         const int cy = static_cast<int>(std::floor((y - params.checkerOriginY) / tile));
@@ -143,8 +141,8 @@ struct SourceImage final {
         const GpuPresentColor color = raised ? params.checkerColorB : params.checkerColorA;
         return Pixel{color.red, color.green, color.blue, color.alpha};
     }
-    return Pixel{params.backgroundColor.red, params.backgroundColor.green,
-                 params.backgroundColor.blue, params.backgroundColor.alpha};
+    return Pixel{params.frameColor.red, params.frameColor.green, params.frameColor.blue,
+                 params.frameColor.alpha};
 }
 
 [[nodiscard]] Pixel compose(const GpuPresentImageParams& params, const SourceImage& source,
@@ -196,7 +194,7 @@ void shaderPins(Expectations& expectations) {
     expectations.expect(
         digestMatches(
             std::span<const std::uint32_t>(bloom::render::vulkan_detail::kViewerPresentFragSpirv),
-            "63bd49fca96f9c51a6170e2bccfcaf34d7308dfc9c2cf75a0354fec6f7a6f16b"),
+            "1729348522641b57789955ca075a40cb79622027977dfbc8506f815136523f0a"),
         "the embedded fragment SPIR-V matches the corrected pinned manifest digest");
     expectations.expect(bloom::render::vulkan_detail::kViewerPresentVertWordCount ==
                                 bloom::render::vulkan_detail::kViewerPresentVertByteCount / 4U &&
@@ -212,7 +210,6 @@ void premultipliedEdge(Expectations& expectations) {
     GpuPresentImageParams params;
     params.destination = GpuPresentRect{0.0F, 0.0F, 2.0F, 2.0F};
     params.source = GpuPresentSourceWindow{0.0, 0.0, 2.0, 2.0};
-    params.background = GpuPresentBackground::Black;
     SourceImage image;
     image.texels[0] = Pixel{1.0F, 0.0F, 0.0F, 1.0F}; // opaque red
     image.texels[1] = Pixel{0.0F, 0.0F, 1.0F, 0.0F}; // transparent blue
@@ -231,32 +228,37 @@ void premultipliedEdge(Expectations& expectations) {
 
 void channelAndBackground(Expectations& expectations) {
     GpuPresentImageParams params;
-    params.destination = GpuPresentRect{0.0F, 0.0F, 2.0F, 2.0F};
     params.source = GpuPresentSourceWindow{0.0, 0.0, 2.0, 2.0};
-    params.background = GpuPresentBackground::Checkerboard;
+    params.destination = GpuPresentRect{0.0F, 0.0F, 20.0F, 20.0F};
+    params.surroundColor = GpuPresentColor{0.1F, 0.1F, 0.1F, 1.0F};
+    params.frameColor = GpuPresentColor{0.6F, 0.3F, 0.2F, 1.0F};
     params.checkerTilePixels = 10.0F;
     params.checkerColorA = GpuPresentColor{0.25F, 0.25F, 0.25F, 1.0F};
     params.checkerColorB = GpuPresentColor{0.75F, 0.75F, 0.75F, 1.0F};
-    params.destination = GpuPresentRect{0.0F, 0.0F, 20.0F, 20.0F};
+    const Pixel frame = background(params, 0.5F, 0.5F);
+    const Pixel outside = background(params, 30.5F, 0.5F);
+    expectations.expect(near(frame.r, 0.6F) && near(frame.g, 0.3F) && near(frame.b, 0.2F),
+                        "inside the destination the backdrop is the frame (composition) colour");
+    expectations.expect(near(outside.r, 0.1F) && near(outside.g, 0.1F),
+                        "outside the destination the backdrop is the surround colour");
+    params.transparencyGrid = true;
     const Pixel raised = background(params, 0.5F, 0.5F);
     const Pixel base = background(params, 10.5F, 0.5F);
     expectations.expect(near(raised.r, 0.75F) && near(base.r, 0.25F),
-                        "checkerboard parity matches the viewer (row+column even is raised)");
-    params.backgroundColor = GpuPresentColor{0.1F, 0.1F, 0.1F, 1.0F};
+                        "the grid replaces the frame colour; row+column even is raised");
     const Pixel surround = background(params, 30.5F, 0.5F);
     expectations.expect(near(surround.r, 0.1F),
                         "the checkerboard stops at the destination; the surround stays solid");
+    params.transparencyGrid = false;
     params.destination = GpuPresentRect{0.0F, 0.0F, 2.0F, 2.0F};
-
-    params.background = GpuPresentBackground::Solid;
-    params.backgroundColor = GpuPresentColor{0.2F, 0.2F, 0.2F, 1.0F};
+    params.frameColor = GpuPresentColor{0.2F, 0.2F, 0.2F, 1.0F};
     SourceImage image;
     image.texels[0] = Pixel{0.4F, 0.6F, 0.8F, 0.5F};
     const Pixel texel = image.texel(0, 0);
     params.channel = GpuPresentChannel::Rgba;
     Pixel p = compose(params, image, Pixel{}, false, 0.5F, 0.5F);
     expectations.expect(near(p.r, texel.r * texel.a + 0.2F * (1.0F - texel.a)),
-                        "RGBA composes straight alpha over the background");
+                        "RGBA composes straight alpha over the frame colour");
     params.channel = GpuPresentChannel::Rgb;
     p = compose(params, image, Pixel{}, false, 0.5F, 0.5F);
     expectations.expect(near(p.r, 0.4F) && near(p.g, 0.6F) && near(p.b, 0.8F) && near(p.a, 1.0F),
@@ -275,7 +277,6 @@ void overlay(Expectations& expectations) {
     GpuPresentImageParams params;
     params.destination = GpuPresentRect{0.0F, 0.0F, 2.0F, 2.0F};
     params.source = GpuPresentSourceWindow{0.0, 0.0, 2.0, 2.0};
-    params.background = GpuPresentBackground::Black;
     SourceImage image;
     image.texels[0] = Pixel{0.5F, 0.5F, 0.5F, 1.0F};
     const Pixel premultOverlay{0.3F, 0.1F, 0.2F, 0.4F};

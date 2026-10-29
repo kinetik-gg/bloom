@@ -318,10 +318,12 @@ void applyElevation(QWidget& widget, const Elevation elevation) {
 
 namespace {
 
-void fillCheckerCells(QPainter& painter, const QRectF& bounds, const int cellPx) {
+void fillCheckerCells(QPainter& painter, const QRectF& bounds, const int cellPx,
+                      const Color lightRole = Color::CheckerLight,
+                      const Color darkRole = Color::CheckerDark) {
     painter.setPen(Qt::NoPen);
-    painter.fillRect(bounds, color(Color::CheckerLight));
-    const QColor dark = color(Color::CheckerDark);
+    painter.fillRect(bounds, color(lightRole));
+    const QColor dark = color(darkRole);
     const auto cell = static_cast<qreal>(cellPx);
     const auto rows = static_cast<int>(std::ceil(bounds.height() / cell));
     const auto columns = static_cast<int>(std::ceil(bounds.width() / cell));
@@ -479,14 +481,15 @@ void drawAlphaCheckerboard(QPainter& painter, const QRectF& bounds, const int ce
     painter.restore();
 }
 
-void drawAlphaCheckerboard(QPainter& painter, const QRectF& bounds, const int cellPx) {
+void drawAlphaCheckerboard(QPainter& painter, const QRectF& bounds, const int cellPx,
+                           const Color light, const Color dark) {
     if (bounds.isEmpty() || cellPx <= 0) {
         return;
     }
     painter.save();
     painter.setClipRect(bounds, Qt::IntersectClip);
     painter.setRenderHint(QPainter::Antialiasing, false);
-    fillCheckerCells(painter, bounds, cellPx);
+    fillCheckerCells(painter, bounds, cellPx, light, dark);
     painter.restore();
 }
 

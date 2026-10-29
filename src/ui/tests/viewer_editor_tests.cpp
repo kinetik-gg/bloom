@@ -29,7 +29,9 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/color.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
@@ -483,6 +485,8 @@ struct PipelineFixture final {
     bloom::ui::PreviewPreparationFunction pipeline;
     std::atomic<int> probeCalls = 0;
     std::atomic<bool> probeOffUi = false;
+    // Every full (non-probe) preparation: an evaluation of the composition for display.
+    std::atomic<int> preparations = 0;
 
     PipelineFixture() : compiler(definitions) {
         if (!bloom::runtime::registerBuiltInNodeDefinitions(definitions)) {
@@ -500,6 +504,8 @@ struct PipelineFixture final {
                 identity.roi->extent().height() == 1) {
                 ++probeCalls;
                 probeOffUi = std::this_thread::get_id() != uiThread;
+            } else {
+                ++preparations;
             }
             return preparation(snapshot, identity, budget, overrides, context);
         };
@@ -864,30 +870,13 @@ void testEmptyStateInvitationTextPresentWithoutComposition(Expectations& expecta
     expectations.expect(session.composition() == nullptr,
                         "the fixture genuinely has no composition -- this is the empty state, not "
                         "merely an unready one");
-    expectations.expect(viewer.emptyStateInvitationTextForTest() ==
-                            QStringLiteral("Create a composition to begin"),
-                        "with no composition the canvas invites creating a composition, not a "
-                        "layer");
+    auto* invitation = viewer.findChild<QWidget*>("viewerEmptyState");
+    expectations.expect(invitation != nullptr && !invitation->isHidden(),
+                        "with no composition the canvas offers the New Composition invitation");
     const QImage image = viewer.grab().toImage();
     expectations.expect(!image.isNull(), "the empty-state canvas still renders offscreen (smoke)");
 
     reachQuiescence(controller, bridge, scheduler, expectations);
-}
-
-// An active composition with no layers keeps the layer invitation; once it has content the canvas
-// shows no empty-state text (including a genuinely unsupported render, which stays honest).
-void testActiveEmptyCompositionInvitesALayer(Expectations& expectations) {
-    using namespace bloom;
-    ViewerFixture fixture(makeTestProject("Active empty invitation"));
-    expectations.expect(fixture.session.composition() != nullptr,
-                        "active-empty: the fixture has an active composition");
-    expectations.expect(fixture.viewer.emptyStateInvitationTextForTest() ==
-                            QStringLiteral("Create a layer to begin"),
-                        "active-empty: the invitation names the layer, not the composition");
-    expectations.expect(fixture.session.addSolidLayer("Solid", core::Color4d{0.2, 0.4, 0.6, 1.0}),
-                        "active-empty: a layer is added");
-    expectations.expect(fixture.viewer.emptyStateInvitationTextForTest().isEmpty(),
-                        "with content the canvas shows no empty-state invitation");
 }
 
 void testAutoFollowsFitResize(Expectations& expectations) {
@@ -1392,123 +1381,6 @@ void testChannelPendingRefusalAndSupersession(Expectations& checks) {
                           "CPU channel presentation"),
                   "refusal retains the old actual CPU channel as Stale");
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, checks);
-}
-
-// The background dropdown chooses what the canvas surround is, defaults to Checkerboard, and
-// persists the choice under "viewer/background".
-void testBackgroundDropdownChoosesTheSurroundAndPersists(Expectations& expectations) {
-    using namespace bloom;
-    QSettings().remove("viewer/background");
-    {
-        ViewerFixture fixture(makeTestProject("Background Test"));
-        fixture.viewer.show();
-        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                            "the background fixture reaches a ready frame");
-        auto* background =
-            fixture.viewer.findChild<ui::kit::KDropdown*>("viewerBackgroundDropdown");
-        expectations.expect(background != nullptr && background->count() == 4 &&
-                                background->currentText() == QStringLiteral("Checkerboard") &&
-                                fixture.viewer.backgroundForTest() ==
-                                    ui::ViewerBackground::Checkerboard,
-                            "the footer offers four backgrounds and defaults to Checkerboard");
-        if (background == nullptr) {
-            reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
-            return;
-        }
-        // A corner of the fit rectangle at 25% zoom: the composition rectangle is a few pixels at
-        // the centre, so the corner is pure surround (the frame casts no shadow any more).
-        fixture.viewer.zoomDropdownForTest()->setCurrentIndex(1); // 25%
-        QCoreApplication::processEvents();
-        const auto corner = [&fixture] {
-            return fixture.viewer.grab().toImage().pixelColor(
-                fixture.viewer.canvasRectForTest().topLeft().toPoint() + QPoint(2, 2));
-        };
-        // The GPU resident request must carry the SAME surround as the CPU paint for every mode, so
-        // a transparent composition region cannot read one colour on the GPU and another on the
-        // CPU.
-        const auto gpuColor = [](const render::GpuPresentColor color) {
-            const auto byteOf = [](const float value) {
-                const float clamped = value < 0.0F ? 0.0F : (value > 1.0F ? 1.0F : value);
-                return static_cast<int>(std::lround(clamped * 255.0F));
-            };
-            return QColor(byteOf(color.red), byteOf(color.green), byteOf(color.blue));
-        };
-        const auto requestMatches = [&fixture, &gpuColor](const ui::ViewerBackground mode,
-                                                          const QColor& surround) {
-            const auto request = fixture.viewer.buildResidentPresentRequestForTest();
-            return request.background == static_cast<render::GpuPresentBackground>(mode) &&
-                   gpuColor(request.backgroundColor) == surround;
-        };
-        // The default Checkerboard: the resident checker tiles are the kit checker tokens.
-        {
-            const auto request = fixture.viewer.buildResidentPresentRequestForTest();
-            expectations.expect(
-                request.background == render::GpuPresentBackground::Checkerboard &&
-                    gpuColor(request.checkerColorA) ==
-                        ui::kit::color(ui::kit::Color::CheckerLight) &&
-                    gpuColor(request.checkerColorB) == ui::kit::color(ui::kit::Color::CheckerDark),
-                "the GPU resident checkerboard uses the same checker tokens as the CPU");
-        }
-        // Choose Solid explicitly: it paints the panel's own background token, so the surround
-        // blends with the panel chrome, and it is deliberately not the composition's black.
-        background->setCurrentIndex(0); // Solid
-        QCoreApplication::processEvents();
-        const QColor panelBackground = ui::kit::color(ui::kit::Color::Canvas);
-        expectations.expect(corner() == panelBackground, "Solid paints the panel background token");
-        expectations.expect(requestMatches(ui::ViewerBackground::Solid, panelBackground),
-                            "the GPU resident request uses the same Canvas Solid surround");
-        commands::Transaction backgroundEdit("Background", fixture.session.snapshot().revision());
-        backgroundEdit.emplace<commands::SetCompositionBackgroundColor>(
-            fixture.session.compositionId(), core::Color4d{0.2, 0.4, 0.6, 1.0});
-        expectations.expect(
-            fixture.session.executeTransaction(std::move(backgroundEdit)).succeeded(),
-            "authored background edit commits");
-        QCoreApplication::processEvents();
-        expectations.expect(corner() == panelBackground,
-                            "Solid ignores the authored composition background");
-        background->setCurrentIndex(2); // Black
-        QCoreApplication::processEvents();
-        expectations.expect(fixture.viewer.backgroundForTest() == ui::ViewerBackground::Black &&
-                                corner() == QColor(Qt::black),
-                            "Black is literal black, not a token that merely reads dark");
-        expectations.expect(requestMatches(ui::ViewerBackground::Black, QColor(Qt::black)),
-                            "the GPU resident request also paints the literal Black surround");
-        background->setCurrentIndex(3); // White
-        QCoreApplication::processEvents();
-        expectations.expect(corner() == QColor(Qt::white), "and White is literal white");
-        expectations.expect(requestMatches(ui::ViewerBackground::White, QColor(Qt::white)),
-                            "the GPU resident request also paints the literal White surround");
-        // The surround fills the WHOLE content area, edge to edge (owner, 2026-09-15): the first
-        // pixel right of the tool column at the very top, and the last pixel above the footer at
-        // the far right, are both surround, not the canvas token behind it.
-        {
-            const QImage image = fixture.viewer.grab().toImage();
-            const QRect content = fixture.viewer.contentRectForTest().toRect();
-            const QColor topLeft = image.pixelColor(content.topLeft() + QPoint(1, 1));
-            const QColor bottomRight = image.pixelColor(content.bottomRight() - QPoint(1, 1));
-            expectations.expect(topLeft == QColor(Qt::white) && bottomRight == QColor(Qt::white),
-                                "the surround reaches every edge of the content area");
-        }
-        expectations.expect(QSettings().value("viewer/background").toString() ==
-                                QStringLiteral("White"),
-                            "the choice is persisted under viewer/background");
-        reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
-    }
-    {
-        ViewerFixture restored(makeTestProject("Background Restore Test"));
-        expectations.expect(restored.viewer.backgroundForTest() == ui::ViewerBackground::White,
-                            "a new viewer restores the persisted background");
-        reachQuiescence(restored.controller, restored.bridge, restored.scheduler, expectations);
-    }
-    QSettings().setValue("viewer/background", QStringLiteral("nonsense"));
-    {
-        ViewerFixture invalid(makeTestProject("Background Fallback Test"));
-        expectations.expect(invalid.viewer.backgroundForTest() ==
-                                ui::ViewerBackground::Checkerboard,
-                            "an unrecognized saved background falls back to Checkerboard");
-        reachQuiescence(invalid.controller, invalid.bridge, invalid.scheduler, expectations);
-    }
-    QSettings().remove("viewer/background");
 }
 
 // The readout: click to type an exact frame number, and a context menu that switches the label
@@ -2063,6 +1935,7 @@ void testViewerAdjustments(Expectations& expectations) {
 
 #include "viewer_tools_tests.ipp"
 #include "viewer_chrome_tests.ipp"
+#include "viewer_background_tests.ipp"
 
 } // namespace
 
@@ -2173,7 +2046,12 @@ int main(int argc, char** argv) {
     testLoopToggleDrivesThePlaybackControllerAndPersists(expectations);
     testChannelDropdownRemapsOnlyThePresentedImage(expectations);
     testChannelPendingRefusalAndSupersession(expectations);
-    testBackgroundDropdownChoosesTheSurroundAndPersists(expectations);
+    testViewerSurroundNeverDrawsInsideTheFrame(expectations);
+    testTransparencyGridSharesOneActionAndPersists(expectations);
+    testCompositionBackgroundEditRepresentsWithoutEvaluating(expectations);
+    testSemiTransparentLayerCompositesOverTheBackground(expectations);
+    testLegacyCheckerboardSettingMigrates(expectations);
+    testEmptyCompositionShowsNoLayerInvitation(expectations);
     testTimeReadoutEditsFramesAndSwitchesFormat(expectations);
     testViewerHeaderSelectorsMenusAndOverflow(expectations);
     testViewerHeaderCollapseIsStableAcrossResizes(expectations);
@@ -2181,12 +2059,10 @@ int main(int argc, char** argv) {
     testMiddleDragPans(expectations);
     testCtrlZeroFitsAndCtrlOneIsActualSize(expectations);
     testEmptyStateInvitationTextPresentWithoutComposition(expectations);
-    testActiveEmptyCompositionInvitesALayer(expectations);
     testViewerFooterLayoutAtEveryWidth(expectations);
     testViewerFooterControlsShareOneVocabulary(expectations);
     testViewerEmptyProjectChrome(expectations);
     testViewerToolColumnAtShortHeights(expectations);
-    testViewerCheckerStaysInsideTheFrame(expectations);
     try {
         testViewerChromeRoiClearFollowsTheRegion(expectations);
         testViewerMenusAreOrganisedAndShared(expectations);

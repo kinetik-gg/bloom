@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <limits>
@@ -122,7 +123,6 @@ void testOracleChannels(Expectations& expectations,
     for (const GpuPresentChannel channel : channels) {
         auto params = identityParams(2, 2);
         params.channel = channel;
-        params.background = GpuPresentBackground::Black;
         const auto rendered =
             renderOffscreen(control, VK_FORMAT_R8G8B8A8_UNORM, 2, 2, input, params, {});
         const auto oracle = renderOracle(displayBytes, 2, 2, params, {}, 0, 0, true);
@@ -216,7 +216,7 @@ void testChecker(Expectations& expectations, const std::shared_ptr<DeviceAllocat
                  const std::vector<Rgba8>& displayBytes) {
     auto params = identityParams(8, 8);
     params.source = GpuPresentSourceWindow{0.0, 0.0, 2.0, 2.0};
-    params.background = GpuPresentBackground::Checkerboard;
+    params.transparencyGrid = true;
     params.checkerTilePixels = 2.0F;
     params.checkerOriginX = 1.0F;
     params.checkerOriginY = 1.0F;
@@ -229,6 +229,67 @@ void testChecker(Expectations& expectations, const std::shared_ptr<DeviceAllocat
     expectations.expect(rendered.ok && delta.ok,
                         "checkerboard origin/tile matches the QPainter oracle (delta " +
                             std::to_string(delta.maxChannelDelta) + ")");
+}
+
+// The Viewer's three backdrops on one device frame: the surround outside the destination, the
+// composition background behind a half-transparent image inside it, and the transparency grid
+// replacing that background. Each is compared with the QPainter oracle (the CPU paint's semantics),
+// and the surround and frame are also pinned to their exact bytes so neither can leak into the other.
+void testSurroundFrameAndGrid(Expectations& expectations,
+                              const std::shared_ptr<DeviceAllocatorState>& control,
+                              GpuImageUpload& uploader, GpuResidentDisplay& display) {
+    auto bundle = makeDisplayBundle(uploader, display, premultipliedPixels(), 2, 2);
+    expectations.expect(bundle.has_value(), "the half-alpha display bundle builds");
+    if (!bundle) {
+        return;
+    }
+    auto params = identityParams(12, 12);
+    params.destination = GpuPresentRect{2.0F, 2.0F, 8.0F, 8.0F};
+    params.source = GpuPresentSourceWindow{0.0, 0.0, 2.0, 2.0};
+    params.surroundColor = GpuPresentColor{19.0F / 255.0F, 19.0F / 255.0F, 19.0F / 255.0F, 1.0F};
+    params.frameColor = GpuPresentColor{200.0F / 255.0F, 40.0F / 255.0F, 90.0F / 255.0F, 1.0F};
+    params.checkerTilePixels = 2.0F;
+    params.checkerColorA = GpuPresentColor{58.0F / 255.0F, 58.0F / 255.0F, 58.0F / 255.0F, 1.0F};
+    params.checkerColorB = GpuPresentColor{42.0F / 255.0F, 42.0F / 255.0F, 42.0F / 255.0F, 1.0F};
+    const auto pixelAt = [](const std::vector<Rgba8>& pixels, const int x, const int y) {
+        return pixels[static_cast<std::size_t>(y) * 12U + static_cast<std::size_t>(x)];
+    };
+    const auto same = [](const Rgba8 a, const Rgba8 b) {
+        return a.red == b.red && a.green == b.green && a.blue == b.blue && a.alpha == b.alpha;
+    };
+    for (const bool grid : {false, true}) {
+        params.transparencyGrid = grid;
+        const auto rendered =
+            renderOffscreen(control, VK_FORMAT_R8G8B8A8_UNORM, 12, 12, bundle->input, params, {});
+        const auto oracle = renderOracle(bundle->bytes, 2, 2, params, {}, 0, 0, true);
+        const auto delta = compareImages(rendered.pixels, oracle.pixels, 3);
+        const std::string label = grid ? "grid on" : "grid off";
+        expectations.expect(rendered.ok && delta.ok,
+                            label + ": surround/frame/grid match the QPainter oracle (delta " +
+                                std::to_string(delta.maxChannelDelta) + ")");
+        if (!rendered.ok || rendered.pixels.size() != 144U) {
+            continue;
+        }
+        bool surroundExact = true;
+        for (const auto [x, y] : {std::pair{0, 0}, std::pair{11, 0}, std::pair{0, 11},
+                                  std::pair{11, 11}, std::pair{1, 6}, std::pair{10, 6}})
+            surroundExact = surroundExact && same(pixelAt(rendered.pixels, x, y), Rgba8{19, 19, 19, 255});
+        expectations.expect(surroundExact,
+                            label + ": the surround is exactly the surround colour, never the "
+                                    "frame colour or the checker");
+        if (!grid) {
+            // The destination's top-left texel is opaque red, so the frame colour shows where the
+            // image is transparent: compare a pixel on the half-alpha white quadrant against the
+            // straight-over composite onto the frame colour.
+            const Rgba8 halfWhite = pixelAt(rendered.pixels, 8, 8);
+            const auto over = [](const int frame) { return (255 * 128 + frame * 127 + 127) / 255; };
+            expectations.expect(std::abs(static_cast<int>(halfWhite.red) - over(200)) <= 3 &&
+                                    std::abs(static_cast<int>(halfWhite.green) - over(40)) <= 3 &&
+                                    std::abs(static_cast<int>(halfWhite.blue) - over(90)) <= 3,
+                                "grid off: a half-transparent pixel composites over the "
+                                "composition background colour");
+        }
+    }
 }
 
 [[nodiscard]] std::vector<Rgba8> makeOverlay(const std::uint32_t width, const std::uint32_t height,
@@ -473,8 +534,12 @@ void testParamValidation(Expectations& expectations,
     expectRejected(nanSource, "a NaN source origin");
 
     auto infiniteColor = identityParams(2, 2);
-    infiniteColor.backgroundColor.red = std::numeric_limits<float>::infinity();
-    expectRejected(infiniteColor, "an infinite background color");
+    infiniteColor.surroundColor.red = std::numeric_limits<float>::infinity();
+    expectRejected(infiniteColor, "an infinite surround color");
+
+    auto infiniteFrame = identityParams(2, 2);
+    infiniteFrame.frameColor.green = std::numeric_limits<float>::infinity();
+    expectRejected(infiniteFrame, "an infinite frame color");
 
     auto badChannel = identityParams(2, 2);
     // A deliberate out-of-range channel mode is the invalid-input fixture.
@@ -651,6 +716,7 @@ int main(int argc, char** argv) {
         testOracleZoomCrop(expectations, control, *uploader.upload, *display.display,
                            sentinel->input, sentinel->bytes);
         testChecker(expectations, control, sentinel->input, sentinel->bytes);
+        testSurroundFrameAndGrid(expectations, control, *uploader.upload, *display.display);
         testOverlay(expectations, control, sentinel->input, sentinel->bytes);
         testRejectionsAndBudgets(expectations, *device.device, options.loader_path, control,
                                  sentinel->input);

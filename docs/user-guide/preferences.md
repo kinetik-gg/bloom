@@ -19,7 +19,7 @@ saves without closing; Cancel discards anything not applied.
 | Memory & Caches | Operation-cache and RAM-preview budgets, media disk cache enable/directory/budget | Memory budgets immediately; disk cache after restart |
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
 | Node Graph | Link style, snap to grid, grid size | Immediately |
-| Viewer | Resolution, background, and the safe-areas, centre-cross, thirds, rulers and pixel-grid overlays | Immediately |
+| Viewer | Resolution, the background around the composition frame (Solid, Grey, Black, White), the transparency grid inside it, and the safe-areas, centre-cross, thirds, rulers and pixel-grid overlays | Immediately |
 | Performance | Read-only acceleration status | Not a preference |
 
 Immediate changes reach every open panel: the window hands the committed value to each editor,

@@ -361,6 +361,20 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     connect(&session_, &CompositionSession::snapshotChanged, this, [this] { updateLookControl(); });
     connect(&session_, &CompositionSession::compositionChanged, this,
             [this] { updateLookControl(); });
+    // The composition background is presentation only (its command is not render-affecting): an
+    // edit re-presents the frame it already has -- a CPU repaint, or a native present with the new
+    // frame colour -- and never asks for a new evaluation.
+    presentedFrameColor_ = frameBackgroundColor().rgba();
+    const auto refreshFrameColor = [this] {
+        const QRgb color = frameBackgroundColor().rgba();
+        if (color == presentedFrameColor_)
+            return;
+        presentedFrameColor_ = color;
+        updateGpuResidentPresentation();
+        update();
+    };
+    connect(&session_, &CompositionSession::snapshotChanged, this, refreshFrameColor);
+    connect(&session_, &CompositionSession::compositionChanged, this, refreshFrameColor);
 
     // Every one of these already repainted the status bar for free when it was part of this
 
@@ -741,6 +755,19 @@ void ViewerEditor::setBackground(const ViewerBackground background) {
     update();
 }
 
+void ViewerEditor::setTransparencyGrid(const bool enabled) {
+    if (transparencyGrid_ == enabled)
+        return;
+    transparencyGrid_ = enabled;
+    QSettings().setValue(kTransparencyGridSetting, enabled);
+    if (transparencyGridAction_ != nullptr && transparencyGridAction_->isChecked() != enabled) {
+        const QSignalBlocker blocker(transparencyGridAction_);
+        transparencyGridAction_->setChecked(enabled);
+    }
+    updateGpuResidentPresentation();
+    update();
+}
+
 void ViewerEditor::applyApplicationPreferences(const ApplicationPreferences& preferences) {
     // Drive the panel's own controls rather than reaching past them, so their existing
     // persistence and the preview controller's resolution update stay the one code path. An index
@@ -762,19 +789,7 @@ void ViewerEditor::applyApplicationPreferences(const ApplicationPreferences& pre
         resolutionDropdown_->setCurrentIndex(resolutionIndex);
     }
 
-    const auto backgroundIndex = [&preferences] {
-        switch (preferences.viewerBackground) {
-        case ViewerBackgroundPreference::Checkerboard:
-            return 1;
-        case ViewerBackgroundPreference::Black:
-            return 2;
-        case ViewerBackgroundPreference::White:
-            return 3;
-        case ViewerBackgroundPreference::Solid:
-            break;
-        }
-        return 0;
-    }();
+    const int backgroundIndex = static_cast<int>(viewerBackgroundFor(preferences.viewerBackground));
     if (backgroundDropdown_ != nullptr && backgroundDropdown_->currentIndex() != backgroundIndex) {
         backgroundDropdown_->setCurrentIndex(backgroundIndex);
     }
@@ -784,6 +799,7 @@ void ViewerEditor::applyApplicationPreferences(const ApplicationPreferences& pre
             action->setChecked(desired);
         }
     };
+    syncAction(transparencyGridAction_, preferences.viewerTransparencyGrid);
     syncAction(safeAreasAction_, preferences.viewerSafeAreas);
     syncAction(centreCrossAction_, preferences.viewerCentreCross);
     syncAction(thirdsAction_, preferences.viewerThirds);
@@ -828,15 +844,8 @@ QRectF ViewerEditor::canvasRect() const {
                                    -bar.height() - padding);
 }
 
-QString ViewerEditor::emptyStateInvitation() const {
-    const auto* composition = session_.composition();
-    if (composition == nullptr) {
-        return tr("Create a composition to begin");
-    }
-    if (composition->graph().layerOutputs().empty()) {
-        return tr("Create a layer to begin");
-    }
-    return {};
+QColor ViewerEditor::frameBackgroundColor() const {
+    return compositionFrameColor(session_.composition());
 }
 
 void ViewerEditor::layoutStatusBar() {
@@ -931,14 +940,12 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     // footer -- not just the padded fit rectangle (owner, 2026-09-15: "it should be 100% to
     // viewer content width and height, not partial"). canvasRect() stays the fit target only.
     const QRectF surround = contentRect();
-    const QRectF frame = canvasRect();
     const auto* composition = session_.composition();
-    const QString invitation = emptyStateInvitation();
 
     if (composition == nullptr) {
-        // Honest empty state (decision 5): the plain surround -- no checkerboard, which belongs
-        // inside a composition frame and there is none -- under the no-composition invitation
-        // widget (buildEmptyState()), which names the composition and offers New Composition.
+        // Honest empty state (decision 5): the plain surround -- no frame background or grid,
+        // which belong inside a composition frame and there is none -- under the no-composition
+        // invitation widget (buildEmptyState()), which offers New Composition.
         drawCanvasBackground(painter, surround, background_);
         return;
     }
@@ -952,10 +959,8 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
         return;
     }
 
+    // A composition with no layers shows just its frame and background: no invitation.
     paintViewerContent(painter);
-    // An active composition with no layers still shows its layer invitation; a composition with
-    // content (including one whose render is genuinely unsupported) shows no empty-state text.
-    paintViewerEmptyInvitation(painter, frame, invitation);
 }
 
 void ViewerEditor::paintViewerContent(QPainter& painter) {
@@ -989,7 +994,9 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                                     .captureRect = contentRect(),
                                     .devicePixelRatio = devicePixelRatioF(),
                                     .channel = packedDisplay.channel,
-                                    .background = background_,
+                                    .surroundColor = viewerSurroundColor(background_).rgba(),
+                                    .frameColor = frameBackgroundColor().rgba(),
+                                    .transparencyGrid = transparencyGrid_,
                                     .overlayRevision = gpuOverlayRevision_,
                                     .native = false,
                                     .cover = coverSnapshotInProgress_};
@@ -1028,8 +1035,11 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                             ? viewTransformedDisplayRect(frame, geometry->extent,
                                                          geometry->pixelAspect, transform_)
                             : QRectF{};
-                    // The checkerboard sits inside the composition frame only, under the image.
-                    drawFrameBackground(painter, contentRect(), displayRect, background_);
+                    // The composition background (or the grid) sits inside the frame only, under
+                    // the image; the image composites over it in display space, exactly as the
+                    // GPU present composites.
+                    drawFrameBackground(painter, contentRect(), displayRect,
+                                        frameBackgroundColor(), transparencyGrid_);
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                     const auto& fullWindow = bufferView->displayWindow;
                     const QRectF dataRect{
@@ -1092,7 +1102,9 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
         const bool changed = !cpuPaintedDisplay_ || cpuPaintedDisplay_->frame != painted.frame ||
                              cpuPaintedDisplay_->mapping != painted.mapping ||
                              cpuPaintedDisplay_->channel != painted.channel ||
-                             cpuPaintedDisplay_->background != painted.background ||
+                             cpuPaintedDisplay_->surroundColor != painted.surroundColor ||
+                             cpuPaintedDisplay_->frameColor != painted.frameColor ||
+                             cpuPaintedDisplay_->transparencyGrid != painted.transparencyGrid ||
                              cpuPaintedDisplay_->overlayRevision != painted.overlayRevision;
         cpuPaintedDisplay_ = std::move(painted);
         if (changed)

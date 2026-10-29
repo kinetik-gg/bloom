@@ -53,14 +53,19 @@ enum class Color : std::uint8_t {
     Ok,
     Warn,
     Error,
-    // The alpha checkerboard's two mid-grey tones (the compositing convention: a mid-grey grid
-    // reads as "transparent" against both dark and light pixels, where a pair of interface surfaces
-    // would vanish under any dark image).
+    // The small-swatch alpha checkerboard's two mid-grey tones (chips, swatches, the picker's alpha
+    // bar). A mid-grey grid reads as "transparent" behind a few pixels of any colour, where a pair
+    // of interface surfaces would vanish under a dark one.
     CheckerLight,
     CheckerDark,
-    // The Viewer's Black and White backgrounds: exactly black and exactly white, because checking
-    // an edge against a known value is the whole point of choosing them.
+    // The Viewer's Transparency Grid: a deeper pair for a whole frame of image, readable but quiet
+    // next to dark footage, and distinct from the Canvas surround so the frame edge still reads.
+    ViewerCheckerLight,
+    ViewerCheckerDark,
+    // The Viewer's Black, Grey and White surrounds: exactly black, a neutral mid grey and exactly
+    // white, because judging an edge or a colour against a known value is the point of choosing them.
     CanvasBlack,
+    CanvasGrey,
     CanvasWhite,
     DataSequence,
     DataClip,

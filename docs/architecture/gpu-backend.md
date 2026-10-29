@@ -372,8 +372,9 @@ command; it never calls `vkQueueWaitIdle`/`vkDeviceWaitIdle`, retains an image u
 presentation-engine signal actually proves retirement, propagates device loss, and quarantines a
 foreign-thread or unproven teardown under a bounded process fuse. `gpu_present_image.hpp` and
 `presentImage` sample the resident display image into the acquired swapchain with an explicit affine
-destination/source mapping, viewer channel remap, background (the checkerboard only inside the
-destination rectangle, the solid surround outside it, exactly as the Viewer's CPU paint), and an
+destination/source mapping, viewer channel remap, backdrop (the display-referred surround colour
+outside the destination rectangle; inside it the composition's background colour, or the
+checkerboard when the Transparency Grid is on, exactly as the Viewer's CPU paint), and an
 optional premultiplied RGBA8 overlay; both shaders are SHA-256 pinned with a manifest binding and a
 configure-time regeneration check. `GpuPresentationCoordinator` (with the Qt-free, Vulkan-free
 `GpuPresentationClient`) is a coordinator, not a thread, service, device, or message bus: it is
@@ -565,9 +566,10 @@ Honest outcome: the production application source wires the resident display rou
 main-linked vertical acceptance now passes over a genuine OpenEXR document (a real `AddImageLayer`
 image source compiled by the real `SnapshotCompiler` and the unmodified stage factories) through the
 resident frame cache into the actual `ViewerEditor`: fit, zoom-pan, and Red-channel captures match the
-CPU reference with zero byte difference, and the four viewer background modes (Solid/Canvas, Black,
-White, Checkerboard) each match the CPU surround, including transparent composition pixels, so the
-GPU and CPU display paths agree. Warm cache reuse adds no native dispatches, the unsupported path
+CPU reference with zero byte difference, and the viewer backdrop phases (the Solid/Canvas, Grey,
+Black and White surrounds over the composition background colour, and the Transparency Grid) each
+emit interior samples over transparent composition pixels and a surround sample outside the frame
+for comparison against the CPU paint, so the GPU and CPU display paths agree. Warm cache reuse adds no native dispatches, the unsupported path
 returns the CPU fallback, and shutdown drains cleanly. This document makes no full-application FPS
 claim, no measured speedup claim, and no universal or cross-platform qualification claim, and the
 resident-preview outcome remains `PreviewOnly`. The final-render route now evaluates through the
