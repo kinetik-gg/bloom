@@ -17,8 +17,10 @@ Once mounted, you can:
   exactly as it would a local file.
 - **Use File > Import, the Assets footer's Import button, or Replace Footage…**, and pick the file from the
   mounted share in the Open dialog's sidebar, which lists every currently mounted network share.
-- **Open Project, Save Project As, and Export Frame** also list mounted network shares in their
-  dialog sidebar, so you can read from or write to a share without typing its full mounted path.
+- **Open Project, Save Project As, Export Frame and every other file dialog** also list mounted
+  network shares in their sidebar, so you can read from or write to a share without typing its
+  full mounted path. Bloom always uses its own file dialog, on every system, so the sidebar is
+  there whichever desktop or file-chooser settings you use.
 
 If you drag a file from a share your file manager has not connected yet, Bloom will not silently
 do nothing: the status bar reports **"Connect to `<server>/<share>` in your file manager

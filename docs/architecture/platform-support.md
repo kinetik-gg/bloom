@@ -59,7 +59,10 @@ cross-platform libraries. It does not call Win32, Cocoa/AppKit, Metal, Direct3D,
 other native APIs directly.
 
 Qt 6 owns the common desktop shell and provides the default adapters for windows, menus, input,
-clipboard, drag and drop, accessibility, display scaling, and standard dialogs. Narrow native
+clipboard, drag and drop, accessibility, display scaling, and standard dialogs. File dialogs are
+always Qt's own widget dialog, styled by the kit, never a native or desktop-portal chooser, so
+they look and behave the same on every platform and stay child windows of Bloom's window
+([ui-grammar.md](../ux/ui-grammar.md), Dialogs). Narrow native
 adapters are allowed where Qt cannot provide the required quality, but they stay below a portable
 interface and do not leak native handles or types into document, command, project, runtime, or
 render semantics.

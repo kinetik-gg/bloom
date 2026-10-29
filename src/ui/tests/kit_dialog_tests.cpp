@@ -10,10 +10,12 @@
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/task_dialog.hpp>
+#include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <QApplication>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
@@ -21,7 +23,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QStyle>
 #include <QTemporaryDir>
 #include <QTest>
@@ -365,6 +369,22 @@ void testChooseFile(QWidget& owner) {
            "Save adds the default suffix to a name typed without one");
     expect(QDir(kit::rememberedDirectory(QStringLiteral("kit-test"))) == QDir(directory.path()),
            "the directory is remembered per kind");
+    const auto built =
+        kit::buildFileDialog(owner, {.mode = kit::KFileRequest::Mode::Open,
+                                     .title = QStringLiteral("Open"),
+                                     .kind = QStringLiteral("kit-test"),
+                                     .nameFilters = QStringLiteral("Bloom (*.bloom)"),
+                                     .defaultSuffix = {},
+                                     .startPath = {}});
+    expect(built->testOption(QFileDialog::DontUseNativeDialog) &&
+               built->windowModality() == Qt::WindowModal && built->parentWidget() == &owner,
+           "Bloom's own file dialog on every platform, window-modal over the owner");
+    bool oneHeight = true;
+    for (auto* combo : built->findChildren<QComboBox*>())
+        oneHeight = oneHeight && combo->height() == kit::px(kit::Size::Control);
+    for (auto* button : built->findChildren<QPushButton*>())
+        oneHeight = oneHeight && button->height() == kit::px(kit::Size::Control);
+    expect(oneHeight, "the file dialog's combos and buttons are one control tall");
     expect(kit::withDefaultSuffix(QStringLiteral("/a/b.exr"), QStringLiteral("png")) ==
                    QStringLiteral("/a/b.exr") &&
                kit::withDefaultSuffix(QStringLiteral("/a/b"), QStringLiteral("png")) ==
@@ -411,6 +431,24 @@ void testCheckLabel(QWidget& owner) {
     dialog.reject();
 }
 
+void testPathField(QWidget& owner) {
+    kit::KPathField field(&owner);
+    field.resize(kit::px(kit::Size::DropdownWidthWide), kit::px(kit::Size::Control));
+    const auto path = QStringLiteral("/volumes/production/shows/long-show-name/cache/bloom-media");
+    field.setText(path);
+    field.show();
+    QCoreApplication::processEvents();
+    expect(field.toolTip() == path, "a path field's tooltip is the whole path");
+    // At rest it paints the path elided in the middle: the last folder stays on screen.
+    const QImage image = field.grab().toImage();
+    expect(!image.isNull(), "a path field paints at rest");
+    expect(field.fontMetrics()
+               .elidedText(path, Qt::ElideMiddle, field.width())
+               .contains(QChar(0x2026)),
+           "a path wider than the field is elided");
+    field.hide();
+}
+
 // With BLOOM_SCREENSHOT_DIR set, review captures of a destructive confirm and a refused prompt.
 void writeScreenshots(QWidget& owner, const QString& directory) {
     QDir().mkpath(directory);
@@ -449,6 +487,8 @@ void writeScreenshots(QWidget& owner, const QString& directory) {
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
+    // Qt's widget file dialog saves its state into the user's Qt settings: not from a test.
+    QStandardPaths::setTestModeEnabled(true);
     QApplication application(argc, argv);
     kit::installKinetikTheme(application);
     QTemporaryDir settings;
@@ -471,6 +511,7 @@ int main(int argc, char** argv) {
     testChooseFile(owner);
     testTaskDialog(owner);
     testCheckLabel(owner);
+    testPathField(owner);
     if (const auto shots = qEnvironmentVariable("BLOOM_SCREENSHOT_DIR"); !shots.isEmpty())
         writeScreenshots(owner, shots);
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

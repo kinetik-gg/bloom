@@ -50,6 +50,7 @@ target_sources(
         kit/thumbnail.cpp
         kit/title_bar.cpp
         kit/tokens.cpp
+        kit/tab_bar.cpp
         kit/task_dialog.cpp
         kit/typography.cpp
         kit/value_field.cpp
@@ -97,6 +98,7 @@ target_sources(
             include/bloom/ui/kit/text_field.hpp
             include/bloom/ui/kit/value_expression.hpp
             include/bloom/ui/kit/switch_control.hpp
+            include/bloom/ui/kit/tab_bar.hpp
             include/bloom/ui/kit/task_dialog.hpp
             include/bloom/ui/kit/theme.hpp
             include/bloom/ui/kit/title_bar.hpp

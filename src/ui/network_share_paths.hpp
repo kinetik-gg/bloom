@@ -9,5 +9,6 @@ using kit::configureFileDialogSidebar;
 using kit::defaultGvfsRoot;
 using kit::localPathForUrl;
 using kit::mountedNetworkShares;
+using kit::networkShareLabel;
 using kit::smbShareLabel;
 } // namespace bloom::ui

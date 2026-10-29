@@ -30,6 +30,9 @@ class KSection;
 struct KRefusal final {
     QWidget* field = nullptr;
     QString reason;
+    // Work still under way (a check, a verification) rather than a value to fix: it holds the
+    // closing buttons all the same, but its words are Muted helper text, not the Error reason.
+    bool pending = false;
 };
 
 // The kit look for a read-only document or list inside a dialog (a licence text, a component
@@ -76,6 +79,12 @@ class KForm final : public QWidget {
     [[nodiscard]] KLabel* reasonFor(QWidget* field) const;
     // Every focusable widget in visual order: rows top to bottom, a row left to right.
     [[nodiscard]] std::vector<QWidget*> tabSequence() const;
+    // The row labels, top to bottom.
+    [[nodiscard]] std::vector<KLabel*> labels() const;
+
+  protected:
+    // A row's label is shown and hidden with its field.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
     struct Row final {
@@ -157,11 +166,12 @@ class KDialog : public QDialog {
     [[nodiscard]] KLabel* dialogReason() const noexcept { return dialogReason_; }
     void registerReason(QWidget* field, KLabel* reason);
 
-    // What pressing the role's button does. False (and the dialog stays) while refused.
+    // What pressing the role's button does. False (and the dialog stays) while refused; a refused
+    // commit switches to the refused field's tab and focuses it.
     bool activate(Role role);
     // Commits a value field whose text editor is open, as focus leaving it would.
     void commitOpenEditors();
-    // Grows the dialog to the height its content needs at its current width (wrapped reasons
+    // Grows the dialog to the width and height its content needs (wrapped reasons
     // and notes included), so a row that appears or a reason that wraps is never squeezed or
     // overlapped. Runs whenever the layout changes; it never shrinks the dialog.
     void fitToContent();
@@ -184,6 +194,7 @@ class KDialog : public QDialog {
   private:
     void watchKeys(QWidget* widget);
     void applyTabOrder();
+    void revealRefusal();
 
     QVBoxLayout* root_ = nullptr;
     QVBoxLayout* content_ = nullptr;

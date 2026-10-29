@@ -6,6 +6,8 @@
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
+#include <bloom/ui/kit/tab_bar.hpp>
+
 #include <QAccessible>
 #include <QAccessibleWidget>
 #include <QHash>
@@ -155,6 +157,82 @@ class RadioGroupAccessible final : public QAccessibleWidget {
     mutable QHash<int, QAccessible::Id> children_;
 };
 
+// One tab of a KTabBar, a page tab; selected while current.
+class TabAccessible final : public QAccessibleInterface {
+  public:
+    TabAccessible(KTabBar* bar, const int index) : bar_(bar), index_(index) {}
+    [[nodiscard]] bool isValid() const override {
+        return bar_ != nullptr && index_ < bar_->count();
+    }
+    [[nodiscard]] QObject* object() const override { return nullptr; }
+    [[nodiscard]] QWindow* window() const override {
+        return bar_ == nullptr ? nullptr : bar_->window()->windowHandle();
+    }
+    [[nodiscard]] QAccessibleInterface* parent() const override {
+        return QAccessible::queryAccessibleInterface(bar_.data());
+    }
+    [[nodiscard]] QAccessibleInterface* child(int) const override { return nullptr; }
+    [[nodiscard]] int childCount() const override { return 0; }
+    [[nodiscard]] int indexOfChild(const QAccessibleInterface*) const override { return -1; }
+    [[nodiscard]] QAccessibleInterface* childAt(int, int) const override { return nullptr; }
+    [[nodiscard]] QAccessibleInterface* focusChild() const override { return nullptr; }
+    [[nodiscard]] QString text(const QAccessible::Text type) const override {
+        return isValid() && type == QAccessible::Name ? bar_->tabText(index_) : QString{};
+    }
+    void setText(QAccessible::Text, const QString&) override {}
+    [[nodiscard]] QRect rect() const override {
+        if (!isValid())
+            return {};
+        const QRect local = bar_->tabRect(index_);
+        return {bar_->mapToGlobal(local.topLeft()), local.size()};
+    }
+    [[nodiscard]] QAccessible::Role role() const override { return QAccessible::PageTab; }
+    [[nodiscard]] QAccessible::State state() const override {
+        QAccessible::State value;
+        if (!isValid())
+            return value;
+        value.selectable = true;
+        value.selected = bar_->currentIndex() == index_;
+        value.disabled = !bar_->isEnabled();
+        value.invisible = !bar_->isVisible();
+        return value;
+    }
+
+  private:
+    QPointer<KTabBar> bar_;
+    int index_ = 0;
+};
+
+// KTabBar as a page tab list, one child per tab.
+class TabBarAccessible final : public QAccessibleWidget {
+  public:
+    explicit TabBarAccessible(KTabBar* bar) : QAccessibleWidget(bar, QAccessible::PageTabList) {}
+    ~TabBarAccessible() override {
+        for (const auto id : std::as_const(children_))
+            QAccessible::deleteAccessibleInterface(id);
+    }
+    [[nodiscard]] KTabBar* bar() const { return static_cast<KTabBar*>(widget()); }
+    [[nodiscard]] int childCount() const override { return bar()->count(); }
+    [[nodiscard]] QAccessibleInterface* child(const int index) const override {
+        if (index < 0 || index >= bar()->count())
+            return nullptr;
+        if (const auto found = children_.constFind(index); found != children_.constEnd())
+            return QAccessible::accessibleInterface(*found);
+        auto* tab = new TabAccessible(bar(), index);
+        children_.insert(index, QAccessible::registerAccessibleInterface(tab));
+        return tab;
+    }
+    [[nodiscard]] int indexOfChild(const QAccessibleInterface* child) const override {
+        for (auto it = children_.constBegin(); it != children_.constEnd(); ++it)
+            if (QAccessible::accessibleInterface(it.value()) == child)
+                return it.key();
+        return -1;
+    }
+
+  private:
+    mutable QHash<int, QAccessible::Id> children_;
+};
+
 // KValueField as a spin box: its name, its value with the unit, and the value interface (current,
 // minimum, maximum, step). Setting the value through assistive technology is one complete edit.
 class ValueFieldAccessible final : public QAccessibleWidget, public QAccessibleValueInterface {
@@ -295,6 +373,8 @@ QAccessibleInterface* kitAccessibleFactory(const QString& className, QObject* ob
         return new DropdownAccessible(static_cast<KDropdown*>(object));
     if (className == QLatin1String(KRadioGroup::staticMetaObject.className()))
         return new RadioGroupAccessible(static_cast<KRadioGroup*>(object));
+    if (className == QLatin1String(KTabBar::staticMetaObject.className()))
+        return new TabBarAccessible(static_cast<KTabBar*>(object));
     if (className == QLatin1String(KValueField::staticMetaObject.className()))
         return new ValueFieldAccessible(static_cast<KValueField*>(object));
     if (className == QLatin1String(KSlider::staticMetaObject.className()))

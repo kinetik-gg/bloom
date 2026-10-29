@@ -5,8 +5,10 @@
 #include <QAction>
 #include <QEvent>
 #include <QKeyEvent>
+#include <QPainter>
 #include <QPalette>
 #include <QStyle>
+#include <QStyleOptionFrame>
 
 namespace bloom::ui::kit {
 namespace {
@@ -83,6 +85,32 @@ KInlineEdit& KTextField::useInlineEdit(KInlineEdit::Validator validator) {
 KLineEdit::KLineEdit(QWidget* parent) : KTextField(parent) {}
 
 KLineEdit::KLineEdit(const QString& text, QWidget* parent) : KTextField(text, parent) {}
+
+KPathField::KPathField(QWidget* parent) : KLineEdit(parent) {
+    // The whole path is always one hover away, unless a refusal reason is showing there.
+    connect(this, &QLineEdit::textChanged, this, [this](const QString& path) {
+        if (error().isEmpty())
+            setToolTip(path);
+    });
+}
+
+void KPathField::paintEvent(QPaintEvent* event) {
+    if (hasFocus() || text().isEmpty()) {
+        KLineEdit::paintEvent(event);
+        return;
+    }
+    // The field's own box, then the path elided in the middle inside its contents.
+    QPainter painter(this);
+    QStyleOptionFrame option;
+    initStyleOption(&option);
+    style()->drawPrimitive(QStyle::PE_PanelLineEdit, &option, &painter, this);
+    const QRect area = style()->subElementRect(QStyle::SE_LineEditContents, &option, this);
+    const QMargins margins = textMargins();
+    const QRect text = area.marginsRemoved(margins);
+    painter.setPen(palette().color(QPalette::Text));
+    painter.drawText(text, Qt::AlignLeft | Qt::AlignVCenter,
+                     fontMetrics().elidedText(this->text(), Qt::ElideMiddle, text.width()));
+}
 
 KSearchField::KSearchField(QWidget* parent) : KLineEdit(parent) {
     setPlaceholderText(tr("Search"));

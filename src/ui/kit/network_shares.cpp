@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <utility>
 #include <vector>
 
@@ -130,6 +131,13 @@ QList<QUrl> mountedNetworkShares(const QString& gvfsRoot) {
     return shares;
 }
 
+std::optional<QString> networkShareLabel(const QString& mountDirectoryName) {
+    const auto parsed = parseMountName(mountDirectoryName);
+    if (!parsed)
+        return std::nullopt;
+    return parsed->server + QLatin1Char('/') + parsed->share;
+}
+
 std::optional<QString> smbShareLabel(const QUrl& url) {
     const auto parsed = parseSmbUrl(url);
     if (!parsed)
@@ -139,13 +147,22 @@ std::optional<QString> smbShareLabel(const QUrl& url) {
 
 void configureFileDialogSidebar(QFileDialog& dialog, const QString& gvfsRoot) {
     const auto shares = mountedNetworkShares(gvfsRoot);
-    if (shares.isEmpty())
-        return;
-    auto urls = dialog.sidebarUrls();
+    // Qt's widget dialog keeps its sidebar between runs, so a share added while mounted would
+    // stay listed after it is gone. Drop every share entry that is not mounted now (by its mount
+    // directory name alone: no file system call on a possibly unreachable share), keep every other
+    // place, then add the mounted shares once each.
+    QList<QUrl> urls;
+    for (const auto& url : dialog.sidebarUrls()) {
+        const bool share =
+            url.isLocalFile() && networkShareLabel(QFileInfo(url.toLocalFile()).fileName());
+        if ((!share || shares.contains(url)) && !urls.contains(url))
+            urls.push_back(url);
+    }
     for (const auto& share : shares)
         if (!urls.contains(share))
             urls.push_back(share);
-    dialog.setSidebarUrls(urls);
+    if (urls != dialog.sidebarUrls())
+        dialog.setSidebarUrls(urls);
 }
 
 } // namespace bloom::ui::kit

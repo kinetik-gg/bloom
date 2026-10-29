@@ -6,6 +6,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <QAbstractButton>
@@ -168,6 +169,8 @@ KLabel* KForm::place(KLabel* label, QWidget* widget, QWidget* key, const bool re
     }
     grid_->addWidget(holder, row, 1);
     rows_.push_back({label, holder, key, reasonLabel});
+    if (label != nullptr)
+        widget->installEventFilter(this);
     return reasonLabel;
 }
 
@@ -226,6 +229,23 @@ KLabel* KForm::labelFor(QWidget* field) const {
 KLabel* KForm::reasonFor(QWidget* field) const {
     const auto* row = rowFor(field);
     return row != nullptr ? row->reason : nullptr;
+}
+
+std::vector<KLabel*> KForm::labels() const {
+    std::vector<KLabel*> found;
+    for (const auto& row : rows_)
+        if (row.label != nullptr)
+            found.push_back(row.label);
+    return found;
+}
+
+bool KForm::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::ShowToParent || event->type() == QEvent::HideToParent)
+        for (const auto& row : rows_)
+            if (row.label != nullptr && row.holder->layout() != nullptr &&
+                row.holder->layout()->indexOf(qobject_cast<QWidget*>(watched)) >= 0)
+                row.label->setVisible(event->type() == QEvent::ShowToParent);
+    return QWidget::eventFilter(watched, event);
 }
 
 std::vector<QWidget*> KForm::tabSequence() const {
@@ -389,11 +409,19 @@ void KDialog::revalidate() {
         if (target == nullptr)
             target = dialogReason_;
         target->setText(refusal_->reason);
+        target->setTone(refusal_->pending ? Color::Muted : Color::Error);
         target->show();
         // A reason inside a closed section opens it, so it is never out of sight.
         for (auto* widget = refusal_->field; widget != nullptr; widget = widget->parentWidget())
             if (auto* section = qobject_cast<KSection*>(widget); section && section->isCollapsed())
                 section->setCollapsed(false);
+    }
+    // A reason on a tab that is not showing marks that tab with an Error dot.
+    for (auto* tabs : findChildren<KTabs*>()) {
+        connect(tabs, &KTabs::currentChanged, this, &KDialog::revalidate, Qt::UniqueConnection);
+        const int page = refusal_ && !refusal_->pending ? tabs->pageOf(refusal_->field) : -1;
+        for (int index = 0; index < tabs->bar()->count(); ++index)
+            tabs->bar()->setTabAlert(index, index == page && index != tabs->currentIndex());
     }
     for (const auto& [role, button] : roleButtons_)
         if (commits(role))
@@ -413,8 +441,15 @@ void KDialog::commitOpenEditors() {
 
 bool KDialog::activate(const Role role) {
     auto* chosen = button(role);
-    if (chosen == nullptr || !chosen->isEnabled() || chosen->isHidden())
+    if (chosen == nullptr || chosen->isHidden())
         return false;
+    if (!chosen->isEnabled()) {
+        // A commit refused by the validator still shows where: Enter on a refused form goes to
+        // the refused field, on its tab.
+        if (commits(role) && refusal_)
+            revealRefusal();
+        return false;
+    }
     switch (role) {
     case Role::Apply:
         emit applyRequested();
@@ -433,11 +468,31 @@ bool KDialog::activate(const Role role) {
     }
     commitOpenEditors();
     revalidate();
-    if (refusal_)
+    if (refusal_) {
+        revealRefusal();
         return false;
+    }
     chosen_ = role;
     accept();
     return true;
+}
+
+void KDialog::revealRefusal() {
+    // Show the first refused field, switching to its tab, and put the cursor in it.
+    auto* field = refusal_ ? refusal_->field : nullptr;
+    if (field == nullptr)
+        return;
+    for (auto* tabs : findChildren<KTabs*>())
+        if (const int page = tabs->pageOf(field); page >= 0)
+            tabs->setCurrentIndex(page);
+    QWidget* target = field;
+    if ((field->focusPolicy() & Qt::TabFocus) == 0) {
+        std::vector<QWidget*> inside;
+        collectFocusable(field->layout(), inside);
+        if (!inside.empty())
+            target = inside.front();
+    }
+    target->setFocus(Qt::OtherFocusReason);
 }
 
 void KDialog::open(std::function<void(Role)> done) {
@@ -460,11 +515,14 @@ void KDialog::fitToContent() {
     if (own == nullptr)
         return;
     own->activate();
-    const int needed = std::max(own->hasHeightForWidth() ? own->totalHeightForWidth(width())
+    // Never narrower than the content's minimum either: an explicit minimum width (the dialog's
+    // token width) must not squeeze a wider layout.
+    const int wide = std::max(width(), own->totalMinimumSize().width());
+    const int needed = std::max(own->hasHeightForWidth() ? own->totalHeightForWidth(wide)
                                                          : own->sizeHint().height(),
                                 own->totalMinimumSize().height());
-    if (height() < needed)
-        resize(width(), needed);
+    if (height() < needed || width() < wide)
+        resize(wide, std::max(height(), needed));
 }
 
 bool KDialog::event(QEvent* event) {

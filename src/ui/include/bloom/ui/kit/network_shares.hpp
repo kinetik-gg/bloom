@@ -13,8 +13,8 @@ namespace bloom::ui::kit {
 // GNOME/Linux desktop convention; on macOS and Windows this returns an empty string and every
 // function below that takes a `gvfsRoot` degrades to its "no shares" behaviour, which is correct
 // there: a mounted SMB share already appears as an ordinary local path (a `/Volumes` entry, or a
-// mapped drive letter) that `file://` URLs and the platform's native Open dialog already reach
-// without this module's help.
+// mapped drive letter) that `file://` URLs and Bloom's file dialog already reach without this
+// module's help.
 [[nodiscard]] QString defaultGvfsRoot();
 
 // Resolves a dropped or otherwise supplied URL to a local filesystem path usable with
@@ -39,10 +39,15 @@ namespace bloom::ui::kit {
 // share segment.
 [[nodiscard]] std::optional<QString> smbShareLabel(const QUrl& url);
 
+// The `host/share` a GVFS `smb-share:*` mount directory name stands for (its `server=` and
+// `share=` fields), as a file manager names it; `std::nullopt` for any other name. Bloom's file
+// dialog shows a mounted share under this name instead of the raw mount directory name.
+[[nodiscard]] std::optional<QString> networkShareLabel(const QString& mountDirectoryName);
+
 // Adds every entry from `mountedNetworkShares(gvfsRoot)` to `dialog`'s sidebar, alongside its
-// existing entries, so a non-native (Qt widget) file dialog can reach a mounted share; native
-// platform dialogs own their own sidebar and ignore this. Safe to call unconditionally before
-// `exec()`. kit::chooseFile() calls it for every file dialog Bloom opens.
+// existing entries, so Bloom's file dialog (Qt's widget dialog, which kit::chooseFile() always
+// uses) can reach a mounted share. A share entry the dialog remembered from an earlier run that
+// is no longer mounted is removed. Safe to call unconditionally before `exec()`.
 void configureFileDialogSidebar(QFileDialog& dialog, const QString& gvfsRoot = defaultGvfsRoot());
 
 } // namespace bloom::ui::kit

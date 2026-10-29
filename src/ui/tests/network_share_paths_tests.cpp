@@ -28,6 +28,8 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
+#include <QStandardPaths>
+
 #include <iostream>
 #include <stdexcept>
 
@@ -149,6 +151,12 @@ void shareLabelTests() {
             "smbShareLabel needs a share segment");
     require(!ui::smbShareLabel(QUrl(QStringLiteral("file:///tmp/x.png"))).has_value(),
             "smbShareLabel only names smb:// URLs");
+    require(ui::networkShareLabel(QStringLiteral(
+                "smb-share:domain=WORKGROUP,server=10.10.10.20,share=archive,user=alice")) ==
+                QStringLiteral("10.10.10.20/archive"),
+            "a mount directory reads as host/share, whatever other fields it carries");
+    require(!ui::networkShareLabel(QStringLiteral("renders")).has_value(),
+            "an ordinary folder name is not a share");
 }
 
 void sidebarTest() {
@@ -169,6 +177,14 @@ void sidebarTest() {
     ui::configureFileDialogSidebar(dialog, fake.rootPath());
     require(dialog.sidebarUrls().size() == after.size(),
             "configuring the sidebar twice does not duplicate entries");
+    // A share remembered from an earlier run that is not mounted now leaves the sidebar; other
+    // places stay.
+    auto remembered = dialog.sidebarUrls();
+    remembered.push_back(
+        QUrl::fromLocalFile(fake.rootPath() + QStringLiteral("/smb-share:server=gone,share=old")));
+    dialog.setSidebarUrls(remembered);
+    ui::configureFileDialogSidebar(dialog, fake.rootPath());
+    require(dialog.sidebarUrls() == after, "an unmounted share leaves the sidebar");
 }
 
 // The drop test deliverable 5 asks for: AssetTree resolves an smb:// URL through an injected
@@ -246,6 +262,9 @@ void assetTreeDropTest() {
 } // namespace
 
 int main(int argc, char** argv) {
+    // Qt's widget file dialog saves its sidebar into the user's Qt settings; keep a test's fake
+    // shares out of the real ones.
+    QStandardPaths::setTestModeEnabled(true);
     QApplication app(argc, argv);
     try {
         mappingTests();

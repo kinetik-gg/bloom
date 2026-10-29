@@ -85,6 +85,19 @@ class KSearchField : public KLineEdit {
     QAction* clear_ = nullptr;
 };
 
+// A file or folder path: KTextField that, at rest, elides the path in the middle so the drive and
+// the last folder stay readable, with the whole path as its tooltip; while being edited it shows
+// the whole path like any field.
+class KPathField final : public KLineEdit {
+    Q_OBJECT
+
+  public:
+    explicit KPathField(QWidget* parent = nullptr);
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
+};
+
 // The multi-line text field: the same Field well, border rule, padding and error state as
 // KTextField, for text that runs to several lines (a text layer's content, a job's diagnostics, a
 // licence). Value role by default, since every multi-line text Bloom shows is content rather than

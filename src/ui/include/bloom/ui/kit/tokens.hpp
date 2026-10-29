@@ -335,6 +335,8 @@ enum class Size : int {
     // The minimum height of a dialog whose body is a long document or a page stack (Open Source
     // Licenses, Preferences), so it opens at a readable size rather than at its smallest layout.
     DialogDocumentHeight = 480,
+    // The places sidebar of Bloom's file dialog, wide enough for a network share's name.
+    DialogSidebarWidth = 200,
 };
 
 [[nodiscard]] constexpr int px(const Spacing token) noexcept { return static_cast<int>(token); }
