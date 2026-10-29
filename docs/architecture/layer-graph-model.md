@@ -349,6 +349,23 @@ complete node schema. The following actions have distinct meanings:
 A graph-driven property remains visibly driven. Typing into its field must not silently replace the
 connection; the artist chooses how to disconnect or preserve the evaluated value.
 
+### Parameter presentation
+
+How a parameter is edited is registry metadata, kept beside the definitions in
+`document::parameterPresentation()` (`bloom/document/parameter_presentation.hpp`), keyed by schema
+key (and, for the value library's shared operand schemas, by role). Each presentation carries its
+kind (a continuous number, an exact whole number, a choice, or other), the hard range in stored
+units -- the schema's own domain, never a narrower editor cap -- the soft range a slider spans, the
+step and decimals in displayed units, the displayed unit, and the display scale between the stored
+and the shown number (opacity is stored 0..1 and shown 0..100 %). A colour's alpha component alone
+is confined to [0, 1] (`componentPresentation()`). Presentation is not project truth: it is not
+serialized, takes no part in any schema or registry version, and validation never reads it, so
+changing it needs no document migration. Every built-in parameter is named in the table
+(`parameter_presentation_tests.cpp` enforces it and checks each bounded edge against the schema
+domain). Properties, Timeline rows and node cards configure their numeric fields only through
+`bloom::ui::configureValueField()`, so the same parameter behaves identically on every surface; see
+`ui-grammar.md`, "Live Value Editing".
+
 ## Editor Projections And Selection
 
 Selection is a tagged stable document reference, not a widget pointer or row index.

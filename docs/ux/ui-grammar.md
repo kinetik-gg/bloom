@@ -22,8 +22,9 @@ This contract supersedes conflicting component metrics in [Visual Language](visu
 ## Control vocabulary
 
 Every interactive control is a kit class: `KDropdown`, `KMenuButton`, `KButton`,
-`KIconButton`, `KIconToggle`, `KCheckBox`, `KSwitch`, `KValueField`, `KSlider`,
-`KSearchField`, `KLineEdit`, `KFieldFrame`, `KSection`, `KRadioGroup`, or `KColorSwatchRow`. Text uses TypeRole-bound `KLabel`.
+`KIconButton`, `KIconToggle`, `KCheckBox`, `KSwitch`, `KValueField`, `KSlider`, `KRangeSelector`,
+`KTextField` (and its `KLineEdit` and `KSearchField` forms), `KTextArea`, `KFieldFrame`, `KSection`,
+`KRadioGroup`, or `KColorSwatchRow`. Text uses TypeRole-bound `KLabel`.
 Read-only progress uses `KProgressBar` (see "Import Progress Dialog" below). A read-only picture
 uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken`, showing a
 worker-decoded proxy or a glyph fitted without changing its aspect ratio; it never loads anything.
@@ -81,7 +82,7 @@ The exceptions are deliberate and closed:
 | Exception | Why |
 | --- | --- |
 | Panel menu titles (`KMenuButton`: View, Select, Add, the Timeline and Nodes menus) | Menus, like a menu bar's titles, not buttons: flat text with the `Accent` hover bar |
-| Text entry (`KValueField`, `KLineEdit`, `KSearchField`, the Viewer frame field) | The one text-entry recipe, `kit::fieldColors()`: a `Field` well, so an editable value never reads as a button. A field standing in a chrome row or on a node card keeps a resting `Border`; a property cell rests borderless |
+| Text entry (`KValueField`, `KTextField`/`KLineEdit`, `KSearchField`, `KTextArea`, the Viewer frame field) | The one text-entry recipe, `kit::fieldColors()`: a `Field` well, so an editable value never reads as a button. A field standing in a chrome row or on a node card keeps a resting `Border` (`KValueField::setOutlinedAtRest`); a property cell (Properties, Timeline rows) rests borderless. A refused entry wears `Error` over every other state |
 | Timeline layer switches (eye, audio, solo, lock) | The glyph is the state (an eye that is there or not), so a switch never takes the Accent plate; its cell is the Secondary plate |
 | The tool column | Keeps its plate-less (Ghost) choices with the Selected plate until the tools move to the contextual bar |
 | Ghost | Only where a control deliberately has no resting surface: disclosure carets (layer and property disclosure, the RGBA and multiline expanders) and the window title bar buttons |
@@ -321,8 +322,9 @@ the `Value` role and the composition's duration after it in muted ink: `120 / 24
 `00:00:05:00 / 00:00:10:00` in timecode. Its width is fixed from the composition's longest value
 (its last frame's label and the duration) and changes only with the composition or the reading, so
 nothing moves during playback; the current value right-aligns in its column. A click opens the kit
-line edit in the same box; Return, Escape and clicking away all commit (an unparseable entry
-reverts). Its context menu switches Frames / Timecode, and its tooltip names the reading and how to
+line edit in the same box; Return, Escape and clicking away all commit through the kit inline-edit
+policy. Text that is neither a frame nor a timecode is refused: Return keeps the editor open with an
+`Error` border and the reason, and Escape or clicking away closes it on the current frame. Its context menu switches Frames / Timecode, and its tooltip names the reading and how to
 change it. With no composition it shows `00:00:00:00` (or `0`) disabled in the same box, with no
 duration.
 
@@ -449,10 +451,14 @@ or the arrow keys), while each adapter says which point is selected and what cho
 the Properties adapter resolves bounds off the UI thread and sets the layer's anchor, and the
 Composition dialog's resize anchor only records the chosen point.
 
-A `KValueField` at rest paints a value that fits its cell. When the number and unit are wider than
-the cell, it drops the unit first and then decimal places, rounding, so a number is never cut by
-the cell edge or painted over its axis prefix; the hover tooltip and the editor keep the exact
-value. `KListSurface` paints the common flat empty-row backdrop;
+A `KValueField` at rest paints a value that fits its cell, at its configured decimal places --
+trailing zeroes are kept, so the decimal points of an X/Y/Z column line up. When the number and unit
+are wider than the cell, it drops the unit first, then decimal places, then falls back to scientific
+notation with fewer significant digits, and finally to an ellipsis, so a digit or a sign is never
+cut by the cell edge or painted over its axis prefix. A rounded reading is underlined with a dotted
+`Faint` hairline; the hover tooltip and the editor keep the exact value (the shortest text that
+reads back to the same double). An in-field label is measured and painted in `UiSmall` and elides
+inside its `ValueFieldLabelColumn` cap. `KListSurface` paints the common flat empty-row backdrop;
 `KRow` owns populated rows and column headings. A heading explicitly identifies its shorter
 `Control` pitch through `headerRow`.
 
@@ -595,8 +601,9 @@ outline at every DPR. Colour parameter rows show only the swatch; expanding the 
 the individual R/G/B/A numeric rows, so narrowing the table never crushes four inline fields.
 Layer rename uses the shared KLineEdit at the name label's horizontal bounds, vertically centered
 in the row; it never covers the chevron or expands as text is typed. It follows column resizing.
-Return or focus loss commits a changed name once; unchanged text creates no transaction and Escape
-cancels without committing on the subsequent focus loss.
+Return, Escape, Tab and focus loss all commit a changed name once (the kit inline-edit policy);
+unchanged text creates no transaction, and an empty name is refused with its reason rather than
+reverted in silence.
 
 The timeline's graph editor REPLACES the key lanes rather than sitting beside them: in graph mode
 the lane region paints only its Surface backdrop and the curve view covers it, because two views of
@@ -702,8 +709,8 @@ are exposed by View, with their legacy footer controls hidden.
 `kNodeLinkWidth` (1) is identical for idle, selected and hovered links; activation applies
 `kLinkActiveLightness` (135 percent) to the socket-kind tint, preserving its hue.
 Node parameter rows are KPropertyRows with a separate fixed diamond column. Their numeric fields
-use compact resting precision: at most two decimals, no trailing zeros; editing retains full
-precision. KDiamond draws vector geometry through the painter's device transform, including canvas
+use the parameter's presentation places at rest, trailing zeros kept so a column's decimal points
+line up; editing retains full precision. KDiamond draws vector geometry through the painter's device transform, including canvas
 zoom. Vertices and `kDiamondStroke` (1.5, Bold icon weight at IconSmall) resolve to integer device
 pixels. No diamond pixmap is cached or scaled. New automation name: `nodePropertyRow`.
 
@@ -786,8 +793,8 @@ folder holding it where that is not available; one helper chooses the command pe
 first asks in a warning box that names the usage, and for folders offers Delete Folders Only (the
 contents move up) or Delete with Contents. Every delete is one transaction and one undo step.
 
-Rename edits the Name cell in place through a kit line edit, from Rename, F2 or Return. Escape
-restores the row without an edit. Every accepted rename uses the shared command transaction. The
+Rename edits the Name cell in place through a kit line edit, from Rename, F2 or Return. Return,
+Escape and clicking away commit (Escape confirms everywhere; Undo is the discard). Every accepted rename uses the shared command transaction. The
 Tags column lists an asset's tags; clicking it filters by the first tag. Edit Tags… opens one kit
 line edit per tag with Add Tag and Remove Tag controls; applying to multiple selected assets
 replaces their sets in one transaction.
@@ -928,16 +935,80 @@ state"). Neither alters composition pixels, the authored Background Colour, or e
 
 A `KValueField` is a horizontal scrub handle, including its label. Drag past the platform drag
 threshold to change one single-step per logical pixel; Ctrl uses one tenth of that step and Shift
-uses ten times the step. A click opens an inline editor with the value selected. Valid numeric text,
-Up/Down and Page Up/Page Down changes update the session's live value and every visible readback
-immediately. Intermediate text such as a minus sign does not replace the last valid value.
+uses ten times the step. The threshold is a dead zone, so crossing it never jumps the value, and
+pressing or releasing a modifier mid-drag starts a new segment where the pointer is, from the value
+already reached. Each segment is measured from its own start, so wandering back lands exactly on its
+base. On X11, Windows and macOS the pointer wraps at the screen edge so a scrub never runs out of
+travel; Wayland gives an application no way to move the pointer, so there the scrub ends at the
+screen edge (release and scrub again, or hold Shift) -- the documented fallback. Losing the pointer
+grab or the window mid-scrub finishes the scrub as a commit. A disabled field shows the arrow cursor.
 
-A pointer release or key release finishes a scrub/step; Enter, Tab and focus-out finish typing.
-One completed gesture is one undo entry. Escape restores the starting value without history.
-Properties, node cards and timeline fields use the same kit gesture signals. The active field keeps
-its text/caret or scrub base while peer fields show the live number. Colour-picker spatial drags and
-channel edits use the same live/commit/cancel boundary; closing an active picker accepts its edit.
-Preview rendering runs independently of these control readbacks.
+A press never takes keyboard focus, so frame stepping and the transport keys keep working after a
+scrub or a click. A click opens an inline editor with the exact value selected. The editor takes the
+field's own unit (`50%`, `10 px`), either decimal separator, arithmetic (`+ - * /` and parentheses)
+and relative entries (`+= 10`, `-=`, `*=`, `/=`, applied to the value the edit started from).
+Integer parameters use the field's integer mode: int64 storage, whole steps and an exact parse with
+no rounding through a double, so a value above 2^53 survives. Valid text, Up/Down and Page Up/Page
+Down update the session's live value and every visible readback immediately. Intermediate text such
+as a minus sign does not replace the last valid value.
+
+**Escape confirms everywhere.** Return, Escape, Tab and focus loss all commit typing; a pointer
+release or key release finishes a scrub/step. Undo is the discard. One completed gesture is one undo
+entry. Text that does not parse, carries another unit, or falls outside the parameter's range is
+refused, never clamped and never zero: Return or Tab keeps the editor open with an `Error` border and
+the reason in its tooltip and accessible description; Escape or focus loss closes it on the last
+valid value and a tooltip says the typed text was not taken. Tab and Shift+Tab commit and travel to
+the next or previous field, which opens ready to type; a digit typed into a keyboard-focused field
+starts an edit with it. The wheel steps a field that is being edited, or a keyboard-focused one with
+a modifier held (whole notches only, accumulated from high-resolution wheels); a burst of wheel steps
+is one edit that ends once the wheel has been still for `kWheelGestureIdleMs`. A wheel over a field
+at rest scrolls the panel behind it. A held stepper auto-repeats after `kAutoRepeatDelayMs`.
+
+A field reflecting several objects whose values differ is mixed: an em dash at rest and an empty
+editor; typing writes the value to all of them and an empty entry changes nothing. A field with a
+default (`setDefaultValue`) marks a differing value with the `NonDefaultMark` Accent dot in its top
+right corner and resets it -- as one complete edit -- from a double-click on its label or Reset in
+its context menu. The field reads as a spin box to assistive technology, with its value, minimum,
+maximum and step; `KSlider` and `KRangeSelector` read as sliders with their values.
+
+Properties, node cards and timeline fields use the same kit gesture signals, and configure every
+parameter field from the parameter's one presentation (`document::parameterPresentation`, applied by
+`bloom::ui::configureValueField`): hard range (the schema's own domain), soft range (the span of a
+slider beside it), step, decimals, unit and display scale. The same parameter therefore scrubs,
+steps and reads identically on all three surfaces; Properties' letter spacing alone layers its
+percent-of-size reading on top. The active field keeps its text/caret or scrub base while peer
+fields show the live number. Colour-picker spatial drags and channel edits use the same
+live/commit/cancel boundary; closing an active picker, with Escape too, accepts its edit. A
+`KSlider` and a `KRangeSelector` keep the same edit-session contract: a drag (or a run of keys) is
+one edit, pressing a slider's handle keeps its grab offset, and grab loss commits. A range
+selector's arrow, Page and Home/End keys move its active handle, Tab moves to the other handle
+before focus leaves, and handles that sit on each other are told apart by the first move's
+direction. Preview rendering runs independently of these control readbacks.
+
+## Text fields
+
+`KTextField` is the kit's one text field: a `Field` well in the control body with `Spacing::S`
+padding, `Radius::Small` corners and the single border (`BorderHover` under the pointer, `Accent`
+while it has focus), `Faint` placeholder ink, and an `Error` border with a reason for a refused value.
+Names and prose use the `Ui` role; numbers, hex, timecode and other machine text use `Value`.
+`KLineEdit` is its historical name and keeps working. `KSearchField` adds a leading magnifier and a
+trailing clear button that shows only with text; its first Escape clears the text and the second is
+left for the surface around it (a popup closes, a panel takes focus back). `KTextArea` is the same
+well for multi-line text: a text layer's content, a job's diagnostics, a licence. The look is
+generated from `kit::fieldColors()` into the application sheet; no widget carries its own sheet.
+
+Every in-place editor -- a value field's text entry, a rename, the frame field, the Properties and
+node-card text rows, the colour hex field -- installs the kit inline-edit policy (`kit::KInlineEdit`)
+instead of spelling its keys: Return (Ctrl+Return in a multi-line editor), Escape, Tab and focus loss
+commit; refused text stays open on Return or Tab with the reason, and closes on the last valid value
+for Escape or focus loss; the editor's own context menu and a switch to another window are not
+endings. Text parameters bind
+through one editor binding (`properties::bindTextEdit`): typing previews live and the ending commits
+exactly one transaction.
+
+`KCheckBox` draws an `Accent` ring outside a checked box with keyboard focus, may carry its own
+clickable label, and has a mixed (indeterminate) state. `KSwitch` shows hover in both states, and a
+programmatic change places its thumb without animating; only an artist's toggle slides it.
 
 ## Canvas text editing
 
@@ -955,8 +1026,8 @@ layer deletion, nudging, playback and tool shortcuts are suspended while the can
 
 Enter accepts point text on one line. Box text, existing multiline text, and text made multiline
 with Shift+Enter use Enter for a line break and Ctrl+Enter (Command+Enter on macOS) to accept.
-Focus loss accepts; Escape restores the original string without history. A completed gesture is
-one `Edit Text` transaction. The Properties single-line and expanded text fields use the same
+Focus loss accepts, and so does Escape (Escape confirms everywhere; Undo is the discard). A
+completed gesture is one `Edit Text` transaction. The Properties single-line and expanded text fields use the same
 live/commit/cancel seam. Time, composition and revision changes cancel stale canvas input.
 
 Font resolution and layout run on a cancellable worker with one active and one newest request.
