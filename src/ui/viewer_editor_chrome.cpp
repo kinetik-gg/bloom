@@ -293,8 +293,10 @@ void ViewerEditor::rebuildDisplayViewControl() {
         const auto view = QString::fromStdString(entry.view);
         const auto full = QStringLiteral("%1 / %2").arg(display, view);
         const auto data = QStringList{display, view};
-        const int itemIndex = viewerDisplayView_->addItem(viewUses[entry.view] > 1 ? full : view,
-                                                          data);
+        // A human name ("sRGB"), never the config's identifier; the raw names are in the tooltip.
+        const QString viewLabel = displayViewText(view, view);
+        const int itemIndex = viewerDisplayView_->addItem(
+            viewUses[entry.view] > 1 ? displayViewText(display, view) : viewLabel, data);
         viewerDisplayView_->setItemToolTip(
             itemIndex, tr("Display / View: %1 · %2 (viewer display only, never export)")
                            .arg(full, QString::fromStdString(entry.colourSpaceId)));

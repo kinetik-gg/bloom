@@ -178,6 +178,14 @@ void testEmbeddedPayloadDigestEqualsProfileConstant(Expectations& expectations) 
     }
 }
 
+void testDisplayViewLabels(Expectations& expectations) {
+    expectations.expect(bloom::color::displayViewLabel("srgb_rec709_display") == "sRGB",
+                        "Bloom Neutral's display/view identifier reads as sRGB");
+    expectations.expect(bloom::color::displayViewLabel("ACES 1.0 - SDR Video") ==
+                            "ACES 1.0 - SDR Video",
+                        "a display or view already named for people is shown as the config spells it");
+}
+
 } // namespace
 
 int main() {
@@ -188,5 +196,6 @@ int main() {
     testUnsupportedLocatorKindsTyped(expectations);
     testEmbeddedPayloadDigestEqualsProfileConstant(expectations);
     testAcesCgBuiltIn(expectations);
+    testDisplayViewLabels(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

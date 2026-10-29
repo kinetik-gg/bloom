@@ -90,6 +90,13 @@ struct DisplayViewEntry final {
     friend bool operator==(const DisplayViewEntry&, const DisplayViewEntry&) = default;
 };
 
+// The name an artist reads for an OCIO display or view name. The OCIO built-in configs name their
+// displays and views for people ("sRGB - Display", "ACES 1.0 - SDR Video") and come back unchanged;
+// Bloom Neutral names its single display and view by its interchange identifier
+// (srgb_rec709_display), which maps to the plain name here, next to the registry that owns those
+// identifiers. Interface code shows this and keeps the raw names for tooltips and diagnostics.
+[[nodiscard]] std::string_view displayViewLabel(std::string_view ocioName) noexcept;
+
 // Attempts to resolve one OcioConfigReference-shaped request against the in-process Bloom
 // Neutral v1 built-in registry. `locatorValue` is the caller's exact locator text; it is compared
 // byte-for-byte against kBloomNeutralV1ConfigUri, never normalized, aliased, or matched

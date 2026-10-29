@@ -12,6 +12,8 @@
 
 #include <array>
 #include <optional>
+#include <string>
+#include <string_view>
 
 class QAction;
 class QPainter;
@@ -31,6 +33,20 @@ namespace viewer_detail {
 // The Fit item plus the fixed percentage presets a real gesture never removes (decision 3). A
 // zoom that lands off this ladder (e.g. from a wheel step) gets ONE additional trailing item; see
 // ViewerEditor::refreshZoomDropdown().
+// The display and view an artist reads: each name through the colour registry's labels, and one
+// name alone when both read the same (Bloom Neutral's single "sRGB" display and view). The raw OCIO
+// names stay in the item data and the tooltip.
+[[nodiscard]] inline QString displayViewText(const QString& display, const QString& view) {
+    const auto label = [](const QString& name) {
+        const std::string raw = name.toStdString();
+        const std::string_view text = color::displayViewLabel(raw);
+        return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+    };
+    const QString displayLabel = label(display);
+    const QString viewLabel = label(view);
+    return displayLabel == viewLabel ? viewLabel : QStringLiteral("%1 / %2").arg(displayLabel, viewLabel);
+}
+
 inline constexpr std::array<int, 5> kZoomPresets = {25, 50, 100, 200, 400};
 inline constexpr int kFixedZoomItemCount = 1 + static_cast<int>(kZoomPresets.size());
 inline constexpr std::array<const char*, 4> kResolutionNames = {"Auto", "Full", "Half", "Quarter"};

@@ -44,7 +44,7 @@ using namespace viewer_detail;
 namespace {
 // A menu that offers a dropdown's items, item for item, under `label(index)`, with the current
 // one checked. The dropdown stays the one source of truth: choosing a menu item chooses the
-// dropdown item, and the menu re-reads the dropdown whenever it opens or the choice changes.
+// dropdown item, and the menu re-reads the dropdown whenever its items or its choice change.
 void syncMirror(QMenu& menu, const kit::KDropdown& dropdown, const QString& objectPrefix,
                 const std::function<QString(int)>& label) {
     const int count = dropdown.count();
@@ -82,11 +82,14 @@ QMenu* mirrorMenu(const QString& title, const QString& objectName, kit::KDropdow
     const auto sync = [menu, dropdown, objectPrefix, label] {
         syncMirror(*menu, *dropdown, objectPrefix, label);
     };
-    QObject::connect(menu, &QMenu::aboutToShow, owner, sync);
+    // The menu follows the dropdown as it changes -- its items, its availability and its value --
+    // rather than re-reading it every time it is about to show.
+    QObject::connect(dropdown, &kit::KDropdown::itemsChanged, owner, sync);
     QObject::connect(dropdown, &kit::KDropdown::currentIndexChanged, owner, sync);
     QObject::connect(menu, &QMenu::triggered, owner, [menu, dropdown](QAction* action) {
+        // Choosing in the menu is the artist's choice, exactly as choosing in the dropdown is.
         if (menu->actions().contains(action))
-            dropdown->setCurrentIndex(action->data().toInt());
+            dropdown->chooseIndex(action->data().toInt());
     });
     sync();
     return menu;
@@ -148,9 +151,9 @@ void ViewerEditor::buildMenus() {
         tr("Display / View"), QStringLiteral("viewerDisplayViewMenu"), viewerDisplayView_,
         QStringLiteral("viewerDisplayView"),
         [this](const int index) {
-            // The full display and view, which the compact footer field leaves to its tooltip.
+            // The display and view by name, which the compact footer field may shorten.
             const auto pair = viewerDisplayView_->itemData(index).toStringList();
-            return pair.size() == 2 ? QStringLiteral("%1 / %2").arg(pair[0], pair[1])
+            return pair.size() == 2 ? displayViewText(pair[0], pair[1])
                                     : viewerDisplayView_->itemText(index);
         },
         this);
