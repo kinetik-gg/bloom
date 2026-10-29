@@ -1,4 +1,5 @@
 #include "node_editor_items.hpp"
+#include "value_presentation.hpp"
 #include <QCoreApplication>
 #include <QPainterPathStroker>
 #include <QShortcut>
@@ -387,20 +388,19 @@ document::NodeId destinationNodeId(const document::InputPortRef& input) {
         input);
 }
 
-// A kit numeric cell sized for a node card: no internal label column (KValueField's own is a fixed
-// 72px meant for a Properties-style row), because the card paints the row's name itself in a column
-// shared by every row.
+// A kit numeric cell sized for a node card: no internal label column (KValueField's own is meant
+// for a Properties-style row), because the card paints the row's name itself in a column shared by
+// every row. Its range, step, decimals, unit and display scale are the parameter's presentation.
 kit::KValueField* makeCardField(const QString& objectName, const QString& accessibleName,
-                                const double minimum, const double maximum, const int decimals,
-                                const QString& unit) {
+                                const std::string_view schemaKey,
+                                const document::ParameterValueKind kind,
+                                const std::size_t component, const std::string_view role) {
     auto* field = new kit::KValueField;
     field->setObjectName(objectName);
     field->setAccessibleName(accessibleName);
-    field->setRange(minimum, maximum);
-    field->setDecimals(decimals);
     field->setCompact(true);
-    field->setSingleStep(1.0);
-    field->setUnit(unit);
+    field->setOutlinedAtRest(true);
+    configureComponentField(*field, schemaKey, kind, component, role);
     field->resize(field->sizeHint());
     return field;
 }
@@ -1097,19 +1097,23 @@ void NodeItem::startRename() {
     renameProxy_->setZValue(5);
     const auto revision = session_->snapshot().revision();
     const auto composition = session_->compositionId();
-    connect(field, &QLineEdit::editingFinished, this,
-            [this, field, graphScene, layer = *layer, revision, composition] {
+    // The kit inline-edit policy (Escape confirms everywhere): every ending commits a changed
+    // name once, and an empty name is refused rather than reverted in silence.
+    auto& policy = field->useInlineEdit(kit::KInlineEdit::nameValidator());
+    connect(&policy, &kit::KInlineEdit::accepted, this,
+            [this, graphScene, layer = *layer, revision, composition,
+             original = title_](const QString& text) {
                 if (!renameProxy_ || !renameProxy_->isVisible())
                     return;
-                const auto name = field->text().toStdString();
                 retireRenameProxy();
+                if (text == original)
+                    return;
                 commands::Transaction transaction("Rename Layer", revision);
-                transaction.emplace<commands::RenameLayer>(composition, layer, name);
+                transaction.emplace<commands::RenameLayer>(composition, layer,
+                                                           text.toStdString());
                 (void)graphScene->submit(std::move(transaction));
             });
-    auto* cancel = new QShortcut(QKeySequence(Qt::Key_Escape), field);
-    cancel->setContext(Qt::WidgetShortcut);
-    connect(cancel, &QShortcut::activated, this, [this] { retireRenameProxy(); });
+    connect(&policy, &kit::KInlineEdit::refused, this, [this] { retireRenameProxy(); });
     field->setFocus(Qt::OtherFocusReason);
     field->selectAll();
 }
@@ -1202,8 +1206,8 @@ void NodeGroupItem::retireRenameProxy() {
 }
 
 // The same inline-editor shape a layer card's rename uses, over the frame's own title strip: commit
-// on editingFinished (which is what Enter in the field means), cancel on Escape, and one
-// RenameGroup transaction for the commit.
+// through the kit inline-edit policy (Return, Escape, Tab and focus loss all commit), and one
+// RenameGroup transaction for a changed name.
 void NodeGroupItem::startRename() {
     auto* graphScene = qobject_cast<NodeGraphicsScene*>(scene());
     if (session_ == nullptr || session_->composition() == nullptr || graphScene == nullptr ||
@@ -1230,19 +1234,19 @@ void NodeGroupItem::startRename() {
     renameProxy_->setZValue(5);
     const auto revision = session_->snapshot().revision();
     const auto composition = session_->compositionId();
-    connect(field, &QLineEdit::editingFinished, this,
-            [this, field, graphScene, revision, composition] {
+    auto& policy = field->useInlineEdit(kit::KInlineEdit::nameValidator());
+    connect(&policy, &kit::KInlineEdit::accepted, this,
+            [this, graphScene, revision, composition, original = title_](const QString& text) {
                 if (renameProxy_ == nullptr || !renameProxy_->isVisible())
                     return;
-                const auto name = field->text().toStdString();
                 retireRenameProxy();
+                if (text == original)
+                    return;
                 commands::Transaction transaction("Rename Node Group", revision);
-                transaction.emplace<commands::RenameGroup>(composition, id_, name);
+                transaction.emplace<commands::RenameGroup>(composition, id_, text.toStdString());
                 (void)graphScene->submit(std::move(transaction));
             });
-    auto* cancel = new QShortcut(QKeySequence(Qt::Key_Escape), field);
-    cancel->setContext(Qt::WidgetShortcut);
-    connect(cancel, &QShortcut::activated, this, [this] { retireRenameProxy(); });
+    connect(&policy, &kit::KInlineEdit::refused, this, [this] { retireRenameProxy(); });
     field->setFocus(Qt::OtherFocusReason);
     field->selectAll();
     update();

@@ -3,7 +3,9 @@
 #include "numeric_field_projection.hpp"
 #include "properties_sections.hpp"
 #include "properties_value_edits.hpp"
+#include "properties_text_edit.hpp"
 #include "text_font_choices.hpp"
+#include "value_presentation.hpp"
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -204,8 +206,10 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         slider_ = new kit::KSlider(controls);
         slider_->setObjectName(QStringLiteral("propertiesAudioLevelSlider"));
         slider_->setAccessibleName(label);
-        slider_->setRange(0.0, 2.0);
-        slider_->installEventFilter(this);
+        // The level slider is in stored units (0 to 2, unity at 1): its soft range IS the domain.
+        const auto level = document::parameterPresentation(definition_);
+        slider_->setRange(level.softMinimum, level.softMaximum);
+        properties::bindValueEdit(session_, *slider_, [this] { return parameter_; });
         layout->addWidget(slider_);
         connect(slider_, &kit::KSlider::valueChanged, this, [this] { commit(); });
     } else if (propertiesRowControl(definition_.schemaKey) == PropertiesRowControl::SegmentedEnum) {
@@ -267,17 +271,21 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         if (isFontSchema(definition_.schemaKey))
             QTimer::singleShot(50, this, &PropertiesRegistryRow::pollFontCatalogue);
     } else if (definition_.valueKind == document::ParameterValueKind::Integer) {
-        integer_ = new kit::KLineEdit(controls);
+        // A whole-number parameter is a value field in integer mode: it scrubs and steps in whole
+        // units, parses exactly across the int64 range, and edits live like every number.
+        integer_ = new kit::KValueField(controls);
         integer_->setObjectName(
             definition_.schemaKey == "bloom.image.start-frame"   ? "propertiesImageStartFrame"
             : definition_.schemaKey == "bloom.audio.start-frame" ? "propertiesAudioStartFrame"
                                                                  : "propertiesRegistryInteger");
         integer_->setAccessibleName(label);
-        integer_->setFixedSize(kit::px(kit::Size::PropertiesFieldWidth),
-                               kit::px(kit::Size::Control));
-        integer_->setFont(kit::font(kit::TypeRole::Value));
+        integer_->setCompact(true);
+        auto presentation = document::parameterPresentation(definition_);
+        presentation.kind = document::ParameterPresentationKind::Integer;
+        configureValueField(*integer_, presentation);
         layout->addWidget(integer_);
-        connect(integer_, &QLineEdit::editingFinished, this, [this] { commit(); });
+        properties::bindValueEdit(session_, *integer_, [this] { return parameter_; });
+        connect(integer_, &kit::KValueField::integerValueChanged, this, [this] { commit(); });
     } else if (definition_.valueKind == document::ParameterValueKind::Boolean) {
         toggle_ = new kit::KSwitch(controls);
         toggle_->setObjectName(definition_.schemaKey == "bloom.image.premultiply"
@@ -288,16 +296,15 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     } else if (definition_.valueKind == document::ParameterValueKind::String) {
         text_ = new kit::KLineEdit(controls);
         text_->setObjectName("propertiesRegistryString");
-        text_->setFont(kit::font(kit::TypeRole::Value));
-        text_->setFixedHeight(kit::px(kit::Size::Control));
+        text_->setTypeRole(kit::TypeRole::Value);
         layout->addWidget(text_, 1);
-        connect(text_, &QLineEdit::editingFinished, this, [this] { commit(); });
+        // The one text-parameter editor: live while typing, one commit when the edit ends.
+        properties::bindTextEdit(session_, *text_, [this] { return parameter_; });
         if (definition_.schemaKey == document::kTextParameterSchemaKey) {
-            multiline_ = new QPlainTextEdit(this);
+            multiline_ = new kit::KTextArea(this);
             multiline_->setObjectName("propertiesRegistryMultiline");
-            multiline_->setFont(kit::font(kit::TypeRole::Value));
             multiline_->setFixedHeight(kit::px(kit::Size::MultilineHeight));
-            multiline_->installEventFilter(this);
+            properties::bindTextEdit(session_, *multiline_, [this] { return parameter_; });
             multiline_->hide();
             auto* expand = new kit::KButton(controls);
             expand->setObjectName("propertiesRegistryTextExpand");
@@ -341,30 +348,18 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             auto* field = fields_[static_cast<std::size_t>(i)] = new kit::KValueField(controls);
             field->setObjectName("propertiesRegistryValue");
             field->setAccessibleName(label);
-            field->setRange(std::numeric_limits<double>::lowest(),
-                            std::numeric_limits<double>::max());
-            if (definition_.schemaKey == "bloom.blur.radius") {
-                field->setRange(0.0, document::kMaximumBlurRadiusPixels);
-                field->setUnit("px");
-            }
             field->setCompact(true);
+            // The parameter's own presentation, the same one its Timeline row and node card use.
+            configureValueField(*field, document::parameterPresentation(definition_));
+            if (definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey) {
+                // Properties reads letter spacing as a percentage of the font size (refresh());
+                // the stored value stays pixels, which is what the other surfaces show.
+                field->setUnit(QStringLiteral("%"));
+            }
             if (count == 3)
                 field->setMinimumWidth(kit::px(kit::Size::PropertiesComponentMinWidth));
-            field->setDecimals(2);
             field->setStepper(propertiesRowControl(definition_.schemaKey) ==
                               PropertiesRowControl::Stepper);
-            if (definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ||
-                definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey)
-                field->setUnit("%");
-            if (definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ||
-                definition_.schemaKey == document::kTextSizeParameterSchemaKey)
-                field->setRange(std::numeric_limits<double>::denorm_min(),
-                                definition_.schemaKey == document::kTextSizeParameterSchemaKey
-                                    ? document::kMaximumTextSizePixels
-                                    : std::numeric_limits<double>::max());
-            if (definition_.schemaKey == document::kSolidWidthParameterSchemaKey ||
-                definition_.schemaKey == document::kSolidHeightParameterSchemaKey)
-                field->setRange(1, std::numeric_limits<double>::max());
             if (count > 1)
                 field->setLabel(QString(color_ ? "RGBA" : "XYZ").mid(i, 1));
             if (count > 1 && !color_) {
@@ -410,20 +405,6 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     if (auto* controller = session_.assetController())
         connect(controller, &AssetController::changed, this, &PropertiesRegistryRow::refresh);
     refresh();
-}
-
-bool PropertiesRegistryRow::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == slider_ && !refreshing_) {
-        if (event->type() == QEvent::MouseButtonPress)
-            (void)session_.beginValueEdit(parameter_);
-        else if (event->type() == QEvent::MouseButtonRelease && session_.isValueEditing(parameter_))
-            (void)session_.commitValueEdit();
-    }
-    if (watched == multiline_ && event->type() == QEvent::FocusOut) {
-        text_->setText(multiline_->toPlainText());
-        commit();
-    }
-    return QWidget::eventFilter(watched, event);
 }
 
 void PropertiesRegistryRow::populateFontSelector() {
@@ -582,13 +563,14 @@ void PropertiesRegistryRow::refresh() {
             if (displayScale() != 0.0)
                 projectNumericField(
                     *fields_[0], *scalar, displayScale(),
-                    definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ||
-                            definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
+                    definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
                         ? QStringLiteral("%")
-                        : fields_[0]->unit(),
+                        : QString::fromStdString(document::parameterPresentation(definition_).unit),
                     definition_.schemaKey == document::kTextLineHeightParameterSchemaKey
                         ? QStringLiteral("×")
-                        : QStringLiteral("px"));
+                        : definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
+                        ? QStringLiteral("px")
+                        : QString::fromStdString(document::parameterPresentation(definition_).unit));
         if (auto* scalar = std::get_if<double>(&value); scalar && slider_)
             slider_->setValue(*scalar);
         if (auto* integer = std::get_if<std::int64_t>(&value)) {
@@ -607,7 +589,7 @@ void PropertiesRegistryRow::refresh() {
                     selector_->addItem(tr("Missing LUT"), QVariant::fromValue(*integer));
             }
             if (integer_)
-                integer_->setText(QString::number(static_cast<qlonglong>(*integer)));
+                integer_->setIntegerValue(*integer);
             if (fields_[0])
                 fields_[0]->setValue(static_cast<double>(*integer));
             if (segments_)
@@ -721,7 +703,9 @@ double PropertiesRegistryRow::displayScale() const {
                         size && *size > 0)
                         return 100.0 / *size;
     }
-    return definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey ? 0.0 : 1.0;
+    return definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
+               ? 0.0
+               : document::parameterPresentation(definition_).displayScale;
 }
 
 void PropertiesRegistryRow::commit(const std::optional<std::size_t> component) {
@@ -764,15 +748,9 @@ void PropertiesRegistryRow::commit(const std::optional<std::size_t> component) {
         value = slider_->value();
     else if (selector_)
         value = selector_->itemData(selector_->currentIndex()).value<std::int64_t>();
-    else if (integer_) {
-        bool valid = false;
-        const auto integer = integer_->text().toLongLong(&valid);
-        if (!valid) {
-            refresh();
-            return;
-        }
-        value = static_cast<std::int64_t>(integer);
-    } else if (toggle_)
+    else if (integer_)
+        value = integer_->integerValue();
+    else if (toggle_)
         value = toggle_->isChecked();
     else if (text_)
         value = text_->text().toStdString();
@@ -791,7 +769,7 @@ void PropertiesRegistryRow::commit(const std::optional<std::size_t> component) {
     else if (definition_.valueKind == document::ParameterValueKind::Integer)
         value = static_cast<std::int64_t>(fields_[0]->value());
     else
-        value = numericFieldValue(*fields_[0], displayScale());
+        value = numericFieldValue(*fields_[0]);
     (void)session_.setParameterValue(parameter_, value, tr("Set Parameter"));
     refresh();
 }

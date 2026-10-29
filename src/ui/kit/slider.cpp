@@ -1,5 +1,6 @@
 #include <bloom/ui/kit/slider.hpp>
 
+#include <bloom/ui/kit/accessibility.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 
@@ -7,11 +8,15 @@
 #include <QEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QAccessible>
+#include <QFocusEvent>
 #include <QPainter>
+#include <QSignalBlocker>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace bloom::ui::kit {
 namespace {
@@ -22,6 +27,7 @@ constexpr int kHandleDiameter = px(Size::SliderHandle);
 } // namespace
 
 KSlider::KSlider(QWidget* parent) : QWidget(parent) {
+    installKitAccessibility();
     setFixedHeight(px(Size::Control));
     ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kSlider"));
@@ -45,17 +51,56 @@ double KSlider::maximum() const noexcept { return maximum_; }
 
 double KSlider::value() const noexcept { return value_; }
 
-void KSlider::setValue(const double value) { commitValue(value); }
+void KSlider::setValue(const double value) {
+    // A drag owns the handle until it ends, as a scrub owns a value field.
+    if (dragging_)
+        return;
+    commitValue(value);
+}
 
 void KSlider::commitValue(const double value) {
+    if (!std::isfinite(value))
+        return;
     const double clamped = std::clamp(value, minimum_, maximum_);
     if (clamped == value_) {
         return;
     }
     value_ = clamped;
     update();
+    if (QAccessible::isActive()) {
+        QAccessibleValueChangeEvent change(this, value_);
+        QAccessible::updateAccessibility(&change);
+    }
     Q_EMIT valueChanged(value_);
 }
+
+void KSlider::beginInteraction() {
+    if (interactionActive_)
+        return;
+    interactionActive_ = true;
+    interactionBase_ = value_;
+    Q_EMIT editStarted();
+}
+
+void KSlider::finishInteraction(const bool keep) {
+    if (!interactionActive_)
+        return;
+    interactionActive_ = false;
+    dragging_ = false;
+    keyStepping_ = false;
+    update();
+    if (keep) {
+        Q_EMIT editFinished();
+        return;
+    }
+    {
+        const QSignalBlocker blocker(this);
+        commitValue(interactionBase_);
+    }
+    Q_EMIT editCancelled();
+}
+
+void KSlider::cancelEdit() { finishInteraction(false); }
 
 double KSlider::normalizedValue() const { return (value_ - minimum_) / (maximum_ - minimum_); }
 
@@ -117,17 +162,26 @@ void KSlider::mousePressEvent(QMouseEvent* event) {
         QWidget::mousePressEvent(event);
         return;
     }
+    beginInteraction();
     dragging_ = true;
-    // Pressing anywhere on the track takes the value there immediately rather than nudging toward
-    // it: the artist asked for that value by pointing at it.
-    commitValue(valueForPosition(event->position().x()));
+    const QRectF handle = handleRect();
+    const qreal x = event->position().x();
+    if (x >= handle.left() && x <= handle.right()) {
+        // Pressing the handle grabs it where it was pressed: nothing moves until the pointer does.
+        grabOffset_ = x - handle.center().x();
+    } else {
+        // Pressing the bare track takes the value there immediately rather than nudging toward
+        // it: the artist asked for that value by pointing at it.
+        grabOffset_ = 0.0;
+        commitValue(valueForPosition(x));
+    }
     update();
     event->accept();
 }
 
 void KSlider::mouseMoveEvent(QMouseEvent* event) {
     if (dragging_) {
-        commitValue(valueForPosition(event->position().x()));
+        commitValue(valueForPosition(event->position().x() - grabOffset_));
         event->accept();
         return;
     }
@@ -136,8 +190,7 @@ void KSlider::mouseMoveEvent(QMouseEvent* event) {
 
 void KSlider::mouseReleaseEvent(QMouseEvent* event) {
     if (dragging_ && event->button() == Qt::LeftButton) {
-        dragging_ = false;
-        update();
+        finishInteraction(true);
         event->accept();
         return;
     }
@@ -146,37 +199,103 @@ void KSlider::mouseReleaseEvent(QMouseEvent* event) {
 
 void KSlider::keyPressEvent(QKeyEvent* event) {
     const double span = maximum_ - minimum_;
+    std::optional<double> target;
     switch (event->key()) {
     case Qt::Key_Left:
     case Qt::Key_Down:
-        commitValue(value_ - span * kKeyStepFraction);
-        event->accept();
-        return;
+        target = value_ - span * kKeyStepFraction;
+        break;
     case Qt::Key_Right:
     case Qt::Key_Up:
-        commitValue(value_ + span * kKeyStepFraction);
-        event->accept();
-        return;
+        target = value_ + span * kKeyStepFraction;
+        break;
     case Qt::Key_PageDown:
-        commitValue(value_ - span * kKeyStepFraction * kCoarseStepMultiple);
-        event->accept();
-        return;
+        target = value_ - span * kKeyStepFraction * kCoarseStepMultiple;
+        break;
     case Qt::Key_PageUp:
-        commitValue(value_ + span * kKeyStepFraction * kCoarseStepMultiple);
-        event->accept();
-        return;
+        target = value_ + span * kKeyStepFraction * kCoarseStepMultiple;
+        break;
     case Qt::Key_Home:
-        commitValue(minimum_);
-        event->accept();
-        return;
+        target = minimum_;
+        break;
     case Qt::Key_End:
-        commitValue(maximum_);
-        event->accept();
-        return;
+        target = maximum_;
+        break;
+    case Qt::Key_Escape:
+        // Escape confirms a key edit in progress; at rest it belongs to whatever is around.
+        if (keyStepping_) {
+            finishInteraction(true);
+            event->accept();
+            return;
+        }
+        break;
     default:
         break;
     }
+    if (target.has_value() && isEnabled()) {
+        // Held or repeated keys are one edit, ending on the release.
+        if (!interactionActive_) {
+            beginInteraction();
+            keyStepping_ = true;
+        }
+        commitValue(*target);
+        event->accept();
+        return;
+    }
     QWidget::keyPressEvent(event);
+}
+
+void KSlider::keyReleaseEvent(QKeyEvent* event) {
+    if (keyStepping_ && !event->isAutoRepeat()) {
+        switch (event->key()) {
+        case Qt::Key_Left:
+        case Qt::Key_Right:
+        case Qt::Key_Up:
+        case Qt::Key_Down:
+        case Qt::Key_PageUp:
+        case Qt::Key_PageDown:
+        case Qt::Key_Home:
+        case Qt::Key_End:
+            finishInteraction(true);
+            event->accept();
+            return;
+        default:
+            break;
+        }
+    }
+    QWidget::keyReleaseEvent(event);
+}
+
+void KSlider::focusOutEvent(QFocusEvent* event) {
+    if (keyStepping_)
+        finishInteraction(true);
+    QWidget::focusOutEvent(event);
+}
+
+bool KSlider::event(QEvent* event) {
+    switch (event->type()) {
+    case QEvent::ShortcutOverride: {
+        // A focused slider steps with the arrows, so the frame-step shortcuts stand down.
+        const int key = static_cast<QKeyEvent*>(event)->key();
+        if (hasFocus() && (key == Qt::Key_Left || key == Qt::Key_Right || key == Qt::Key_Up ||
+                           key == Qt::Key_Down || key == Qt::Key_PageUp ||
+                           key == Qt::Key_PageDown || key == Qt::Key_Home || key == Qt::Key_End ||
+                           (key == Qt::Key_Escape && keyStepping_))) {
+            event->accept();
+            return true;
+        }
+        break;
+    }
+    case QEvent::UngrabMouse:
+    case QEvent::WindowDeactivate:
+        // The drag ends where it is, as a commit, when the pointer or the window goes away.
+        if (dragging_ || (event->type() == QEvent::WindowDeactivate && keyStepping_))
+            finishInteraction(true);
+        break;
+    default:
+        break;
+    }
+    return QWidget::event(event);
 }
 
 void KSlider::enterEvent(QEnterEvent* event) {
@@ -196,7 +315,7 @@ void KSlider::leaveEvent(QEvent* event) {
 void KSlider::changeEvent(QEvent* event) {
     if (event->type() == QEvent::EnabledChange && !isEnabled()) {
         hovered_ = false;
-        dragging_ = false;
+        finishInteraction(true);
     }
     QWidget::changeEvent(event);
 }

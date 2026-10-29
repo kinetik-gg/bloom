@@ -1,6 +1,7 @@
 #include "node_editor_items.hpp"
 #include "numeric_field_projection.hpp"
 #include "properties_value_edits.hpp"
+#include "value_presentation.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <memory>
@@ -229,6 +230,7 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     bindCommits();
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &PropertiesEditor::rebuild);
+    connect(&session_, &QObject::destroyed, this, [this] { sessionGone_ = true; });
     connect(&session_, &CompositionSession::liveValueChanged, this,
             &PropertiesEditor::refreshLiveValues);
     connect(&session_, &CompositionSession::compositionChanged, this, &PropertiesEditor::rebuild);
@@ -298,56 +300,14 @@ void PropertiesEditor::commitRotationFromControls() {
     (void)session_.setSelectedRotation(rotation_->value());
 }
 
-bool PropertiesEditor::eventFilter(QObject* watched, QEvent* event) {
-    const bool textField =
-        watched == textContent_ || watched->objectName() == "propertiesTextMultiline";
-    if (textField && !rebuilding_ && watched->property("ownsTextEdit").toBool()) {
-        const auto* parameter = session_.parameterForSelection(document::kTextParameterRole);
-        if (parameter && session_.isValueEditing(parameter->id)) {
-            if (event->type() == QEvent::KeyPress) {
-                const auto* key = static_cast<QKeyEvent*>(event);
-                if (key->key() == Qt::Key_Escape) {
-                    watched->setProperty("ownsTextEdit", false);
-                    const auto parameterId = parameter->id;
-                    session_.cancelValueEdit();
-                    if (auto* multiline = qobject_cast<QPlainTextEdit*>(watched)) {
-                        const QSignalBlocker blocker(multiline);
-                        multiline->setPlainText(
-                            session_.effectiveStringValue(parameterId).value_or(QString{}));
-                    }
-                    return true;
-                }
-                if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
-                    (watched == textContent_ || key->modifiers().testFlag(Qt::ControlModifier) ||
-                     key->modifiers().testFlag(Qt::MetaModifier))) {
-                    watched->setProperty("ownsTextEdit", false);
-                    (void)session_.commitValueEdit();
-                    return true;
-                }
-            }
-            if (event->type() == QEvent::FocusOut) {
-                watched->setProperty("ownsTextEdit", false);
-                (void)session_.commitValueEdit();
-            }
-        }
-    }
-    if (!rebuilding_ && (watched == opacitySlider_ || watched == rotationSlider_)) {
-        const auto role = watched == opacitySlider_ ? document::kOpacityParameterRole
-                                                    : document::kRotationParameterRole;
-        const auto* parameter = session_.parameterForSelection(role);
-        if (parameter && event->type() == QEvent::MouseButtonPress)
-            (void)session_.beginValueEdit(parameter->id);
-        if (parameter && session_.isValueEditing(parameter->id)) {
-            if (event->type() == QEvent::MouseButtonRelease || event->type() == QEvent::FocusOut)
-                (void)session_.commitValueEdit();
-            else if (event->type() == QEvent::KeyPress &&
-                     static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
-                session_.cancelValueEdit();
-                return true;
-            }
-        }
-    }
-    return QWidget::eventFilter(watched, event);
+PropertiesEditor::~PropertiesEditor() {
+    // Nothing in this panel listens to the session once it starts to go: a cell torn down with a
+    // live edit cancels it, and the session's answer must not reach a half-destroyed panel.
+    if (sessionGone_)
+        return;
+    disconnect(&session_, nullptr, this, nullptr);
+    for (auto* object : findChildren<QObject*>())
+        disconnect(&session_, nullptr, object, nullptr);
 }
 
 void PropertiesEditor::refreshLiveValues() { refreshValues(); }
@@ -494,8 +454,8 @@ void PropertiesEditor::configureMergeInputs() {
         });
         auto* opacity = new kit::KValueField(row);
         opacity->setObjectName(QStringLiteral("mergeInputOpacity"));
-        opacity->setRange(0, 100);
-        opacity->setUnit(QStringLiteral("%"));
+        configureValueField(*opacity, document::kOpacityParameterSchemaKey,
+                            document::ParameterValueKind::Float64);
         document::ParameterId opacityId;
         if (boundary)
             for (const auto& binding : source->parameters)

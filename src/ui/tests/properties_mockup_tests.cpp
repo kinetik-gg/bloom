@@ -160,7 +160,8 @@ void run() {
            "checked switch is brighter than unchecked");
     expect(on.pixelColor(trackFill).blue() > on.pixelColor(trackFill).red(),
            "checked switch uses accent blue");
-    expect(opacity->displayedValue() == "100", "whole values omit decimal zeroes");
+    // Lane B: compact cells keep their configured places, so a column's decimal points line up.
+    expect(opacity->displayedValue() == "100.0", "whole values keep their configured places");
     auto* parent = panel->findChild<ui::kit::KDropdown*>("propertiesParentDropdown");
     expect(parent && parent->isEnabled() && parent->currentText() == "None" &&
                !parent->toolTip().isEmpty(),

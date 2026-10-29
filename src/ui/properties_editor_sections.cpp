@@ -19,6 +19,8 @@
 #include "composition_editor_support.hpp"
 #include "properties_anchor_grid.hpp"
 #include "properties_sections.hpp"
+#include "properties_text_edit.hpp"
+#include "value_presentation.hpp"
 #include "properties_value_edits.hpp"
 
 #include <bloom/ui/composition_authoring.hpp>
@@ -80,9 +82,6 @@ std::optional<document::LayerId> contextualLayerId(const CompositionSession& ses
     }
     return session.selection().contextualLayer;
 }
-
-// These parameters accept finite binary64 values; presentation must not impose a document limit.
-constexpr double kFiniteMaximum = std::numeric_limits<double>::max();
 
 kit::KSwitch* makeToggle(QWidget* parent, const QString& objectName, const QString& accessible) {
     auto* toggle = new kit::KSwitch(parent);
@@ -166,19 +165,15 @@ void PropertiesEditor::buildObjectSection(QVBoxLayout* layout) {
     }
     addRow(rows, body, makeRowLabel(tr("Blending Mode"), body), nullptr, blendMode_);
 
-    opacity_ = makeValueCell({.objectName = QStringLiteral("opacityEditor"),
-                              .accessibleName = tr("Opacity"),
-                              .subLabel = {},
-                              .minimum = 0.0,
-                              .maximum = 100.0,
-                              .decimals = 1,
-                              .singleStep = 1.0,
-                              .unit = QStringLiteral("%")},
-                             body);
+    opacity_ = properties::makeParameterCell(QStringLiteral("opacityEditor"), tr("Opacity"), {},
+                                             document::kOpacityParameterSchemaKey,
+                                             document::ParameterValueKind::Float64, body);
     opacitySlider_ = new kit::KSlider(body);
     opacitySlider_->setObjectName(QStringLiteral("opacitySlider"));
     opacitySlider_->setAccessibleName(tr("Opacity"));
-    opacitySlider_->setRange(0.0, 100.0);
+    configureSlider(*opacitySlider_,
+                    document::parameterPresentation(document::kOpacityParameterSchemaKey,
+                                                    document::ParameterValueKind::Float64));
     opacityKeyframe_ = makeKeyframeDiamond(session_, document::kOpacityParameterRole, body);
     // The slider and the cell are BOTH direct children of the row, not a nested group: every
     // projection assertion in the suite reaches an unpaired row through exactly one parentWidget()
@@ -195,24 +190,15 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     auto* body = section->body();
     auto* rows = section->bodyLayout();
 
-    const ValueCellSpec pixelCell{.objectName = {},
-                                  .accessibleName = {},
-                                  .subLabel = {},
-                                  .minimum = -kFiniteMaximum,
-                                  .maximum = kFiniteMaximum,
-                                  .decimals = 2,
-                                  .singleStep = 1.0,
-                                  .unit = QStringLiteral("px")};
-
-    auto positionSpec = pixelCell;
-    positionSpec.objectName = QStringLiteral("positionXEditor");
-    positionSpec.accessibleName = tr("Position X");
-    positionSpec.subLabel = QStringLiteral("X");
-    positionX_ = makeValueCell(positionSpec, body);
-    positionSpec.objectName = QStringLiteral("positionYEditor");
-    positionSpec.accessibleName = tr("Position Y");
-    positionSpec.subLabel = QStringLiteral("Y");
-    positionY_ = makeValueCell(positionSpec, body);
+    const auto vectorCell = [body](const QString& name, const QString& accessible,
+                                   const QString& axis, const std::string_view schema) {
+        return properties::makeParameterCell(name, accessible, axis, schema,
+                                             document::ParameterValueKind::Vec2d, body);
+    };
+    positionX_ = vectorCell(QStringLiteral("positionXEditor"), tr("Position X"),
+                            QStringLiteral("X"), document::kPositionParameterSchemaKey);
+    positionY_ = vectorCell(QStringLiteral("positionYEditor"), tr("Position Y"),
+                            QStringLiteral("Y"), document::kPositionParameterSchemaKey);
     positionLink_ = qobject_cast<kit::KButton*>(properties::makeLinkToggle(
         QStringLiteral("positionLinkToggle"),
         tr("Link X and Y: moving one axis moves the other by the same amount"), body));
@@ -232,19 +218,15 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     // that clamped at 360 would silently refuse an authored 450. The slider beside it spans exactly
     // one turn each way and pins at its ends -- it is the coarse gesture, and the cell stays the
     // authority for a wound value the slider cannot reach.
-    rotation_ = makeValueCell({.objectName = QStringLiteral("rotationEditor"),
-                               .accessibleName = tr("Rotation"),
-                               .subLabel = {},
-                               .minimum = -kFiniteMaximum,
-                               .maximum = kFiniteMaximum,
-                               .decimals = 2,
-                               .singleStep = 1.0,
-                               .unit = QString::fromUtf8("°")},
-                              body);
+    rotation_ = properties::makeParameterCell(QStringLiteral("rotationEditor"), tr("Rotation"), {},
+                                              document::kRotationParameterSchemaKey,
+                                              document::ParameterValueKind::Float64, body);
     rotationSlider_ = new kit::KSlider(body);
     rotationSlider_->setObjectName(QStringLiteral("rotationSlider"));
     rotationSlider_->setAccessibleName(tr("Rotation"));
-    rotationSlider_->setRange(-360.0, 360.0);
+    configureSlider(*rotationSlider_,
+                    document::parameterPresentation(document::kRotationParameterSchemaKey,
+                                                    document::ParameterValueKind::Float64));
     rotationKeyframe_ = makeKeyframeDiamond(session_, document::kRotationParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Rotation"), body), rotationKeyframe_,
            {rotationSlider_, rotation_});
@@ -252,23 +234,10 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
     // Scale is authored as a PERCENTAGE and stored as a unitless factor, exactly the way Opacity is
     // authored as a percentage and stored in [0, 1]. Negative percentages are reachable because a
     // negative factor is a legitimate mirror of the axis.
-    const ValueCellSpec scaleCell{.objectName = {},
-                                  .accessibleName = {},
-                                  .subLabel = {},
-                                  .minimum = -kFiniteMaximum,
-                                  .maximum = kFiniteMaximum,
-                                  .decimals = 2,
-                                  .singleStep = 1.0,
-                                  .unit = QStringLiteral("%")};
-    auto scaleSpec = scaleCell;
-    scaleSpec.objectName = QStringLiteral("scaleXEditor");
-    scaleSpec.accessibleName = tr("Scale X");
-    scaleSpec.subLabel = QStringLiteral("X");
-    scaleX_ = makeValueCell(scaleSpec, body);
-    scaleSpec.objectName = QStringLiteral("scaleYEditor");
-    scaleSpec.accessibleName = tr("Scale Y");
-    scaleSpec.subLabel = QStringLiteral("Y");
-    scaleY_ = makeValueCell(scaleSpec, body);
+    scaleX_ = vectorCell(QStringLiteral("scaleXEditor"), tr("Scale X"), QStringLiteral("X"),
+                         document::kScaleParameterSchemaKey);
+    scaleY_ = vectorCell(QStringLiteral("scaleYEditor"), tr("Scale Y"), QStringLiteral("Y"),
+                         document::kScaleParameterSchemaKey);
     scaleLink_ = qobject_cast<kit::KButton*>(properties::makeLinkToggle(
         QStringLiteral("scaleLinkToggle"), tr("Constrain proportions"), body));
     // On by default: constraining proportions is what an artist expects of a scale pair, and the
@@ -287,15 +256,10 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
 
     // The anchor is in the same pixel space Position is, so it takes Position's range, decimals,
     // step, and unit verbatim.
-    auto anchorSpec = pixelCell;
-    anchorSpec.objectName = QStringLiteral("anchorXEditor");
-    anchorSpec.accessibleName = tr("Anchor X");
-    anchorSpec.subLabel = QStringLiteral("X");
-    anchorX_ = makeValueCell(anchorSpec, body);
-    anchorSpec.objectName = QStringLiteral("anchorYEditor");
-    anchorSpec.accessibleName = tr("Anchor Y");
-    anchorSpec.subLabel = QStringLiteral("Y");
-    anchorY_ = makeValueCell(anchorSpec, body);
+    anchorX_ = vectorCell(QStringLiteral("anchorXEditor"), tr("Anchor X"), QStringLiteral("X"),
+                          document::kAnchorParameterSchemaKey);
+    anchorY_ = vectorCell(QStringLiteral("anchorYEditor"), tr("Anchor Y"), QStringLiteral("Y"),
+                          document::kAnchorParameterSchemaKey);
     anchorKeyframe_ = makeKeyframeDiamond(session_, document::kAnchorParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Anchor"), body), anchorKeyframe_,
            makeCellGroup(
@@ -328,31 +292,21 @@ void PropertiesEditor::buildSolidSection(QVBoxLayout* layout) {
     // Task P3 and FORMAL AMENDMENT 1 (2026-09-12): four kit::KValueField cells, one per channel,
     // UNBOUNDED in practice -- they never clip negative or HDR channels, display the exact stored
     // value, and commit exactly what was typed or scrubbed.
-    const ValueCellSpec channel{.objectName = {},
-                                .accessibleName = {},
-                                .subLabel = {},
-                                .minimum = -kFiniteMaximum,
-                                .maximum = kFiniteMaximum,
-                                .decimals = 3,
-                                .singleStep = 0.01,
-                                .unit = {}};
-    auto spec = channel;
-    spec.objectName = QStringLiteral("solidColorRedEditor");
-    spec.accessibleName = tr("Solid color red");
-    spec.subLabel = QStringLiteral("R");
-    solidColorRed_ = makeValueCell(spec, body);
-    spec.objectName = QStringLiteral("solidColorGreenEditor");
-    spec.accessibleName = tr("Solid color green");
-    spec.subLabel = QStringLiteral("G");
-    solidColorGreen_ = makeValueCell(spec, body);
-    spec.objectName = QStringLiteral("solidColorBlueEditor");
-    spec.accessibleName = tr("Solid color blue");
-    spec.subLabel = QStringLiteral("B");
-    solidColorBlue_ = makeValueCell(spec, body);
-    spec.objectName = QStringLiteral("solidColorAlphaEditor");
-    spec.accessibleName = tr("Solid color alpha");
-    spec.subLabel = QStringLiteral("A");
-    solidColorAlpha_ = makeValueCell(spec, body);
+    const auto channel = [body](const QString& name, const QString& accessible,
+                                const QString& letter, const std::size_t component) {
+        return properties::makeParameterCell(name, accessible, letter,
+                                             document::kSolidColorParameterSchemaKey,
+                                             document::ParameterValueKind::Color4d, body,
+                                             component);
+    };
+    solidColorRed_ = channel(QStringLiteral("solidColorRedEditor"), tr("Solid color red"),
+                             QStringLiteral("R"), 0);
+    solidColorGreen_ = channel(QStringLiteral("solidColorGreenEditor"), tr("Solid color green"),
+                               QStringLiteral("G"), 1);
+    solidColorBlue_ = channel(QStringLiteral("solidColorBlueEditor"), tr("Solid color blue"),
+                              QStringLiteral("B"), 2);
+    solidColorAlpha_ = channel(QStringLiteral("solidColorAlphaEditor"), tr("Solid color alpha"),
+                               QStringLiteral("A"), 3);
 
     solidColorKeyframe_ = makeKeyframeDiamond(session_, document::kSolidColorParameterRole, body);
     solidColorChip_ = new kit::KColorChip(body);
@@ -391,29 +345,21 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     auto* body = section->body();
     auto* rows = section->bodyLayout();
 
-    // The kit has no string field, so the content cell is a plain QLineEdit styled by the
-    // application palette. It commits on editingFinished, not on textChanged: a per-keystroke
-    // commit would make typing one word a dozen undo steps and a dozen recompiles.
+    // The kit text field, bound by the one text-parameter editor (properties::bindTextEdit): typing
+    // previews live, and Return, Escape, Tab or focus loss commit ONE Edit Text transaction -- never
+    // one per keystroke.
     textContent_ = new kit::KLineEdit(body);
     textContent_->setObjectName("textContentEditor");
-    textContent_->installEventFilter(this);
     textContent_->setAccessibleName(tr("Text content"));
-    textContent_->setFont(kit::font(kit::TypeRole::Value));
-    textContent_->setFixedHeight(kit::px(kit::Size::Control));
+    textContent_->setTypeRole(kit::TypeRole::Value);
     textContent_->setClearButtonEnabled(false);
     addRow(rows, body, makeRowLabel(tr("Text"), body), nullptr, textContent_);
 
     // The range is the text size schema's own domain, not a spelled UI guess: the document refuses
     // anything outside it, so a cell that could scrub past it would only produce refusals.
-    textSize_ = makeValueCell({.objectName = QStringLiteral("textSizeEditor"),
-                               .accessibleName = tr("Text size"),
-                               .subLabel = {},
-                               .minimum = std::numeric_limits<double>::denorm_min(),
-                               .maximum = document::kMaximumTextSizePixels,
-                               .decimals = 1,
-                               .singleStep = 1.0,
-                               .unit = QStringLiteral("px")},
-                              body);
+    textSize_ = properties::makeParameterCell(QStringLiteral("textSizeEditor"), tr("Text size"), {},
+                                              document::kTextSizeParameterSchemaKey,
+                                              document::ParameterValueKind::Float64, body);
     textSize_->setStepper(true);
     textSizeKeyframe_ = makeKeyframeDiamond(session_, document::kTextSizeParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Font Size"), body), textSizeKeyframe_, textSize_);
@@ -424,12 +370,10 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     textColorKeyframe_ = makeKeyframeDiamond(session_, document::kTextColorParameterRole, body);
     for (std::size_t index = 0; index < textColorFields_.size(); ++index) {
         const auto channel = QString("RGBA").mid(static_cast<qsizetype>(index), 1);
-        textColorFields_[index] = makeValueCell({.objectName = "propertiesTextColor" + channel,
-                                                 .accessibleName = tr("Text color %1").arg(channel),
-                                                 .subLabel = channel,
-                                                 .singleStep = 0.01,
-                                                 .unit = {}},
-                                                body);
+        textColorFields_[index] = properties::makeParameterCell(
+            "propertiesTextColor" + channel, tr("Text color %1").arg(channel), channel,
+            document::kTextColorParameterSchemaKey, document::ParameterValueKind::Color4d, body,
+            index);
         bindCell(textColorFields_[index], document::kTextColorParameterRole,
                  static_cast<document::AnimationComponent>(
                      static_cast<std::size_t>(document::AnimationComponent::Red) + index),
@@ -462,10 +406,9 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     multilineRow->setProperty("expanded", false);
     auto* multilineLayout = new QVBoxLayout(multilineRow);
     multilineLayout->setContentsMargins(0, 0, 0, 0);
-    auto* multiline = new QPlainTextEdit(multilineRow);
+    auto* multiline = new kit::KTextArea(multilineRow);
     multiline->setObjectName("propertiesTextMultiline");
     multiline->setFixedHeight(kit::px(kit::Size::MultilineHeight));
-    multiline->installEventFilter(this);
     auto* expand = new kit::KButton(body);
     expand->setObjectName("propertiesTextExpand");
     expand->setIconId(kit::IconId::CaretRight);
@@ -493,13 +436,9 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
             multiline->setPlainText(textContent_->text());
         }
     });
-    connect(multiline, &QPlainTextEdit::textChanged, this, [this, multiline] {
+    properties::bindTextEdit(session_, *multiline, [this] {
         const auto* parameter = session_.parameterForSelection(document::kTextParameterRole);
-        if (!rebuilding_ && multiline->hasFocus() && parameter &&
-            session_.beginTextEdit(parameter->id)) {
-            multiline->setProperty("ownsTextEdit", true);
-            (void)session_.updateValueEdit(multiline->toPlainText().toStdString());
-        }
+        return rebuilding_ || parameter == nullptr ? document::ParameterId{} : parameter->id;
     });
     connect(expand, &kit::KButton::toggled, multiline, [this, multiline](bool expanded) {
         if (expanded) {
@@ -676,8 +615,8 @@ void PropertiesEditor::bindCommits() {
         const auto authoritative = session_.effectiveVec2Value(document::kScaleParameterRole);
         if (!authoritative)
             return;
-        double x = fromX ? numericFieldValue(*scaleX_, 100) : authoritative->x;
-        double y = fromX ? authoritative->y : numericFieldValue(*scaleY_, 100);
+        double x = fromX ? numericFieldValue(*scaleX_) : authoritative->x;
+        double y = fromX ? authoritative->y : numericFieldValue(*scaleY_);
         if (scaleLink_->isChecked()) {
             if (const auto current = session_.effectiveVec2Value(document::kScaleParameterRole)) {
                 // A zero axis carries no ratio to preserve, so proportional linking falls back to
@@ -701,8 +640,15 @@ void PropertiesEditor::bindCommits() {
     bindCell(opacity_, document::kOpacityParameterRole, std::nullopt,
              [this] { commitOpacityFromControls(); });
 
+    // A slider keeps the kit edit-session contract, so it binds exactly as a value field does: one
+    // drag or one run of keys is one undo entry.
     const auto bindSlider = [this](kit::KSlider* slider, kit::KValueField* mirror, auto commit) {
-        slider->installEventFilter(this);
+        const auto role = slider == opacitySlider_ ? document::kOpacityParameterRole
+                                                   : document::kRotationParameterRole;
+        properties::bindValueEdit(session_, *slider, [this, role] {
+            const auto* parameter = session_.parameterForSelection(role);
+            return parameter ? parameter->id : document::ParameterId{};
+        });
         connect(slider, &kit::KSlider::valueChanged, this, [this, slider, mirror, commit] {
             if (rebuilding_) {
                 return;
@@ -767,26 +713,9 @@ void PropertiesEditor::bindCommits() {
     bindCell(solidColorAlpha_, document::kSolidColorParameterRole,
              document::AnimationComponent::Alpha, commitSolidColor);
 
-    connect(textContent_, &QLineEdit::textEdited, this, [this](const QString& text) {
+    properties::bindTextEdit(session_, *textContent_, [this] {
         const auto* parameter = session_.parameterForSelection(document::kTextParameterRole);
-        if (!rebuilding_ && parameter && session_.beginTextEdit(parameter->id)) {
-            textContent_->setProperty("ownsTextEdit", true);
-            (void)session_.updateValueEdit(text.toStdString());
-        }
-    });
-    connect(textContent_, &QLineEdit::editingFinished, this, [this] {
-        const auto* parameter = session_.parameterForSelection(document::kTextParameterRole);
-        if (rebuilding_ || !parameter)
-            return;
-        const bool ownsEdit = textContent_->property("ownsTextEdit").toBool();
-        textContent_->setProperty("ownsTextEdit", false);
-        if (session_.isValueEditing(parameter->id) && !ownsEdit)
-            return;
-        if ((ownsEdit || session_.effectiveStringValue(parameter->id) != textContent_->text()) &&
-            session_.beginTextEdit(parameter->id)) {
-            (void)session_.updateValueEdit(textContent_->text().toStdString());
-            (void)session_.commitValueEdit();
-        }
+        return rebuilding_ || parameter == nullptr ? document::ParameterId{} : parameter->id;
     });
     bindCell(textSize_, document::kTextSizeParameterRole, std::nullopt,
              [this] { (void)session_.setSelectedTextSize(textSize_->value()); });

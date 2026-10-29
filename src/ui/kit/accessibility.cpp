@@ -2,6 +2,9 @@
 
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
+#include <bloom/ui/kit/range_selector.hpp>
+#include <bloom/ui/kit/slider.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 
 #include <QAccessible>
 #include <QAccessibleWidget>
@@ -152,6 +155,137 @@ class RadioGroupAccessible final : public QAccessibleWidget {
     mutable QHash<int, QAccessible::Id> children_;
 };
 
+// KValueField as a spin box: its name, its value with the unit, and the value interface (current,
+// minimum, maximum, step). Setting the value through assistive technology is one complete edit.
+class ValueFieldAccessible final : public QAccessibleWidget, public QAccessibleValueInterface {
+  public:
+    explicit ValueFieldAccessible(KValueField* field)
+        : QAccessibleWidget(field, QAccessible::SpinBox) {}
+
+    [[nodiscard]] KValueField* field() const { return static_cast<KValueField*>(widget()); }
+
+    void* interface_cast(const QAccessible::InterfaceType type) override {
+        if (type == QAccessible::ValueInterface)
+            return static_cast<QAccessibleValueInterface*>(this);
+        return QAccessibleWidget::interface_cast(type);
+    }
+
+    [[nodiscard]] QString text(const QAccessible::Text type) const override {
+        if (type == QAccessible::Value) {
+            const auto unit = field()->unit();
+            const auto value = field()->displayedValue();
+            return unit.isEmpty() || field()->isMixed() ? value : value + QLatin1Char(' ') + unit;
+        }
+        if (type == QAccessible::Name) {
+            const QString name = QAccessibleWidget::text(type);
+            return name.isEmpty() ? field()->label() : name;
+        }
+        return QAccessibleWidget::text(type);
+    }
+
+    [[nodiscard]] QVariant currentValue() const override {
+        if (field()->isIntegerMode())
+            return QVariant::fromValue(static_cast<qlonglong>(field()->integerValue()));
+        return field()->value();
+    }
+    void setCurrentValue(const QVariant& value) override {
+        bool ok = false;
+        const double number = value.toDouble(&ok);
+        if (!ok || field()->hasLiveEdit())
+            return;
+        Q_EMIT field()->editStarted();
+        field()->setValue(number);
+        Q_EMIT field()->editFinished();
+    }
+    [[nodiscard]] QVariant maximumValue() const override { return field()->maximum(); }
+    [[nodiscard]] QVariant minimumValue() const override { return field()->minimum(); }
+    [[nodiscard]] QVariant minimumStepSize() const override { return field()->singleStep(); }
+};
+
+// KSlider as a slider with the value interface.
+class SliderAccessible final : public QAccessibleWidget, public QAccessibleValueInterface {
+  public:
+    explicit SliderAccessible(KSlider* slider) : QAccessibleWidget(slider, QAccessible::Slider) {}
+
+    [[nodiscard]] KSlider* slider() const { return static_cast<KSlider*>(widget()); }
+
+    void* interface_cast(const QAccessible::InterfaceType type) override {
+        if (type == QAccessible::ValueInterface)
+            return static_cast<QAccessibleValueInterface*>(this);
+        return QAccessibleWidget::interface_cast(type);
+    }
+
+    [[nodiscard]] QString text(const QAccessible::Text type) const override {
+        if (type == QAccessible::Value)
+            return QString::number(slider()->value());
+        return QAccessibleWidget::text(type);
+    }
+
+    [[nodiscard]] QVariant currentValue() const override { return slider()->value(); }
+    void setCurrentValue(const QVariant& value) override {
+        bool ok = false;
+        const double number = value.toDouble(&ok);
+        if (!ok || slider()->hasLiveEdit())
+            return;
+        Q_EMIT slider()->editStarted();
+        slider()->setValue(number);
+        Q_EMIT slider()->editFinished();
+    }
+    [[nodiscard]] QVariant maximumValue() const override { return slider()->maximum(); }
+    [[nodiscard]] QVariant minimumValue() const override { return slider()->minimum(); }
+    [[nodiscard]] QVariant minimumStepSize() const override {
+        return (slider()->maximum() - slider()->minimum()) * kKeyStepFraction;
+    }
+};
+
+// KRangeSelector as a slider whose value is the keyboard's active handle; its value text names
+// both ends.
+class RangeSelectorAccessible final : public QAccessibleWidget, public QAccessibleValueInterface {
+  public:
+    explicit RangeSelectorAccessible(KRangeSelector* range)
+        : QAccessibleWidget(range, QAccessible::Slider) {}
+
+    [[nodiscard]] KRangeSelector* range() const { return static_cast<KRangeSelector*>(widget()); }
+    [[nodiscard]] bool upper() const {
+        return range()->activeHandle() == KRangeSelector::Handle::Upper;
+    }
+
+    void* interface_cast(const QAccessible::InterfaceType type) override {
+        if (type == QAccessible::ValueInterface)
+            return static_cast<QAccessibleValueInterface*>(this);
+        return QAccessibleWidget::interface_cast(type);
+    }
+
+    [[nodiscard]] QString text(const QAccessible::Text type) const override {
+        if (type == QAccessible::Value)
+            return QObject::tr("%1 to %2")
+                .arg(QString::number(range()->lowerValue()), QString::number(range()->upperValue()));
+        return QAccessibleWidget::text(type);
+    }
+
+    [[nodiscard]] QVariant currentValue() const override {
+        return upper() ? range()->upperValue() : range()->lowerValue();
+    }
+    void setCurrentValue(const QVariant& value) override {
+        bool ok = false;
+        const double number = value.toDouble(&ok);
+        if (!ok || range()->hasLiveEdit())
+            return;
+        Q_EMIT range()->editStarted();
+        upper() ? range()->setUpperValue(number) : range()->setLowerValue(number);
+        Q_EMIT range()->editFinished();
+    }
+    [[nodiscard]] QVariant maximumValue() const override {
+        return upper() ? range()->maximum() : range()->upperValue();
+    }
+    [[nodiscard]] QVariant minimumValue() const override {
+        return upper() ? range()->lowerValue() : range()->minimum();
+    }
+    [[nodiscard]] QVariant minimumStepSize() const override {
+        return (range()->maximum() - range()->minimum()) * kKeyStepFraction;
+    }
+};
+
 } // namespace
 
 QAccessibleInterface* kitAccessibleFactory(const QString& className, QObject* object) {
@@ -161,6 +295,12 @@ QAccessibleInterface* kitAccessibleFactory(const QString& className, QObject* ob
         return new DropdownAccessible(static_cast<KDropdown*>(object));
     if (className == QLatin1String(KRadioGroup::staticMetaObject.className()))
         return new RadioGroupAccessible(static_cast<KRadioGroup*>(object));
+    if (className == QLatin1String(KValueField::staticMetaObject.className()))
+        return new ValueFieldAccessible(static_cast<KValueField*>(object));
+    if (className == QLatin1String(KSlider::staticMetaObject.className()))
+        return new SliderAccessible(static_cast<KSlider*>(object));
+    if (className == QLatin1String(KRangeSelector::staticMetaObject.className()))
+        return new RangeSelectorAccessible(static_cast<KRangeSelector*>(object));
     return nullptr;
 }
 

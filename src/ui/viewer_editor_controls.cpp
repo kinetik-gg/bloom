@@ -209,84 +209,6 @@ void drawFrameBackground(QPainter& painter, const QRectF& content, const QRectF&
 }
 } // namespace viewer_detail
 
-namespace {
-// The Viewer's exposure and gamma fields: a dot while the value differs from its default, and a
-// reset on a double-click on the label or from the field's context menu. Composed around the kit
-// field rather than inside it -- the field itself has no notion of a default.
-class ViewAdjustField final : public QObject {
-  public:
-    ViewAdjustField(kit::KValueField& field, const double defaultValue, QString resetLabel,
-                    QAction* resetBoth)
-        : QObject(&field), field_(field), default_(defaultValue),
-          resetLabel_(std::move(resetLabel)), resetBoth_(resetBoth) {
-        field.installEventFilter(this);
-        connect(&field, &kit::KValueField::valueChanged, this, [this] { refresh(); });
-        refresh();
-    }
-
-  protected:
-    bool eventFilter(QObject* watched, QEvent* event) override {
-        switch (event->type()) {
-        case QEvent::Paint: {
-            // The field paints itself first; the dot goes on top, inside the cell's top-right
-            // corner, so it never covers the number.
-            static_cast<QObject&>(field_).event(event);
-            if (std::abs(field_.value() - default_) > 1e-9) {
-                QPainter painter(&field_);
-                painter.setRenderHint(QPainter::Antialiasing, true);
-                const qreal mark = kit::px(kit::Size::NonDefaultMark);
-                const QRectF cell = field_.cellRect();
-                const qreal inset = kit::px(kit::Spacing::XXS);
-                painter.setPen(Qt::NoPen);
-                painter.setBrush(kit::color(kit::Color::Accent));
-                painter.drawEllipse(QRectF(cell.right() - inset - mark, cell.top() + inset, mark,
-                                           mark));
-            }
-            return true;
-        }
-        case QEvent::MouseButtonDblClick: {
-            const auto* mouse = static_cast<QMouseEvent*>(event);
-            if (field_.labelRect().contains(mouse->position())) {
-                reset();
-                return true;
-            }
-            break;
-        }
-        case QEvent::ContextMenu: {
-            std::unique_ptr<QMenu> menu(kit::makeMenu(&field_));
-            auto* single = menu->addAction(resetLabel_);
-            single->setObjectName(field_.objectName() + QStringLiteral("ResetAction"));
-            single->setEnabled(std::abs(field_.value() - default_) > 1e-9);
-            connect(single, &QAction::triggered, this, [this] { reset(); });
-            if (resetBoth_ != nullptr)
-                menu->addAction(resetBoth_);
-            menu->exec(static_cast<QContextMenuEvent*>(event)->globalPos());
-            return true;
-        }
-        default:
-            break;
-        }
-        return QObject::eventFilter(watched, event);
-    }
-
-  private:
-    void reset() {
-        field_.cancelEdit();
-        field_.setValue(default_);
-    }
-    void refresh() {
-        const bool changed = std::abs(field_.value() - default_) > 1e-9;
-        field_.setProperty("viewerNonDefault", changed);
-        field_.update();
-    }
-    kit::KValueField& field_;
-    double default_;
-    QString resetLabel_;
-    QAction* resetBoth_;
-};
-
-} // namespace
-
 namespace viewer_detail {
 kit::KValueField* makeAdjustField(const QString& label, const QString& accessibleName,
                                   const QString& objectName, const double minimum,
@@ -296,6 +218,8 @@ kit::KValueField* makeAdjustField(const QString& label, const QString& accessibl
     field->setLabel(label);
     field->setAccessibleName(accessibleName);
     field->setCompact(true);
+    // A field in a chrome row keeps its resting outline.
+    field->setOutlinedAtRest(true);
     field->setRange(minimum, maximum);
     field->setSingleStep(step);
     field->setDecimals(2);
@@ -305,7 +229,12 @@ kit::KValueField* makeAdjustField(const QString& label, const QString& accessibl
 
 void attachDefaultReset(kit::KValueField& field, const double defaultValue, QString resetLabel,
                         QAction* resetBoth) {
-    new ViewAdjustField(field, defaultValue, std::move(resetLabel), resetBoth);
+    // The kit field's own default: the differs-from-default dot, the double-click on its label and
+    // Reset in its context menu, which also lists the shared Reset Exposure and Gamma.
+    field.setDefaultValue(defaultValue);
+    field.setResetText(std::move(resetLabel));
+    if (resetBoth != nullptr)
+        field.addAction(resetBoth);
 }
 } // namespace viewer_detail
 

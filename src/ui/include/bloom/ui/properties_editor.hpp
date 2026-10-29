@@ -49,6 +49,10 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
   public:
     [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
     explicit PropertiesEditor(CompositionSession& session, QWidget* parent = nullptr);
+    // Stops this panel and every child listening to the session before the children are
+    // destroyed: a cell torn down with a live edit cancels it, and the session's answer must not
+    // reach a half-destroyed panel.
+    ~PropertiesEditor() override;
 
     // #358 work counters: a playhead move refreshes values in place and never rebuilds rows or
     // re-walks the upstream graph.
@@ -60,7 +64,6 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     [[nodiscard]] Work work() const noexcept { return work_; }
 
   protected:
-    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
     void refreshVideoSourceRows(const document::NodeRecord* node,
@@ -212,7 +215,7 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     // has no string field; it commits on editingFinished/returnPressed, not per keystroke, so
     // typing a word is one undo step instead of one per letter.
     QWidget* textSourcePanel_ = nullptr;
-    QLineEdit* textContent_ = nullptr;
+    kit::KLineEdit* textContent_ = nullptr;
     kit::KValueField* textSize_ = nullptr;
     std::array<kit::KValueField*, 4> textColorFields_{};
     kit::KColorChip* textColor_ = nullptr;
@@ -243,6 +246,8 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     QLabel* dataBlockReaders_ = nullptr;
 
     bool rebuilding_ = false;
+    // Set when the session goes first (a project replacement), so teardown never touches it.
+    bool sessionGone_ = false;
     // True between a cell's scrubStarted() and its scrubFinished()/scrubCancelled(). One flag for
     // the panel, because the panel has one pointer on it.
 };

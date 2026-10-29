@@ -462,6 +462,11 @@ bool KPopupList::handleKey(QKeyEvent* key, const bool fromFilter) {
         return true;
     }
     case Qt::Key_Escape:
+        // The search field's two Escapes: the first clears a typed filter, the second closes.
+        if (fromFilter && !filter_->text().isEmpty()) {
+            filter_->clear();
+            return true;
+        }
         Q_EMIT dismissed();
         return true;
     default:

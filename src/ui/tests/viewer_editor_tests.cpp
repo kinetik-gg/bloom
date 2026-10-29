@@ -1458,7 +1458,10 @@ void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
     expectations.expect(editor->isVisible() || editor->text() == QStringLiteral("0"),
                         "clicking the readout opens an editor seeded with the current frame");
     editor->setText(QStringLiteral("5"));
-    QMetaObject::invokeMethod(editor, "returnPressed");
+    {
+        QKeyEvent ret(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QCoreApplication::sendEvent(editor, &ret);
+    }
     QCoreApplication::processEvents();
     const auto* const composition = fixture.session.composition();
     const auto expected =
@@ -1469,7 +1472,10 @@ void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
     // Out of range clamps rather than refusing, and an unparseable entry reverts in silence.
     QCoreApplication::sendEvent(readout, &press);
     editor->setText(QStringLiteral("999999"));
-    QMetaObject::invokeMethod(editor, "returnPressed");
+    {
+        QKeyEvent ret(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QCoreApplication::sendEvent(editor, &ret);
+    }
     QCoreApplication::processEvents();
     const auto maximum =
         ui::maxFrameIndex(composition->format().frameRate(), composition->duration());
@@ -1503,13 +1509,19 @@ void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
     QCoreApplication::sendEvent(readout, &press);
     const auto expectedTimecode = core::RationalTime::create(5, 2);
     editor->setText("00:00:02:12");
-    QMetaObject::invokeMethod(editor, "returnPressed");
+    {
+        QKeyEvent ret(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QCoreApplication::sendEvent(editor, &ret);
+    }
     QCoreApplication::processEvents();
     expectations.expect(expectedTimecode && fixture.session.currentTime() == *expectedTimecode,
                         "typed timecode maps to exact rational frame time");
     QCoreApplication::sendEvent(readout, &press);
     editor->setText("00:99:00:00");
-    QMetaObject::invokeMethod(editor, "returnPressed");
+    {
+        QKeyEvent ret(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QCoreApplication::sendEvent(editor, &ret);
+    }
     expectations.expect(expectedTimecode && fixture.session.currentTime() == *expectedTimecode,
                         "invalid timecode leaves time unchanged");
     expectations.expect(duration != nullptr && lastFrame.has_value() &&

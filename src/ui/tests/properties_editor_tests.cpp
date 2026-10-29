@@ -873,7 +873,9 @@ void testFocusedHoveredCellBorderIsAccentOnScreen(Expectations& expectations) {
     QCoreApplication::sendEvent(positionX, &leave);
     positionX->setFocus(Qt::TabFocusReason);
     QCoreApplication::processEvents();
-    expectations.expect(positionX->hasFocus(), "the cell can take keyboard focus inside the panel");
+    // Tab arrives ready to type: the cell's own editor holds the focus.
+    expectations.expect(positionX->hasFocus() || positionX->isEditing(),
+                        "the cell can take keyboard focus inside the panel");
 
     QEnterEvent enter(QPointF(1.0, 1.0), QPointF(1.0, 1.0), QPointF(1.0, 1.0));
     QCoreApplication::sendEvent(positionX, &enter);
@@ -950,7 +952,10 @@ void testTextSourceRowsEditThroughCommands(Expectations& expectations) {
 
     const auto historyBefore = stack.size();
     content->setText(QStringLiteral("Edited"));
-    Q_EMIT content->editingFinished();
+    {
+        QKeyEvent ret(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QCoreApplication::sendEvent(content, &ret);
+    }
     expectations.expect(stack.size() == historyBefore + 1,
                         "committing the content field is exactly one history entry");
     size->setValue(96.0);

@@ -143,24 +143,31 @@ void testANarrowCompactCellFitsItsValue(Expectations& expectations) {
     field.setLabel(QStringLiteral("Y"));
     field.setUnit(QStringLiteral("px"));
     field.setRange(-1.0e9, 1.0e9);
-    field.setDecimals(2);
+    field.setDecimals(1);
     field.resize(kit::px(kit::Size::PropertiesFieldWidth), kit::px(kit::Size::Control));
     const QFontMetrics metrics(kit::font(kit::TypeRole::Value));
     const auto fitsColumn = [&] {
         const auto text = field.paintedText();
-        return metrics.horizontalAdvance(text) <= field.width();
+        return metrics.horizontalAdvance(text) <= field.cellTextRect().width();
     };
-    field.setValue(960.0);
-    expectations.expect(field.paintedText() == QStringLiteral("960 px"),
-                        "a short value keeps its unit");
+    field.setValue(9.5);
+    expectations.expect(field.paintedText() == QStringLiteral("9.5 px"),
+                        "a short value keeps its unit and its configured places, got " +
+                            field.paintedText().toStdString());
     field.setValue(1540.22);
     expectations.expect(fitsColumn() && field.paintedText().startsWith(QStringLiteral("154")),
                         "a long value drops the unit, then decimals, and keeps its leading digits");
-    expectations.expect(field.displayedValue() == QStringLiteral("1540.22"),
-                        "the exact value is still the field's value text");
+    expectations.expect(field.displayedValue() == QStringLiteral("1540.2"),
+                        "the field's value text keeps its configured places");
     field.setValue(42.5);
-    expectations.expect(field.paintedText() == QStringLiteral("42.5 px"),
+    expectations.expect(field.paintedText() == QStringLiteral("42.5 px") &&
+                            !field.isDisplayRounded(),
                         "a value that fits shows its unit again");
+    // Compact cells no longer trim trailing zeroes, so an X/Y/Z column keeps its decimal points
+    // aligned.
+    field.setValue(3.0);
+    expectations.expect(field.displayedValue() == QStringLiteral("3.0"),
+                        "a whole number keeps its configured places in a compact cell");
 }
 
 void testFiniteExtremesStayExactAndBounded(Expectations& expectations) {
@@ -370,7 +377,8 @@ void testTheWheelIsIgnoredUntilTheFieldIsFocused(Expectations& expectations) {
     field.setFocus(Qt::MouseFocusReason);
     QCoreApplication::processEvents();
     sendWheel();
-    expectations.expect(field.value() == 51.0, "once focused the wheel steps the value");
+    expectations.expect(field.value() == 50.0,
+                        "a focused field at rest still leaves a plain wheel to the panel");
 }
 
 void testTheStateMachineAndDisabledField(Expectations& expectations) {
@@ -416,32 +424,36 @@ void testDraggingScrubsTheValue(Expectations& expectations) {
     host.activateWindow();
     QCoreApplication::processEvents();
 
+    // The platform drag threshold is a dead zone: crossing it never jumps the value by the
+    // threshold's worth of steps (lane B, finding 2).
+    const int threshold = QApplication::startDragDistance();
     scrub(field, 40);
-    expectations.expect(field.value() == 40.0, "forty pixels to the right is forty steps, got " +
-                                                   std::to_string(field.value()));
+    expectations.expect(field.value() == 40.0 - threshold,
+                        "forty pixels to the right is forty steps less the dead zone, got " +
+                            std::to_string(field.value()));
     expectations.expect(!field.isScrubbing(), "the gesture ends on release");
     expectations.expect(!field.isEditing(), "a drag does not open the text editor");
 
     field.setValue(0.0);
     scrub(field, -25);
-    expectations.expect(field.value() == -25.0, "dragging left subtracts steps");
+    expectations.expect(field.value() == -25.0 + threshold, "dragging left subtracts steps");
 
     field.setValue(0.0);
     field.setSingleStep(0.5);
-    scrub(field, 10);
+    scrub(field, 10 + threshold);
     expectations.expect(field.value() == 5.0, "one pixel is one singleStep(), not one unit");
 
     field.setSingleStep(1.0);
     field.setValue(0.0);
-    scrub(field, 10, Qt::ShiftModifier);
+    scrub(field, 10 + threshold, Qt::ShiftModifier);
     expectations.expect(field.value() == 100.0, "Shift scrubs ten times as fast");
 
     field.setValue(0.0);
-    scrub(field, 100, Qt::ControlModifier);
-    expectations.expect(field.value() == 10.0, "Ctrl scrubs a tenth as fast");
+    scrub(field, 100 + threshold, Qt::ControlModifier);
+    expectations.expect(std::abs(field.value() - 10.0) < 1e-9, "Ctrl scrubs a tenth as fast");
 
     field.setValue(0.0);
-    scrub(field, 10, Qt::ShiftModifier | Qt::ControlModifier);
+    scrub(field, 10 + threshold, Qt::ShiftModifier | Qt::ControlModifier);
     expectations.expect(field.value() == 100.0, "Shift wins when both modifiers are held");
     expectations.expect(kit::KValueField::scrubScale(Qt::ShiftModifier) == 10.0 &&
                             kit::KValueField::scrubScale(Qt::ControlModifier) == 0.1 &&
@@ -468,7 +480,7 @@ void testDraggingScrubsTheValue(Expectations& expectations) {
     releaseAt(field, start + QPointF(static_cast<qreal>(under), 0.0));
 }
 
-void testAClickEntersTextEditAndEscCancels(Expectations& expectations) {
+void testAClickEntersTextEditAndEscapeCommits(Expectations& expectations) {
     QWidget host;
     auto* layout = new QVBoxLayout(&host);
     auto& field = *new kit::KValueField(&host);
@@ -480,6 +492,17 @@ void testAClickEntersTextEditAndEscCancels(Expectations& expectations) {
     host.activateWindow();
     QCoreApplication::processEvents();
 
+    const auto key = [&field](const Qt::Key code) {
+        QKeyEvent press(QEvent::KeyPress, code, Qt::NoModifier);
+        QCoreApplication::sendEvent(field.lineEdit(), &press);
+        QCoreApplication::processEvents();
+    };
+    const auto open = [&field] {
+        const QPointF centre(field.cellRect().center());
+        pressAt(field, centre);
+        releaseAt(field, centre);
+    };
+
     const QPointF centre(field.cellRect().center());
     pressAt(field, centre);
     expectations.expect(!field.isEditing(), "the editor waits for the release, not the press");
@@ -488,60 +511,66 @@ void testAClickEntersTextEditAndEscCancels(Expectations& expectations) {
     expectations.expect(field.lineEdit()->isVisible(), "the text editor is actually shown");
     expectations.expect(field.displayedValue() == QStringLiteral("20.0") &&
                             field.lineEdit()->selectedText() == field.lineEdit()->text() &&
-                            field.lineEdit()->text().toDouble() == field.value(),
-                        "entering text edit selects the exact numeric value while the resting "
+                            field.lineEdit()->text() == QStringLiteral("20"),
+                        "entering text edit selects the exact shortest value while the resting "
                         "display keeps its configured precision, got '" +
                             field.lineEdit()->selectedText().toStdString() + '\'');
     expectations.expect(field.borderToken() == kit::Color::Accent,
                         "an editing cell is active, so it wears the accent border");
 
+    // Owner decision 2026-10-29: Escape confirms everywhere. Undo is the discard.
     QSignalSpy changed(&field, &kit::KValueField::valueChanged);
+    QSignalSpy finished(&field, &kit::KValueField::editFinished);
+    QSignalSpy cancelled(&field, &kit::KValueField::editCancelled);
     field.lineEdit()->setText(QStringLiteral("42.5"));
-    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
-    QCoreApplication::sendEvent(field.lineEdit(), &escape);
-    QCoreApplication::processEvents();
-    expectations.expect(!field.isEditing(), "Esc leaves text edit");
-    expectations.expect(field.value() == 20.0, "Esc cancels: the typed value is discarded");
-    expectations.expect(changed.count() == 0, "and nothing is committed");
+    key(Qt::Key_Escape);
+    expectations.expect(!field.isEditing(), "Escape leaves text edit");
+    expectations.expect(field.value() == 42.5, "Escape commits what was typed");
+    expectations.expect(changed.count() == 1 && finished.count() == 1 && cancelled.count() == 0,
+                        "as one finished edit, never a cancel");
 
-    pressAt(field, centre);
-    releaseAt(field, centre);
-    expectations.expect(field.isEditing(), "clicking again re-enters text edit");
-    field.lineEdit()->setText(QStringLiteral("42.5"));
-    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
-    QCoreApplication::sendEvent(field.lineEdit(), &enter);
-    QCoreApplication::processEvents();
-    expectations.expect(!field.isEditing(), "Enter leaves text edit");
-    expectations.expect(field.value() == 42.5, "Enter commits what was typed");
-    expectations.expect(changed.count() == 1, "committing reports the change exactly once");
-
-    pressAt(field, centre);
-    releaseAt(field, centre);
+    open();
     field.lineEdit()->setText(QStringLiteral("13.5"));
-    QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
-    QCoreApplication::sendEvent(field.lineEdit(), &tab);
-    QCoreApplication::processEvents();
-    expectations.expect(!field.isEditing(), "Tab leaves text edit");
-    expectations.expect(field.value() == 13.5, "Tab commits too");
+    key(Qt::Key_Return);
+    expectations.expect(!field.isEditing() && field.value() == 13.5, "Return commits too");
 
-    pressAt(field, centre);
-    releaseAt(field, centre);
+    // Refused text never silently reverts: Return keeps the editor open with an Error border and
+    // the reason; Escape then closes it on the last valid value.
+    open();
     field.lineEdit()->setText(QStringLiteral("not a number"));
-    QKeyEvent enterAgain(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
-    QCoreApplication::sendEvent(field.lineEdit(), &enterAgain);
-    QCoreApplication::processEvents();
-    expectations.expect(field.value() == 13.5,
-                        "unparseable text is refused the way Esc is, never silently zero");
+    key(Qt::Key_Return);
+    expectations.expect(field.isEditing() && field.borderToken() == kit::Color::Error &&
+                            !field.refusal().isEmpty() &&
+                            field.lineEdit()->property("kitError").toBool(),
+                        "unparseable text keeps the editor open with an Error border and a reason");
+    expectations.expect(field.value() == 13.5, "and never becomes zero");
+    key(Qt::Key_Escape);
+    expectations.expect(!field.isEditing() && field.value() == 13.5 && field.refusal().isEmpty(),
+                        "Escape on refused text closes the editor and keeps the last valid value");
 
-    pressAt(field, centre);
-    releaseAt(field, centre);
-    QSignalSpy rejected(&field, &kit::KValueField::editCancelled);
+    open();
     field.lineEdit()->setText(QStringLiteral("101"));
-    QKeyEvent outOfRange(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
-    QCoreApplication::sendEvent(field.lineEdit(), &outOfRange);
-    QCoreApplication::processEvents();
-    expectations.expect(field.value() == 13.5 && rejected.count() == 1,
-                        "an out-of-range typed value is rejected, never silently clamped");
+    key(Qt::Key_Return);
+    expectations.expect(field.isEditing() && field.value() == 13.5 &&
+                            field.refusal().contains(QStringLiteral("100")),
+                        "an out-of-range typed value is refused with the range, never clamped");
+    key(Qt::Key_Tab);
+    expectations.expect(field.isEditing(), "Tab with refused text keeps the editor open as well");
+    field.lineEdit()->setText(QStringLiteral("50%"));
+    key(Qt::Key_Return);
+    expectations.expect(field.isEditing() && field.refusal().contains(QStringLiteral("%")),
+                        "a unit the field does not take is refused by name");
+    field.lineEdit()->setText(QStringLiteral("(10 + 5) * 2"));
+    key(Qt::Key_Return);
+    expectations.expect(!field.isEditing() && field.value() == 30.0,
+                        "arithmetic is evaluated, got " + std::to_string(field.value()));
+    open();
+    field.lineEdit()->setText(QStringLiteral("+= 2,5"));
+    key(Qt::Key_Return);
+    expectations.expect(field.value() == 32.5,
+                        "a relative entry with a comma decimal applies to the value the edit "
+                        "started from");
+    expectations.expect(cancelled.count() == 0, "no key in the editor ever cancels");
 }
 
 } // namespace
@@ -558,10 +587,19 @@ void testAFocusedFieldClaimsEditingKeyOverrides(Expectations& expectations) {
 
     field.setFocus(Qt::OtherFocusReason);
     QCoreApplication::processEvents();
-    QKeyEvent leftOverride(QEvent::ShortcutOverride, Qt::Key_Left, Qt::NoModifier);
-    QCoreApplication::sendEvent(&field, &leftOverride);
-    expectations.expect(leftOverride.isAccepted(),
-                        "a focused field claims Left so window shortcuts stay inert");
+    QKeyEvent upOverride(QEvent::ShortcutOverride, Qt::Key_Up, Qt::NoModifier);
+    upOverride.ignore();
+    QCoreApplication::sendEvent(&field, &upOverride);
+    expectations.expect(upOverride.isAccepted(), "a focused field claims the keys that step it");
+    // Lane B, finding 4: Left/Right/Home/End step the transport. A field at rest has no use for
+    // them, so it no longer swallows them; only an open editor (a QLineEdit) claims them.
+    for (const auto code : {Qt::Key_Left, Qt::Key_Right, Qt::Key_Home, Qt::Key_End}) {
+        QKeyEvent transport(QEvent::ShortcutOverride, code, Qt::NoModifier);
+        transport.ignore();
+        QCoreApplication::sendEvent(&field, &transport);
+        expectations.expect(!transport.isAccepted(),
+                            "a field at rest leaves the transport keys to the window");
+    }
 
     field.clearFocus();
     QKeyEvent unfocusedOverride(QEvent::ShortcutOverride, Qt::Key_Left, Qt::NoModifier);
@@ -588,6 +626,6 @@ int main(int argc, char** argv) {
     testTheStateMachineAndDisabledField(expectations);
     testAFocusedFieldClaimsEditingKeyOverrides(expectations);
     testDraggingScrubsTheValue(expectations);
-    testAClickEntersTextEditAndEscCancels(expectations);
+    testAClickEntersTextEditAndEscapeCommits(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

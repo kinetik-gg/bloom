@@ -49,6 +49,20 @@ class AssetNameDelegate final : public QStyledItemDelegate {
         editor->setAccessibleName(QObject::tr("Name"));
         return editor;
     }
+
+  protected:
+    // Escape confirms everywhere (owner, 2026-10-29): it commits the typed name exactly as Return
+    // and clicking away do, instead of the stock delegate's revert. Undo is the discard.
+    bool eventFilter(QObject* object, QEvent* event) override {
+        auto* editor = qobject_cast<QWidget*>(object);
+        if (editor != nullptr && event->type() == QEvent::KeyPress &&
+            static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+            Q_EMIT commitData(editor);
+            Q_EMIT closeEditor(editor, QAbstractItemDelegate::NoHint);
+            return true;
+        }
+        return QStyledItemDelegate::eventFilter(object, event);
+    }
 };
 // Keys the tree owns while it has focus, so a window-level shortcut cannot take them.
 bool treeKey(const QKeyEvent& event) {

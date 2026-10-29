@@ -6,6 +6,7 @@
 #include <QToolButton>
 #include <vector>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 class QVBoxLayout;
@@ -149,17 +150,6 @@ class KFieldFrame : public QWidget {
   private:
     bool hovered_ = false;
     bool editing_ = false;
-};
-class KLineEdit : public QLineEdit {
-    Q_OBJECT
-  public:
-    explicit KLineEdit(QWidget* parent = nullptr);
-    explicit KLineEdit(const QString& text, QWidget* parent = nullptr);
-};
-class KSearchField : public KLineEdit {
-    Q_OBJECT
-  public:
-    explicit KSearchField(QWidget* parent = nullptr);
 };
 [[nodiscard]] QMenu* makeMenu(QWidget* parent = nullptr);
 [[nodiscard]] QMenu* makeMenu(const QString& title, QWidget* parent = nullptr);

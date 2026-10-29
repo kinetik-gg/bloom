@@ -2,6 +2,7 @@
 
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/dialog.hpp>
+#include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/third_party_license_catalog.hpp>
 
@@ -31,7 +32,7 @@ LicensesWindow::LicensesWindow(QWidget& owner)
     componentList_->setObjectName(QStringLiteral("licensesComponentList"));
     kit::styleDocumentView(*componentList_);
 
-    licenseText_ = new QPlainTextEdit(this);
+    licenseText_ = new kit::KTextArea(this);
     licenseText_->setObjectName(QStringLiteral("licensesTextView"));
     licenseText_->setReadOnly(true);
     kit::styleDocumentView(*licenseText_);

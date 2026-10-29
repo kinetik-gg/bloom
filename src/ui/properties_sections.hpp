@@ -13,6 +13,7 @@
 
 #include <bloom/core/color.hpp>
 #include <bloom/document/animation.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <optional>
 
@@ -88,6 +89,16 @@ struct ValueCellSpec {
 };
 
 [[nodiscard]] kit::KValueField* makeValueCell(const ValueCellSpec& spec, QWidget* parent);
+
+// One numeric cell for a document parameter, configured from the parameter's presentation
+// (bloom::ui::configureValueField) rather than from a per-surface spec, so it scrubs, steps and
+// reads exactly as the same parameter does on a Timeline row or a node card.
+[[nodiscard]] kit::KValueField* makeParameterCell(const QString& objectName,
+                                                  const QString& accessibleName,
+                                                  const QString& subLabel,
+                                                  std::string_view schemaKey,
+                                                  document::ParameterValueKind kind,
+                                                  QWidget* parent, std::size_t component = 0);
 
 // The [X][Y] (optionally [X][link][Y]) container a paired row puts in its value column. Named so
 // the existing positionFieldGroup/anchorFieldGroup/scaleFieldGroup/solidColorFieldGroup objectNames

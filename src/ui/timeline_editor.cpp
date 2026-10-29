@@ -964,22 +964,22 @@ void TimelineLayerStack::renameLayer(const document::LayerId layerId) {
             (void)session_.executeTransaction(std::move(transaction));
         }
     };
-    connect(field, &QLineEdit::returnPressed, this, [this, finish] {
-        finish(false);
-        setFocus();
-    });
-    connect(qApp, &QApplication::focusChanged, field, [field, finish](QWidget* old, QWidget*) {
-        if (old == field)
-            finish(false);
-    });
-    auto* cancel = new QAction(field);
-    cancel->setShortcut(QKeySequence(Qt::Key_Escape));
-    cancel->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    field->addAction(cancel);
-    connect(cancel, &QAction::triggered, field, [this, finish] {
-        finish(true);
-        setFocus();
-    });
+    // The kit inline-edit policy: Return, Escape, Tab and focus loss all commit (Escape confirms
+    // everywhere; Undo is the discard). An empty name is refused: Return keeps the field open with
+    // the reason, and Escape or a click away keeps the layer's current name.
+    auto& policy = field->useInlineEdit(kit::KInlineEdit::nameValidator());
+    connect(&policy, &kit::KInlineEdit::accepted, field,
+            [this, finish](const QString&, const kit::KInlineEdit::Ending ending) {
+                finish(false);
+                if (ending != kit::KInlineEdit::Ending::FocusOut)
+                    setFocus();
+            });
+    connect(&policy, &kit::KInlineEdit::refused, field,
+            [this, finish](const QString&, const QString&, const kit::KInlineEdit::Ending ending) {
+                finish(true);
+                if (ending != kit::KInlineEdit::Ending::FocusOut)
+                    setFocus();
+            });
     field->show();
     field->raise();
     field->setFocus();

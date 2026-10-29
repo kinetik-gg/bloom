@@ -63,7 +63,8 @@ template <typename Predicate> bool waitUntil(Predicate predicate) {
 void typeHex(ui::kit::KColorChip& chip, const QString& text) {
     auto* picker = chip.picker();
     picker->hexField()->setText(text);
-    Q_EMIT picker->hexField()->editingFinished();
+    QKeyEvent ret(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(picker->hexField(), &ret);
 }
 QColor centerPixel(QWidget& widget) {
     const auto image = widget.grab().toImage();

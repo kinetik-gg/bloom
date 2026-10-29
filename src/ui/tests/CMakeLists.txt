@@ -64,6 +64,12 @@ add_executable(bloom_kit_range_test
 add_executable(bloom_kit_value_field_test
     kit_value_field_tests.cpp
 )
+add_executable(bloom_kit_value_field_input_test
+    kit_value_field_input_tests.cpp
+)
+add_executable(bloom_kit_edit_session_test
+    kit_edit_session_tests.cpp
+)
 add_executable(bloom_kit_theme_test
     kit_theme_tests.cpp
 )
@@ -214,6 +220,8 @@ target_link_libraries(bloom_main_window_chrome_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_frameless_window_support_test PRIVATE bloom_ui)
 target_link_libraries(bloom_kit_range_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_value_field_test PRIVATE bloom_ui_kit Qt6::Test)
+target_link_libraries(bloom_kit_value_field_input_test PRIVATE bloom_ui_kit Qt6::Test)
+target_link_libraries(bloom_kit_edit_session_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_theme_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_tokens_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_surfaces_test PRIVATE bloom_ui_kit)
@@ -393,6 +401,8 @@ bloom_enable_warnings(bloom_main_window_chrome_test)
 bloom_enable_warnings(bloom_frameless_window_support_test)
 bloom_enable_warnings(bloom_kit_range_test)
 bloom_enable_warnings(bloom_kit_value_field_test)
+bloom_enable_warnings(bloom_kit_value_field_input_test)
+bloom_enable_warnings(bloom_kit_edit_session_test)
 bloom_enable_warnings(bloom_kit_theme_test)
 bloom_enable_warnings(bloom_kit_tokens_test)
 bloom_enable_warnings(bloom_kit_surfaces_test)
@@ -627,6 +637,22 @@ bloom_add_test(
 bloom_add_test(
     NAME bloom.ui.kit_value_field
     COMMAND bloom_kit_value_field_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_value_field_input
+    COMMAND bloom_kit_value_field_input_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_edit_session
+    COMMAND bloom_kit_edit_session_test
     LABELS ui unit kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"

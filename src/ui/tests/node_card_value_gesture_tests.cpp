@@ -184,7 +184,7 @@ void scrubOnALayerCard(App& app, const document::NodeId layer) {
            "and undoing it puts the whole gesture back");
     expect(app.session.redo(), "redo restores the scrubbed value");
 
-    // A scrub abandoned with Esc puts the cell back and writes nothing at all.
+    // Esc confirms everywhere (owner, 2026-10-29): a scrub ended with Esc lands as one command.
     const double armed = opacity->value();
     const std::size_t armedHistory = app.stack.size();
     const QPointF start = controlCenter(opacity);
@@ -199,9 +199,11 @@ void scrubOnALayerCard(App& app, const document::NodeId layer) {
     QCoreApplication::processEvents();
     app.release(start + QPointF(-40.0, 0.0));
     QCoreApplication::processEvents();
-    expect(closeTo(static_cast<float>(opacity->value()), armed),
-           "Esc puts back exactly the value the press started from");
-    expect(app.stack.size() == armedHistory, "an abandoned scrub lands no command at all");
+    expect(opacity->value() < armed && !opacity->isScrubbing(),
+           "Esc ends the scrub and keeps the value it reached");
+    expect(app.stack.size() == armedHistory + 1, "a scrub ended with Esc lands one command");
+    expect(app.session.undo() && closeTo(static_cast<float>(opacity->value()), armed),
+           "Undo is the discard");
 }
 
 // --- (c) the operand dropdown and the color chip ------------------------------------------------
@@ -292,10 +294,11 @@ void tabMovesBetweenCells(App& app, const document::NodeId layer) {
     const auto stored = vec2Of(app, layer, document::kPositionParameterRole);
     expect(stored.has_value() && closeTo(static_cast<float>(stored->x), 40.0),
            "Tab commits the cell it leaves");
-    expect(positionY->hasFocus(), "Tab moves to the next cell on the same card");
+    expect(positionY->isEditing(), "Tab moves to the next cell on the same card, ready to type");
+    key(app, Qt::Key_Escape);
 }
 
-// --- (e) Esc cancels ---------------------------------------------------------------------------
+// --- (e) Esc confirms ---------------------------------------------------------------------------
 void escapeCancels(App& app, const document::NodeId layer) {
     auto* rotation = field(app, layer, QStringLiteral("nodeRotationEditor"));
     expect(rotation != nullptr, "the Layer card carries a Rotation cell");
@@ -307,11 +310,11 @@ void escapeCancels(App& app, const document::NodeId layer) {
     type(app, QStringLiteral("77"));
     key(app, Qt::Key_Escape);
     expect(!rotation->isEditing(), "Esc closes the inline editor");
-    expect(closeTo(static_cast<float>(rotation->value()), before),
-           "Esc leaves the cell's value exactly as it was");
     const auto stored = scalarOf(app, layer, document::kRotationParameterRole);
-    expect(stored.has_value() && closeTo(static_cast<float>(*stored), before),
-           "Esc writes nothing to the document");
+    expect(stored.has_value() && closeTo(static_cast<float>(*stored), 77.0),
+           "Esc commits what was typed (Escape confirms everywhere)");
+    expect(app.session.undo() && closeTo(static_cast<float>(rotation->value()), before),
+           "Undo is the discard");
 }
 
 // --- (f) editing a value node's own value drives the downstream parameter ----------------------
@@ -586,17 +589,23 @@ void valueNodeCards(App& app) {
                    "editing vector Y preserves the formerly clamped X component");
     }
     const auto integerNode = app.addByType(document::kIntegerValueNodeType, {x, 40.0});
-    auto* integer = qobject_cast<QLineEdit*>(app.editor.graphScene()->nodeFieldForTest(
+    auto* integer = qobject_cast<ui::kit::KValueField*>(app.editor.graphScene()->nodeFieldForTest(
         integerNode, QStringLiteral("nodeOperandIntegerEditor")));
-    expect(integer != nullptr, "integer operands have an exact decimal editor");
+    expect(integer != nullptr && integer->isIntegerMode(),
+           "integer operands have an exact integer value field");
     if (integer) {
-        integer->setText(QStringLiteral("9223372036854775807"));
-        Q_EMIT integer->editingFinished();
+        click(app, integer);
+        integer->lineEdit()->setText(QStringLiteral("9223372036854775807"));
+        key(app, Qt::Key_Return);
         expect(integerOf(app, integerNode, document::kValueParameterRole) ==
                    std::numeric_limits<std::int64_t>::max(),
                "integer operands preserve all int64 digits");
-        integer->setText(QStringLiteral("9223372036854775808"));
-        Q_EMIT integer->editingFinished();
+        click(app, integer);
+        integer->lineEdit()->setText(QStringLiteral("9223372036854775808"));
+        key(app, Qt::Key_Return);
+        expect(integer->isEditing() && !integer->refusal().isEmpty(),
+               "an int64 overflow is refused with its reason and the editor stays open");
+        key(app, Qt::Key_Escape);
         expect(integerOf(app, integerNode, document::kValueParameterRole) ==
                    std::numeric_limits<std::int64_t>::max(),
                "integer overflow is refused without a mutation");
@@ -623,7 +632,7 @@ void valueNodeCards(App& app) {
                 click(app, xField);
                 type(app, QStringLiteral("2"));
                 expect(xField->isEditing() && xField->unit() == QStringLiteral("×") &&
-                           xField->property("numericDisplayScale").toDouble() == 1 &&
+                           xField->displayScale() == 1 &&
                            app.session.effectiveVec2Value(scaleId) == document::Vec2d{2, 2},
                        "a native-factor gesture keeps its unit through synchronous live refresh");
                 QTest::keyClick(app.editor.graphView(), Qt::Key_A, Qt::ControlModifier);
@@ -640,9 +649,12 @@ void valueNodeCards(App& app) {
                 click(app, xField);
                 type(app, QStringLiteral("2"));
                 key(app, Qt::Key_Escape);
-                expect(app.session.effectiveVec2Value(scaleId) == document::Vec2d{extreme, 2} &&
+                expect(app.session.effectiveVec2Value(scaleId) == document::Vec2d{2, 2},
+                       "Escape commits the typed native factor (Escape confirms everywhere)");
+                expect(app.session.undo() &&
+                           app.session.effectiveVec2Value(scaleId) == document::Vec2d{extreme, 2} &&
                            xField->value() == extreme && xField->unit() == QStringLiteral("×"),
-                       "cancelling restores the original value and its native-factor projection");
+                       "Undo restores the original value and its native-factor projection");
             }
         }
     }

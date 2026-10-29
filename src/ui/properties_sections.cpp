@@ -1,4 +1,5 @@
 #include "properties_sections.hpp"
+#include "value_presentation.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <memory>
@@ -146,6 +147,20 @@ kit::KValueField* makeValueCell(const ValueCellSpec& spec, QWidget* parent) {
     if (!spec.subLabel.isEmpty()) {
         field->setLabel(spec.subLabel);
     }
+    return field;
+}
+
+kit::KValueField* makeParameterCell(const QString& objectName, const QString& accessibleName,
+                                    const QString& subLabel, const std::string_view schemaKey,
+                                    const document::ParameterValueKind kind, QWidget* parent,
+                                    const std::size_t component) {
+    auto* field = new kit::KValueField(parent);
+    field->setCompact(true);
+    field->setObjectName(objectName);
+    field->setAccessibleName(accessibleName);
+    configureComponentField(*field, schemaKey, kind, component);
+    if (!subLabel.isEmpty())
+        field->setLabel(subLabel);
     return field;
 }
 

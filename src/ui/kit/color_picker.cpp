@@ -1,5 +1,8 @@
 #include <bloom/ui/kit/color_picker.hpp>
 
+#include <bloom/ui/kit/inline_edit.hpp>
+#include <bloom/ui/kit/text_field.hpp>
+
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
@@ -38,24 +41,6 @@ namespace {
 [[nodiscard]] int contentWidthPx() { return squareSidePx() + barGapPx() + hueBarWidthPx(); }
 [[nodiscard]] int checkerCellPx() { return px(Size::CheckerCell); }
 [[nodiscard]] qreal markerRadiusPx() { return static_cast<qreal>(px(Size::PickerMarker)) / 2.0; }
-
-[[nodiscard]] QString hexFieldStyleSheet() {
-    return expandTokens(QStringLiteral(R"(
-QLineEdit#kColorHexField {
-    background: {color.Field};
-    border: {border.Hairline}px solid {color.Border};
-    border-radius: {radius.Small}px;
-    color: {color.Foreground};
-    padding: {space.XXS}px {space.S}px;
-}
-QLineEdit#kColorHexField[bloomKeyboardFocus="true"] {
-    border-color: {color.Accent};
-}
-QLineEdit#kColorHexField:disabled {
-    color: {color.Muted};
-}
-)"));
-}
 
 // A double-ring dot: an outer Background-colored halo so the marker reads against a light patch of
 // the gradient, and an inner Foreground ring so it reads against a dark one. Same idea as the focus
@@ -248,22 +233,30 @@ void KColorPicker::buildChrome() {
                 [this](double) { onChannelFieldEdited(); });
     }
 
-    hexField_ = new QLineEdit(this);
+    // The kit text field in the Value role, with the inline-edit policy: Return, Escape, Tab and
+    // focus loss commit a valid hex (Escape confirms everywhere), and text that is not one keeps the
+    // field open on Return with the reason, or goes back to the current colour otherwise.
+    hexField_ = new KTextField(this);
     hexField_->setObjectName(QStringLiteral("kColorHexField"));
-    hexField_->setFont(kit::font(TypeRole::Value));
+    hexField_->setTypeRole(TypeRole::Value);
     hexField_->setAlignment(Qt::AlignCenter);
-    hexField_->setStyleSheet(hexFieldStyleSheet());
     hexField_->setAccessibleName(tr("Hex color"));
-    hexField_->installEventFilter(this);
+    auto& policy = hexField_->useInlineEdit([this](const QString& text) {
+        return KColor::fromHex(text, alpha_) ? QString{} : tr("Not a hex colour (#RRGGBB)");
+    });
     connect(hexField_, &QLineEdit::textEdited, this, [this] {
         if (KColor::fromHex(hexField_->text(), alpha_)) {
             beginEdit();
             onHexFieldEdited();
         }
     });
-    connect(hexField_, &QLineEdit::editingFinished, this, [this] {
+    connect(&policy, &KInlineEdit::accepted, this, [this] {
         onHexFieldEdited();
         finishEdit();
+    });
+    connect(&policy, &KInlineEdit::refused, this, [this] {
+        finishEdit();
+        refreshHexField();
     });
 
     swatchRow_ = new KColorSwatchRow(this);
@@ -782,9 +775,11 @@ void KColorPicker::cancelEdit() {
 }
 
 void KColorPicker::keyPressEvent(QKeyEvent* event) {
+    // Escape confirms everywhere: closing the picker keeps the colour picked so far (Undo is the
+    // discard), exactly as clicking away does.
     if (event->key() == Qt::Key_Escape) {
-        cancelEdit();
-        close();
+        finishEdit();
+        closePopup();
         event->accept();
         return;
     }
@@ -794,15 +789,6 @@ void KColorPicker::keyPressEvent(QKeyEvent* event) {
 void KColorPicker::hideEvent(QHideEvent* event) {
     finishEdit();
     QWidget::hideEvent(event);
-}
-
-bool KColorPicker::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == hexField_ && event->type() == QEvent::KeyPress &&
-        static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
-        cancelEdit();
-        return true;
-    }
-    return QWidget::eventFilter(watched, event);
 }
 
 void KColorPicker::paintEvent(QPaintEvent* event) {

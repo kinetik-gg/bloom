@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QVariant>
 #include <bloom/ui/kit/value_field.hpp>
 #include <cmath>
 #include <limits>
@@ -25,15 +24,14 @@ inline void projectNumericField(kit::KValueField& field, const double value, con
         scaled = false;
         displayed = value;
     }
-    field.setProperty("numericDisplayScale", scaled ? scale : 1.0);
+    field.setDisplayScale(scaled ? scale : 1.0);
     field.setUnit(scaled ? unit : nativeUnit);
     field.setValue(displayed);
 }
 
-[[nodiscard]] inline double numericFieldValue(const kit::KValueField& field,
-                                              const double fallbackScale = 1.0) {
-    const auto scale = field.property("numericDisplayScale");
-    return field.value() / (scale.isValid() ? scale.toDouble() : fallbackScale);
+// The stored value behind a field's shown number: the field's own display scale divides it back.
+[[nodiscard]] inline double numericFieldValue(const kit::KValueField& field) {
+    return field.storedValue();
 }
 
 } // namespace bloom::ui

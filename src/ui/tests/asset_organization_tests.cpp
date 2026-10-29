@@ -302,11 +302,12 @@ void run() {
     rename(*tree, item(assets::kCompositionRole, edit.value()), "Cut");
     require(session.snapshot().project().findComposition(edit)->name() == "Cut",
             "inline composition rename");
-    const auto beforeCancel = session.snapshot().revision();
-    rename(*tree, item(assets::kAssetRole, a.value()), "Discard", true);
-    require(session.snapshot().revision() == beforeCancel &&
-                item(assets::kAssetRole, a.value())->text(assets::NameColumn) == "First plate",
-            "cancelled rename restores row without authoring");
+    // Escape confirms everywhere (owner, 2026-10-29): it commits like Return; Undo is the discard.
+    rename(*tree, item(assets::kAssetRole, a.value()), "Escaped", true);
+    require(session.snapshot().project().findAsset(a)->name == "Escaped",
+            "Escape commits an inline rename");
+    require(session.undo() && session.snapshot().project().findAsset(a)->name == "First plate",
+            "one undo discards the Escape-committed rename");
 
     // Edit Tags from the context menu.
     bool editedDialog = false;

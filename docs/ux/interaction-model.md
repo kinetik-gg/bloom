@@ -26,7 +26,9 @@ hosts reach with a modifier — bare letters belong to tools.
   field: a value field with its editor closed, a colour chip, a switch and a dropdown have no use for
   them, and swallowing them there made "click a card, press Delete" do nothing at all. A field whose
   text editor is open — the rename field, a text content row, a value field the artist has clicked
-  into — keeps them.
+  into — keeps them. A value field at rest claims only the keys it answers (Up/Down, Page Up/Page
+  Down, Return and the characters that start an entry); Left, Right, Home and End stay the
+  transport's, and a click or scrub never leaves keyboard focus on the field.
 - **Reserved keys are left unbound**, so the gesture that will own them is not taken first. Nothing
   is reserved at the moment: `Ctrl+G` and `Ctrl+Shift+G` were, and the Nodes canvas now binds them
   to grouping and ungrouping.
@@ -210,7 +212,7 @@ different things. The play button reports whether the range it is about to play 
 | --- | --- |
 | Click the frame field | Opens an inline editor seeded with the current frame in the field's reading |
 | Type a frame number, `Return` | Seeks to that frame's exact mapped time, clamped to the composition's range |
-| `Escape` or focus loss while editing | Commits, like `Return` (Escape confirms everywhere); an unparseable entry reverts in silence |
+| `Escape` or focus loss while editing | Commits, like `Return` (Escape confirms everywhere). Text that is not a frame or a timecode is refused: `Return` keeps the editor open with the reason; `Escape` or focus loss closes it on the current frame |
 | Right-click the frame field > Frames / Timecode | Switches the reading between a frame index and non-drop timecode |
 
 The field's editor takes a frame number or a timecode in the composition's own numbering (start
@@ -275,7 +277,7 @@ search or inline rename field.
 | Add > Import…, footer Import, File > Import | Imports into the selected folder: a selected folder, or the folder of the selected item; the root with nothing selected |
 | Select > All / None | Selects all visible rows or clears the selection |
 | Click, Shift-click, Ctrl-click; Up/Down/Left/Right, Home/End | Selects one row, a range or a set; arrows move and Left/Right collapse or expand folders |
-| F2 or Return | Renames the current row in place (asset, composition or folder); Escape cancels |
+| F2 or Return | Renames the current row in place (asset, composition or folder); Return, Escape and clicking away commit |
 | Delete or Backspace, footer Delete | Deletes the selection; a used item, or a folder that holds items, asks first (see below) |
 | Double-click a composition | Switches the shared `CompositionSession` to that composition, as in After Effects; it opens no dialog. Double-clicking a folder expands it |
 | Click a Tags cell | Filters by the asset's first tag |
@@ -510,7 +512,7 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | `Ctrl+K` | Split selected layers at the playhead (also Timeline Edit) |
 | Click / Ctrl-click / Shift-click row | Select one / toggle membership / extend contiguous selection |
 | Drag row | Reorder stable slots at the insertion indicator |
-| Double-click name | Inline rename in the name label's bounds; Return or focus loss commits changed text once, unchanged text creates no transaction, Escape cancels |
+| Double-click name | Inline rename in the name label's bounds; Return, Escape, Tab or focus loss commits changed text once, unchanged text creates no transaction, an empty name is refused with its reason |
 | Right-click row | Duplicate, Delete, Rename, Blending, Label Color, Split at Playhead |
 | Right-click empty layer-table space | Add submenu (existing Solid, Text and shape actions); direct Keyframes, Graph Editor, Snap to Frames, Zoom to Fit, Select All and Deselect All actions. Opening or dismissing the menu preserves selection |
 | `Ctrl+wheel` over ruler or lanes | Zoom time about the pointer; the pointer's time stays fixed until a composition boundary clamps the range |
@@ -644,7 +646,8 @@ None and the other layers of the same Merge, then Alpha, Luma and Inverted for t
 | Escape in search | Clear query, restore rows and return focus to the panel |
 | Scrub a numeric row | Preview locally; commit once on release; cancellation writes nothing |
 | Click color / text disclosure chevron | Reveal detailed color components / multiline text editing |
-| Leave a multiline editor | Commit the complete text as one parameter edit |
+| Leave a multiline editor, `Escape`, `Ctrl+Return` | Commit the complete text as one parameter edit |
+| `Escape` in a value field or text row | Commits what was typed (Escape confirms everywhere); Undo discards |
 | Click section-header jump icon / driver link | Select the target and frame it in the node canvas |
 | Right-click parameter row or control | Reset to its registered default; driven reset disconnects with Undo support |
 | Wheel over the body | Scroll cards beneath the panel header search |

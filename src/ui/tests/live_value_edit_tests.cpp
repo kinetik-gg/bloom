@@ -152,9 +152,12 @@ void fieldsShareLiveValues() {
                 checked(session.effectiveVec2Value(fixture.position())).x == 123,
             "typed value is projected on all three surfaces before Enter");
     require(fixture.history.size() == 0, "typing has no history while unfinished");
+    // Escape confirms everywhere (owner, 2026-10-29): the typed value is committed once.
     QTest::keyClick(property->lineEdit(), Qt::Key_Escape);
-    require(property->value() == base && card->value() == base && fixture.history.size() == 0,
-            "Escape restores both fields without a transaction");
+    require(property->value() == 123 && card->value() == 123 && fixture.history.size() == 1,
+            "Escape commits the typed value once, on both fields");
+    (void)base;
+    fixture.history.clear();
     QTest::keyClick(property, Qt::Key_Return);
     QTest::keyClicks(property->lineEdit(), "42");
     QTest::keyClick(property->lineEdit(), Qt::Key_Return);
@@ -167,7 +170,10 @@ void fieldsShareLiveValues() {
                      card->mapToGlobal(start + QPoint(20, 0)), Qt::NoButton, Qt::LeftButton,
                      Qt::ControlModifier);
     QApplication::sendEvent(card, &move);
-    require(card->isScrubbing() && property->value() == card->value() && card->value() == 44,
+    // Twenty pixels, less the drag threshold's dead zone, at a tenth of a step each.
+    const double scrubbed = 42.0 + (20 - QApplication::startDragDistance()) * 0.1;
+    require(card->isScrubbing() && property->value() == card->value() &&
+                std::abs(card->value() - scrubbed) < 1e-9,
             "node scrub immediately refreshes Properties with the fine modifier");
     require(fixture.history.size() == 0, "node drag has not committed");
     QTest::mouseRelease(card, Qt::LeftButton, Qt::ControlModifier, start + QPoint(20, 0));
@@ -185,8 +191,9 @@ void fieldsShareLiveValues() {
     require(property->value() == 88 && card->value() == 88 && fixture.history.size() == 0,
             "timeline typing updates Properties and node card without committing");
     QTest::keyClick(timelineField->lineEdit(), Qt::Key_Escape);
-    require(timelineField->value() == property->value() && fixture.history.size() == 0,
-            "timeline Escape cancels without history");
+    require(timelineField->value() == 88 && property->value() == 88 && fixture.history.size() == 1,
+            "timeline Escape commits once");
+    fixture.history.clear();
     QTest::keyClick(timelineField, Qt::Key_Return);
     QTest::keyClicks(timelineField->lineEdit(), "91");
     QTest::keyClick(timelineField->lineEdit(), Qt::Key_Return);
@@ -210,9 +217,9 @@ void fieldsShareLiveValues() {
     fixture.history.clear();
     QTest::mousePress(picker, Qt::LeftButton, Qt::NoModifier, at + QPoint(10, 10));
     QTest::keyClick(picker, Qt::Key_Escape);
-    require(fixture.history.size() == 0 &&
-                session.effectiveColorValue(document::kSolidColorParameterRole) == color,
-            "picker Escape cancels without history");
+    require(fixture.history.size() == 1 && !session.valueEditActive() && !picker->isVisible(),
+            "picker Escape closes it and keeps the picked colour as one edit");
+    (void)color;
 }
 
 void interactiveBeforeCommit() {
@@ -410,16 +417,18 @@ void timelineColorBoundary() {
             "undo restores the scrubbed colour as one coherent step");
     fixture.history.clear();
 
-    // Escape cancels the same pointer gesture without history.
+    // Escape confirms the same pointer gesture: it ends the scrub as one transaction.
     row.bind(entry);
-    const double cancelBase = field->value();
     QTest::mousePress(field, Qt::LeftButton, Qt::NoModifier, pressPoint);
     QApplication::sendEvent(field, &move);
-    require(field->isScrubbing() && fixture.history.size() == 0, "the scrub is live before cancel");
+    require(field->isScrubbing() && fixture.history.size() == 0, "the scrub is live before Escape");
     QTest::keyClick(field, Qt::Key_Escape);
-    require(field->value() == cancelBase && session.constantColorValue(parameterId) == base &&
-                fixture.history.size() == 0,
-            "Escape cancels the timeline colour scrub without history");
+    require(!field->isScrubbing() && fixture.history.size() == 1,
+            "Escape commits the timeline colour scrub once");
+    require(session.undo() && session.constantColorValue(parameterId) == base,
+            "Undo is the discard");
+    fixture.history.clear();
+    QTest::mouseRelease(field, Qt::LeftButton, Qt::NoModifier, pressPoint);
 
     // Typing an out-of-range RGB number into a display-mode field authors it as a reference channel
     // and switches the row to honest reference presentation, preserving the other channels.
@@ -467,8 +476,8 @@ void timelineColorBoundary() {
     QTest::keyClick(field, Qt::Key_Return);
     QTest::keyClicks(field->lineEdit(), "0.9");
     QTest::keyClick(field->lineEdit(), Qt::Key_Escape);
-    require(session.constantColorValue(parameterId) == beforeCancel && fixture.history.size() == 0,
-            "Escape on a timeline colour field restores without history");
+    require(session.constantColorValue(parameterId) != beforeCancel && fixture.history.size() == 1,
+            "Escape on a timeline colour field commits the typed number once");
 }
 } // namespace
 int main(int argc, char** argv) {

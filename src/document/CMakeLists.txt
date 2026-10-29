@@ -16,6 +16,7 @@ target_sources(
         layer_stack.cpp
         new_project.cpp
         parameter.cpp
+        parameter_presentation.cpp
         shape.cpp
         persisted_text.cpp
         project.cpp
@@ -43,6 +44,7 @@ target_sources(
             include/bloom/document/layer_time.hpp
             include/bloom/document/new_project.hpp
             include/bloom/document/parameter.hpp
+            include/bloom/document/parameter_presentation.hpp
             include/bloom/document/shape.hpp
             include/bloom/document/persisted_text.hpp
             include/bloom/document/project.hpp
@@ -65,6 +67,16 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_document_node_model_test PRIVATE bloom_document)
     bloom_enable_warnings(bloom_document_node_model_test)
     bloom_add_test(NAME bloom.document.node-model COMMAND bloom_document_node_model_test LABELS unit)
+
+    add_executable(bloom_document_parameter_presentation_test
+                   tests/parameter_presentation_tests.cpp)
+    target_link_libraries(bloom_document_parameter_presentation_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_parameter_presentation_test)
+    bloom_add_test(
+        NAME bloom.document.parameter-presentation
+        COMMAND bloom_document_parameter_presentation_test
+        LABELS unit
+    )
 
 
     add_executable(bloom_document_render_reachability_test tests/render_reachability_tests.cpp)

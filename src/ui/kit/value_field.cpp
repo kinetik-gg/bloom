@@ -2,35 +2,29 @@
 
 #include "value_field_format.hpp"
 
+#include <bloom/ui/kit/accessibility.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/inline_edit.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/theme.hpp>
 
-#include <QApplication>
-#include <QEnterEvent>
-#include <QEvent>
-#include <QFocusEvent>
+#include <QAccessible>
 #include <QFontMetrics>
-#include <QHelpEvent>
-#include <QKeyEvent>
-#include <QLineEdit>
-#include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
-#include <QResizeEvent>
-#include <QSignalBlocker>
-#include <QToolTip>
-#include <QWheelEvent>
+#include <QTimer>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+
+// The value field is split in two: this file owns its configuration, formatting, geometry and
+// painting; value_field_input.cpp owns the gestures (scrub, keys, wheel, typed entry).
 
 namespace bloom::ui::kit {
 namespace {
-
-// Long labels share a capped column; short component labels claim only their glyph width.
-constexpr int kMaximumLabelColumnWidth = 72;
 
 // The cell's own horizontal padding: the inset the painted value AND the inline editor both use, so
 // the number sits at one x whichever of the two is drawing it.
@@ -43,33 +37,43 @@ constexpr int kCellPaddingX = px(Spacing::S);
 // kit_value_field_tests.cpp pins that off a real render rather than off this arithmetic.
 constexpr int kLineEditTextMargin = 2;
 
+// The resting text of a multi-selection whose values differ.
+const QString& mixedText() {
+    static const QString text = QString(QChar(0x2014));
+    return text;
+}
+
 } // namespace
 
 KValueField::KValueField(QWidget* parent) : QWidget(parent) {
+    installKitAccessibility();
     setFixedHeight(px(Size::Control));
     ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kValueField"));
-    setFocusPolicy(Qt::StrongFocus);
+    // Tab reaches the field; a click does not take focus. A press is a scrub or opens the editor,
+    // and neither needs the field itself to hold focus afterwards -- holding it is what used to
+    // leave the transport and frame-step keys dead after a scrub.
+    setFocusPolicy(Qt::TabFocus);
     setAttribute(Qt::WA_Hover, true);
     setFont(kit::font(TypeRole::Ui));
     // The whole control is a scrub handle, label included -- exactly as in After Effects, where
     // dragging the parameter's name drags its value.
     setCursor(Qt::SizeHorCursor);
+    resetText_ = tr("Reset");
 
     // The text editor exists for the control's whole life rather than being built on demand: it
     // carries focus while editing, and a widget that is created and destroyed inside a focus
-    // transition is a reliable way to lose that focus to the wrong place.
-    editor_ = new QLineEdit(this);
+    // transition is a reliable way to lose that focus to the wrong place. It is the kit text field
+    // in its embedded form: no box of its own, because the cell this widget paints is the only
+    // fill and its hairline the only border.
+    editor_ = new KTextField(this);
     editor_->setObjectName(QStringLiteral("kValueFieldEditor"));
-    editor_->setFrame(false);
+    editor_->setEmbedded(true);
+    editor_->setTypeRole(TypeRole::Value);
     editor_->setAlignment(Qt::AlignVCenter | Qt::AlignRight);
-    editor_->setFont(kit::font(TypeRole::Value));
     editor_->setCursor(Qt::IBeamCursor);
-    // The editor contributes NO background of its own: the cell this widget paints is the only
-    // fill, and the Accent hairline on that cell is the only border. Base is what the style fills a
-    // line edit's panel with; Window is what Qt fills a widget's rectangle with whenever the widget
-    // is painted as a root -- which is exactly what happens to it inside a QGraphicsProxyWidget on
-    // a node card, and what previously left an opaque plate over the cell the moment editing began.
+    // Window is what Qt fills a widget's rectangle with whenever the widget is painted as a root --
+    // which is exactly what happens to it inside a QGraphicsProxyWidget on a node card.
     QPalette editorPalette = editor_->palette();
     editorPalette.setColor(QPalette::Base, Qt::transparent);
     editorPalette.setColor(QPalette::Window, Qt::transparent);
@@ -79,30 +83,32 @@ KValueField::KValueField(QWidget* parent) : QWidget(parent) {
     editor_->setPalette(editorPalette);
     editor_->setAttribute(Qt::WA_NoSystemBackground, true);
     editor_->setAutoFillBackground(false);
-    // A palette alone is not enough: the application installs a global stylesheet, and the moment
-    // one exists QStyleSheetStyle -- not Fusion -- draws PE_PanelLineEdit, with a panel of its own
-    // that ignores this widget's palette and lands an opaque plate over the cell. The one way to
-    // reach that painter is a rule, so the editor carries the smallest possible one: no box, no
-    // background, the cell's padding expressed as zero (it travels in the text margins instead),
-    // and the selection colors the palette above already names.
-    editor_->setStyleSheet(expandTokens(QStringLiteral(R"(
-QLineEdit#kValueFieldEditor {
-    background: transparent;
-    border: none;
-    padding: 0px;
-    margin: 0px;
-    color: {color.Foreground};
-    selection-background-color: {color.Accent};
-    selection-color: {color.Foreground};
-}
-)")));
     editor_->hide();
     editor_->installEventFilter(this);
+    inline_ = &editor_->useInlineEdit([this](const QString& text) { return refusalFor(text); });
+    connect(inline_, &KInlineEdit::refusalChanged, this, [this] { update(); });
+    connect(inline_, &KInlineEdit::accepted, this,
+            [this](const QString&, const KInlineEdit::Ending ending) {
+                endEdit(true);
+                if (ending == KInlineEdit::Ending::Tab || ending == KInlineEdit::Ending::Backtab)
+                    focusNextPrevChild(ending == KInlineEdit::Ending::Tab);
+            });
+    connect(inline_, &KInlineEdit::refused, this, [this] { endEdit(false); });
     connect(editor_, &QLineEdit::textEdited, this, [this](const QString& text) {
-        bool valid = false;
-        const double value = text.toDouble(&valid);
-        if (editing_ && valid && std::isfinite(value) && value >= minimum_ && value <= maximum_)
-            commitValue(value);
+        if (editing_)
+            (void)applyTyped(text);
+    });
+
+    stepperTimer_ = new QTimer(this);
+    connect(stepperTimer_, &QTimer::timeout, this, &KValueField::stepperRepeat);
+    wheelIdle_ = new QTimer(this);
+    wheelIdle_->setSingleShot(true);
+    wheelIdle_->setInterval(kWheelGestureIdleMs);
+    connect(wheelIdle_, &QTimer::timeout, this, [this] {
+        if (wheelGesture_) {
+            wheelGesture_ = false;
+            finishInteraction(true);
+        }
     });
 }
 
@@ -117,8 +123,15 @@ void KValueField::setCompact(const bool compact) {
     update();
 }
 
+void KValueField::setOutlinedAtRest(const bool outlined) {
+    outlinedAtRest_ = outlined;
+    update();
+}
+
 void KValueField::setStepper(const bool stepper) {
     stepper_ = stepper;
+    if (editing_)
+        layOutEditor();
     update();
 }
 
@@ -153,7 +166,40 @@ void KValueField::setSpecialValueText(const QString& text) {
 
 QString KValueField::specialValueText() const { return specialValueText_; }
 
+void KValueField::setPresentation(const ValueFieldPresentation& presentation) {
+    if (interactionActive_)
+        return;
+    setIntegerMode(presentation.integer);
+    setDisplayScale(presentation.displayScale);
+    if (presentation.integer)
+        setIntegerRange(valueFieldSaturatingInteger(std::ceil(presentation.minimum)),
+                        valueFieldSaturatingInteger(std::floor(presentation.maximum)));
+    else
+        setRange(presentation.minimum, presentation.maximum);
+    setSoftRange(presentation.softMinimum, presentation.softMaximum);
+    setSingleStep(presentation.step);
+    setDecimals(presentation.integer ? 0 : presentation.decimals);
+    setUnit(presentation.unit);
+}
+
+ValueFieldPresentation KValueField::presentation() const {
+    return {.minimum = minimum(),
+            .maximum = maximum(),
+            .softMinimum = softMinimum(),
+            .softMaximum = softMaximum(),
+            .step = step_,
+            .decimals = decimals_,
+            .unit = unit_,
+            .displayScale = displayScale_,
+            .integer = integer_};
+}
+
 void KValueField::setRange(const double minimum, const double maximum) {
+    if (integer_) {
+        setIntegerRange(valueFieldSaturatingInteger(std::ceil(minimum)),
+                        valueFieldSaturatingInteger(std::floor(maximum)));
+        return;
+    }
     minimum_ = minimum;
     maximum_ = std::max(maximum, minimum);
     commitValue(value_);
@@ -164,54 +210,162 @@ double KValueField::minimum() const noexcept { return minimum_; }
 
 double KValueField::maximum() const noexcept { return maximum_; }
 
-void KValueField::setSingleStep(const double step) { step_ = std::abs(step); }
+void KValueField::setSoftRange(const double minimum, const double maximum) {
+    softMinimum_ = std::max(minimum, minimum_);
+    softMaximum_ = std::min(std::max(maximum, minimum), maximum_);
+}
+
+void KValueField::setSingleStep(const double step) {
+    step_ = std::abs(step);
+    if (integer_)
+        step_ = std::max(1.0, std::round(step_));
+}
 
 double KValueField::singleStep() const noexcept { return step_; }
 
 void KValueField::setDecimals(const int decimals) {
-    decimals_ = std::clamp(decimals, 0, 9);
+    decimals_ = integer_ ? 0 : std::clamp(decimals, 0, 9);
     updateGeometry();
     update();
 }
 
 int KValueField::decimals() const noexcept { return decimals_; }
 
+void KValueField::setDisplayScale(const double scale) {
+    displayScale_ = scale != 0.0 && std::isfinite(scale) ? scale : 1.0;
+}
+
 double KValueField::value() const noexcept { return value_; }
 
 void KValueField::setValue(const double value) {
-    // See the header: a live scrub owns the cell. A projection that arrived mid-drag -- another
+    // See the header: a live gesture owns the cell. A projection that arrived mid-drag -- another
     // surface's edit, a time change -- would otherwise snap the number back under the pointer and
     // the rest of the gesture would carry on from the wrong base.
-    if (scrubbing_ || editing_) {
+    if (scrubbing_ || editing_)
         return;
+    if (mixed_) {
+        mixed_ = false;
+        update();
     }
-    commitValue(value);
+    if (integer_)
+        commitInteger(valueFieldSaturatingInteger(std::round(value)));
+    else
+        commitValue(value);
 }
+
+void KValueField::setIntegerMode(const bool integer) {
+    if (integer_ == integer)
+        return;
+    integer_ = integer;
+    if (integer) {
+        integerMinimum_ = valueFieldSaturatingInteger(std::ceil(minimum_));
+        integerMaximum_ =
+            std::max(integerMinimum_, valueFieldSaturatingInteger(std::floor(maximum_)));
+        integerValue_ = std::clamp(valueFieldSaturatingInteger(std::round(value_)), integerMinimum_,
+                                   integerMaximum_);
+        minimum_ = static_cast<double>(integerMinimum_);
+        maximum_ = static_cast<double>(integerMaximum_);
+        value_ = static_cast<double>(integerValue_);
+        decimals_ = 0;
+        step_ = std::max(1.0, std::round(step_));
+        displayScale_ = 1.0;
+    }
+    updateGeometry();
+    update();
+}
+
+void KValueField::setIntegerRange(const std::int64_t minimum, const std::int64_t maximum) {
+    if (!integer_)
+        setIntegerMode(true);
+    integerMinimum_ = minimum;
+    integerMaximum_ = std::max(minimum, maximum);
+    minimum_ = static_cast<double>(integerMinimum_);
+    maximum_ = static_cast<double>(integerMaximum_);
+    commitInteger(integerValue_);
+    updateGeometry();
+    update();
+}
+
+void KValueField::setIntegerValue(const std::int64_t value) {
+    if (scrubbing_ || editing_)
+        return;
+    if (!integer_)
+        setIntegerMode(true);
+    if (mixed_) {
+        mixed_ = false;
+        update();
+    }
+    commitInteger(value);
+}
+
+void KValueField::setMixed(const bool mixed) {
+    if (interactionActive_ || mixed_ == mixed)
+        return;
+    mixed_ = mixed;
+    update();
+}
+
+void KValueField::setDefaultValue(const double value) {
+    default_ = value;
+    update();
+}
+
+void KValueField::clearDefaultValue() {
+    default_.reset();
+    update();
+}
+
+bool KValueField::isNonDefault() const noexcept {
+    // Half of the last shown place is the tolerance: a default the display cannot tell from the
+    // value is no difference to mark.
+    return default_.has_value() && !mixed_ &&
+           std::abs(value_ - *default_) > 0.5 * std::pow(10.0, -decimals_);
+}
+
+void KValueField::setResetText(const QString& text) { resetText_ = text; }
 
 void KValueField::commitValue(const double value) {
     if (!std::isfinite(value))
         return;
-    const double clamped = std::clamp(value, minimum_, maximum_);
-    if (clamped == value_) {
+    if (integer_) {
+        commitInteger(valueFieldSaturatingInteger(std::round(value)));
         return;
     }
+    const double clamped = std::clamp(value, minimum_, maximum_);
+    if (clamped == value_)
+        return;
     value_ = clamped;
     update();
+    if (QAccessible::isActive()) {
+        QAccessibleValueChangeEvent change(this, value_);
+        QAccessible::updateAccessibility(&change);
+    }
     Q_EMIT valueChanged(value_);
 }
 
-void KValueField::stepBy(const int steps) {
-    commitValue(value_ + step_ * static_cast<double>(steps));
+void KValueField::commitInteger(const std::int64_t value) {
+    const std::int64_t clamped = std::clamp(value, integerMinimum_, integerMaximum_);
+    if (clamped == integerValue_ && static_cast<double>(clamped) == value_)
+        return;
+    integerValue_ = clamped;
+    value_ = static_cast<double>(clamped);
+    update();
+    if (QAccessible::isActive()) {
+        QAccessibleValueChangeEvent change(this, static_cast<qlonglong>(integerValue_));
+        QAccessible::updateAccessibility(&change);
+    }
+    Q_EMIT integerValueChanged(static_cast<qint64>(integerValue_));
+    Q_EMIT valueChanged(value_);
 }
 
 double KValueField::scrubScale(const Qt::KeyboardModifiers modifiers) noexcept {
     // Shift outranks Ctrl when both are held: the coarse gesture is the one the artist asked for
     // last in every host that offers both, and one of the two has to win.
     if (modifiers.testFlag(Qt::ShiftModifier)) {
-        return 10.0;
+        return kCoarseStepMultiple;
     }
     if (modifiers.testFlag(Qt::ControlModifier)) {
-        return 0.1;
+        return 1.0 / kCoarseStepMultiple;
     }
     return 1.0;
 }
@@ -222,15 +376,27 @@ bool KValueField::isEditing() const noexcept { return editing_; }
 
 QLineEdit* KValueField::lineEdit() const noexcept { return editor_; }
 
+QString KValueField::refusal() const { return inline_->refusal(); }
+
+QString KValueField::numberText(const int decimals) const {
+    return integer_ ? valueFieldExactText(integerValue_) : valueFieldNumber(value_, decimals);
+}
+
+QString KValueField::editText() const {
+    return integer_ ? valueFieldExactText(integerValue_) : valueFieldExactText(value_);
+}
+
 QString KValueField::displayedValue() const {
+    if (mixed_)
+        return mixedText();
     if (!specialValueText_.isEmpty() && value_ == minimum_)
         return specialValueText_;
-    return valueFieldNumber(value_, compact_ ? std::min(decimals_, 2) : decimals_, compact_);
+    return numberText(decimals_);
 }
 
 KValueField::RestingText KValueField::restingText() const {
     const auto full = displayedValue();
-    const bool special = !specialValueText_.isEmpty() && value_ == minimum_;
+    const bool special = mixed_ || (!specialValueText_.isEmpty() && value_ == minimum_);
     const bool wantsUnit = !unit_.isEmpty() && !special;
     const QFontMetrics metrics(kit::font(TypeRole::Value));
     const auto column = cellTextRect().width();
@@ -239,18 +405,26 @@ KValueField::RestingText KValueField::restingText() const {
         return metrics.horizontalAdvance(text) + reserved <= column;
     };
     if (fits(full, unitColumn) || special)
-        return {full, wantsUnit};
+        return {full, wantsUnit, false};
     if (fits(full, 0))
-        return {full, false};
-    // Fewer places, rounded, until the number fits; the whole number is the last resort and is
-    // painted even when it cannot fit, since a number cut by its column would misstate the value.
-    const int decimals = compact_ ? std::min(decimals_, 2) : decimals_;
-    for (int places = decimals - 1; places >= 0; --places) {
-        const auto shorter = valueFieldNumber(value_, places, compact_);
-        if (fits(shorter, 0) || places == 0)
-            return {shorter, false};
+        return {full, false, false};
+    // Fewer places, rounded, until the number fits.
+    if (!integer_) {
+        for (int places = decimals_ - 1; places >= 0; --places) {
+            const auto shorter = numberText(places);
+            if (fits(shorter, 0))
+                return {shorter, false, true};
+        }
     }
-    return {full, false};
+    // Then scientific notation with fewer and fewer significant digits, and an ellipsis when not
+    // even one digit fits: a number cut by its column would misstate the value.
+    constexpr int kMostSignificantDigits = 6;
+    for (int digits = kMostSignificantDigits; digits >= 1; --digits) {
+        const auto scientific = valueFieldScientific(value_, digits);
+        if (fits(scientific, 0))
+            return {scientific, false, true};
+    }
+    return {QString(QChar(0x2026)), false, true};
 }
 
 QString KValueField::paintedText() const {
@@ -258,9 +432,19 @@ QString KValueField::paintedText() const {
     return text.unit ? text.value + QLatin1Char(' ') + unit_ : text.value;
 }
 
+bool KValueField::isDisplayRounded() const { return restingText().rounded; }
+
+QString KValueField::exactToolTip() const {
+    if (mixed_)
+        return tr("Mixed values");
+    const auto exact = editText();
+    return unit_.isEmpty() ? exact : exact + QLatin1Char(' ') + unit_;
+}
+
 int KValueField::labelColumnWidth() const {
-    return std::min(kMaximumLabelColumnWidth,
-                    QFontMetrics(kit::font(TypeRole::Ui)).horizontalAdvance(label_));
+    // Measured in the role it is painted in; a longer label elides inside the capped column.
+    return std::min(px(Size::ValueFieldLabelColumn),
+                    QFontMetrics(kit::font(TypeRole::UiSmall)).horizontalAdvance(label_));
 }
 
 QRectF KValueField::labelRect() const {
@@ -286,13 +470,18 @@ QRectF KValueField::cellTextRect() const {
 }
 
 Color KValueField::borderToken() const {
+    if (editing_ && inline_->hasRefusal())
+        return Color::Error;
     return borderForInteraction(isEnabled(), editing_ || hasKeyboardFocus(*this), hovered_);
 }
 
 QColor KValueField::cellBorderColor() const {
-    // Borderless at rest (a compact field excepted): the resting token resolves to nothing drawn
-    // at all, so the cell is a plain Field rectangle until hover or focus gives it its one border.
-    return fieldColors(isEnabled(), editing_ || hasKeyboardFocus(*this), hovered_, compact_).border;
+    if (editing_ && inline_->hasRefusal())
+        return color(Color::Error);
+    // Borderless at rest unless outlined: the resting token resolves to nothing drawn at all, so
+    // the cell is a plain Field rectangle until hover or focus gives it its one border.
+    return fieldColors(isEnabled(), editing_ || hasKeyboardFocus(*this), hovered_, outlinedAtRest_)
+        .border;
 }
 
 State KValueField::visualState() const {
@@ -319,7 +508,11 @@ QSize KValueField::sizeHint() const {
     // Sized for the widest number the range can produce, not for the number currently in it: the
     // field must not resize as digits change.
     const QString widest =
-        valueFieldNumber(std::max(std::abs(minimum_), std::abs(maximum_)), decimals_, false);
+        integer_ ? (valueFieldExactText(integerMinimum_).size() >
+                            valueFieldExactText(integerMaximum_).size()
+                        ? valueFieldExactText(integerMinimum_)
+                        : valueFieldExactText(integerMaximum_))
+                 : valueFieldNumber(std::max(std::abs(minimum_), std::abs(maximum_)), decimals_);
     int cellWidth = valueMetrics.horizontalAdvance(widest) + px(Spacing::S) * 2;
     if (!unit_.isEmpty()) {
         cellWidth += valueMetrics.horizontalAdvance(unit_) + px(Spacing::XS);
@@ -334,19 +527,18 @@ QSize KValueField::sizeHint() const {
 QSize KValueField::minimumSizeHint() const {
     if (compact_)
         return {minimumWidth(), px(Size::Control)};
-    // task WIDTH-1: sizeHint() above is this field's PREFERRED width, sized for the widest number
-    // its own range can produce so the cell never resizes as digits change. minimumSizeHint() is a
-    // different question -- the FLOOR this cell may shrink to when the panel hosting it (Properties
-    // above all) is narrower than every field's combined preferred width. That floor is
-    // Size::ValueCellMin, not the range's own widest string, so a narrow panel degrades every cell
-    // in it to the same legible width instead of each row committing to its own.
+    // sizeHint() above is this field's PREFERRED width, sized for the widest number its own range
+    // can produce so the cell never resizes as digits change. minimumSizeHint() is the FLOOR this
+    // cell may shrink to when the panel hosting it is narrower than every field's combined
+    // preferred width: Size::ValueCellMin, so a narrow panel degrades every cell in it to the same
+    // legible width instead of each row committing to its own.
     const int labelWidth = label_.isEmpty() ? 0 : labelColumnWidth() + px(Spacing::S);
     return {labelWidth + px(Size::ValueCellMin), px(Size::Control)};
 }
 
 void KValueField::layOutEditor() {
-    // The editor IS the cell: exactly its rectangle, so the Field fill and the one Accent hairline
-    // this widget paints stay the cell's own outline rather than being joined by a second, smaller
+    // The editor IS the cell: exactly its rectangle, so the Field fill and the one hairline this
+    // widget paints stay the cell's own outline rather than being joined by a second, smaller
     // rectangle with its own background and corners. The cell's padding reaches the editor as text
     // margins instead of as geometry, and the unit's column is reserved on the right because the
     // unit keeps being painted while editing -- together that is what holds the number's x fixed
@@ -361,338 +553,23 @@ void KValueField::layOutEditor() {
         static_cast<int>(cellRect().right() - text.right()) + unitColumn - kLineEditTextMargin, 0);
 }
 
-void KValueField::beginEdit() {
-    if (editing_ || !isEnabled()) {
-        return;
-    }
-    beginInteraction();
-    editing_ = true;
-    layOutEditor();
-    editor_->setText(QString::number(value_, 'g', std::numeric_limits<double>::max_digits10));
-    editor_->show();
-    editor_->setFocus(Qt::MouseFocusReason);
-    // Select all on entry: a click-to-edit that kept the caret where the pointer landed would make
-    // replacing the number a two-gesture job.
-    editor_->selectAll();
-    update();
-}
-
-void KValueField::beginInteraction() {
-    if (interactionActive_)
-        return;
-    interactionBase_ = value_;
-    interactionActive_ = true;
-    Q_EMIT editStarted();
-}
-
-void KValueField::finishInteraction(const bool keep) {
-    if (!interactionActive_)
-        return;
-    interactionActive_ = false;
-    if (!keep) {
-        const QSignalBlocker blocker(this);
-        commitValue(interactionBase_);
-    }
-    if (keep)
-        Q_EMIT editFinished();
-    else
-        Q_EMIT editCancelled();
-}
-
-void KValueField::cancelEdit() {
-    const bool wasScrubbing = scrubbing_;
-    pressed_ = false;
-    scrubbing_ = false;
-    stepping_ = false;
-    editing_ = false;
-    editor_->hide();
-    finishInteraction(false);
-    if (wasScrubbing)
-        Q_EMIT scrubCancelled();
-    update();
-}
-
-void KValueField::endEdit(const bool keep) {
-    if (!editing_)
-        return;
-    editing_ = false;
-    bool parsed = false;
-    const double entered = editor_->text().toDouble(&parsed);
-    // Text entry must never silently turn an out-of-domain number into a boundary value. Scrub
-    // and step gestures remain bounded, but an invalid typed edit rolls back to its starting value.
-    const bool accept =
-        keep && parsed && std::isfinite(entered) && entered >= minimum_ && entered <= maximum_;
-    if (accept)
-        commitValue(entered);
-    editor_->hide();
-    finishInteraction(accept);
-    update();
-}
-
-void KValueField::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton && isEnabled()) {
-        if (stepper_ && event->position().x() >= width() - px(Size::PropertiesStepperWidth)) {
-            setFocus(Qt::MouseFocusReason);
-            stepping_ = true;
-            beginInteraction();
-            stepBy(event->position().y() < height() / 2.0 ? 1 : -1);
-            event->accept();
-            return;
-        }
-        pressed_ = true;
-        scrubbing_ = false;
-        pressPosition_ = event->position().toPoint();
-        pressValue_ = value_;
-        setFocus(Qt::MouseFocusReason);
-        event->accept();
-        return;
-    }
-    QWidget::mousePressEvent(event);
-}
-
-void KValueField::mouseMoveEvent(QMouseEvent* event) {
-    if (!pressed_) {
-        QWidget::mouseMoveEvent(event);
-        return;
-    }
-    const int dx = event->position().toPoint().x() - pressPosition_.x();
-    if (!scrubbing_) {
-        if (std::abs(dx) < QApplication::startDragDistance()) {
-            event->accept();
-            return;
-        }
-        scrubbing_ = true;
-        beginInteraction();
-        Q_EMIT scrubStarted();
-    }
-    // Measured from the press, not from the previous move: a scrub that wanders back to where it
-    // started puts the value back exactly, with no accumulated rounding drift.
-    commitValue(pressValue_ + static_cast<double>(dx) * step_ * scrubScale(event->modifiers()));
-    event->accept();
-}
-
-void KValueField::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton && stepping_) {
-        stepping_ = false;
-        finishInteraction(true);
-        event->accept();
-        return;
-    }
-    if (event->button() != Qt::LeftButton || !pressed_) {
-        QWidget::mouseReleaseEvent(event);
-        return;
-    }
-    const bool wasScrubbing = scrubbing_;
-    pressed_ = false;
-    scrubbing_ = false;
-    if (wasScrubbing) {
-        // The one moment in the gesture at which a value is worth writing down.
-        Q_EMIT scrubFinished();
-        finishInteraction(true);
-    } else {
-        // A press that never travelled is a click, and a click opens the editor.
-        beginEdit();
-    }
-    update();
-    event->accept();
-}
-
-void KValueField::wheelEvent(QWheelEvent* event) {
-    if (!hasFocus() || !isEnabled()) {
-        // A wheel over an unfocused field belongs to whatever is scrolling behind it. Stealing it
-        // would silently change a parameter the artist was only scrolling past.
-        QWidget::wheelEvent(event);
-        return;
-    }
-    beginInteraction();
-    stepBy(event->angleDelta().y() > 0 ? 1 : -1);
-    finishInteraction(true);
-    event->accept();
-}
-
-bool KValueField::event(QEvent* event) {
-    // A focused value field owns its editing keys the way a spin box does: claim the
-    // ShortcutOverride so window-level shortcuts (frame stepping, transport jumps) stay inert
-    // while the artist is adjusting a value. Left/Right/Home/End are claimed for parity with the
-    // spin-box widgets this field replaces even though only Up/Down/Page currently step.
-    if (event->type() == QEvent::ShortcutOverride && hasFocus()) {
-        auto* key = static_cast<QKeyEvent*>(event);
-        switch (key->key()) {
-        case Qt::Key_Up:
-        case Qt::Key_Down:
-        case Qt::Key_PageUp:
-        case Qt::Key_PageDown:
-        case Qt::Key_Left:
-        case Qt::Key_Right:
-        case Qt::Key_Home:
-        case Qt::Key_End:
-            event->accept();
-            return true;
-        default:
-            break;
-        }
-    }
-    if (event->type() == QEvent::ToolTip && toolTip().isEmpty() && !editing_ &&
-        paintedText() != (unit_.isEmpty() || (!specialValueText_.isEmpty() && value_ == minimum_)
-                              ? displayedValue()
-                              : displayedValue() + QLatin1Char(' ') + unit_)) {
-        // A fitted resting value shows the exact one on hover.
-        const auto* help = static_cast<QHelpEvent*>(event);
-        QToolTip::showText(
-            help->globalPos(),
-            unit_.isEmpty() ? displayedValue() : displayedValue() + QLatin1Char(' ') + unit_, this);
-        return true;
-    }
-    return QWidget::event(event);
-}
-
-bool KValueField::eventFilter(QObject* watched, QEvent* event) {
-    if (watched != editor_) {
-        return QWidget::eventFilter(watched, event);
-    }
-    if (event->type() == QEvent::KeyPress) {
-        auto* key = static_cast<QKeyEvent*>(event);
-        if (key->key() == Qt::Key_Escape) {
-            endEdit(false);
-            setFocus(Qt::OtherFocusReason);
-            return true;
-        }
-        if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
-            // Consumed here rather than through QLineEdit::returnPressed, because QLineEdit
-            // deliberately leaves Return unaccepted so a dialog's default button can still see it
-            // -- which would send it straight on to this field's own Return handler and reopen the
-            // editor the commit just closed.
-            endEdit(true);
-            setFocus(Qt::OtherFocusReason);
-            return true;
-        }
-        if (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down) {
-            stepBy(key->key() == Qt::Key_Up ? 1 : -1);
-            editor_->setText(QString::number(value_, 'g', 17));
-            editor_->selectAll();
-            return true;
-        }
-        if (key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab) {
-            // Tab commits, then travels on the way Tab always does.
-            endEdit(true);
-            return false;
-        }
-    }
-    if (event->type() == QEvent::FocusOut) {
-        // Clicking away is a commit, not a cancel: the artist typed a value and then went
-        // somewhere else, which in every numeric field in this class of application means "take
-        // it". Esc is the way to not take it.
-        endEdit(true);
-    }
-    return QWidget::eventFilter(watched, event);
-}
-
-void KValueField::keyPressEvent(QKeyEvent* event) {
-    switch (event->key()) {
-    case Qt::Key_Up:
-        beginInteraction();
-        stepBy(1);
-        event->accept();
-        return;
-    case Qt::Key_Down:
-        beginInteraction();
-        stepBy(-1);
-        event->accept();
-        return;
-    case Qt::Key_PageUp:
-        beginInteraction();
-        stepBy(10);
-        event->accept();
-        return;
-    case Qt::Key_PageDown:
-        beginInteraction();
-        stepBy(-10);
-        event->accept();
-        return;
-    case Qt::Key_Return:
-    case Qt::Key_Enter:
-        // The keyboard route into the text editor, for an artist who tabbed here rather than
-        // clicking.
-        if (interactionActive_)
-            finishInteraction(true);
-        else
-            beginEdit();
-        event->accept();
-        return;
-    case Qt::Key_Escape:
-        if (interactionActive_) {
-            cancelEdit();
-            event->accept();
-            return;
-        }
-        break;
-    default:
-        break;
-    }
-    QWidget::keyPressEvent(event);
-}
-
-void KValueField::keyReleaseEvent(QKeyEvent* event) {
-    if (!editing_ && !event->isAutoRepeat() &&
-        (event->key() == Qt::Key_Up || event->key() == Qt::Key_Down ||
-         event->key() == Qt::Key_PageUp || event->key() == Qt::Key_PageDown)) {
-        finishInteraction(true);
-        event->accept();
-        return;
-    }
-    QWidget::keyReleaseEvent(event);
-}
-
-void KValueField::focusOutEvent(QFocusEvent* event) {
-    if (!editing_ && !scrubbing_)
-        finishInteraction(true);
-    QWidget::focusOutEvent(event);
-}
-
-void KValueField::enterEvent(QEnterEvent* event) {
-    if (isEnabled()) {
-        hovered_ = true;
-        update();
-    }
-    QWidget::enterEvent(event);
-}
-
-void KValueField::leaveEvent(QEvent* event) {
-    hovered_ = false;
-    update();
-    QWidget::leaveEvent(event);
-}
-
-void KValueField::changeEvent(QEvent* event) {
-    if (event->type() == QEvent::EnabledChange && !isEnabled()) {
-        hovered_ = false;
-        cancelEdit();
-    }
-    QWidget::changeEvent(event);
-}
-
-void KValueField::resizeEvent(QResizeEvent* event) {
-    if (editing_) {
-        layOutEditor();
-    }
-    QWidget::resizeEvent(event);
-}
-
 void KValueField::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event)
     QPainter painter(this);
     const State state = visualState();
 
     // The one text-entry recipe (kit::fieldColors): a Field well that reads differently from every
-    // button. A compact field stands in a chrome row or a node card, so it keeps a resting outline.
+    // button. A field in a chrome row or on a node card keeps a resting outline.
     const QRectF cell = cellRect();
-    const ButtonColors colors = fieldColors(isEnabled(), editing_ || hasKeyboardFocus(*this),
-                                            hovered_, compact_);
-    fillRoundedSurface(painter, cell, colors.fill, colors.border, Radius::Small);
+    fillRoundedSurface(painter, cell, color(Color::Field), cellBorderColor(), Radius::Small);
     if (!label_.isEmpty()) {
         painter.setFont(kit::font(TypeRole::UiSmall));
         painter.setPen(inkForState(Color::Muted, state));
-        painter.drawText(labelRect(), Qt::AlignVCenter | Qt::AlignLeft, label_);
+        const QRectF labelBounds = labelRect();
+        painter.drawText(labelBounds, Qt::AlignVCenter | Qt::AlignLeft,
+                         QFontMetrics(painter.font())
+                             .elidedText(label_, Qt::ElideRight,
+                                         static_cast<int>(std::floor(labelBounds.width()))));
     }
     if (stepper_) {
         const int extent = px(Size::PropertiesStepperWidth);
@@ -704,6 +581,17 @@ void KValueField::paintEvent(QPaintEvent* event) {
                            iconPixmap(IconId::CaretDown, Size::IconSmall, tint, devicePixelRatioF(),
                                       iconWeight(IconRole::Chrome)));
     }
+    if (isNonDefault()) {
+        // The differs-from-default dot, inside the cell's top-right corner, clear of the number.
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const qreal mark = px(Size::NonDefaultMark);
+        const qreal inset = px(Spacing::XXS);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(inkForState(Color::Accent, state));
+        painter.drawEllipse(QRectF(cell.right() - inset - mark, cell.top() + inset, mark, mark));
+        painter.restore();
+    }
 
     // The value takes the monospaced role; the unit takes muted ink so it reads as a unit rather
     // than as part of the number.
@@ -712,7 +600,7 @@ void KValueField::paintEvent(QPaintEvent* event) {
     const QRectF text = cellTextRect();
     QRectF unitRect;
     const auto resting = restingText();
-    const bool showUnit = !unit_.isEmpty() && (editing_ || resting.unit);
+    const bool showUnit = !unit_.isEmpty() && !mixed_ && (editing_ || resting.unit);
     if (showUnit) {
         const auto unitWidth = static_cast<qreal>(valueMetrics.horizontalAdvance(unit_));
         unitRect = QRectF(text.right() - unitWidth, text.top(), unitWidth, text.height());
@@ -725,12 +613,25 @@ void KValueField::paintEvent(QPaintEvent* event) {
         // entering edit would both lose information and move the number it labels.
         return;
     }
-    painter.setPen(inkForState(Color::Foreground, state));
+    painter.setPen(inkForState(mixed_ ? Color::Muted : Color::Foreground, state));
     const qreal valueRight = showUnit ? unitRect.left() - px(Spacing::XS) : text.right();
     // Clipped to the cell so nothing can paint over the sub-label or the border.
     painter.setClipRect(cell);
-    painter.drawText(QRectF(text.left(), text.top(), valueRight - text.left(), text.height()),
-                     Qt::AlignVCenter | Qt::AlignRight, resting.value);
+    const QRectF valueRect(text.left(), text.top(), valueRight - text.left(), text.height());
+    painter.drawText(valueRect, Qt::AlignVCenter | Qt::AlignRight, resting.value);
+    if (resting.rounded) {
+        // A rounded display is underlined with a dotted Faint hairline: the number is a reading,
+        // and hovering it (or opening the editor) shows the exact value.
+        const qreal advance = valueMetrics.horizontalAdvance(resting.value);
+        const qreal baseline = valueRect.center().y() +
+                               (valueMetrics.ascent() - valueMetrics.descent()) / 2.0 +
+                               px(Spacing::XXS);
+        QPen pen(inkForState(Color::Faint, state));
+        pen.setWidthF(snappedHairlineWidth(devicePixelRatioF()));
+        pen.setStyle(Qt::DotLine);
+        painter.setPen(pen);
+        painter.drawLine(QPointF(valueRight - advance, baseline), QPointF(valueRight, baseline));
+    }
 }
 
 } // namespace bloom::ui::kit
