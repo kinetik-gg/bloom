@@ -149,6 +149,9 @@ enum class Spacing : int {
     PanelHeader = 10,
     ChromePadding = 3,
     ChromeGap = 4,
+    // The space between two groups of one chrome row (the Viewer footer's view, time and framing
+    // groups): three ChromeGaps, so a group boundary reads as a boundary without a drawn divider.
+    ChromeGroupGap = 12,
     // The air between a control widget's own rectangle and the box it paints, on every side and
     // for every control kind (buttons, dropdowns, value fields, icon buttons). One number, so a
     // KButton, a KDropdown and a KValueField in one row paint boxes of exactly the same height:
@@ -195,6 +198,18 @@ enum class Size : int {
     ViewerTimecodeWidth = 104,
     ViewerZoomWidth = 64,
     ViewerResolutionWidth = 96,
+    // The Resolution dropdown's compact form (Auto, Full, ½, ¼) when the footer runs short.
+    ViewerResolutionCompactWidth = 64,
+    // Display / View at most: typical view names ("ACES 1.0 SDR", the built-in config's
+    // srgb_rec709_display) fit whole; longer ones elide and the tooltip carries the full display,
+    // view and colour space.
+    ViewerDisplayViewWidth = 176,
+    // The exposure (EV) and gamma fields.
+    ViewerAdjustWidth = 72,
+    // The no-composition invitation's text column.
+    ViewerEmptyStateWidth = 320,
+    // The dot a Viewer value field shows while it differs from its default.
+    NonDefaultMark = 4,
     ViewerMinWidth = 220,
     ViewerMinHeight = 176,
     MultilineHeight = 78,

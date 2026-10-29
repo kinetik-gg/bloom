@@ -164,10 +164,12 @@ int run(int argc, char** argv) {
             if (const auto* toggle = qobject_cast<kit::KIconToggle*>(widget)) {
                 const auto pixmap = toggle->glyphPixmap();
                 const bool layerSwitch = toggle->property("layerSwitch").toBool();
+                // Layer switches and tool choices are chrome glyphs (IconMedium).
+                const bool chrome = layerSwitch || toggle->property("toolChoice").toBool();
                 const int extent = layerSwitch && !toggle->isChecked()
                                        ? 0
-                                       : qRound(kit::px(layerSwitch ? kit::Size::IconMedium
-                                                                    : kit::Size::IconLarge) *
+                                       : qRound(kit::px(chrome ? kit::Size::IconMedium
+                                                               : kit::Size::IconLarge) *
                                                 widget->devicePixelRatioF());
                 expect(pixmap.width() == extent, widget, "toggle integer physical glyph box");
                 ++icons;
@@ -250,7 +252,8 @@ int run(int argc, char** argv) {
         expect(choice->isEnabled(), choice, "viewer tools enabled");
         expect(choice->height() == kit::px(kit::Size::ToggleCell) && !choice->toolTip().isEmpty(),
                choice, "tool extent and help");
-        expect(tools->rect().contains(choice->geometry()), choice, "tool stays inside column");
+        expect(!choice->isVisible() || tools->rect().contains(choice->geometry()), choice,
+               "tool stays inside column");
     }
     auto* propertiesFilter = fixture.window->findChild<kit::KToolColumn*>("propertiesFilterStrip");
     expect(propertiesFilter == nullptr, fixture.window.get(), "Properties filter strip removed");

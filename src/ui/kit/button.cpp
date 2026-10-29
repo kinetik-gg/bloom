@@ -7,6 +7,7 @@
 #include <QEvent>
 #include <QFontMetrics>
 #include <QPainter>
+#include <cmath>
 #include <QPixmap>
 #include <QRectF>
 
@@ -149,7 +150,6 @@ QSize KButton::sizeHint() const {
         return {controlExtent(), controlExtent()};
     }
 
-    const QFontMetrics metrics(font());
     int width = px(Spacing::M) * 2 + px(Spacing::ControlInset) * 2;
     if (icon_.has_value()) {
         width += px(iconBox());
@@ -158,7 +158,9 @@ QSize KButton::sizeHint() const {
         }
     }
     if (!text().isEmpty()) {
-        width += metrics.horizontalAdvance(text());
+        // The painter lays glyphs out at fractional advances, so the label's integer advance can
+        // fall a fraction short at a fractional device pixel ratio and elide its last letter.
+        width += static_cast<int>(std::ceil(QFontMetricsF(font()).horizontalAdvance(text()))) + 1;
     }
     return {std::max(width, controlExtent()), controlExtent()};
 }

@@ -404,6 +404,9 @@ QSize EditorArea::minimumSizeHint() const {
     if (footer_ != nullptr) {
         height += footer_->sizeHint().height();
     }
+    // A canvas that cannot shrink to nothing (the Viewer) declares its own fixed floor, so the
+    // splitter never squeezes the content below it and pushes the footer out of the panel.
+    height += contentMinimumHeight_;
     return {kit::px(kit::Size::PanelMinWidth), height};
 }
 
@@ -495,8 +498,10 @@ void EditorArea::rebuildEditor(int editorIndex) {
     contentLayout_->addWidget(editorHost_);
     watchForActivation(editorWidget_);
 
+    contentMinimumHeight_ = 0;
     if (auto* provider = dynamic_cast<EditorChromeProvider*>(editorWidget_)) {
         auto& spec = provider->editorChrome();
+        contentMinimumHeight_ = spec.contentMinimumHeight;
         if (spec.hosted)
             spec.hosted();
         if (spec.leading != nullptr) {

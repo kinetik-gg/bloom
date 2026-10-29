@@ -9,11 +9,14 @@
 
 #include <QPointer>
 #include <array>
+#include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+class QAction;
 class QEvent;
 class QHBoxLayout;
 class QMenu;
@@ -24,6 +27,7 @@ class QVBoxLayout;
 
 namespace bloom::ui::kit {
 class KDropdown;
+enum class IconId : std::uint8_t;
 } // namespace bloom::ui::kit
 
 namespace bloom::ui::kit {
@@ -34,29 +38,61 @@ namespace bloom::ui {
 class EditorRegistry;
 
 // Controls and actions are declared by panels; EditorArea owns materialization and layout.
+// Where a chrome-row control sits. Leading packs from the start, Trailing packs against the end,
+// and Centre is one run kept centred in the row while there is room for it (a Viewer's transport).
+enum class EditorChromeGroup : std::uint8_t { Leading, Centre, Trailing };
 struct EditorChromeRowSpec {
     struct Entry {
-        QWidget* control;
+        QWidget* control = nullptr;
         bool menu = false;
         bool visible = true;
         bool trailing = false;
         bool expanding = false;
+        EditorChromeGroup group = EditorChromeGroup::Leading;
+        // Priority collapse. A control with a collapse rank leaves the row for the overflow menu
+        // when the row is too narrow, lowest rank first; there it is offered as `overflow` (an
+        // action, a submenu's action, or a widget action), under its full label. Zero: never.
+        int collapseRank = 0;
+        QAction* overflow = nullptr;
+        // A control with a compact rank switches to its compact form (`setCompact(true)`, at
+        // `compactWidth`) at that rank, before anything with a higher rank collapses.
+        int compactRank = 0;
+        int compactWidth = 0;
+        std::function<void(bool)> setCompact;
+        // A dropdown that may shrink to this width and elide before menus collapse. Zero: never.
+        int elideFloor = 0;
     };
     QString objectName;
     QString overflowButtonName;
     QString overflowMenuName;
+    // The overflow affordance of a priority row: an icon button with this glyph and tooltip,
+    // instead of the "…" menu-strip button the menu collapse uses.
+    std::optional<kit::IconId> overflowIcon;
+    QString overflowToolTip;
     std::vector<Entry> entries;
     QPointer<QWidget> host;
     QWidget* owner = nullptr;
     bool trailing = false;
+    EditorChromeGroup group = EditorChromeGroup::Leading;
     void addWidget(QWidget* control);
     void addExpandingWidget(QWidget* control);
-    void addStretch(int = 1) { trailing = true; }
+    void addStretch(int = 1) {
+        trailing = true;
+        group = EditorChromeGroup::Trailing;
+    }
+    // The controls added after this form the row's centred run.
+    void beginCentre() { group = EditorChromeGroup::Centre; }
+    void setCollapse(QWidget* control, int rank, QAction* overflow);
+    void setCompactForm(QWidget* control, int rank, int width, std::function<void(bool)> compact);
+    void setElideFloor(QWidget* control, int floor);
     QToolButton* addMenuButton(const QString& title, QMenu* menu, const QString& name = {},
                                bool visible = true);
     QToolButton* addMenu(QMenu* menu, const QString& name, bool visible = true);
     QMenu* addMenu(const QString& title);
     void addTopLevelMenu(const QString& title, QMenu* menu) { addMenuButton(title, menu); }
+
+  private:
+    Entry* find(QWidget* control);
 };
 struct EditorCanvasChromeSpec {
     QString objectName;
@@ -79,6 +115,9 @@ struct EditorChromeSpec {
     QWidget* headerCanvas = nullptr;
     // Optional split canvas footer, built through the same chrome helpers as the header.
     QWidget* footerCanvas = nullptr;
+    // The content's own fixed minimum height, added to the header and footer in the panel's
+    // minimum: a canvas editor whose content cannot shrink to nothing (the Viewer) declares it here.
+    int contentMinimumHeight = 0;
     bool maximizeInLeadingHeader = false;
     std::function<int()> splitPosition;
     // task TL-FIX2: EditorArea fixes headerLeft_'s width to splitPosition() once, at rebuild time
@@ -193,6 +232,8 @@ class EditorArea final : public QFrame {
     // Owned by EditorArea from the moment it is taken (reparented here in rebuildEditor()),
     // rebuilt every time the editor changes.
     QWidget* footer_ = nullptr;
+    // The hosted editor's declared content floor (EditorChromeSpec::contentMinimumHeight).
+    int contentMinimumHeight_ = 0;
     // Task NODES-1: the header's own OPTIONAL extra, on the same terms as footer_ above -- non-null
 
     // widget (the node editor is the only one today). Lives in headerLayout_, between the panel
