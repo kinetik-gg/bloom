@@ -1302,6 +1302,8 @@ and `idAllocation.highestIssued.asset: "0"`; all existing IDs and authored value
 Canonical order is `project`'s existing members followed by `assets`; each composition appends
 `backgroundColor` after its optional work area. Background is a four-number straight RGBA array,
 default `[0.0, 0.0, 0.0, 1.0]`. It is viewer presentation metadata and does not fill export alpha.
+The Viewer displays it, opaque, inside the composition frame behind transparent pixels (unless the
+Viewer's Transparency Grid is on); changing it is not render-affecting.
 The asset allocator is appended after `nodeGroup`; asset IDs follow the existing decimal-string
 and never-reuse/high-water rules, including undo and redo.
 

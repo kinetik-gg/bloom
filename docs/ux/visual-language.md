@@ -59,13 +59,19 @@ snapped to a whole number of physical pixels at the device pixel ratio in use
 | `Ok` | `#3FBF6B` | Success and ready states |
 | `Warn` | `#E6A23C` | Warnings and unsupported states |
 | `Error` | `#E0554E` | Failures and destructive actions |
-| `CheckerLight` / `CheckerDark` | `#999999` / `#666666` | The alpha checkerboard: every colour widget and the Viewer's Checkerboard background |
-| `CanvasBlack` / `CanvasWhite` | `#000000` / `#FFFFFF` | The Viewer's exact Black and White backgrounds |
+| `CheckerLight` / `CheckerDark` | `#999999` / `#666666` | The small-swatch alpha checkerboard: colour chips, swatches and the picker's alpha bar |
+| `ViewerCheckerLight` / `ViewerCheckerDark` | `#3A3A3A` / `#2A2A2A` | The Viewer's Transparency Grid inside the composition frame |
+| `CanvasGrey` | `#808080` | The Viewer's neutral mid-grey surround |
+| `CanvasBlack` / `CanvasWhite` | `#000000` / `#FFFFFF` | The Viewer's exact Black and White surrounds |
 
 `OnAccent` on `Accent` measures 4.6:1, which meets WCAG AA for 12 px interface text; the previous
 `#0C8CE9` measured 3.5:1. A heavier weight does not change a contrast ratio, so the accent itself
-was deepened. The checker tones are mid-grey -- the compositing convention -- because a pair of
-dark interface surfaces vanishes under any dark image.
+was deepened. The small-swatch checker tones are mid-grey -- the compositing convention -- because
+a few pixels of a dark colour vanish against a pair of dark interface surfaces. The Viewer's
+Transparency Grid covers a whole frame of image, so it uses a deeper pair that stays quiet next to
+dark footage yet reads as a grid (1.26:1) and stays a clear step above the `Canvas` surround
+(1.30:1), so the frame edge still reads. Both pairs feed the CPU paint and the GPU present from
+these tokens alone.
 
 Data-type palette, for identifying what a thing *is*:
 

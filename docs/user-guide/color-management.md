@@ -51,6 +51,12 @@ toggle to include it while reviewing, or switch it off to inspect the underlying
 is disabled when the composition has no look-tagged effect. Export always includes active look
 effects; use an authored Bypass value when the exported handoff itself must omit one.
 
+Inside the composition frame the Viewer shows the composition's **Background Colour** (Composition
+Settings) behind transparent pixels, as a display colour: what you pick in the chip is what the
+frame shows. Switch on **Transparency Grid** (the footer toggle or **View > Transparency Grid**) to
+see a checkerboard there instead. **View > Background** only changes the canvas around the frame.
+None of these reach export: exported alpha stays transparent.
+
 Move the pointer over the Viewer to read the probe in the window status bar. **W** reports the
 un-premultiplied working-space RGBA authored by the process frame; **D** reports the display value
 the Viewer paints. Ctrl-click the probe cell to switch D between 8-bit encoded values and float

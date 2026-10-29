@@ -231,7 +231,8 @@ The viewer surrounds its composition with `Color::Canvas` (`#131313`) and uses
 `Color::CompositionFrame` (`#454545`) at `kCompositionFrameWidth` (1 logical pixel) for the
 frame outline. `ViewerWorkPadding` reserves breathing room around the frame; the left inset
 also includes `ToolColumnWidth`. Image fitting, picking, selection overlays and panning all
-use this same padded rectangle. View's Background choices remain presentation preferences.
+use this same padded rectangle. View > Background (the surround) and the Transparency Grid remain
+presentation preferences.
 
 ### Viewer header and footer
 
@@ -247,22 +248,24 @@ The footer (`viewerFooter`) is a priority row of three groups:
 
 | Group | Controls |
 | --- | --- |
-| Leading (view and display) | Channel (`ViewerChannelWidth`), ROI toggle, Clear ROI, exposure (EV) and gamma (`ViewerAdjustWidth`), Display / View (its items' widest, `DropdownWidth`..`ViewerDisplayViewWidth`), Look |
+| Leading (view and display) | Channel (`ViewerChannelWidth`), Transparency Grid toggle, ROI toggle, Clear ROI, exposure (EV) and gamma (`ViewerAdjustWidth`), Display / View (its items' widest, `DropdownWidth`..`ViewerDisplayViewWidth`), Look |
 | Centre (time) | Go to start, step back, play/pause, step forward, go to end, loop, the time readout (`ViewerTimecodeWidth`), centred in the row while there is room and never stranded from the transport |
 | Trailing (framing and quality) | Zoom (`ViewerZoomWidth` floor), Resolution (`ViewerResolutionWidth`), RAM Preview |
 
 As the footer narrows, controls leave the row in this order, each offered in the View options
 overflow (`viewerFooterOverflowButton`, `SlidersHorizontal`, menu `viewerFooterOverflowMenu`) under
 its full label: Look, Display / View, exposure and gamma (as labelled fields plus Reset Exposure
-and Gamma), ROI and Clear ROI, Channel; then Resolution compresses to Auto / Full / ½ / ¼ at
+and Gamma), ROI and Clear ROI, Transparency Grid, Channel; then Resolution compresses to Auto / Full / ½ / ¼ at
 `ViewerResolutionCompactWidth`; then RAM Preview, go to start/end, and finally Zoom and
 Resolution. Step back, play, step forward, loop and the readout never collapse. No control is
 clipped at any width down to the panel minimum.
 
-Every footer control is one `Control` slot painting a `ToggleCell` plate. The ROI, Look and loop
-toggles and the transport are `KIconButton`s with `IconRole::Control` glyphs; a checked toggle shows
-the one Selected plate. The ROI toggle carries the Phosphor `selection` glyph; Clear ROI shows only
-while a region exists. RAM Preview is a labelled Secondary `KButton` toggle whose label reads the
+Every footer control is one `Control` slot painting a `ToggleCell` plate. The Transparency Grid,
+ROI, Look and loop toggles and the transport are `KIconButton`s with `IconRole::Control` glyphs; a
+checked toggle shows the one Selected plate. The Transparency Grid toggle carries the Phosphor
+`square-half` glyph (the pinned set has no checkerboard) and is View > Transparency Grid's own
+action (`viewerTransparencyGridAction`). The ROI toggle carries the Phosphor `selection` glyph;
+Clear ROI shows only while a region exists. RAM Preview is a labelled Secondary `KButton` toggle whose label reads the
 controller's progress (Caching n%, RAM Cached). Exposure and gamma show an `NonDefaultMark` Accent
 dot while they differ from 0 / 1 and reset by a double-click on their label or from their context
 menu. Display / View shows the view name (qualified by its display only when several displays
@@ -272,14 +275,30 @@ remain for automation. With no composition the readout shows `00:00:00:00` (or `
 
 ### Viewer canvas and empty state
 
-The surround is the plain Canvas in Solid and Checkerboard modes (Black and White fill the whole
-content area); the checkerboard is drawn only inside the composition frame, under the image, on the
-content area's grid, on the CPU path and the GPU present alike. With no composition the canvas
-shows the surround under the `viewerEmptyState` invitation: a Title "No composition", a Muted hint
-that dropped media files are imported into Assets, and the Primary `viewerNewCompositionButton`,
-which runs the application's New Composition command. An active composition with no layers keeps
-the painted "Create a layer to begin" invitation. The Viewer's own minimum is `ViewerMinHeight`,
-independent of the tool column; hosted, the panel adds its header and footer.
+The canvas has two backdrops, as in After Effects, and they are separate questions:
+
+- **The surround** is the content area outside the composition frame. View > Background chooses
+  it: Solid (the default, the `Canvas` token), Grey (`CanvasGrey`), Black (`CanvasBlack`) or White
+  (`CanvasWhite`). It never draws inside the frame. Stored as `viewer/background` by name.
+- **Inside the frame**, behind transparent and partly transparent pixels, the Viewer shows the
+  composition's own Background Colour from Composition Settings, opaque. View > Transparency Grid
+  (off by default, `viewer/transparency-grid`) replaces it with the Viewer checker
+  (`ViewerCheckerLight` / `ViewerCheckerDark` on the `ViewerChecker` grid from the content area's
+  top-left).
+
+Both are display-referred and the image composites over them in display space (the authored
+Background Colour is a display value; see `docs/architecture/color-management.md`), identically on
+the CPU path and the GPU present. They are presentation only: never process or export alpha, never
+image content in a cache. Editing the Background Colour is one non-render-affecting undoable step,
+so the Viewer re-presents the frame it already has instead of re-evaluating. A stored pre-split
+`Checkerboard` background reads as Solid with the Transparency Grid on (unless a grid value was
+stored since).
+
+With no composition the canvas shows the surround under the `viewerEmptyState` invitation: a Title
+"No composition", a Muted hint that dropped media files are imported into Assets, and the Primary
+`viewerNewCompositionButton`, which runs the application's New Composition command. A composition
+with no layers shows just its frame and background, with no invitation. The Viewer's own minimum is
+`ViewerMinHeight`, independent of the tool column; hosted, the panel adds its header and footer.
 
 ### Viewer menus
 
@@ -288,7 +307,7 @@ context menu. Dropdown-backed submenus mirror their footer dropdown item for ite
 
 | Menu | Contents |
 | --- | --- |
-| View | Fit (`Ctrl+0`), 100% (`Ctrl+1`), Zoom In, Zoom Out, Zoom ▸ (the zoom presets), Resolution ▸; Channel ▸, Display / View ▸, Look, Reset Exposure and Gamma, Region of Interest, Clear Region of Interest; Guides ▸ (Safe Areas `Ctrl+Alt+S`, Safe Area Preset ▸, Custom Safe Areas…, Centre Cross, Thirds, Rulers, Pixel Grid), Background ▸ |
+| View | Fit (`Ctrl+0`), 100% (`Ctrl+1`), Zoom In, Zoom Out, Zoom ▸ (the zoom presets), Resolution ▸; Channel ▸, Display / View ▸, Look, Reset Exposure and Gamma, Region of Interest, Clear Region of Interest; Guides ▸ (Safe Areas `Ctrl+Alt+S`, Safe Area Preset ▸, Custom Safe Areas…, Centre Cross, Thirds, Rulers, Pixel Grid), Background ▸ (Solid, Grey, Black, White: the surround), Transparency Grid |
 | Select | Select All / Deselect All / Invert (`Ctrl+A`, `Ctrl+Shift+A`, `Ctrl+Alt+A`), naming their target: anchors while a path is edited (the Pen tool, a selected mask, or an anchor selection), layers otherwise |
 | Add | Solid, Text; the shape kinds; Import and Add… (the drop path's import, then layers at the playhead) |
 | Canvas context menu | On a layer: Select it, Duplicate Layer, Delete Layer; then Fit, 100%, Zoom In, Zoom Out; Add ▸, Guides ▸; Composition Settings…. The anchor menu stays first while a path is edited |
@@ -437,7 +456,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `PlayheadHalfWidth / PlayheadHeight` | 5 / 6 | Timeline playhead head |
 | `RulerLabelGap` | 10 | Timeline ruler labels |
 | `MinorTick / MajorTick` | 4 / 8 | Timeline tick extents |
-| `ViewerChecker` | 22 | Checkerboard cell |
+| `ViewerChecker` | 22 | Transparency Grid cell |
 | `ViewerMinWidth / ViewerMinHeight` | 220 / 176 | Viewer minimum; the hosted panel adds header and footer |
 | `MultilineHeight` | 78 | Expanded text editors |
 | `PropertyLabelCompact` | 64 | Timeline property label |
@@ -842,11 +861,10 @@ plain reason directly under the offending field: a word-wrapped `KLabel` in `UiS
 first invalid field shows a reason, so the reason always names what to fix next.
 
 The Composition dialog and the composition Properties section expose a `KColorChip` Background
-Colour for the composition itself. The Viewer background is chosen separately under View >
-Background: Solid paints the panel Canvas token, Black and White paint literal values, and
-Checkerboard is the default so alpha inside the composition frame is always visible (its surround
-stays Canvas). The surround does not alter composition pixels, the
-authored Background Colour, or export alpha.
+Colour for the composition itself; the Viewer shows it inside the composition frame. The Viewer's
+surround is chosen separately under View > Background (Solid, Grey, Black, White), and View >
+Transparency Grid swaps the frame's Background Colour for a checker (see "Viewer canvas and empty
+state"). Neither alters composition pixels, the authored Background Colour, or export alpha.
 
 ## Live Value Editing
 
