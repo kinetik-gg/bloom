@@ -47,6 +47,10 @@ target_sources(
         kit/title_bar.cpp
         kit/tokens.cpp
         kit/value_field.cpp
+        kit/value_field_input.cpp
+        kit/value_expression.cpp
+        kit/inline_edit.cpp
+        kit/text_field.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -78,6 +82,9 @@ target_sources(
             include/bloom/ui/kit/range_selector.hpp
             include/bloom/ui/kit/slider.hpp
             include/bloom/ui/kit/split_handle.hpp
+            include/bloom/ui/kit/inline_edit.hpp
+            include/bloom/ui/kit/text_field.hpp
+            include/bloom/ui/kit/value_expression.hpp
             include/bloom/ui/kit/switch_control.hpp
             include/bloom/ui/kit/theme.hpp
             include/bloom/ui/kit/title_bar.hpp
@@ -452,6 +459,7 @@ target_sources(
         composition_driver_probe.cpp
         properties_anchor_grid.cpp
         properties_sections.cpp
+        value_presentation.cpp
         memory_budget_controller.cpp
         qualified_display_processor_bootstrap.cpp
         task_monitor_model.cpp

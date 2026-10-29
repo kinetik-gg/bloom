@@ -17,6 +17,8 @@ class QLineEdit;
 
 namespace bloom::ui::kit {
 
+class KTextField;
+
 class KButton;
 class KDropdown;
 class KValueField;
@@ -115,7 +117,6 @@ class KColorPicker final : public QWidget {
     void mouseReleaseEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void hideEvent(QHideEvent* event) override;
-    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
     enum class DragRegion : std::uint8_t { None, SvSquare, Hue, Alpha };
@@ -171,7 +172,7 @@ class KColorPicker final : public QWidget {
     KPopupWindow* window_ = nullptr;
     KDropdown* modelSelector_ = nullptr;
     std::array<KValueField*, 4> channelFields_{};
-    QLineEdit* hexField_ = nullptr;
+    KTextField* hexField_ = nullptr;
     KColorSwatchRow* swatchRow_ = nullptr;
     // Owned default so the swatch row always has somewhere to read/write recents even when no
     // caller injects a shared one (setRecentColorStore()).

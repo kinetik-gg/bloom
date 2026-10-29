@@ -6,6 +6,7 @@
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <QApplication>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QVBoxLayout>
@@ -149,9 +150,13 @@ void testModelSwitchPreservesTheColorExactly(Expectations& expectations) {
 void testHexEntryRoundTrips(Expectations& expectations) {
     Fixture fixture;
     auto& picker = *fixture.picker;
+    const auto press = [&picker](const Qt::Key key) {
+        QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
+        QCoreApplication::sendEvent(picker.hexField(), &event);
+        QCoreApplication::processEvents();
+    };
     picker.hexField()->setText(QStringLiteral("#3399FFCC"));
-    picker.hexField()->editingFinished();
-    QCoreApplication::processEvents();
+    press(Qt::Key_Return);
 
     expectations.expect(picker.hexField()->text() == QStringLiteral("#3399ffcc"),
                         "the hex field redisplays its own lowercase canonical text");
@@ -160,12 +165,15 @@ void testHexEntryRoundTrips(Expectations& expectations) {
                         "the parsed hex value committed exactly, alpha included");
 
     picker.hexField()->setText(QStringLiteral("not-a-color"));
-    picker.hexField()->editingFinished();
-    QCoreApplication::processEvents();
+    press(Qt::Key_Return);
+    expectations.expect(picker.hexField()->property("kitError").toBool(),
+                        "Return on an unparsable hex keeps the field open with an Error border");
+    // Escape confirms everywhere; with refused text it closes on the last valid colour.
+    press(Qt::Key_Escape);
     expectations.expect(picker.color().toQColor() == QColor(0x33, 0x99, 0xFF, 0xCC),
                         "an unparsable hex entry is refused, not silently applied");
     expectations.expect(picker.hexField()->text() == QStringLiteral("#3399ffcc"),
-                        "a refused entry reverts the field to the last valid text");
+        "a refused entry reverts the field to the last valid text");
 }
 
 void testChannelFieldEditUpdatesTheColorAndSwatch(Expectations& expectations) {

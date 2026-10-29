@@ -133,26 +133,45 @@ const auto& numberPlaceholders() {
     return rules;
 }
 
-// The generated rules for the kit line edits (KLineEdit, KSearchField), from the one text-entry
-// recipe (kit::fieldColors), so a typed name reads exactly like a typed number. The well is drawn in
-// the control body: a ControlInset margin inside the Control-tall widget, like every kit control.
+// The generated rules for the kit text fields (KTextField and its KLineEdit/KSearchField forms, and
+// the multi-line KTextArea), from the one text-entry recipe (kit::fieldColors), so a typed name
+// reads exactly like a typed number. The well is drawn in the control body: a ControlInset margin
+// inside the Control-tall widget, like every kit control, with the kit's Spacing::S text padding --
+// the padding a KValueField cell gives its number. A refused entry ("kitError") wears Error over
+// every other state. An embedded field ("kitEmbedded": the editor inside a KValueField) draws no
+// box at all, because its host paints the cell and the one border.
 [[nodiscard]] QString lineEditRules() {
-    const QString selector = QStringLiteral("QLineEdit[kitControl=\"true\"]");
-    const auto rule = [&selector](const QString& pseudo, const ButtonColors& colors) {
-        return selector + pseudo + QStringLiteral(" {\n") + buttonDeclarations(colors) +
-               QStringLiteral("}\n");
+    QString rules;
+    const auto block = [&rules](const QString& selector, const QString& pseudo,
+                                const ButtonColors& colors) {
+        rules += selector + pseudo + QStringLiteral(" {\n") + buttonDeclarations(colors) +
+                 QStringLiteral("}\n");
     };
-    return selector + QStringLiteral(" {\n    border: %1px solid transparent;\n"
-                                     "    border-radius: %2px;\n    margin: %3px;\n"
-                                     "    padding: 0px %4px;\n}\n")
-                          .arg(static_cast<int>(kHairlineWidth))
-                          .arg(radiusPx(Radius::Small, 0))
-                          .arg(px(Spacing::ControlInset))
-                          .arg(px(Spacing::XS)) +
-           rule({}, fieldColors(true, false, false, false)) +
-           rule(QStringLiteral(":hover"), fieldColors(true, false, true, false)) +
-           rule(QStringLiteral(":focus"), fieldColors(true, true, false, false)) +
-           rule(QStringLiteral(":disabled"), fieldColors(false, false, false, false));
+    for (const auto& selector : {QStringLiteral("QLineEdit[kitControl=\"true\"]"),
+                                 QStringLiteral("QPlainTextEdit[kitControl=\"true\"]")}) {
+        rules += selector + QStringLiteral(" {\n    border: %1px solid transparent;\n"
+                                           "    border-radius: %2px;\n    margin: %3px;\n"
+                                           "    padding: 0px %4px;\n"
+                                           "    selection-background-color: %5;\n"
+                                           "    selection-color: %6;\n}\n")
+                                .arg(static_cast<int>(kHairlineWidth))
+                                .arg(radiusPx(Radius::Small, 0))
+                                .arg(px(Spacing::ControlInset))
+                                .arg(px(Spacing::S))
+                                .arg(hex(Color::Accent), hex(Color::Foreground));
+        block(selector, {}, fieldColors(true, false, false, false));
+        block(selector, QStringLiteral(":hover"), fieldColors(true, false, true, false));
+        block(selector, QStringLiteral(":focus"), fieldColors(true, true, false, false));
+        block(selector, QStringLiteral(":disabled"), fieldColors(false, false, false, false));
+        rules += selector + QStringLiteral("[kitError=\"true\"] {\n    border-color: ") +
+                 hex(Color::Error) + QStringLiteral(";\n}\n");
+    }
+    rules += QStringLiteral("QLineEdit[kitEmbedded=\"true\"] {\n    background: transparent;\n"
+                            "    border: none;\n    padding: 0px;\n    margin: 0px;\n"
+                            "    color: %1;\n    selection-background-color: %2;\n"
+                            "    selection-color: %1;\n}\n")
+                 .arg(hex(Color::Foreground), hex(Color::Accent));
+    return rules;
 }
 
 } // namespace

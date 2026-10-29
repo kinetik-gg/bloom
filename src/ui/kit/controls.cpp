@@ -535,7 +535,7 @@ void KFieldFrame::setEditing(const bool editing) {
     editing_ = editing;
     update();
 }
-int KFieldFrame::textInset() { return px(Spacing::ControlInset) + px(Spacing::XS); }
+int KFieldFrame::textInset() { return px(Spacing::ControlInset) + px(Spacing::S); }
 void KFieldFrame::paintEvent(QPaintEvent*) {
     if (editing_)
         return;
@@ -553,13 +553,6 @@ void KFieldFrame::leaveEvent(QEvent* event) {
     update();
     QWidget::leaveEvent(event);
 }
-KLineEdit::KLineEdit(QWidget* parent) : KLineEdit(QString{}, parent) {}
-KLineEdit::KLineEdit(const QString& text, QWidget* parent) : QLineEdit(text, parent) {
-    setFont(kit::font(TypeRole::Ui));
-    setFixedHeight(px(Size::Control));
-    setProperty("kitControl", true);
-}
-KSearchField::KSearchField(QWidget* parent) : KLineEdit(parent) {}
 namespace {
 class FlowMenu final : public QMenu {
   public:
