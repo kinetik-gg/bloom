@@ -781,8 +781,8 @@ a blank cell) with four Control-height `KLabel` lines: the name; kind, size, dur
 (`Video · 1920 × 1080 · 0:00:02:00 (48 frames), 24 fps`); colour; and usage
 (`Used 3 times in 2 compositions`, `Not used`). The colour line names the input colour space by its
 plain name, then the alpha, then the colour note once:
-`Colour: Linear Rec.709 · Straight alpha · Colour tags missing — assumed Rec.709. Change in Assets →
-Input Colour`. Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene` is
+`Colour: sRGB · Straight alpha · Colour tags missing — assumed Rec.709 with the sRGB transfer. Change
+in Assets → Input Colour`. Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene` is
 **Linear Rec.709**, `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space **Rec.709
 video**); another config's spaces show the names the config gives them. A space Auto read from the
 file's own tags adds `(from the file)`; an assumed one is explained by the note alone.

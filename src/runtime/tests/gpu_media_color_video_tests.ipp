@@ -281,6 +281,70 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
     }
 }
 
+// Issue #381 / ADR 0032, GPU route: ordinary BT.709-tagged and untagged H.264 in Auto under Bloom
+// Neutral resolve to the sRGB texture space, whose decode to the working space is a dispatched GPU
+// OCIO effect with CPU parity. The frame read back once and shown through the default sRGB view
+// matches FFmpeg's player-equivalent decode within the same tolerance as the CPU reference route.
+void testPlayerReferenceVideo(Expectations& expectations, bloom::render::GpuDevice& device,
+                              const std::filesystem::path& fixtures,
+                              const GpuSceneOcioContext& ocioContext) {
+    namespace reference = bloom::test::video_player_reference;
+    if (fixtures.empty() || !std::filesystem::is_directory(fixtures))
+        return;
+    const auto config = bloom::runtime::detail::resolveInputColorConfig({});
+    expectations.expect(config.has_value(), "player reference: the Neutral config resolves");
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
+    auto executor = GpuSceneExecutor::create(device, *cache.cache, GpuSceneExecutorBudgets{});
+    expectations.expect(cache.hasValue() && executor.hasValue(),
+                        "player reference: the cache and executor host");
+    if (!config || !cache || !executor)
+        return;
+    std::uint64_t idBase = 4900;
+    for (const auto& fixture : reference::kFixtures) {
+        const std::string tag = "player reference " + std::string(fixture.label);
+        document::AssetRecord asset;
+        try {
+            asset = videoAsset(fixtures / std::string(fixture.clip), idBase + 100);
+        } catch (const std::exception& error) {
+            expectations.expect(false, tag + ": fixture probe failed: " + error.what());
+            continue;
+        }
+        const auto plan =
+            videoPlan(format(asset.width, asset.height), asset,
+                      LayerValues{.position = {static_cast<double>(asset.width) * 0.5,
+                                               static_cast<double>(asset.height) * 0.5}},
+                      idBase);
+        CpuCompositionEvaluator evaluator;
+        evaluator.setAssetBaseDirectory(fixtures);
+        evaluator.setVideoCacheByteBudget(std::size_t{64} << 20U);
+        const auto context = legacyPreparedMediaContext(evaluator);
+        const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
+        const auto request = requestFor(*plan);
+        expectations.expect(expectMediaParity(expectations, *executor.executor, evaluator, builder,
+                                              plan, request, asset.width, asset.height, tag),
+                            tag + ": sRGB texture input-to-working parity on the GPU");
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(prepared.hasValue(), tag + ": the warm frame prepares");
+        if (!prepared)
+            continue;
+        const auto run = runScene(*executor.executor, prepared.scene, kSceneBudget);
+        expectations.expect(run.ready && run.image != nullptr, tag + ": the GPU frame completes");
+        if (!run.ready || run.image == nullptr)
+            continue;
+        const auto readback = bloom::render::readbackResidentImage(*run.image, kReadbackBudget);
+        expectations.expect(readback.hasValue(), tag + ": the GPU frame reads back once");
+        if (!readback)
+            continue;
+        const auto comparison = reference::compare(*config, readback.pixels,
+                                                   fixtures / std::string(fixture.reference));
+        std::cout << tag << " (GPU): " << comparison.summary() << '\n';
+        expectations.expect(comparison.passes(),
+                            tag + ": the GPU frame matches FFmpeg's player decode, " +
+                                comparison.summary());
+        idBase += 10;
+    }
+}
+
 void testVideoCancellation(Expectations& expectations, const std::filesystem::path& fixtures,
                            const GpuSceneOcioContext& ocioContext) {
     if (fixtures.empty() || !std::filesystem::is_directory(fixtures)) {

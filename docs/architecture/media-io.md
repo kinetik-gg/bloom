@@ -67,8 +67,8 @@ EXR decode runs on a worker and uses the same disk-cache key and thumbnail path 
 - *Asset state in Assets.* "Missing — Replace Footage" means only that the imported bytes are gone or
   changed. A present source that cannot be shown as it is (for example a Rec.2020 video awaiting an input
   colour space) states that problem and its fix instead, and its audio still decodes. An untagged
-  video is shown under the assumed Rec.709 or Rec.601 interpretation with an Info mark and its
-  colour note. A
+  video is shown under the assumed Rec.709 or Rec.601 matrix with the sRGB transfer, with an Info
+  mark and its colour note. A
   data-only image is valid: it is labelled like any image or sequence (a Sequence of N frames) and its
   thumbnail is the Cryptomatte ID colours of its first type, or its first data channel as grey. The
   Image source's Part and Layer pickers read a sequence's parts from its first member.
@@ -1616,13 +1616,21 @@ Issue #365 interpretation rules:
   wide or taller than 576 lines are Rec.709 (primaries 1, matrix 1); smaller pictures are Rec.601,
   BT.470BG (5) at 25 or 50 fps and SMPTE 170M (6) otherwise, with the BT.709-curve transfer
   (SMPTE 170M, 6). A missing transfer on HD is BT.709 (1), a missing range is limited (video), and
-  a missing matrix on a BT.2020-primaries or PQ/HLG stream is BT.2020 non-constant luminance. Rec.601
-  primaries resolve to the config's Rec.709 camera/video space; the Rec.601 matrix is applied by
-  the YUV conversion. The assumption is shown as the note "Colour tags missing — assumed Rec.709.
-  Change in Assets → Input Colour" (Rec.601 or Rec.2020 as applicable) in the asset's colour note,
-  an Info mark on its Assets row, and "Auto (assumed: …)" in the input colour display. The filled
-  tags and which of them were assumed (`assumed-colour-v1:<filled>:p,t,m,r`) are part of the video
-  transform and cache identity and of the thumbnail key. Streams the assumption cannot make SDR
+  a missing matrix on a BT.2020-primaries or PQ/HLG stream is BT.2020 non-constant luminance.
+- Ordinary SDR video, tagged or assumed (a Rec.709 or Rec.601 matrix with the BT.709/SMPTE 170M
+  transfer), resolves in Auto to the config's sRGB-texture space
+  ([ADR 0032](../decisions/0032-sdr-video-colour-default.md)): the YUV conversion applies the
+  stream's matrix (Rec.601 for SD by the size convention) and range, and the resulting R'G'B' is
+  interpreted with the sRGB display transfer, as players and Bloom's 8-bit stills are shown. Before
+  document 1.28 these streams resolved to the config's Rec.709 video space, which in Bloom Neutral
+  was scene-linear, so the encoded signal was shown pale. The Rec.709 camera inverse OETF
+  (`Rec.709 Camera (Bloom)`), Rec.2100 PQ/HLG and log spaces stay explicit Input Colour choices.
+  The assumption is shown as the note "Colour tags missing — assumed Rec.709 with the sRGB
+  transfer. Change in Assets → Input Colour" (Rec.601 for SD; "assumed Rec.2020" without the
+  transfer clause for a wide-gamut stream) in the asset's colour note, an Info mark on its Assets
+  row, and "Auto (assumed: …)" in the input colour display. The filled tags and which of them were
+  assumed (`assumed-colour-v2:<filled>:p,t,m,r`; v2 since the SDR default changed) are part of the
+  video transform and cache identity and of the thumbnail key. Streams the assumption cannot make SDR
   Rec.709/601 (Rec.2020 without PQ/HLG, BT.2020 constant luminance) keep their named refusal.
 - An explicit input colour space is the artist's interpretation and overrides missing tags. The
   space supplies primaries and transfer; the stream supplies its YUV matrix and range. When those

@@ -137,11 +137,11 @@ void roundTrip() {
     const auto snapshot = fixture.document.snapshot();
     expect(snapshot.project().validate().ok(), "the channel project validates");
     const auto text = encode(fixture.document);
-    expect(text.find("\"minor\": 27") != std::string::npos, "the document is written at 1.27");
+    expect(text.find("\"minor\": 28") != std::string::npos, "the document is written at 1.28");
     expect(text.find("\"bloom.channel-shuffle\"") != std::string::npos &&
                text.find("\"bloom.image.part\"") != std::string::npos,
            "the channel nodes and the image part parameter are written");
-    expect(static_cast<bool>(decodeText(text)), "the 1.27 document decodes");
+    expect(static_cast<bool>(decodeText(text)), "the 1.28 document decodes");
 
     const auto settings = document::makeBloomNeutralColorSettingsV1({});
     auto archive = project::buildVerifiedSaveArchive(
@@ -187,7 +187,7 @@ void imageSourceV1Migrates() {
     Fixture fixture;
     auto text = encode(fixture.document);
     // A 1.24 Image source is v1. The migrated node keeps every binding and edge.
-    replaceOnce(text, "\"minor\": 27", "\"minor\": 24");
+    replaceOnce(text, "\"minor\": 28", "\"minor\": 24");
     replaceOnce(text, "\"typeId\": \"bloom.image-source\",\n              \"schemaVersion\": 2",
                 "\"typeId\": \"bloom.image-source\",\n              \"schemaVersion\": 1");
     auto operation = memory();
@@ -196,17 +196,18 @@ void imageSourceV1Migrates() {
     if (!parsed)
         return;
     const auto migrated =
-        project::migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 27},
+        project::migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 28},
                                     project::kProductionDocumentMigrationSteps, {}, operation);
     expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-               migrated.stepsApplied() == 3,
-           "the video-metadata, channel-set and composition-folder steps run once each");
+               migrated.stepsApplied() == 4,
+           "the video-metadata, channel-set, composition-folder and video-colour-default steps "
+           "run once each");
     if (migrated.outcome() != project::MigrationOutcome::Migrated)
         return;
     const auto decoded = project::decodeDocumentEnvelope(*migrated.migratedRoot());
     expect(static_cast<bool>(decoded), "the migrated document decodes with Image source v2");
     expect(static_cast<bool>(decodeText(text)) == false,
-           "a 1.27 decoder refuses an unmigrated v1 Image source");
+           "a 1.28 decoder refuses an unmigrated v1 Image source");
 }
 
 } // namespace

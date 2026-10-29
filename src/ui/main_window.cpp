@@ -162,6 +162,15 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
             [this](const ProjectHostOperationOutcome outcome, const QString& message) {
                 if (outcome == ProjectHostOperationOutcome::Published) {
                     statusStrip_->showTransientMessage(message);
+                    // ADR 0032's one-time note for an older project, in a window-modal box that
+                    // does not block the open.
+                    if (const auto& notice = projectHost_.openNotice(); !notice.isEmpty()) {
+                        auto* box = new QMessageBox(QMessageBox::Information, tr("Open Project"),
+                                                    notice, QMessageBox::Ok, this);
+                        box->setObjectName("openNoticeBox");
+                        box->setAttribute(Qt::WA_DeleteOnClose);
+                        box->open();
+                    }
                     return;
                 }
                 if (outcome == ProjectHostOperationOutcome::Cancelled) {

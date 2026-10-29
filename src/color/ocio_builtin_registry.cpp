@@ -185,13 +185,13 @@ struct InputColorSpaceMappings final {
     return editable;
 }
 
-// Synthesizes kBloomRec709CameraColorSpaceId into a non-Neutral pinned config that has no
-// Rec.709 camera space. Neutral maps Rec.709 video through its own scene-linear space.
+// Synthesizes kBloomRec709CameraColorSpaceId into a pinned config that has no Rec.709 camera
+// space (both pinned configs). It is the explicit camera interpretation of Rec.709 video (the
+// BT.709 inverse OETF); Auto shows ordinary SDR video through the sRGB texture space instead.
 [[nodiscard]] OCIO::ConstConfigRcPtr withBloomRec709CameraInput(const OCIO::ConstConfigRcPtr& config,
                                                                 const bool isNeutral) {
-    if (isNeutral ||
-        config->getColorSpace(std::string(bloom::color::kBloomRec709CameraColorSpaceId).c_str()) !=
-            nullptr)
+    if (config->getColorSpace(std::string(bloom::color::kBloomRec709CameraColorSpaceId).c_str()) !=
+        nullptr)
         return config;
     for (int index = 0;
          index < config->getNumColorSpaces(OCIO::SEARCH_REFERENCE_SPACE_ALL, OCIO::COLORSPACE_ALL);
@@ -212,14 +212,17 @@ struct InputColorSpaceMappings final {
     curve->setGamma(gamma);
     curve->setOffset(offset);
     toReference->appendTransform(curve);
-    auto toXyz = OCIO::MatrixTransform::Create();
-    const auto rec709ToXyz = matrix44(rgbToXyz(bt709));
-    toXyz->setMatrix(rec709ToXyz.data());
-    toReference->appendTransform(toXyz);
-    auto toAp0 = OCIO::BuiltinTransform::Create();
-    toAp0->setStyle("UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD");
-    toAp0->setDirection(OCIO::TRANSFORM_DIR_INVERSE);
-    toReference->appendTransform(toAp0);
+    // Bloom Neutral's reference is linear Rec.709 (D65), so the decoded signal is already there.
+    if (!isNeutral) {
+        auto toXyz = OCIO::MatrixTransform::Create();
+        const auto rec709ToXyz = matrix44(rgbToXyz(bt709));
+        toXyz->setMatrix(rec709ToXyz.data());
+        toReference->appendTransform(toXyz);
+        auto toAp0 = OCIO::BuiltinTransform::Create();
+        toAp0->setStyle("UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD");
+        toAp0->setDirection(OCIO::TRANSFORM_DIR_INVERSE);
+        toReference->appendTransform(toAp0);
+    }
     auto space = OCIO::ColorSpace::Create(OCIO::REFERENCE_SPACE_SCENE);
     space->setName(std::string(bloom::color::kBloomRec709CameraColorSpaceId).c_str());
     space->setFamily("Input");
@@ -263,7 +266,7 @@ struct InputColorSpaceMappings final {
     }
     if (isNeutral) {
         result.sRgbTexture = "srgb_rec709_display";
-        result.rec709Video = "lin_rec709_scene";
+        result.rec709Video = std::string(bloom::color::kBloomRec709CameraColorSpaceId);
         return result;
     }
 

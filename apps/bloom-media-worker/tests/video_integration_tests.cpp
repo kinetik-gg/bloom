@@ -1,3 +1,4 @@
+#include "tests/video_player_reference.hpp"
 #include "video_source.hpp"
 #include <algorithm>
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -129,9 +130,10 @@ void hlgInterpretationRoundTrip(const std::filesystem::path& directory) {
     check(render(*restored.document) == before, "reopened HLG project renders identically");
 }
 // Owner decision (2026-10-24): an untagged video renders in Auto under the assumed size
-// convention, with no evaluation diagnostic (so the frame stays RAM-cacheable), and an explicit
-// Rec.709 choice of an untagged HD stream renders identically to the Rec.709 assumption. The same
-// import-and-render path proves an 8K UHD source (issue #352).
+// convention, with no evaluation diagnostic (so the frame stays RAM-cacheable). ADR 0032: Auto
+// shows the assumed SDR stream through the sRGB texture space, so an explicit sRGB choice renders
+// identically and the explicit Rec.709 camera choice does not. The same import-and-render path
+// proves an 8K UHD source (issue #352).
 void untaggedAssumedRender(const std::filesystem::path& directory, const std::filesystem::path& clip,
                            const std::uint32_t width, const std::uint32_t height,
                            const bool expectExplicitMatch) {
@@ -186,8 +188,62 @@ void untaggedAssumedRender(const std::filesystem::path& directory, const std::fi
     const auto assumed = render({});
     if (expectExplicitMatch) {
         const auto config = runtime::detail::resolveInputColorConfig({});
-        check(config && render(std::string(config->rec709VideoColorSpaceId())) == assumed,
-              "the Rec.709 assumption renders exactly as the explicit Rec.709 choice");
+        check(config && render(std::string(config->sRgbTextureColorSpaceId())) == assumed,
+              "the SDR assumption renders exactly as the explicit sRGB texture choice");
+        check(render(std::string(config->rec709VideoColorSpaceId())) != assumed,
+              "the Rec.709 camera interpretation stays a distinct explicit choice");
+    }
+}
+// Issue #381 / ADR 0032, CPU reference route: ordinary BT.709-tagged and untagged H.264 in Auto,
+// shown through Bloom Neutral's default sRGB display view, matches FFmpeg's player-equivalent
+// decode of the same frame within the stated tolerance. The previous Auto default (encoded R'G'B'
+// read as linear light, then display-encoded again) fails it by about 33 codes on the 75% bars.
+void playerReferenceRender(const std::filesystem::path& directory) {
+    namespace reference = test::video_player_reference;
+    const auto config = runtime::detail::resolveInputColorConfig({});
+    check(config.has_value(), "the Bloom Neutral input config resolves");
+    for (const auto& fixture : reference::kFixtures) {
+        auto seed = document::makeNewProject("Player", "Main", core::RationalTime::fromInteger(1));
+        const auto composition = seed.initialCompositionId;
+        const auto format =
+            document::CompositionFormat::create(reference::kWidth, reference::kHeight);
+        if (!format)
+            throw std::runtime_error("test composition format");
+        seed.project.findComposition(composition)->setFormat(*format);
+        document::Document document(std::move(seed.project));
+        const auto snapshot = document.snapshot();
+        auto draft = document.draft(snapshot);
+        commands::ImportAssets imported({directory / std::string(fixture.clip)}, directory);
+        check(imported.apply(draft).status == commands::OperationStatus::Applied,
+              "player reference import");
+        const auto assetId = draft.project().assets().front().id;
+        check(commands::AddImageLayer(composition, assetId).apply(draft).status ==
+                  commands::OperationStatus::Applied,
+              "player reference layer");
+        check(document.commit(snapshot.revision(), std::move(draft)).committed(),
+              "player reference document");
+        runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        const auto compiled = compiler.compile({document.snapshot(), composition}, {});
+        check(compiled.plan != nullptr, "player reference plan compiles");
+        runtime::CpuCompositionEvaluator evaluator;
+        evaluator.setAssetBaseDirectory(directory);
+        const auto result = evaluator.evaluate(compiled.plan,
+                                               {.time = core::RationalTime::fromInteger(0),
+                                                .output = compiled.plan->output(),
+                                                .resolution = {},
+                                                .pixelStorageByteLimit = std::size_t{16} << 20U},
+                                               {});
+        for (const auto& d : result.diagnostics())
+            std::cerr << d.summary << '\n';
+        check(result.frame() != nullptr && result.diagnostics().empty(),
+              "player reference frame renders in Auto without a diagnostic");
+        const auto comparison =
+            reference::compare(*config, result.frame()->processImage().pixels(),
+                               directory / std::string(fixture.reference));
+        std::cout << "player reference (CPU) " << fixture.label << ": " << comparison.summary()
+                  << '\n';
+        check(comparison.passes(),
+              "Auto SDR video matches FFmpeg's player decode through the default sRGB view");
     }
 }
 void run(const std::filesystem::path& directory) {
@@ -373,6 +429,7 @@ int main(int argc, char** argv) {
         sessionAdmission(argv[1]);
         hlgInterpretationRoundTrip(argv[1]);
         const std::filesystem::path fixtures(argv[1]);
+        playerReferenceRender(fixtures);
         untaggedAssumedRender(fixtures, fixtures / "untagged-hd-prores.mov", 1280, 720, true);
         untaggedAssumedRender(fixtures, fixtures / "untagged-h264.mp4", 64, 48, false);
         // Issue #352: an 8K UHD source imports and renders through the evaluator.

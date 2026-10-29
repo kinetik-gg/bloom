@@ -138,11 +138,12 @@ ocioBuiltInContentRevision(OcioConfigLocatorKind locatorKind,
 // Scene-light Rec.2100 HLG input space Bloom synthesizes into every resolved pinned config that
 // lacks one (OCIO "CURVE - HLG-OETF-INVERSE" then BT.2020 to the reference primaries; no OOTF).
 inline constexpr std::string_view kBloomRec2100HlgColorSpaceId = "Rec.2100-HLG (Bloom)";
-// Rec.709 camera/video input Bloom synthesizes into a resolved non-Neutral pinned config that has
-// no Rec.709 camera space (the ACES 1.3 CG config): the BT.709 inverse OETF (OCIO
+// Rec.709 camera input Bloom synthesizes into a resolved pinned config that has no Rec.709 camera
+// space (Bloom Neutral v1 and the ACES 1.3 CG config): the BT.709 inverse OETF (OCIO
 // ExponentWithLinearTransform, gamma 1/0.45, offset 0.099) then Rec.709 to the reference
-// primaries. Tagged and assumed Rec.709/601 video resolves to it in Auto (owner decision
-// 2026-10-24: untagged SDR is not refused under any pinned config).
+// primaries (no matrix for Bloom Neutral, whose reference is linear Rec.709). It is an explicit
+// interpretation only: Auto shows ordinary Rec.709/601 and untagged SDR video through the config's
+// sRGB texture space, as players do (ADR 0032).
 inline constexpr std::string_view kBloomRec709CameraColorSpaceId = "Rec.709 Camera (Bloom)";
 // Identity of a Bloom-synthesized space's math: the definition version and the linked OCIO
 // version whose built-ins it uses. Empty for config-defined spaces. Part of transform identity.
@@ -180,6 +181,9 @@ class ResolvedBloomNeutralConfig final {
     [[nodiscard]] std::span<const DisplayViewEntry> displays() const&& = delete;
     [[nodiscard]] std::string_view sRgbTextureColorSpaceId() const& noexcept;
     [[nodiscard]] std::string_view sRgbTextureColorSpaceId() const&& = delete;
+    // The Rec.709 camera (BT.709 inverse OETF) input space: a config space named like
+    // "Rec.709 ... Camera", otherwise kBloomRec709CameraColorSpaceId. An explicit choice only; Auto
+    // resolves ordinary SDR video to sRgbTextureColorSpaceId().
     [[nodiscard]] std::string_view rec709VideoColorSpaceId() const& noexcept;
     [[nodiscard]] std::string_view rec709VideoColorSpaceId() const&& = delete;
     // Rec.2100 PQ/HLG input spaces for HDR video, searched across active and inactive spaces

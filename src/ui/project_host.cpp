@@ -3,7 +3,9 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/project/canonical_document.hpp>
 #include <bloom/project/save_archive.hpp>
+#include <bloom/runtime/input_color_context.hpp>
 
 #include <QStandardPaths>
 #include <QUuid>
@@ -1165,6 +1167,29 @@ void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
     }
 }
 
+QString ProjectHost::videoColourDefaultNotice(const host::SessionOpenResult& result) const {
+    // ADR 0032: only a decoded project saved before document 1.28 relied on the previous Auto
+    // video colour default; saving it records 1.28, so the note shows once per project.
+    const auto version = result.openedDocumentSchemaVersion();
+    if (!session_.has_value() || !version ||
+        *version >= project::kSdrVideoColourDefaultDocumentVersionV1 ||
+        result.attemptedContentKind() != host::ProjectSessionContentKind::DecodedDocument)
+        return {};
+    const auto snapshot = session_->decodedSnapshot();
+    if (!snapshot)
+        return {};
+    const auto affected = std::ranges::count_if(snapshot.snapshot().project().assets(),
+                                                runtime::detail::assetUsesSdrVideoColourDefault);
+    if (affected == 0)
+        return {};
+    const auto videos = affected == 1 ? tr("1 video") : tr("%1 videos").arg(affected);
+    return tr("This project was saved by an earlier version of Bloom. Video without a chosen input "
+              "colour now looks the way video players show it, so it is less pale than before. "
+              "This affects %1 in this project. To interpret a video differently, choose its "
+              "input colour in Assets → Input Colour.")
+        .arg(videos);
+}
+
 void ProjectHost::handleOpenResult(
     host::SessionOpenResult result,
     std::shared_ptr<const host::detail::AsyncSessionOpenArchive> archive) {
@@ -1248,6 +1273,7 @@ void ProjectHost::handleOpenResult(
     }
     pendingOpenRecoveryPath_.clear();
     protectedRecoveryOfferPath_.reset();
+    openNotice_ = installed ? videoColourDefaultNotice(result) : QString{};
 
     emit dirtyStateChanged();
     emit openFinished(outcome, message);

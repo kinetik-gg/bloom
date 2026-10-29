@@ -152,6 +152,19 @@ class [[nodiscard]] SessionOpenResult final {
         return notOpenedReason_;
     }
 
+    // The document schema version the opened archive was saved at, before any migration. Present
+    // only for an archive opened as a decoded document; behaviour notes keyed by source version
+    // (such as ADR 0032's video colour default note) read it.
+    [[nodiscard]] std::optional<document::SchemaVersion>
+    openedDocumentSchemaVersion() const noexcept {
+        return openedDocumentSchemaVersion_;
+    }
+    [[nodiscard]] SessionOpenResult
+    withOpenedDocumentSchemaVersion(const document::SchemaVersion version) && noexcept {
+        openedDocumentSchemaVersion_ = version;
+        return std::move(*this);
+    }
+
   private:
     SessionOpenResult() = default;
 
@@ -162,6 +175,7 @@ class [[nodiscard]] SessionOpenResult final {
     std::optional<ProjectSessionContentKind> attemptedContentKind_;
     std::optional<project::OpenArchivePreservedReadOnly> preservedReadOnly_;
     std::optional<SessionOpenNotOpenedReason> notOpenedReason_;
+    std::optional<document::SchemaVersion> openedDocumentSchemaVersion_;
 };
 
 // Session-dependent installation step shared by the synchronous openSessionArchive() below and the
