@@ -8,8 +8,8 @@
 
 namespace bloom::mcp {
 namespace {
-constexpr std::array<std::string_view, 6> kContextSources{"",     "project", "composition",
-                                                          "time", "layer",   "selection"};
+constexpr std::array<std::string_view, 7> kContextSources{
+    "", "project", "composition", "time", "layer", "selection", "layers"};
 constexpr std::size_t kParameterPageSize = 64;
 // Even a control-heavy string expands by at most 6x in JSON and 2x in the MCP text copy.
 // 128 KiB therefore stays below the 4 MiB response cap with both representations present.

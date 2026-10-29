@@ -1,5 +1,7 @@
 #include <bloom/scripting/session.hpp>
 
+#include <bloom/scripting/render.hpp>
+
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
@@ -260,7 +262,36 @@ OperationContext Session::operationContext() const {
         context.composition = view.project().compositions().front().id().value();
     }
     context.time = core::RationalTime::fromInteger(0);
+    context.layerGeometry = layerGeometryProvider();
     return context;
+}
+
+LayerGeometryProvider Session::layerGeometryProvider() const {
+    return [this](const document::CompositionId composition, const core::RationalTime time) {
+        host::LayerAlignmentGeometryResult refused;
+        if (!isValid()) {
+            refused.diagnostic = "The scripting session was closed or replaced";
+            return refused;
+        }
+        auto source = renderSourceSnapshot();
+        const auto* found = source.snapshot.project().findComposition(composition);
+        if (found == nullptr) {
+            refused.diagnostic =
+                "Composition " + std::to_string(composition.value()) + " does not exist";
+            return refused;
+        }
+        const auto colorIntent = captureRenderColorIntent(source, *found);
+        if (!colorIntent.has_value()) {
+            refused.diagnostic = "Project color settings are unavailable";
+            return refused;
+        }
+        return host::measureLayerAlignmentGeometry(
+            {.snapshot = std::move(source.snapshot),
+             .composition = composition,
+             .time = time,
+             .assetBaseDirectory = std::move(source.assetBaseDirectory),
+             .colorIntent = *colorIntent});
+    };
 }
 
 SessionCommandResult Session::executeJsonOperation(const std::string_view operation,

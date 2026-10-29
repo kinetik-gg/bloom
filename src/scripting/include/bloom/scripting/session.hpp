@@ -146,6 +146,10 @@ class Session final {
     // its own: the project, its first composition, an empty selection and the zero time. A live
     // authoring surface passes its own context instead.
     [[nodiscard]] OperationContext operationContext() const;
+    // ADR 0031. Measures a composition's layers on the CPU reference path against the current
+    // render source snapshot, for align and distribute. Valid while this session is; it evaluates
+    // synchronously on the calling client thread.
+    [[nodiscard]] LayerGeometryProvider layerGeometryProvider() const;
 
     [[nodiscard]] SessionSaveResult save();
     [[nodiscard]] SessionSaveResult saveAs(const std::filesystem::path& path);
