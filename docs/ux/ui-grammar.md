@@ -557,8 +557,10 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `MultilineHeight` | 78 | Expanded text editors |
 | `PropertyLabelCompact` | 64 | Timeline property label |
 | `DialogTextWidth / DiagnosticHeight` | 520 / 140 | Read-only explanation / job diagnostics |
-| `DialogWideWidth` | 700 | Minimum width of a settings dialog with Basic and Advanced sections (Composition dialog) |
-| `DialogDocumentHeight` | 480 | Minimum height of a dialog whose body is a document or a page stack (Open Source Licenses, Preferences) |
+| `DialogWideWidth` | 700 | Minimum width of a settings dialog with Basic and Advanced tabs (Composition dialog) |
+| `DialogDocumentHeight` | 480 | Minimum height of a dialog whose body is a document (Open Source Licenses) and the opening height of Bloom's file dialog |
+| `PreferencesRailWidth / PreferencesLabelWidth` | 180 / 184 | Preferences sidebar / the one label column every Preferences page shares |
+| `DialogSidebarWidth` | 200 | The places sidebar of Bloom's file dialog |
 | `ProgressTrack` | 6 | `KProgressBar` track height |
 | `SplitHandle` | 6 | Draggable divider hit zone (`KSplitHandle`); paints one snapped hairline centered in it |
 | `ScrollBarTrack / ScrollBarThumb` | 12 / 8 | Constant scrollbar width / resting thumb |
@@ -613,7 +615,10 @@ and `compositionSettingsCancel` (the earlier `assets*` names are retired); its p
 `compositionRenamePrompt`, `assetsDeleteConfirmation`, `assetsTagsDialog`, `assetsInputColorDialog`,
 `viewerSafeAreaDialog`, `projectColorSettingsDialog`, `projectUnsavedChanges`,
 `projectRecoverUnsaved`, `preferencesWindow` (with `preferencesOkButton`,
-`preferencesRestoreDefaultsConfirmation` and `preferencesMediaDiskCacheDirectoryReason`),
+`preferencesCategoryRail`, `preferencesActionsButton`, `preferencesRestoreDefaultsAction`,
+`preferencesRestoreDefaultsConfirmation`, `preferencesMediaDiskCacheDirectoryReason` and
+`preferencesMediaDiskCacheDirectoryClear`; an Automatic/Custom value's mode dropdown is its field's
+name plus `Mode`, a switch's words its name plus `Label`),
 `licensesWindow` (`licensesCloseButton`), `compositionExportDialog` (`compositionExportFirst`,
 `compositionExportLast`, `compositionExportBrowse`, `compositionExportAudio`,
 `compositionExportContinue`, `locateOpenH264Progress`, `cancelLocateOpenH264`,
@@ -928,8 +933,8 @@ share this machine has not mounted yet is still accepted (the cursor stays hones
 being something to do) but imports nothing, reporting "Connect to `<host>/<share>` in your file
 manager first" through the status bar's transient-message cell rather than dropping it silently.
 Every file dialog (`kit::chooseFile()`: Import, Relink, Open Project, Save Project As, Export Frame,
-Export Frame Range, Export Composition, Locate OpenH264 and the cache folder) lists every mounted
-network share in the sidebar of Qt's own dialog alongside the platform's own entries.
+Export Frame Range, Export Composition, Locate OpenH264 and the cache folder) is Bloom's own file
+dialog and lists every mounted network share in its sidebar beside the standard places.
 Dragging an image/sequence row to Nodes creates an Image source; dragging an Audio row creates an
 Audio source. Dropping media or compositions on the Timeline or the Viewer creates the matching
 wired Layers (interaction-model.md, "Layer drops"). During a Timeline drag the layer stack shows
@@ -991,19 +996,29 @@ file shows the warning glyph and remains relinkable from Assets.
 window frame; there are no frameless or custom-titlebar dialogs. A dialog is constructed with a
 title, an object name and a required owner, resolved to the owner's top-level window, and states
 its modality. It sits on `SurfaceRaised` with `Spacing::M` margins and `Spacing::S` between rows,
-and takes its width only from `DialogTextWidth` or `DialogWideWidth` (a document or page stack also
-takes the `DialogDocumentHeight` minimum height); no dialog calls `resize()` with a literal.
+and takes its width only from `DialogTextWidth` or `DialogWideWidth` (a document also takes the
+`DialogDocumentHeight` minimum height); no dialog calls `resize()` with a literal. A dialog is never
+narrower or shorter than its content: it grows to its layout's minimum width and to the height its
+content needs at that width.
 
 - **Form.** `KForm` lays out two columns: `KLabel` labels, left-aligned on every platform, in one
   label column shared by every form of the dialog (sections included), and fields that grow to the
   right. Rows are added in visual order and the dialog's Tab order follows that order (a section's
   header first), whatever order the widgets were constructed in. A check box row puts its words in
   a `KCheckLabel` that toggles the box when clicked.
+- **Tabs** (`kit/tab_bar.hpp`). `KTabBar` is Ui text tabs over a hairline: the current tab in
+  Foreground over a `SelectionEdge` Accent underline, the others Muted, the kit keyboard-focus
+  border around the current tab, Left/Right/Home/End to move, accessible as a page tab list.
+  `KTabs` puts it over a page stack as tall as its tallest page; Ctrl+Tab and Ctrl+Shift+Tab step
+  the tabs from any field. A refused value on a tab that is not showing puts a small Error dot
+  (`NonDefaultMark`) after that tab's name, and Accept then switches to it and focuses the field.
 - **Reasons.** One validator per dialog returns the first refusal: its field and its plain reason.
   The reason shows directly under that field (the inline field reason below), or above the buttons
   when it belongs to the dialog as a whole (the project changed while the dialog was open); a field
   inside a collapsed section opens it. Accept, Destructive and Alternate stay disabled while any
-  reason exists.
+  reason exists; Enter on a refused dialog switches to the refused field's tab and focuses it. A
+  wait that is not an error (the OpenH264 check still running) is a *pending* refusal: the same
+  place, in `Muted` ink.
 - **Button row.** Kit buttons in a `QDialogButtonBox`, so the platform orders them while the kit
   paints them: Accept is a Primary `KButton`, Destructive a Danger one, Reject, Alternate, Apply
   and Reset Secondary. Buttons are named `<dialog>AcceptButton`, `<dialog>RejectButton` and so on
@@ -1014,11 +1029,18 @@ takes the `DialogDocumentHeight` minimum height); no dialog calls `resize()` wit
   Warning, Error, Info); with only an OK it is the error and information notice (`kit::inform()`).
   `kit::promptText()` and `kit::promptRange()` show a refused value's reason inside the prompt and
   keep OK disabled, so a prompt never closes and reopens to refuse.
-- **Files** (`kit/file_chooser.hpp`). Every file dialog is `kit::chooseFile()`: parented to the
-  owner's window, starting in the folder last used for the same kind of file (a user setting,
-  never project data), applying the default suffix to a name typed without one, and listing the
-  mounted network shares in the sidebar of Qt's own dialog. A native platform dialog keeps its own
-  sidebar and ignores that list.
+- **Files** (`kit/file_chooser.hpp`). Every file dialog is `kit::chooseFile()`, and it is always
+  Bloom's own dialog: Qt's widget file dialog (`QFileDialog::DontUseNativeDialog`) on Linux, macOS
+  and Windows alike, never a platform, desktop-portal or Qt platform-theme chooser (owner decision,
+  2026-10-30: a GTK chooser opened through a Qt platform theme landed on another Hyprland workspace
+  and left Bloom looking frozen). It is a window-modal child of the owner's window, starts in the
+  folder last used for the same kind of file (a user setting, never project data), applies the
+  default suffix to a name typed without one, keeps the dialog's filters and lists the mounted
+  network shares in its sidebar. The kit styles all of it, scoped to the dialog: the look-in and
+  file-type combos take the Secondary button recipe, the name field the text-entry recipe, the
+  navigation buttons and every file and place kit glyphs, the file views a `Field` well and the
+  sidebar `Surface` (`DialogSidebarWidth` wide), every control one `Control` tall; it opens
+  `DialogWideWidth` × `DialogDocumentHeight`.
 - **Task dialog** (`kit/task_dialog.hpp`). `KTaskDialog` is the progress-then-summary modal the
   import dialog below is built on: elided heading and detail, a `KProgressBar`, Cancel that only
   asks the work to stop, then a summary with one Close that Return takes. `KTaskTiming` delays it
@@ -1034,19 +1056,57 @@ Restore Defaults and every failure notice are asynchronous. The keys are in
 
 The Composition dialog (New Composition and Composition Settings, #376) is one `kit::KDialog` at
 least `DialogWideWidth` wide, titled `New Composition` or `Composition Settings`, built only from kit
-controls: a **Basic** `KSection` and an **Advanced** `KSection` that starts collapsed. Both sections
-are `KForm`s of the one dialog, so they share ONE label column, sized to the widest label of either,
-and every field starts at the same x. Start, Duration and its unit are laid out (and tabbed) in that
-order; Start, Duration and the Custom frame rate are entered in the Value role. Text entry uses `KLineEdit`, pixel and percentage values `KValueField`,
-choices `KDropdown` (frame rate is one dropdown; its exact `KLineEdit` appears only for Custom), the
-aspect lock a `KIconToggle` (`IconId::Link`), and the preset buttons `KIconButton`s with tooltips
-`Save as preset…` (`IconId::Add`), `Rename preset…` (`IconId::Rename`, Phosphor `pencil-simple`) and
-`Delete preset` (`IconId::Delete`). A muted `UiSmall` summary line sits under the preset. Drop-frame
-is a `KCheckBox` with its `KLabel`; Background Colour is a `KColorChip` at its own size with the
-`#RRGGBB` value beside it in the Value role; the resize anchor is the Properties Anchor Point
-`KAnchorGrid` itself. Opening Advanced grows the dialog to fit and closing it returns the height;
-spare height sits below the sections. The interaction contract is in
+controls, with two tabs in a `kit::KTabs` (After Effects style; no collapsible sections). **Basic**
+holds what most compositions change: Name, Preset with its buttons and summary line, Size with the
+link toggle and the frame aspect beside it in muted Value text (`16:9`, `2.39:1`), Frame Rate,
+Duration with its unit, and Background Colour. **Advanced** holds the rarely changed values: Pixel
+Aspect Ratio, Start, the drop-frame Timecode row (shown only at 29.97 and 59.94 fps), Working
+Colour Space, the Resize Anchor (Composition Settings only, shown once the size changes), and
+Action / Title Safe. Both tabs are `KForm`s of the one dialog, so they share ONE label column, sized
+to the widest label of either, and every field starts at the same x; the dialog is as tall as its
+taller tab, so switching tabs never resizes it, and the tab last shown is shown again for the rest
+of the session. Every number is right-aligned: the `KValueField`s and the Start, Duration and Custom
+frame rate fields, which are entered in the Value role. Text entry uses `KLineEdit`, pixel and
+percentage values `KValueField`, choices `KDropdown` (frame rate is one dropdown; its exact
+`KLineEdit` appears only for Custom), the aspect lock a `KIconToggle` (`IconId::Link`), and the
+preset buttons `KIconButton`s with tooltips `Save as preset…` (`IconId::Add`), `Rename preset…`
+(`IconId::Rename`, Phosphor `pencil-simple`) and `Delete preset` (`IconId::Delete`). A muted
+`UiSmall` summary line sits under the preset. Drop-frame is a `KCheckBox` with its clickable
+`KCheckLabel`; Background Colour is a `KColorChip` at its own size with the `#RRGGBB` value beside it
+in the Value role; the resize anchor is the Properties Anchor Point `KAnchorGrid` itself. The
+interaction contract is in
 [interaction-model.md](interaction-model.md#composition-dialog).
+
+**Preferences window.** Preferences is a settings window rather than a dialog form, laid out the
+way Blender lays out its Preferences and built from the Properties panel's own parts, so a
+Preferences page and a Properties section look the same. A `PreferencesRailWidth` sidebar lists the
+categories one per `ListRow`, grouped by an `Spacing::S` gap: General (and Sounds when it lands) |
+Viewer, Timeline, Node Graph | Memory & Caches, Performance; a page that no group names appears in a
+group of its own after them. The sidebar has no radio marks: the current category takes the kit
+selected-row recipe (selection wash and the `SelectionEdge` Accent leading edge), others take the
+hover wash, Up/Down, Home/End and type-ahead move through it, the keyboard-focused row takes the
+Accent focus inset, and it is an accessible list. The category last shown is shown again for the
+rest of the session. A small Menu `KMenuButton` at the foot of the sidebar holds **Restore
+Defaults**, which still asks first; the button row keeps OK, Cancel and Apply.
+
+Each page is a scrolling Properties panel body: `Background`, the Properties content margins and
+section spacing, and `properties::makeSection` sections. Every row is a `KPropertyRow` with the
+Properties row label (`UiSmall`, `Muted`, right-aligned) in ONE `PreferencesLabelWidth` label column
+shared by every page, so every value starts at the same x on every page. Switches sit in the value
+column with their own clickable `UiSmall` words (`KCheckLabel`) and an empty label. Dropdowns and
+value fields take one width (`DropdownWidthWide`); a path field takes the rest of the row. Helper
+text is wrapped `UiSmall` `Muted` under the row it explains, in the value column; `Error` ink is only
+for a real refusal (a cache folder Bloom cannot use). A value whose zero means Automatic (the
+memory and disk budgets, the timeline layer column width) is a mode dropdown, **Automatic** or
+**Custom**, with the value field and its unit beside it only for Custom; choosing Custom brings
+back the last custom value. A section whose values are read at startup says so once, with a
+`Muted` `UiSmall` **Restart** badge in its header (its tooltip says the value takes effect after
+restart). The cache directory is a `kit::KPathField`, the text field that elides a path in the middle at
+rest (the whole path in its tooltip and while editing), with the placeholder `Default location`, a Secondary
+**Browse…** and a Reset `KIconButton` that returns to the default location. The window opens with
+the pages a `DialogTextWidth` column wide and as tall as the tallest page (up to three quarters of
+the screen, beyond which a page scrolls), so switching pages never resizes it; it can be made
+narrower down to the widest page's minimum. Changes apply on OK or Apply, never live.
 
 **Import Progress Dialog.** Every batch import (#377,
 [ADR 0029](../decisions/0029-import-progress-and-cancellation.md)) shows one application-modal

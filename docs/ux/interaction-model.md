@@ -132,12 +132,19 @@ dialog's, so every dialog answers them the same way:
 
 | Key | Action |
 | --- | --- |
-| `Return` / `Enter` | Presses the focused button-row button, else the default button (Accept, or the safe action of a destructive prompt). Refused, and nothing happens, while that button is disabled. A field that uses Return itself keeps it: a multi-line field's newline, a value field opening or committing its editor |
+| `Return` / `Enter` | Presses the focused button-row button, else the default button (Accept, or the safe action of a destructive prompt). Refused while that button is disabled: nothing closes, and the refused field is shown (its tab first) and focused. A field that uses Return itself keeps it: a multi-line field's newline, a value field opening or committing its editor |
 | `Ctrl+Return` / `Ctrl+Enter` (`Cmd` on macOS) | Always presses Accept, from any field, including a multi-line field and an open value-field editor, which commits what was typed first. Refused while the dialog is invalid |
 | `Escape` | Rejects the dialog. When a field's own editor is open (a value field being typed into, an open dropdown or colour picker popup) the first Escape belongs to that field and the dialog stays; the next Escape rejects |
 
 A value the dialog refuses keeps its accept button disabled and says why under its own field; a
-prompt never closes and reopens to refuse. A dialog that edits project items (Edit Tags, Input
+prompt never closes and reopens to refuse.
+
+Preferences is answered the same way, plus its sidebar: `Up`/`Down` move between categories
+(skipping the gaps between groups), `Home`/`End` go to the first and last, and typing a category's
+first letters selects it; Tab moves from the sidebar into the page. A section's Reset returns that
+section's values to their defaults in the window, and **Restore Defaults** (the menu button at the
+foot of the sidebar) asks first, then returns every value; neither saves anything until OK or
+Apply. A dialog that edits project items (Edit Tags, Input
 Colour, Delete) also refuses, live and again at accept, when the project changed while it was open,
 and commits nothing; cancel and open it again.
 
@@ -348,7 +355,7 @@ returns to the blank project.
 ### Composition Dialog
 
 New Composition and Composition Settings are one modal (#376), titled after its mode, with a Basic
-section and a collapsed Advanced section. Create mode starts from the active composition's settings and commits
+tab and an Advanced tab (Ctrl+Tab / Ctrl+Shift+Tab switch them from any field). Create mode starts from the active composition's settings and commits
 `AddCompositionWithSettings` ("Add Composition"); settings mode edits one composition and commits
 `SetCompositionSettings` ("Composition Settings"). Each is exactly one undoable command, and
 unchanged settings commit nothing. Entry points: Composition menu (`Ctrl+Alt+N`, `Ctrl+Alt+K`), the
@@ -359,20 +366,20 @@ Viewer composition menu, and the Assets Add menu, footer and context menus.
 | Name | Required |
 | Preset | Custom, the user's presets, then HD 1080p (1920 × 1080), HD 720p (1280 × 720), UHD 4K (3840 × 2160), DCI 2K (2048 × 1080), DCI 4K (4096 × 2160), Vertical 1080 × 1920 and Square 1080, all square pixels. Under the preset a muted summary reads the current values, for example `1920 × 1080 · 16:9 · Square pixels · 24 fps · 10 s (240 frames)`: the frame aspect (size times pixel aspect, reduced, or a ratio to one at two decimals such as `1.9:1` when its terms exceed 32), the pixel aspect, the rate (with `drop-frame` when labels are drop-frame) and the duration; a part whose value is invalid is left out. Choosing a built-in sets size and pixel aspect only; choosing a user preset sets every value it holds. The field shows the first preset whose values equal the current ones (user presets first) and Custom otherwise, including while a value is invalid |
 | Save as preset… / Rename preset… / Delete preset | The three buttons beside the preset (plus, pencil, trash). Save names the current values as a user preset; Rename and Delete act on the selected user preset and are disabled on Custom and built-ins. Names are trimmed, at most 128 UTF-8 bytes and unique ignoring case. User presets are a per-user application setting, never project data. A refused name is reported inside the name prompt, which keeps its OK disabled; Delete asks first |
-| Size and lock | Width and height in pixels; the link toggle keeps the aspect ratio while one is edited |
-| Pixel Aspect Ratio | Square, D1/DV NTSC (10/11) and widescreen (40/33), D1/DV PAL (59/54) and widescreen (118/81), HDV 1080 / DVCPRO HD 720 (4/3), DVCPRO HD 1080 (3/2), and Anamorphic 2:1; a stored ratio outside the list is shown as its own entry |
+| Size and lock | Width and height in pixels; the link toggle keeps the aspect ratio while one is edited; the frame aspect reads beside them |
+| Advanced: Pixel Aspect Ratio | Square, D1/DV NTSC (10/11) and widescreen (40/33), D1/DV PAL (59/54) and widescreen (118/81), HDV 1080 / DVCPRO HD 720 (4/3), DVCPRO HD 1080 (3/2), and Anamorphic 2:1; a stored ratio outside the list is shown as its own entry |
 | Frame Rate | One dropdown: 23.976 (24000/1001), 24, 25, 29.97 (30000/1001), 30, 48, 50, 59.94 (60000/1001) and 60 fps, then Custom. Only Custom shows the exact rate field beside it, which takes a positive integer, exact decimal (`29.97` is `2997/100`), or `numerator/denominator`; entered components must fit signed 64-bit integers and the reduced rate's components 32 bits. Typing in the Custom field stays Custom; a rate that equals a preset shows that preset whenever it is set any other way |
-| Timecode: drop-frame labels | Enabled only at 30000/1001 and 60000/1001. It changes timecode labels to SMPTE drop-frame (`;` before the frames, two or four labels skipped each minute except every tenth) and never changes frames or time |
-| Start | The timecode of frame 0, entered in the duration unit; stored as an exact time and labelled at the nearest frame |
+| Advanced: Timecode drop-frame labels | Shown only at 30000/1001 and 60000/1001. It changes timecode labels to SMPTE drop-frame (`;` before the frames, two or four labels skipped each minute except every tenth) and never changes frames or time |
+| Advanced: Start | The timecode of frame 0, entered in the duration unit; stored as an exact time and labelled at the nearest frame |
 | Duration and unit | Frames, Seconds (decimal or rational) or Timecode. Switching units re-displays the same exact duration; changing rate in Frames or Timecode keeps the frame count, in Seconds keeps the exact time |
 | Background Colour | The composition background as a `KColorChip` at its own size with its `#RRGGBB` value beside it; the chip opens the colour picker |
 | Advanced: Working Colour Space | Inherit (the project space) or a scene-linear space of the project's OCIO config |
-| Advanced: Resize Anchor | Settings mode only: the Properties Anchor Point grid (`KAnchorGrid`), choosing where existing layers sit when the size changes (default centre). Click a dot or use the arrow keys |
+| Advanced: Resize Anchor | Settings mode only, once the size changes: the Properties Anchor Point grid (`KAnchorGrid`), choosing where existing layers sit when the size changes (default centre). Click a dot or use the arrow keys |
 | Advanced: Action / Title Safe | The stored safe-area percentages; title safe may not exceed action safe |
 
 An invalid value disables OK and shows one plain reason directly under its own field (name, size,
-frame rate, start, duration or title safe). A reason under Title Safe opens Advanced so it is never
-hidden. Save as preset… and Rename preset… ask for the name in a prompt that shows a refused name's
+frame rate, start, duration or title safe). A reason on the tab that is not showing marks that tab
+with an Error dot, and OK switches to it and puts the cursor in the field. Save as preset… and Rename preset… ask for the name in a prompt that shows a refused name's
 reason (empty, too long, or already used) inside the prompt; Delete preset asks first, because a
 preset is a per-user setting that Undo cannot restore. Action and Title Safe are the same control
 as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
