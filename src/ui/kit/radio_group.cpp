@@ -1,5 +1,6 @@
 #include <bloom/ui/kit/radio_group.hpp>
 
+#include <bloom/ui/kit/accessibility.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 
@@ -21,6 +22,7 @@ constexpr int kMarkDiameter = px(Size::RadioMark);
 } // namespace
 
 KRadioGroup::KRadioGroup(QWidget* parent) : QWidget(parent) {
+    installKitAccessibility();
     ensureKeyboardFocusTracking(*this);
     setObjectName(QStringLiteral("kRadioGroup"));
     setFocusPolicy(Qt::StrongFocus);
@@ -50,10 +52,9 @@ void KRadioGroup::setOptionEnabled(const int index, const bool enabled) {
     if (index < 0 || index >= count()) {
         return;
     }
+    // Disabling the current option keeps it current: it is still the value the control reflects,
+    // so it stays marked -- faded -- rather than the group silently falling into the mixed state.
     options_[index].enabled = enabled;
-    if (!enabled && currentIndex_ == index) {
-        currentIndex_ = -1;
-    }
     update();
 }
 
@@ -224,9 +225,11 @@ void KRadioGroup::changeEvent(QEvent* event) {
 
 void KRadioGroup::selectNeighbour(const int direction) {
     // Arrow keys skip disabled options rather than parking on them, so keyboard navigation can
-    // never land somewhere it cannot commit.
+    // never land somewhere it cannot commit. From the mixed state (no current option) Right/Down
+    // enter at the first option and Left/Up at the last.
+    const int origin = currentIndex_ >= 0 ? currentIndex_ : (direction > 0 ? -1 : count());
     for (int step = 1; step <= count(); ++step) {
-        const int candidate = currentIndex_ + direction * step;
+        const int candidate = origin + direction * step;
         if (candidate < 0 || candidate >= count()) {
             return;
         }
@@ -268,15 +271,20 @@ void KRadioGroup::paintSegmented(QPainter& painter) {
         const State state = stateForOption(index);
         const QRectF segment(optionRect(index));
         const QRectF inner = segment.adjusted(inset, inset, -inset, -inset);
+        const bool fadedCurrent = index == currentIndex_ && state == State::Disabled;
         if (state == State::Selected) {
             fillRoundedSurface(painter, inner, color(Color::Accent), {}, segmentCorner);
+        } else if (fadedCurrent) {
+            fillRoundedSurface(painter, inner, disabledInk(color(Color::Accent)), {},
+                               segmentCorner);
         } else if (state == State::Hover) {
             fillRoundedSurface(painter, inner, color(surfaceStep(Color::Surface, 1)), {},
                                segmentCorner);
         }
 
-        const QColor ink =
-            state == State::Selected ? color(Color::OnAccent) : inkForState(Color::Muted, state);
+        const QColor ink = state == State::Selected ? color(Color::OnAccent)
+                           : fadedCurrent           ? disabledInk(color(Color::OnAccent))
+                                                    : inkForState(Color::Muted, state);
         QRectF content = segment.adjusted(px(Spacing::S), 0.0, -px(Spacing::S), 0.0);
         if (const std::optional<IconId> glyph = options_.at(index).icon; glyph.has_value()) {
             const auto size = iconsOnly_ ? iconSize(IconRole::Chrome) : Size::IconSmall;
@@ -329,12 +337,14 @@ void KRadioGroup::paintDiscrete(QPainter& painter) {
             fillRoundedSurface(painter, markRect.adjusted(-ring, -ring, ring, ring), {},
                                color(Color::Accent), Radius::Full);
         }
-        if (state == State::Selected) {
+        if (state == State::Selected || (index == currentIndex_ && state == State::Disabled)) {
             const auto dot = static_cast<qreal>(px(Size::RadioDot));
             fillRoundedSurface(painter,
                                QRectF(markRect.left() + (mark - dot) / 2.0,
                                       markRect.top() + (mark - dot) / 2.0, dot, dot),
-                               color(Color::Accent), {}, Radius::Full);
+                               state == State::Selected ? color(Color::Accent)
+                                                        : disabledInk(color(Color::Accent)),
+                               {}, Radius::Full);
         }
 
         const QColor ink =

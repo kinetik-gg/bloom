@@ -202,11 +202,10 @@ void testStockButtonsWearTheKitButtonRecipe(Expectations& expectations) {
              QStringLiteral("QToolButton[headerMenuButton=\"true\"][bloomKeyboardFocus=\"true\"]"))
              .isEmpty(),
         "a menu-strip button has a keyboard-focus rule");
-    // The dropdown closed field keeps ControlSurface and the Border hairline.
-    const QString combo = block(QStringLiteral("QComboBox"));
-    expectations.expect(combo.contains(kit::hex(kit::Color::ControlSurface)) &&
-                            combo.contains(kit::hex(kit::Color::Border)),
-                        "the dropdown closed field is ControlSurface with a Border hairline");
+    // The dropdown closed field is painted by KDropdown itself; no raw QComboBox is ever shown,
+    // so the sheet carries no QComboBox rule to drift from it.
+    expectations.expect(!kit::kinetikStyleSheet().contains(QStringLiteral("QComboBox")),
+                        "the application sheet styles no QComboBox");
 }
 
 // Scrollbars keep one track width in every state, so hovering never relayouts a view; the thumb

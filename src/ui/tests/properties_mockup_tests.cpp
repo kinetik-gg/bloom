@@ -332,7 +332,7 @@ void run() {
     expect(parentChoice && parentChoice->count() == static_cast<int>(candidates.size()) + 1,
            "Properties lists None and the session's parent candidates");
     if (parentChoice && childLayer && !candidates.empty()) {
-        parentChoice->setCurrentIndex(1);
+        parentChoice->chooseIndex(1);
         expect(session.parentOf(*childLayer) == candidates.front(),
                "Properties commits parent selection");
         expect(session.undo() && !session.parentOf(*childLayer),

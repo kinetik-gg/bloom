@@ -4,6 +4,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/popup_window.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
@@ -170,11 +171,20 @@ KColorPicker::KColorPicker(QWidget* parent) : QWidget(parent) {
     buildChrome();
 }
 
-KColorPicker::~KColorPicker() = default;
+KColorPicker::~KColorPicker() {
+    // The popup window is this picker's parent while it is open; detach before deleting it so the
+    // window cannot delete the picker a second time.
+    if (window_ != nullptr) {
+        auto* window = window_;
+        window_ = nullptr;
+        setParent(nullptr);
+        delete window;
+    }
+}
 
 void KColorPicker::buildChrome() {
     formSelector_ = new KDropdown(this);
-    formSelector_->setControlSize(KDropdown::ControlSize::Compact);
+    formSelector_->setControlSize(KDropdown::ControlSize::Dense);
     rebuildFormSelector();
     connect(formSelector_, &KDropdown::currentIndexChanged, this, [this](const int index) {
         const QVariant data = formSelector_->itemData(index);
@@ -222,7 +232,7 @@ void KColorPicker::buildChrome() {
         });
 
     modelSelector_ = new KDropdown(this);
-    modelSelector_->setControlSize(KDropdown::ControlSize::Compact);
+    modelSelector_->setControlSize(KDropdown::ControlSize::Dense);
     modelSelector_->addItem(colorModelLabel(ColorModel::Hsva), static_cast<int>(ColorModel::Hsva));
     modelSelector_->addItem(colorModelLabel(ColorModel::Hsla), static_cast<int>(ColorModel::Hsla));
     modelSelector_->addItem(colorModelLabel(ColorModel::Rgba), static_cast<int>(ColorModel::Rgba));
@@ -484,16 +494,20 @@ KRecentColorStore* KColorPicker::recentColorStore() const noexcept {
 }
 
 void KColorPicker::openBelow(const QWidget& anchor) {
-    if ((windowFlags() & Qt::Popup) == 0) {
-        setParent(nullptr);
-        setWindowFlags(Qt::Popup | Qt::BypassGraphicsProxyWidget);
-        applyElevation(*this, Elevation::Dialog);
+    if (window_ == nullptr) {
+        window_ = new KPopupWindow(nullptr, Elevation::Popup);
+        window_->setObjectName(QStringLiteral("kColorPickerPopup"));
+        window_->setContent(this);
     }
-    const QPoint anchorBottomLeft = anchor.mapToGlobal(QPoint(0, anchor.height()));
-    move(anchorBottomLeft + QPoint(0, px(Spacing::XXS)));
-    show();
-    raise();
-    activateWindow();
+    const int border = std::max(1, static_cast<int>(std::lround(kHairlineWidth)));
+    window_->openFor(anchor, size() + QSize(2 * border, 2 * border));
+}
+
+void KColorPicker::closePopup() {
+    if (window_ != nullptr)
+        window_->close();
+    else
+        close();
 }
 
 QRectF KColorPicker::svSquareRect() const noexcept { return svSquareRect_; }
@@ -797,9 +811,11 @@ void KColorPicker::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    // Radius::Small: the same frame every other popup (menus, dropdowns) rounds with.
-    fillRoundedSurface(painter, QRectF(rect()), tokenColor(Color::SurfaceRaised),
-                       tokenColor(Color::Border), Radius::Small);
+    // Radius::Small: the same frame every other popup (menus, dropdowns) rounds with. Hosted in its
+    // popup window, the window paints that frame and the picker draws only its contents.
+    if (window_ == nullptr || parentWidget() != window_)
+        fillRoundedSurface(painter, QRectF(rect()), tokenColor(Color::SurfaceRaised),
+                           tokenColor(Color::Border), Radius::Small);
 
     // SV square: a solid hue fill, a white-to-transparent gradient left to right, and a
     // transparent-to-black gradient top to bottom -- the standard three-layer composition, so the

@@ -427,7 +427,8 @@ void testPanelSwitcherFocusIsKeyboardOnly(Expectations& expectations) {
     QCoreApplication::sendEvent(picker, &leave);
     const QImage resting = picker->grab().toImage();
     const auto edgeLuminance = [](const QImage& image) {
-        const int y = std::min(2, image.height() - 1);
+        // The field's box (and its single border) starts Spacing::ControlInset inside the widget.
+        const int y = std::min(kit::px(kit::Spacing::ControlInset), image.height() - 1);
         return pixelLuminance(image.pixelColor(image.width() / 2, y));
     };
     const double restingEdge = edgeLuminance(resting);

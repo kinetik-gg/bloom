@@ -487,7 +487,7 @@ void PropertiesEditor::configureMergeInputs() {
                                                       binding.parameterId.value())));
         rowLayout->addWidget(blend);
         const auto layerId = entry.layerId;
-        connect(blend, &kit::KDropdown::currentIndexChanged, row, [this, layerId](int index) {
+        connect(blend, &kit::KDropdown::activated, row, [this, layerId](int index) {
             if (index >= 0 && static_cast<std::size_t>(index) < core::kBlendModes.size())
                 (void)session_.setLayerBlendMode(
                     layerId, core::kBlendModes[static_cast<std::size_t>(index)]);

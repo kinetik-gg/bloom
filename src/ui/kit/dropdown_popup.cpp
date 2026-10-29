@@ -1,23 +1,13 @@
 #include <bloom/ui/kit/dropdown_popup.hpp>
 
-#include <bloom/ui/kit/painting.hpp>
-#include <bloom/ui/kit/theme.hpp>
+#include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/popup_list.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 
 #include <QAbstractItemModel>
-#include <QEvent>
-#include <QFrame>
-#include <QKeyEvent>
-#include <QLayout>
-#include <QLineEdit>
 #include <QListView>
-#include <QMouseEvent>
-#include <QPainterPath>
-#include <QPropertyAnimation>
-#include <QRegion>
 #include <QRegularExpression>
-#include <QResizeEvent>
 #include <QSortFilterProxyModel>
-#include <QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
@@ -25,299 +15,118 @@
 namespace bloom::ui::kit {
 namespace {
 
-// The frame's own hairline, in whole logical pixels: the inner list is inset by exactly this much
-// so a full-width row can never paint over the border that defines the frame.
 [[nodiscard]] int frameBorderWidth() {
     return std::max(1, static_cast<int>(std::lround(kHairlineWidth)));
 }
 
-[[nodiscard]] QString popupStyleSheet() {
-    // Item rows carry no corner radius on purpose: the hover state is a full-width accent bar, and
-    // a rounded bar is not full width.
-    return expandTokens(QStringLiteral(R"(
-QFrame#kDropdownSurface {
-    background: {color.SurfaceRaised};
-    border: {border.Hairline}px solid {color.Border};
-    border-radius: {radius.Small}px;
-}
-QListView#kDropdownList {
-    background: transparent;
-    border: none;
-    outline: none;
-    padding: 0px;
-    color: {color.Foreground};
-}
-QListView#kDropdownList::item {
-    padding: {space.XS}px {space.M}px;
-    border: none;
-    color: {color.Foreground};
-}
-QListView#kDropdownList::item:hover, QListView#kDropdownList::item:selected {
-    background: {color.Accent};
-    color: {color.Foreground};
-}
-QListView#kDropdownList::item:disabled {
-    background: transparent;
-    color: {color.DisabledInk};
-}
-)"));
-}
-
 } // namespace
 
-// Qt::BypassGraphicsProxyWidget: when the anchor lives inside a QGraphicsProxyWidget (a node
-// card row), Qt would otherwise embed this popup into the scene as a sub-proxy, where it lands
-// behind the card and never receives the pointer (owner, 2026-09-15: "we can't open dropdown
-// inside a node"). The flag keeps it a real top-level popup; mapToGlobal() already maps through
-// the proxy and its view.
-KDropdownPopup::KDropdownPopup(QWidget* parent)
-    : QWidget(parent, Qt::Popup | Qt::BypassGraphicsProxyWidget) {
+KDropdownPopup::KDropdownPopup(QWidget* parent) : KPopupWindow(parent, Elevation::Popup) {
     setObjectName(QStringLiteral("kDropdownPopup"));
-    setAttribute(Qt::WA_TranslucentBackground, true);
-    setAttribute(Qt::WA_DeleteOnClose, false);
+    list_ = new KPopupList(this);
+    list_->setObjectName(QStringLiteral("kDropdownSurface"));
+    list_->setUniformRows(true);
+    setContent(list_, list_->view());
 
-    // The margin is where the elevation's blur lives; without it a drop shadow would be clipped
-    // away by the popup's own rectangle.
-    const Shadow elevation = shadow(Elevation::Popup);
-    const int margin = elevation.blurRadius;
-    auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(margin, margin, margin, margin + elevation.offsetY);
-    outer->setSpacing(0);
-
-    surface_ = new QFrame(this);
-    surface_->setObjectName(QStringLiteral("kDropdownSurface"));
-    surface_->setFrameShape(QFrame::NoFrame);
-    applyElevation(*surface_, Elevation::Popup);
-    outer->addWidget(surface_);
-
-    inner_ = new QVBoxLayout(surface_);
-    // No margin of its own: QStyleSheetStyle already insets a styled frame's contents by its own
-    // border, so the rows live INSIDE the hairline rather than on top of it -- which is what makes
-    // the frame, not the row, the rounded container. Adding a margin here would inset them twice.
-    inner_->setContentsMargins(0, 0, 0, 0);
-    inner_->setSpacing(0);
-
-    view_ = new QListView(surface_);
-    view_->setObjectName(QStringLiteral("kDropdownList"));
-    view_->setFrameShape(QFrame::NoFrame);
-    view_->setMouseTracking(true);
-    view_->setUniformItemSizes(true);
-    view_->setSelectionMode(QAbstractItemView::SingleSelection);
-    view_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    view_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    // A value too long for the popup is ellipsized, never allowed to widen the popup past the
-    // control it belongs to.
-    view_->setTextElideMode(Qt::ElideRight);
-    view_->setFont(kit::font(TypeRole::Ui));
-    // QAbstractScrollArea's own minimum size hint (56x56 on this Qt) would hold the frame open
-    // below its rows, leaving a dead band of SurfaceRaised under the last one -- and a last row
-    // that never reaches the bottom edge cannot have its hover bar clipped by the frame's bottom
-    // corners at all, which is exactly what this popup's shape is supposed to do. The frame is a
-    // wrapper around its items; it has no size of its own to defend.
-    view_->setMinimumSize(0, 0);
-    inner_->addWidget(view_);
-
-    setStyleSheet(popupStyleSheet());
-    view_->viewport()->installEventFilter(this);
-    // The list is clipped to the frame's inner rounded rectangle every time it is resized, so the
-    // accent hover bar on the first and last rows follows the frame's corners instead of squaring
-    // them off.
-    view_->installEventFilter(this);
-}
-
-QFrame* KDropdownPopup::surface() const noexcept { return surface_; }
-
-void KDropdownPopup::applyRoundedListMask() {
-    const QSize size = view_->size();
-    if (size.isEmpty()) {
-        return;
-    }
-    const auto extent = std::min(size.width(), size.height());
-    // The frame's radius, stepped in by the border the list already sits inside: concentric with
-    // the frame's own corner rather than a second, differently-curved one.
-    const auto corner =
-        static_cast<qreal>(std::max(0, radiusPx(Radius::Small, extent) - frameBorderWidth()));
-    // Only the edges the list actually shares with the frame are rounded (task S1, item 4). A
-    // search popup puts its filter field above the list, so the list's top edge is in the MIDDLE of
-    // the surface; rounding it there carved two notches under the field -- a second rounding with
-    // nothing behind it to curve around. An edge that must stay square is handled by extending the
-    // rounded rectangle past it, so its corners fall outside the widget and only straight sides
-    // remain inside.
-    const auto* surfaceLayout = surface_->layout();
-    const int index = surfaceLayout == nullptr ? 0 : surfaceLayout->indexOf(view_);
-    const int last = surfaceLayout == nullptr ? 0 : surfaceLayout->count() - 1;
-    const qreal top = index <= 0 ? 0.0 : -corner;
-    const qreal bottom = index >= last ? 0.0 : corner;
-    QPainterPath path;
-    path.addRoundedRect(QRectF(QPointF(0.0, 0.0), QSizeF(size)).adjusted(0.0, top, 0.0, bottom),
-                        corner, corner);
-    view_->setMask(QRegion(path.toFillPolygon().toPolygon()));
+    connect(list_, &KPopupList::rowChosen, this, [this](const int row) {
+        const int index = sourceRow(row);
+        close();
+        Q_EMIT itemChosen(index);
+    });
+    connect(list_, &KPopupList::tabbed, this, [this](const bool forward) {
+        close();
+        Q_EMIT focusMoveRequested(forward);
+    });
+    connect(list_, &KPopupList::dismissed, this, &QWidget::close);
+    // Rows rebuilt under an open popup (a vocabulary refreshed by the document) re-fit it rather
+    // than leaving it at the height of the rows it had.
+    connect(list_, &KPopupList::rowsChanged, this, [this] {
+        list_->setCommittedRow(viewRow(committedSource_));
+        if (isVisible())
+            refitToRows();
+    });
 }
 
 void KDropdownPopup::setModel(QAbstractItemModel* model) {
     sourceModel_ = model;
-    view_->setModel(model);
+    if (proxy_ != nullptr)
+        proxy_->setSourceModel(model);
+    list_->setModel(searchable_ && proxy_ != nullptr ? static_cast<QAbstractItemModel*>(proxy_)
+                                                     : model);
 }
 
 void KDropdownPopup::setSearchable(const bool searchable) {
     if (searchable_ == searchable)
         return;
     searchable_ = searchable;
-    if (!searchable_) {
-        if (search_ != nullptr) {
-            inner_->removeWidget(search_);
-            search_->deleteLater();
-            search_ = nullptr;
-        }
-        view_->setModel(sourceModel_);
-        return;
+    list_->setFilterVisible(searchable_);
+    if (searchable_ && proxy_ == nullptr) {
+        // One proxy for the popup's life, however often searchability is switched.
+        proxy_ = new QSortFilterProxyModel(this);
+        proxy_->setFilterCaseSensitivity(Qt::CaseInsensitive);
+        proxy_->setFilterRole(Qt::DisplayRole);
+        connect(list_, &KPopupList::filterChanged, this, [this](const QString& text) {
+            proxy_->setFilterRegularExpression(QRegularExpression(
+                QRegularExpression::escape(text), QRegularExpression::CaseInsensitiveOption));
+            list_->setCommittedRow(viewRow(committedSource_));
+            // Typing keeps a row current, so Enter always has something to choose.
+            if (!list_->isChoosable(list_->currentRow()))
+                list_->stepCurrent(1);
+            if (isVisible())
+                refitToRows();
+        });
     }
-
-    search_ = new QLineEdit(surface_);
-    search_->setObjectName(QStringLiteral("kDropdownSearch"));
-    search_->setPlaceholderText(QObject::tr("Search"));
-    search_->setClearButtonEnabled(true);
-    search_->setFont(kit::font(TypeRole::Ui));
-    search_->setStyleSheet(expandTokens(QStringLiteral(R"(
-QLineEdit#kDropdownSearch {
-    background: {color.SurfaceRaised};
-    border: none;
-    border-bottom: {border.Hairline}px solid {color.BorderSubtle};
-    color: {color.Foreground};
-    padding: {space.XS}px {space.S}px;
-}
-)")));
-    inner_->insertWidget(0, search_);
-
-    auto* proxy = new QSortFilterProxyModel(this);
-    proxy->setSourceModel(sourceModel_);
-    proxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
-    proxy->setFilterRole(Qt::DisplayRole);
-    view_->setModel(proxy);
-    connect(search_, &QLineEdit::textChanged, this, [proxy](const QString& text) {
-        proxy->setFilterRegularExpression(QRegularExpression(
-            QRegularExpression::escape(text), QRegularExpression::CaseInsensitiveOption));
-    });
+    if (proxy_ != nullptr)
+        proxy_->setSourceModel(sourceModel_);
+    list_->setModel(searchable_ ? static_cast<QAbstractItemModel*>(proxy_) : sourceModel_);
 }
 
-QListView* KDropdownPopup::view() const noexcept { return view_; }
+QListView* KDropdownPopup::view() const noexcept { return list_->view(); }
 
-void KDropdownPopup::openBelow(const QWidget& anchor, const int currentIndex) {
-    if (view_->model() != nullptr && currentIndex >= 0) {
-        auto index = view_->model()->index(currentIndex, 0);
-        if (searchable_) {
-            const auto* proxy = qobject_cast<const QSortFilterProxyModel*>(view_->model());
-            if (proxy != nullptr && sourceModel_ != nullptr)
-                index = proxy->mapFromSource(sourceModel_->index(currentIndex, 0));
-        }
-        if (index.isValid())
-            view_->setCurrentIndex(index);
-    }
+QWidget* KDropdownPopup::surface() const noexcept { return list_; }
 
-    const Shadow elevation = shadow(Elevation::Popup);
-    const int margin = elevation.blurRadius;
-    const int rows = view_->model() == nullptr ? 0 : view_->model()->rowCount();
-    const int rowHeight = std::max(px(Size::Control), view_->sizeHintForRow(0));
-    // Exactly the rows, plus the frame's own hairline on each side. No list padding: a row that
-    // stopped short of the frame edge would leave a sliver of SurfaceRaised above the first hover
-    // bar, and the bar would no longer read as reaching the frame's rounded corner.
-    //
-    // The height is pinned on the view rather than merely requested, because
-    // QAbstractScrollArea's own minimum size hint (56x56 on this Qt) would otherwise hold the
-    // frame open below its rows: a dead band of SurfaceRaised under the last one, whose hover bar
-    // could then never reach -- let alone be clipped by -- the frame's bottom corners.
-    const int rowsHeight = std::max(rowHeight, rows * rowHeight);
-    view_->setFixedHeight(rowsHeight);
-    const int searchHeight = search_ == nullptr ? 0 : search_->sizeHint().height();
-    const int listHeight = rowsHeight + searchHeight + frameBorderWidth() * 2;
-
-    const QPoint anchorBottomLeft = anchor.mapToGlobal(QPoint(0, anchor.height()));
-    const QSize outerSize(anchor.width() + margin * 2, listHeight + margin * 2 + elevation.offsetY);
-    resize(outerSize);
-
-    const QPoint finalPosition(anchorBottomLeft.x() - margin,
-                               anchorBottomLeft.y() - margin + px(Spacing::XXS));
-    const int riseMs = durationMs(Motion::Pop);
-    if (riseMs <= 0) {
-        // Reduced motion: straight to the end state, no rise.
-        move(finalPosition);
-        show();
-        if (search_ != nullptr)
-            search_->setFocus();
-        return;
-    }
-    move(finalPosition + QPoint(0, kPopRisePx));
-    show();
-    if (search_ != nullptr)
-        search_->setFocus();
-    auto* rise = new QPropertyAnimation(this, "pos", this);
-    rise->setDuration(riseMs);
-    rise->setEasingCurve(easing(Motion::Pop));
-    rise->setStartValue(finalPosition + QPoint(0, kPopRisePx));
-    rise->setEndValue(finalPosition);
-    rise->start(QAbstractAnimation::DeleteWhenStopped);
+int KDropdownPopup::sourceRow(const int row) const {
+    if (!searchable_ || proxy_ == nullptr || row < 0)
+        return row;
+    return proxy_->mapToSource(proxy_->index(row, 0)).row();
 }
 
-void KDropdownPopup::keyPressEvent(QKeyEvent* event) {
-    if (event->key() == Qt::Key_Escape) {
-        close();
-        event->accept();
-        return;
-    }
-    QWidget::keyPressEvent(event);
+int KDropdownPopup::viewRow(const int source) const {
+    if (!searchable_ || proxy_ == nullptr || source < 0 || sourceModel_ == nullptr)
+        return source;
+    const QModelIndex mapped = proxy_->mapFromSource(sourceModel_->index(source, 0));
+    return mapped.isValid() ? mapped.row() : -1;
 }
 
-void KDropdownPopup::mousePressEvent(QMouseEvent* event) {
-    // Qt delivers a click anywhere on screen to the active popup, with a position that may fall
-    // outside this widget entirely. A press outside the FRAME -- including the transparent shadow
-    // gutter around it -- dismisses; a press on the frame is the list's own business.
-    if (!surface_->geometry().contains(event->position().toPoint())) {
-        close();
-        event->accept();
-        return;
-    }
-    QWidget::mousePressEvent(event);
+void KDropdownPopup::setWidestRowText(const int widestTextWidth) { widestText_ = widestTextWidth; }
+
+QSize KDropdownPopup::wantedFrameSize(const int anchorWidth) const {
+    const int border = frameBorderWidth();
+    const int rows = KPopupList::textOffset() + widestText_ + px(Spacing::MenuItemX);
+    // Exactly the rows (and the filter, when searchable) plus the frame's own hairlines: nothing
+    // under the last row.
+    return {std::max(anchorWidth, rows) + 2 * border, list_->fittedHeight() + 2 * border};
 }
 
-void KDropdownPopup::leaveEvent(QEvent* event) {
-    // Deliberately does NOT close. A detached popup stays open until the artist chooses an item,
-    // clicks outside it, or presses Esc; moving the pointer away is none of those. This override
-    // exists so that intent is written down where someone would otherwise add a close() call.
-    QWidget::leaveEvent(event);
-}
+void KDropdownPopup::refitToRows() { refit(wantedFrameSize(anchorWidth_)); }
 
-bool KDropdownPopup::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == view_ && event->type() == QEvent::Resize) {
-        applyRoundedListMask();
-        return false;
-    }
-    if (watched == view_ && event->type() == QEvent::KeyPress) {
-        // The list keeps keyboard focus while the popup is open, so Esc arrives here rather than at
-        // the popup itself on some platforms.
-        if (static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
-            close();
-            return true;
-        }
-        return false;
-    }
-    if (watched == view_->viewport() && event->type() == QEvent::MouseButtonRelease) {
-        const auto* mouse = static_cast<QMouseEvent*>(event);
-        const QModelIndex index = view_->indexAt(mouse->pos());
-        // A disabled row swallows the click rather than closing the popup on a value the artist
-        // cannot have.
-        if (index.isValid() && (index.flags() & Qt::ItemIsEnabled) != 0) {
-            close();
-            int sourceRow = index.row();
-            if (searchable_) {
-                const auto* proxy = qobject_cast<const QSortFilterProxyModel*>(view_->model());
-                if (proxy != nullptr)
-                    sourceRow = proxy->mapToSource(index).row();
-            }
-            Q_EMIT itemChosen(sourceRow);
-        }
-        return true;
-    }
-    return QWidget::eventFilter(watched, event);
+void KDropdownPopup::openFor(const QWidget& anchor, const int committedRow,
+                             const int anchorTextOffset) {
+    committedSource_ = committedRow;
+    list_->prepareForOpen();
+    list_->setCommittedRow(viewRow(committedRow));
+    list_->setCurrentRow(viewRow(committedRow));
+    const QRect visual = visualGlobalRect(anchor);
+    // A zoomed node card draws its field smaller than its widget; its text offset scales with it.
+    const qreal scale =
+        anchor.width() > 0 ? static_cast<qreal>(visual.width()) / anchor.width() : 1.0;
+    const int shift =
+        std::max(0, KPopupList::textOffset() + frameBorderWidth() -
+                        static_cast<int>(std::lround(anchorTextOffset * scale)));
+    anchorWidth_ = visual.width() + shift - 2 * frameBorderWidth();
+    KPopupWindow::openFor(anchor, wantedFrameSize(anchorWidth_), shift);
+    list_->setFrameCorner(translucent() ? radiusPx(Radius::Small, 0) - frameBorderWidth() : 0.0);
+    list_->scrollToCurrent();
 }
 
 } // namespace bloom::ui::kit

@@ -272,7 +272,7 @@ void buildGroup(CompositionSession& session, MasksState& state, const document::
                          runMaskCommand<commands::RenameLayerMask>(
                              session, "Rename Mask", layerId, maskId, edit->text().toStdString());
                      });
-    QObject::connect(group.mode, &kit::KDropdown::currentIndexChanged, group.mode,
+    QObject::connect(group.mode, &kit::KDropdown::activated, group.mode,
                      [&session, layerId, maskId, dropdown = group.mode](int) {
                          runMaskCommand<commands::SetLayerMaskMode>(
                              session, "Set Mask Mode", layerId, maskId,
@@ -438,9 +438,9 @@ void addTrackMatteSection(CompositionSession& session, QVBoxLayout* layout, QWid
     (void)addRow(rows, body, makeRowLabel(QObject::tr("Layer"), body), nullptr, fields.source);
     (void)addRow(rows, body, makeRowLabel(QObject::tr("Channel"), body), nullptr, fields.channel);
     (void)addRow(rows, body, makeRowLabel(QObject::tr("Inverted"), body), nullptr, fields.inverted);
-    QObject::connect(fields.source, &kit::KDropdown::currentIndexChanged, fields.section,
+    QObject::connect(fields.source, &kit::KDropdown::activated, fields.section,
                      [&session, fields](int) { commitMatte(session, fields); });
-    QObject::connect(fields.channel, &kit::KDropdown::currentIndexChanged, fields.section,
+    QObject::connect(fields.channel, &kit::KDropdown::activated, fields.section,
                      [&session, fields](int) { commitMatte(session, fields); });
     QObject::connect(fields.inverted, &kit::KSwitch::toggled, fields.section,
                      [&session, fields](bool) { commitMatte(session, fields); });

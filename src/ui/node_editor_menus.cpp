@@ -1208,7 +1208,7 @@ void NodeGraphEditor::buildFooter() {
     footerZoomDropdown_ = new kit::KDropdown(this);
     footerZoomDropdown_->setObjectName(QStringLiteral("nodeZoomDropdown"));
     footerZoomDropdown_->setAccessibleName(tr("Zoom"));
-    footerZoomDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
+    footerZoomDropdown_->setControlSize(kit::KDropdown::ControlSize::Dense);
     footerZoomDropdown_->addItem(tr("Fit"), 0);
     for (const int percent : kZoomPresets) {
         footerZoomDropdown_->addItem(tr("%1%").arg(percent), percent);
@@ -1241,7 +1241,7 @@ void NodeGraphEditor::buildFooter() {
     footerLinkStyleDropdown_ = new kit::KDropdown(this);
     footerLinkStyleDropdown_->setObjectName(QStringLiteral("nodeLinkStyleDropdown"));
     footerLinkStyleDropdown_->setAccessibleName(tr("Link Style"));
-    footerLinkStyleDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
+    footerLinkStyleDropdown_->setControlSize(kit::KDropdown::ControlSize::Dense);
     footerLinkStyleDropdown_->addItem(tr("Spline"), static_cast<int>(LinkStyle::Spline));
     footerLinkStyleDropdown_->addItem(tr("Straight"), static_cast<int>(LinkStyle::Straight));
     footerLinkStyleDropdown_->addItem(tr("Angled"), static_cast<int>(LinkStyle::Angled));

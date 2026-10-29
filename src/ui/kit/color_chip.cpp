@@ -129,7 +129,7 @@ void KColorChip::cancelEdit() {
 
 void KColorChip::closePicker() {
     if (picker_ != nullptr) {
-        picker_->close();
+        picker_->closePopup();
     }
 }
 

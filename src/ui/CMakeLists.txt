@@ -26,6 +26,9 @@ target_sources(
         kit/search_popup.cpp
         kit/section.cpp
         kit/dropdown_popup.cpp
+        kit/popup_window.cpp
+        kit/popup_list.cpp
+        kit/accessibility.cpp
         kit/fonts.cpp
         kit/icons.cpp
         kit/mnemonic_style.cpp
@@ -58,6 +61,9 @@ target_sources(
             include/bloom/ui/kit/search_popup.hpp
             include/bloom/ui/kit/section.hpp
             include/bloom/ui/kit/dropdown_popup.hpp
+            include/bloom/ui/kit/popup_window.hpp
+            include/bloom/ui/kit/popup_list.hpp
+            include/bloom/ui/kit/accessibility.hpp
             include/bloom/ui/kit/fonts.hpp
             include/bloom/ui/kit/icons.hpp
             include/bloom/ui/kit/mnemonic_style.hpp

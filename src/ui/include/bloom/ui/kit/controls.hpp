@@ -24,6 +24,11 @@ class KMenuButton : public QToolButton {
 // the pointer itself, because a popup's child widgets cannot rely on hover attributes, and
 // triggers the row's action on release. (Owner, 2026-09-15: the first attempt used a separate
 // button widget and drifted in hover and highlight; this class exists so that cannot recur.)
+//
+// Keyboard: Up/Down move within a column and Left/Right across columns (Left from the first column
+// closes the submenu, as Left does in any submenu), Home/End jump to the first/last row,
+// Enter/Return/Space trigger, Esc closes. The current row is the pointer's or the keyboard's -- one
+// row, painted State_Selected -- and disabled rows are stepped over.
 class KMenuFlow final : public QWidget {
     Q_OBJECT
   public:
@@ -33,6 +38,8 @@ class KMenuFlow final : public QWidget {
     [[nodiscard]] int itemCount() const noexcept { return static_cast<int>(actions_.size()); }
     [[nodiscard]] QRect itemRect(int index) const;
     [[nodiscard]] int hoveredIndex() const noexcept { return hovered_; }
+    [[nodiscard]] int currentIndex() const noexcept { return hovered_; }
+    void setCurrentIndex(int index);
     [[nodiscard]] int columnCount() const noexcept { return columns_; }
     QSize sizeHint() const override;
 
@@ -41,9 +48,13 @@ class KMenuFlow final : public QWidget {
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void leaveEvent(QEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+    void focusInEvent(QFocusEvent* event) override;
 
   private:
     [[nodiscard]] int indexAt(QPoint position) const;
+    [[nodiscard]] int enabledFrom(int index, int step) const;
+    void trigger(int index);
     void fillOption(QStyleOptionMenuItem& option, int index) const;
     QMenu* menu_;
     QList<QAction*> actions_;

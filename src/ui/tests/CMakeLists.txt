@@ -28,6 +28,9 @@ add_executable(bloom_kit_color_swatches_test
 add_executable(bloom_kit_dropdown_test
     kit_dropdown_tests.cpp
 )
+add_executable(bloom_kit_popup_test
+    kit_popup_tests.cpp
+)
 add_executable(bloom_kit_focus_border_test
     kit_focus_border_tests.cpp
 )
@@ -196,6 +199,7 @@ target_link_libraries(bloom_kit_color_picker_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_color_sampler_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_color_swatches_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_dropdown_test PRIVATE bloom_ui_kit Qt6::Test)
+target_link_libraries(bloom_kit_popup_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_focus_border_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_fonts_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_panel_switcher_test PRIVATE bloom_ui_kit Qt6::Test)
@@ -372,6 +376,7 @@ bloom_enable_warnings(bloom_kit_color_picker_test)
 bloom_enable_warnings(bloom_kit_color_sampler_test)
 bloom_enable_warnings(bloom_kit_color_swatches_test)
 bloom_enable_warnings(bloom_kit_dropdown_test)
+bloom_enable_warnings(bloom_kit_popup_test)
 bloom_enable_warnings(bloom_kit_focus_border_test)
 bloom_enable_warnings(bloom_kit_fonts_test)
 bloom_enable_warnings(bloom_kit_panel_switcher_test)
@@ -516,6 +521,14 @@ bloom_add_test(
     LABELS ui unit kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_popup
+    COMMAND bloom_kit_popup_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
 )
 
 bloom_add_test(
@@ -1200,6 +1213,11 @@ endif()
 
 # The maximized Viewer at a small and a large size, with and without a composition: captures for
 # review, plus the check that no hosted header or footer control lies outside its row.
+# The popup chin check: holds one dropdown popup or menu open for a compositor screenshot.
+add_executable(bloom_popup_capture popup_capture.cpp)
+target_link_libraries(bloom_popup_capture PRIVATE bloom_ui_kit)
+bloom_enable_warnings(bloom_popup_capture)
+
 add_executable(bloom_viewer_chrome_capture viewer_chrome_capture.cpp)
 target_link_libraries(bloom_viewer_chrome_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_viewer_chrome_capture PRIVATE

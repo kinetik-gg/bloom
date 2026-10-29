@@ -1,5 +1,7 @@
 #include <bloom/ui/kit/mnemonic_style.hpp>
 
+#include <bloom/ui/kit/popup_window.hpp>
+
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -21,6 +23,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
 #include <QRect>
 #include <QRectF>
@@ -96,8 +99,12 @@ void installKeyboardFocusTracker(QApplication& application) {
 // The menu's shadow gutter on its right and bottom edges: the Popup elevation's blur, plus its
 // vertical offset below.
 [[nodiscard]] QMargins menuShadowGutter() {
+    // No gutter where transparency is not guaranteed: an opaque gutter is a dark band under the
+    // last row (owner, 2026-10-29: "it looks like a chin").
+    if (!popupTranslucencySupported())
+        return {};
     const Shadow popup = shadow(Elevation::Popup);
-    return {0, 0, popup.blurRadius / 2, popup.blurRadius / 2 + popup.offsetY};
+    return {0, 0, popup.blurRadius / 2 + popup.offsetX, popup.blurRadius / 2 + popup.offsetY};
 }
 
 // Wraps a plain-text tooltip that would run wider than Size::TooltipMaxWidth.
@@ -207,6 +214,44 @@ void paintBranchIndicator(const QStyleOption& option, QPainter& painter) {
         glyph);
 }
 
+// The menu frame's corner: Radius::Small where the menu is translucent, square where it is not
+// (its corner pixels would be opaque).
+qreal menuFrameCorner(const QWidget* menu, const QRectF& frame) {
+    if (menu != nullptr && !menu->testAttribute(Qt::WA_TranslucentBackground))
+        return 0.0;
+    return radiusPx(Radius::Small, static_cast<int>(std::min(frame.width(), frame.height())));
+}
+
+// The menu's Accent hover bar: full width, clipped by an antialiased path to the frame's rounded
+// inner edge, so a first or last row meets the frame's corner without squaring it off. `widget` is
+// the menu; a row painted on a child of it (a flowed submenu's body) maps the frame across.
+void paintMenuHoverBar(QPainter& painter, const QRect& row, const QWidget* widget) {
+    const auto* menu = qobject_cast<const QMenu*>(widget);
+    if (menu == nullptr) {
+        painter.fillRect(row, color(Color::Accent));
+        return;
+    }
+    const QMargins gutter = menu->contentsMargins();
+    QRectF frame = QRectF(menu->rect()).adjusted(gutter.left(), gutter.top(), -gutter.right(),
+                                                 -gutter.bottom());
+    if (const auto* target = dynamic_cast<const QWidget*>(painter.device());
+        target != nullptr && target != menu && menu->isAncestorOf(target))
+        frame.translate(QPointF(target->mapFrom(menu, QPoint(0, 0))));
+    const qreal border = std::max(1.0, std::round(kHairlineWidth));
+    const QRectF inner = frame.adjusted(border, border, -border, -border);
+    const qreal corner = std::max(0.0, menuFrameCorner(menu, frame) - border);
+    QPainterPath clip;
+    clip.addRoundedRect(inner, corner, corner);
+    QPainterPath bar;
+    bar.addRect(QRectF(row));
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color(Color::Accent));
+    painter.drawPath(bar.intersected(clip));
+    painter.restore();
+}
+
 } // namespace
 
 bool showMnemonicUnderline(const Qt::KeyboardModifiers modifiers) noexcept {
@@ -236,6 +281,11 @@ bool hasKeyboardFocus(const QWidget& widget) noexcept {
 
 int menuIconColumnWidth() { return px(Size::IconMedium); }
 
+int menuRowHeight(const QFont& font) {
+    return std::max(QFontMetrics(font).height(), menuIconColumnWidth()) +
+           px(Spacing::MenuItemY) * 2;
+}
+
 int menuItemTextOffset() {
     return px(Spacing::MenuItemX) + menuIconColumnWidth() + menuColumnGap();
 }
@@ -256,8 +306,10 @@ int AltUnderlineProxyStyle::styleHint(const StyleHint hint, const QStyleOption* 
 void AltUnderlineProxyStyle::polish(QWidget* widget) {
     if (qobject_cast<QMenu*>(widget) != nullptr) {
         // The frame below is drawn with rounded corners and casts the Popup shadow; without this
-        // the corner pixels and the shadow gutter would be an opaque plate.
-        widget->setAttribute(Qt::WA_TranslucentBackground, true);
+        // the corner pixels and the shadow gutter would be an opaque plate. Where the platform does
+        // not guarantee transparency the menu is a square, gutterless plate instead.
+        if (popupTranslucencySupported())
+            widget->setAttribute(Qt::WA_TranslucentBackground, true);
         // The shadow falls right and below, in a transparent gutter the menu lays its rows out
         // inside of (QMenu honours contents margins). Top and left stay flush, so a menu still
         // opens exactly at its anchor.
@@ -320,10 +372,11 @@ void AltUnderlineProxyStyle::drawPrimitive(const PrimitiveElement element,
         // The casting shape is pulled in so the soft edge lands inside the right/bottom gutter
         // and never shows a cut where the gutter ends.
         const qreal blur = shadow(Elevation::Popup).blurRadius;
-        drawElevationShadow(*painter, frame.adjusted(blur, blur, -blur / 2.0, -blur / 2.0),
-                            Radius::Small, Elevation::Popup);
+        if (!gutter.isNull())
+            drawElevationShadow(*painter, frame.adjusted(blur, blur, -blur / 2.0, -blur / 2.0),
+                                Radius::Small, Elevation::Popup);
         fillRoundedSurface(*painter, frame, color(Color::SurfaceRaised), color(Color::Border),
-                           Radius::Small);
+                           menuFrameCorner(widget, frame));
         return;
     }
     if (element == QStyle::PE_FrameMenu) {
@@ -340,7 +393,9 @@ int AltUnderlineProxyStyle::pixelMetric(const PixelMetric metric, const QStyleOp
     case QStyle::PM_MenuPanelWidth:
         return std::max(1, static_cast<int>(std::lround(kHairlineWidth)));
     case QStyle::PM_MenuVMargin:
-        return px(Spacing::XS);
+        // None: the first and last rows meet the frame, exactly as a dropdown's do, so nothing is
+        // left under the last row. Their hover bars are clipped to the frame's rounded corners.
+        return 0;
     case QStyle::PM_MenuHMargin:
         // The rows run edge to edge inside the frame, so the accent hover bar is full width.
         return 0;
@@ -380,7 +435,7 @@ void AltUnderlineProxyStyle::drawControl(const ControlElement element, const QSt
     // The hover bar is the dropdown's: a full-width Accent rectangle, never a rounded pill and
     // never inset from the frame's own edges.
     if (selected) {
-        painter->fillRect(rect, color(Color::Accent));
+        paintMenuHoverBar(*painter, rect, widget);
     }
 
     // Qualified: QStyle already has a nested `State`, and this class IS a QStyle.

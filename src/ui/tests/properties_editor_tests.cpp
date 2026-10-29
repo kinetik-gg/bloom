@@ -686,7 +686,7 @@ void testBlendingRowEditsThroughOneCommandWithUndo(Expectations& expectations) {
     }
 
     const auto revisionBefore = document.snapshot().revision();
-    blending->setCurrentIndex(overlayRow);
+    blending->chooseIndex(overlayRow);
     expectations.expect(session.blendModeForLayer(ids.layer) == core::BlendMode::Overlay,
                         "picking a mode commits it to the layer's own parameter");
     expectations.expect(document.snapshot().revision() != revisionBefore && session.canUndo() &&
@@ -703,7 +703,7 @@ void testBlendingRowEditsThroughOneCommandWithUndo(Expectations& expectations) {
     // history entry, exactly as the text-content row's equal-value path does.
     const auto settled = document.snapshot().revision();
     const auto historyBefore = session.canUndo();
-    blending->setCurrentIndex(blending->currentIndex());
+    blending->chooseIndex(blending->currentIndex());
     expectations.expect(document.snapshot().revision() == settled &&
                             session.canUndo() == historyBefore,
                         "re-picking the current mode commits nothing");

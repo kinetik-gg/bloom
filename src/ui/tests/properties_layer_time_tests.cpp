@@ -63,11 +63,11 @@ int main(int argc, char** argv) {
     expect(before->count() == 4 && before->currentText() == "None", "default None, four items");
     expect(!remap->isChecked(), "remap off by default");
 
-    before->setCurrentIndex(2); // Loop
+    before->chooseIndex(2); // Loop
     expect(boundary(session, *layer)->timing.beforeMode == document::LayerTimeMode::Loop &&
                boundary(session, *layer)->timing.afterMode == document::LayerTimeMode::None,
            "before Loop committed");
-    after->setCurrentIndex(3); // Ping-pong
+    after->chooseIndex(3); // Ping-pong
     expect(boundary(session, *layer)->timing.afterMode == document::LayerTimeMode::PingPong &&
                boundary(session, *layer)->timing.beforeMode == document::LayerTimeMode::Loop,
            "after Ping-pong committed");

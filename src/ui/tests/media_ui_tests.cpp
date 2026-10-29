@@ -414,7 +414,7 @@ void run() {
             "Timeline preserves an independently authored Layer name");
     require(session.undo() && session.undo(), "remove layer naming fixture");
     const auto other = session.snapshot().project().assets().back().id;
-    cardAsset->setCurrentIndex(cardAsset->findData(QString::number(other.value())));
+    cardAsset->chooseIndex(cardAsset->findData(QString::number(other.value())));
     require(selector->currentData().toString() == QString::number(other.value()),
             "card asset edit projects to Properties");
     require(session.undo(), "asset picker undo");
@@ -473,7 +473,7 @@ void run() {
     for (const auto& record : session.snapshot().project().assets())
         if (record.kind == document::AssetKind::Sequence)
             sequence = record.id;
-    cardAsset->setCurrentIndex(cardAsset->findData(QString::number(sequence.value())));
+    cardAsset->chooseIndex(cardAsset->findData(QString::number(sequence.value())));
     waitThumbnail();
     ui::kit::KLabel* cardDimensions = nullptr;
     ui::kit::KLabel* cardRange = nullptr;
@@ -537,7 +537,7 @@ void run() {
             "time before Start Frame holds first member");
     require(session.undo() && session.undo() && session.undo(), "restore source timing parameters");
     require(session.setCurrentTime(core::RationalTime::fromInteger(0)), "restore sequence time");
-    cardAsset->setCurrentIndex(cardAsset->findData(QString::number(asset.value())));
+    cardAsset->chooseIndex(cardAsset->findData(QString::number(asset.value())));
     waitThumbnail();
     // Timeline installs this exact typed target; its drop must create the Layer/Merge topology.
     QWidget timelineTarget;
@@ -564,7 +564,7 @@ void run() {
         auto* control = row.findChild<ui::kit::KDropdown*>("timelinePropertyAlignment");
         checkEnums(control, item.role == "loopMode" ? QStringList{"Hold", "Loop", "Ping-pong"}
                                                     : QStringList{"Auto", "sRGB", "Linear", "Raw"});
-        control->setCurrentIndex(2);
+        control->chooseIndex(2);
         require(std::get<std::int64_t>(
                     std::get<document::ConstantValueSource>(
                         session.composition()->parameters().find(item.parameterId)->source)
@@ -593,7 +593,7 @@ void run() {
     for (const auto& record : session.snapshot().project().assets())
         if (record.kind == document::AssetKind::Image)
             still = record.id;
-    cardAsset->setCurrentIndex(cardAsset->findData(QString::number(still.value())));
+    cardAsset->chooseIndex(cardAsset->findData(QString::number(still.value())));
     waitThumbnail();
     require(QFile::remove(directory.filePath("still.png")), "remove fixture media file");
     require(nextFrame && session.setCurrentTime(*nextFrame), "refresh after file disappears");

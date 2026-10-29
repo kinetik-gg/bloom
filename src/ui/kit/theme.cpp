@@ -269,37 +269,6 @@ QLabel#readOnlyPlaceholderFileName {
 QLabel#readOnlyPlaceholderBody {
     color: {color.Muted};
 }
-QComboBox {
-    background: {color.ControlSurface};
-    color: {color.Foreground};
-    border: {border.Hairline}px solid {color.Border};
-    border-radius: {radius.Small}px;
-    padding: {space.XXS}px {space.S}px;
-    min-height: {size.Control}px;
-}
-QComboBox:hover {
-    border-color: {color.BorderHover};
-}
-QComboBox[bloomKeyboardFocus="true"] {
-    border-color: {color.Accent};
-}
-QComboBox:disabled {
-    color: {color.DisabledInk};
-}
-QComboBox::drop-down {
-    border: none;
-    width: {size.IconLarge}px;
-}
-QComboBox QAbstractItemView {
-    background: {color.SurfaceRaised};
-    color: {color.Foreground};
-    border: {border.Hairline}px solid {color.Border};
-    border-radius: {radius.Small}px;
-    padding: {space.XXS}px;
-    outline: none;
-    selection-background-color: {color.Accent};
-    selection-color: {color.OnAccent};
-}
 QToolButton {
     border: {border.Hairline}px solid transparent;
     border-radius: {radius.Small}px;

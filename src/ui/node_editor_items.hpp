@@ -936,7 +936,7 @@ class NodeItem final : public QGraphicsObject {
                 blendMode_ = new kit::KDropdown;
                 blendMode_->setObjectName(QStringLiteral("nodeBlendModeDropdown"));
                 blendMode_->setAccessibleName(tr("Blending"));
-                blendMode_->setControlSize(kit::KDropdown::ControlSize::Compact);
+                blendMode_->setControlSize(kit::KDropdown::ControlSize::Dense);
                 for (const auto mode : core::kBlendModes) {
                     blendMode_->addItem(blendModeDisplayName(mode),
                                         QVariant::fromValue(core::blendModeStoredValue(mode)));
@@ -944,7 +944,7 @@ class NodeItem final : public QGraphicsObject {
                 blendMode_->resize(blendMode_->sizeHint());
                 prepareField(blendMode_);
                 registerControlRole(blendMode_, document::kBlendModeParameterRole);
-                connect(blendMode_, &kit::KDropdown::currentIndexChanged, this,
+                connect(blendMode_, &kit::KDropdown::activated, this,
                         [this](const int index) { commitBlendMode(index); });
                 valueRows_.push_back({tr("Blending"), blendMode_, nullptr, {}});
             } else if (role == document::kSolidColorParameterRole) {
@@ -1093,7 +1093,7 @@ class NodeItem final : public QGraphicsObject {
                     ? "nodeCryptomatteLayer"
                     : "nodeOperandSelector");
             row.selector->setAccessibleName(label);
-            row.selector->setControlSize(kit::KDropdown::ControlSize::Compact);
+            row.selector->setControlSize(kit::KDropdown::ControlSize::Dense);
             if (fontSelector) {
                 row.selector->setSearchable(true);
                 const auto snapshot = nodeFontCatalogueCache().snapshot();
@@ -1109,7 +1109,7 @@ class NodeItem final : public QGraphicsObject {
             row.selector->resize(row.selector->sizeHint());
             prepareField(row.selector);
             registerControlRole(row.selector, role);
-            connect(row.selector, &kit::KDropdown::currentIndexChanged, this,
+            connect(row.selector, &kit::KDropdown::activated, this,
                     [commit](int) { commit(); });
             valueRows_.push_back({label, row.selector, nullptr, {}});
             operandRows_.push_back(row);

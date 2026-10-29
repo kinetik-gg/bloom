@@ -34,6 +34,8 @@ class KValueField;
 // re-deriving it from KColor on every paint. That is what lets an SV-square drag "preserve hue"
 // exactly through a gray, and it is a picker-session concern, not a value-model one -- KColor
 // itself stays a pure, memoryless conversion type.
+class KPopupWindow;
+
 class KColorPicker final : public QWidget {
     Q_OBJECT
 
@@ -58,9 +60,11 @@ class KColorPicker final : public QWidget {
     void setRecentColorStore(KRecentColorStore* store);
     [[nodiscard]] KRecentColorStore* recentColorStore() const noexcept;
 
-    // Opens as a top-level Qt::Popup positioned below `anchor`, SurfaceRaised + Elevation::Dialog
-    // per decision 3. The same popup instance is reused across opens (KColorChip owns one).
+    // Opens in a KPopupWindow against `anchor` -- below it, or above when there is more room
+    // there, clamped onto the anchor's screen -- on the popup's SurfaceRaised frame and Popup
+    // shadow. The same picker and window are reused across opens (KColorChip owns one picker).
     void openBelow(const QWidget& anchor);
+    void closePopup();
     void cancelEdit();
 
     [[nodiscard]] QRectF svSquareRect() const noexcept;
@@ -164,6 +168,7 @@ class KColorPicker final : public QWidget {
     KDropdown* formSelector_ = nullptr;
     KButton* eyedropperButton_ = nullptr;
     KColorSampler* sampler_ = nullptr;
+    KPopupWindow* window_ = nullptr;
     KDropdown* modelSelector_ = nullptr;
     std::array<KValueField*, 4> channelFields_{};
     QLineEdit* hexField_ = nullptr;

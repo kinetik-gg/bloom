@@ -110,7 +110,7 @@ class ChromeRow final : public QWidget {
                 if (entry.elideFloor > 0) {
                     dropdown->setMinimumWidth(entry.elideFloor);
                 } else if (!prioritized_) {
-                    const auto minimum = dropdown->minimumSizeHint().width();
+                    const auto minimum = dropdown->sizeHint().width();
                     dropdown->setMaximumWidth(std::max(minimum, dropdown->maximumWidth()));
                     dropdown->setMinimumWidth(minimum);
                 }

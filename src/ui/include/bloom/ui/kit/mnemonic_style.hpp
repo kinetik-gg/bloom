@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QFont>
+
 #include <QProxyStyle>
 #include <QSize>
 #include <QString>
@@ -101,5 +103,10 @@ void restyleOnKeyboardFocus(QWidget& widget);
 // The width the icon column occupies, and the row's vertical padding -- exposed so a test can
 // state the layout rule in the same terms the painter does rather than re-deriving it.
 [[nodiscard]] int menuIconColumnWidth();
+
+// One menu row's height in `font`: the taller of the text and the icon column, plus MenuItemY above
+// and below. Every popup list row (KPopupList) is exactly this tall, so a dropdown's rows and a
+// menu's rows have one pitch.
+[[nodiscard]] int menuRowHeight(const QFont& font);
 
 } // namespace bloom::ui::kit

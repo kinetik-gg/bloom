@@ -218,9 +218,9 @@ void addLayerTimeSection(CompositionSession& session, QVBoxLayout* layout, QWidg
     (void)addRow(rows, body, makeRowLabel(QObject::tr("Before"), body), nullptr, fields.before);
     (void)addRow(rows, body, makeRowLabel(QObject::tr("After"), body), nullptr, fields.after);
     (void)addRow(rows, body, makeRowLabel(QObject::tr("Time Remap"), body), nullptr, fields.remap);
-    QObject::connect(fields.before, &kit::KDropdown::currentIndexChanged, fields.section,
+    QObject::connect(fields.before, &kit::KDropdown::activated, fields.section,
                      [&session, fields](int) { commitModes(session, fields); });
-    QObject::connect(fields.after, &kit::KDropdown::currentIndexChanged, fields.section,
+    QObject::connect(fields.after, &kit::KDropdown::activated, fields.section,
                      [&session, fields](int) { commitModes(session, fields); });
     QObject::connect(fields.remap, &kit::KSwitch::toggled, fields.section,
                      [&session, fields](const bool on) { commitRemap(session, fields, on); });

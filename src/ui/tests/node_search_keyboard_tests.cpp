@@ -293,15 +293,13 @@ void testSearchKeyboardAndMenus() {
     field->setText(QStringLiteral("merge"));
     int expectedHeight = 0;
     for (int row = 0; row < list->model()->rowCount(); ++row)
-        expectedHeight += list->model()->index(row, 0).data(Qt::SizeHintRole).toSize().height();
+        expectedHeight += list->sizeHintForRow(row);
     expect(list->model()->rowCount() > 0 && list->height() == expectedHeight,
            "the list is exactly as tall as the rows and headings it holds");
     field->clear();
-    // The popup's corners come from the shared dropdown surface alone: the list sits below the
-    // filter field, so its own top edge must stay square rather than carving notches under it.
-    const QRegion mask = list->mask();
-    expect(mask.contains(QPoint(0, 0)) && mask.contains(QPoint(list->width() - 1, 0)),
-           "the list is not rounded again where it meets the filter field");
+    // The popup's corners come from the shared popup frame alone: the list is never masked (a
+    // 1-bit mask would alias the corners); the current-row bar is clipped by an antialiased path.
+    expect(list->mask().isEmpty(), "the list carries no mask of its own");
     // Only Output remains a singleton; every Merge stays addable.
     for (const auto typeId : {document::kCompositionOutputNodeType}) {
         const auto row = rowForKey(list->model(), typeId);

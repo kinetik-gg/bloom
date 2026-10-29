@@ -140,7 +140,7 @@ void PropertiesEditor::buildObjectSection(QVBoxLayout* layout) {
     };
     connect(&session_, &CompositionSession::selectionChanged, parent, refreshParent);
     connect(&session_, &CompositionSession::snapshotChanged, parent, refreshParent);
-    connect(parent, &kit::KDropdown::currentIndexChanged, parent,
+    connect(parent, &kit::KDropdown::activated, parent,
             [this, parent, refreshParent](int index) {
                 const auto layer = contextualLayerId(session_);
                 if (index < 0 || !layer)
@@ -550,7 +550,7 @@ void PropertiesEditor::buildDocumentSection(QVBoxLayout* layout) {
     documentWorkingColorSpace_->setAccessibleName(tr("Working space"));
     addRow(rows, body, makeRowLabel(tr("Working space"), body), nullptr,
            documentWorkingColorSpace_);
-    connect(documentWorkingColorSpace_, &kit::KDropdown::currentIndexChanged, this,
+    connect(documentWorkingColorSpace_, &kit::KDropdown::activated, this,
             [this](const int index) {
                 if (rebuilding_ || index < 0 || session_.composition() == nullptr)
                     return;
@@ -715,7 +715,7 @@ void PropertiesEditor::bindCommits() {
     bindSlider(opacitySlider_, opacity_, [this] { commitOpacityFromControls(); });
     bindSlider(rotationSlider_, rotation_, [this] { commitRotationFromControls(); });
 
-    connect(blendMode_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
+    connect(blendMode_, &kit::KDropdown::activated, this, [this](const int index) {
         if (rebuilding_ || index < 0) {
             return;
         }

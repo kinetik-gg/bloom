@@ -158,7 +158,7 @@ Shadow shadow(const Elevation token) {
     case Elevation::TimelineBar:
         return {0, 1, 2, QColor(0, 0, 0, 64)};
     case Elevation::Popup:
-        return {0, 4, 16, QColor(0, 0, 0, 128)};
+        return {0, 0, 8, QColor(0, 0, 0, 115)};
     case Elevation::Dialog:
         return {0, 12, 40, QColor(0, 0, 0, 153)};
     case Elevation::Drag:

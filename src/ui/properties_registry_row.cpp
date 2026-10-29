@@ -276,7 +276,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             : definition_.schemaKey == document::kVideoInputColorSpaceIdParameterSchemaKey
                 ? "propertiesVideoInputColorSpace"
                 : "propertiesRegistryEnum");
-        selector_->setControlSize(kit::KDropdown::ControlSize::Compact);
+        selector_->setControlSize(kit::KDropdown::ControlSize::Dense);
         if (isFontSchema(definition_.schemaKey)) {
             selector_->setSearchable(true);
             populateFontSelector();
@@ -295,10 +295,11 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             for (const auto& [name, stored] : items)
                 selector_->addItem(name, QVariant::fromValue(stored));
         }
-        selector_->setFixedSize(kit::px(kit::Size::PropertiesDropdownWidth),
-                                kit::px(kit::Size::Control));
+        // Hugs its widest item where the row has room and elides down to the Properties dropdown
+        // width where it does not.
+        selector_->setWidthFloor(kit::px(kit::Size::PropertiesDropdownWidth));
         layout->addWidget(selector_);
-        connect(selector_, &kit::KDropdown::currentIndexChanged, this, [this] { commit(); });
+        connect(selector_, &kit::KDropdown::activated, this, [this] { commit(); });
         if (isFontSchema(definition_.schemaKey))
             QTimer::singleShot(50, this, &PropertiesRegistryRow::pollFontCatalogue);
     } else if (definition_.valueKind == document::ParameterValueKind::Integer) {
@@ -482,6 +483,10 @@ void PropertiesRegistryRow::populateFontSelector() {
                       QString::fromLatin1(digest.data(), static_cast<qsizetype>(digest.size()));
         }
     }
+    // A catalogue refresh rebuilds the list and re-selects the stored face. Neither is the artist's
+    // choice, so neither may reach commit(): commit listens to activated() alone, and the blocker
+    // keeps even the value notification quiet while the list is half built.
+    const QSignalBlocker blocker(selector_);
     selector_->clearItems();
     fontFaces_ = snapshot->faces;
     for (const auto& face : fontFaces_) {

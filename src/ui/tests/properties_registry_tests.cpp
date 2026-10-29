@@ -2,6 +2,7 @@
 #include <QApplication>
 #include <bloom/ui/kit/controls.hpp>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QGraphicsItem>
 #include <QKeyEvent>
 #include <QLabel>
@@ -151,7 +152,7 @@ void colourEffectRows() {
     expect(picker && picker->count() == 2 && picker->itemData(1).value<std::int64_t>() == 70,
            "LUT picker contains only LUT assets");
     if (picker)
-        picker->setCurrentIndex(1);
+        picker->chooseIndex(1);
     const auto* node = session.composition()->graph().findNode(file);
     for (const auto& binding : node->parameters)
         if (binding.role == "lut") {
@@ -657,10 +658,59 @@ void videoRows() {
            "Video Properties shows field order and timecode");
 }
 } // namespace
+// The spurious "Choose Font" transaction (lane A, finding 5): rebuilding the font selector when
+// the asynchronous system catalogue arrives -- and re-selecting the stored face in it -- is not the
+// artist's choice, so it must not reach the document. Only a choice does.
+void fontCatalogueRefreshIsNotAnEdit() {
+    auto project = document::makeNewProject("Fonts", "Main", core::RationalTime::fromInteger(10));
+    const auto id = project.initialCompositionId;
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, id);
+    expect(session.addTextLayer("Title", "Bloom"), "font fixture adds its text layer");
+    const auto history = stack.size();
+    const auto revision = session.snapshot().revision();
+    ui::PropertiesEditor panel(session);
+    panel.resize(420, 900);
+    panel.show();
+    ui::kit::KDropdown* font = nullptr;
+    int populated = 0;
+    QElapsedTimer clock;
+    clock.start();
+    // The row polls the catalogue every 50 ms and rebuilds itself when the system faces land
+    // after the embedded ones; wait for that rebuild (the list grows), then a little longer.
+    int first = -1;
+    qint64 grewAt = -1;
+    while (clock.elapsed() < 10'000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        font = panel.findChild<ui::kit::KDropdown*>("propertiesTextFont");
+        if (font == nullptr)
+            continue;
+        if (first < 0)
+            first = font->count();
+        populated = std::max(populated, font->count());
+        if (grewAt < 0 && populated > first)
+            grewAt = clock.elapsed();
+        if (grewAt >= 0 && clock.elapsed() > grewAt + 500)
+            break;
+    }
+    expect(font != nullptr && populated > 0, "the text layer shows a populated font selector");
+    expect(stack.size() == history, "building and refreshing the font list adds no undo entry");
+    expect(session.snapshot().revision() == revision,
+           "and no transaction reaches the document");
+    if (font != nullptr && font->count() > 1) {
+        font->chooseIndex(font->currentIndex() == 0 ? 1 : 0);
+        QCoreApplication::processEvents();
+        expect(stack.size() > history, "choosing a face is one undoable edit");
+    }
+}
 int main(int argc, char** argv) try {
     QApplication application(argc, argv);
     QCoreApplication::setOrganizationName("BloomPropertiesRegistryTest");
     QSettings().clear();
+    // First: it must be the first font row in the process, so the system catalogue arrives (and
+    // the selector is rebuilt) while it watches.
+    fontCatalogueRefreshIsNotAnEdit();
     genericKinds();
     scaledProjectionGestureKeepsItsUnit();
     registryRows();

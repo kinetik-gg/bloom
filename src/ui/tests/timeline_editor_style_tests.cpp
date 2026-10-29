@@ -1094,7 +1094,7 @@ void testBlendingRowAuthorsTheLayerItDraws(Expectations& expectations) {
         return;
     }
 
-    rows[1]->setCurrentIndex(multiplyRow);
+    rows[1]->chooseIndex(multiplyRow);
     expectations.expect(fixture.session.blendModeForLayer(secondLayer) == core::BlendMode::Multiply,
                         "the second row authors the second layer, not the selected one");
     expectations.expect(fixture.session.blendModeForLayer(entries[0].layerId) ==
@@ -1177,7 +1177,7 @@ void testBlendingAndParentAreLiveKDropdowns(Expectations& expectations) {
                 QVariant::fromValue(static_cast<qulonglong>(candidate->value())));
             if (index < 0)
                 continue;
-            dropdown->setCurrentIndex(index);
+            dropdown->chooseIndex(index);
             expectations.expect(fixture.session.parentOf(*child) == candidate,
                                 "choosing the timeline parent commits its stable layer id");
             expectations.expect(fixture.session.undo() && !fixture.session.parentOf(*child),

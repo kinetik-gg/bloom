@@ -199,9 +199,11 @@ void testElevationsCarryTheSpecifiedShadows(Expectations& expectations) {
     expectations.expect(kit::shadow(kit::Elevation::Flat).isFlat(), "Flat casts no shadow");
 
     const auto popup = kit::shadow(kit::Elevation::Popup);
-    expectations.expect(popup.offsetX == 0 && popup.offsetY == 4 && popup.blurRadius == 16 &&
-                            popup.color.alpha() == 128,
-                        "Popup is 0 4 16 rgba(0,0,0,.5)");
+    // Small and symmetric (owner, 2026-10-29): an offset, bottom-heavy shadow read as a chin under
+    // the last row of every menu and dropdown.
+    expectations.expect(popup.offsetX == 0 && popup.offsetY == 0 && popup.blurRadius == 8 &&
+                            popup.color.alpha() == 115,
+                        "Popup is 0 0 8 rgba(0,0,0,.45)");
     const auto dialog = kit::shadow(kit::Elevation::Dialog);
     expectations.expect(dialog.offsetX == 0 && dialog.offsetY == 12 && dialog.blurRadius == 40 &&
                             dialog.color.alpha() == 153,

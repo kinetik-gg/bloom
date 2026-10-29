@@ -268,7 +268,7 @@ kit::KDropdown* makeBlendingDropdown(QWidget* parent) {
     auto* dropdown = new kit::KDropdown(parent);
     dropdown->setObjectName(QStringLiteral("layerBlendingDropdown"));
     dropdown->setAccessibleName(TimelineEditor::tr("Blending"));
-    dropdown->setControlSize(kit::KDropdown::ControlSize::Compact);
+    dropdown->setControlSize(kit::KDropdown::ControlSize::Dense);
     for (const auto mode : core::kBlendModes) {
         dropdown->addItem(blendModeDisplayName(mode),
                           QVariant::fromValue(core::blendModeStoredValue(mode)));
@@ -322,10 +322,10 @@ class TimelineLayerRow final : public kit::KRow {
         blending_ = makeBlendingDropdown(this);
         parentDropdown_ = new kit::KDropdown(this);
         parentDropdown_->setObjectName("layerParentDropdown");
-        parentDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
+        parentDropdown_->setControlSize(kit::KDropdown::ControlSize::Dense);
         parentDropdown_->setAccessibleName(TimelineEditor::tr("Parent"));
         parentDropdown_->setToolTip(TimelineEditor::tr("Transform relative to another layer"));
-        connect(parentDropdown_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
+        connect(parentDropdown_, &kit::KDropdown::activated, this, [this](int index) {
             if (binding_ || !layerId_ || index < 0)
                 return;
             const auto layer = *layerId_;
@@ -340,9 +340,9 @@ class TimelineLayerRow final : public kit::KRow {
         });
         matteDropdown_ = new kit::KDropdown(this);
         matteDropdown_->setObjectName("layerTrackMatteDropdown");
-        matteDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
+        matteDropdown_->setControlSize(kit::KDropdown::ControlSize::Dense);
         matteDropdown_->setAccessibleName(TimelineEditor::tr("Track Matte"));
-        connect(matteDropdown_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
+        connect(matteDropdown_, &kit::KDropdown::activated, this, [this](int index) {
             if (binding_ || !layerId_ || index < 0)
                 return;
             const auto layer = *layerId_;
@@ -373,7 +373,7 @@ class TimelineLayerRow final : public kit::KRow {
         // The connection is made once, for the life of the pooled row, and reads whichever layer
         // the row is bound to AT THE MOMENT the artist picks a mode -- a pooled row is re-pointed
         // on every scroll step, so capturing a layer id here would author the wrong layer.
-        connect(blending_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
+        connect(blending_, &kit::KDropdown::activated, this, [this](const int index) {
             if (binding_ || !layerId_.has_value() || index < 0) {
                 return;
             }
@@ -542,7 +542,7 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
     auto* matteLabel = new kit::KLabel(tr("Matte"), row);
     row->setCells(glyphs, name, {blendingLabel, parentLabel, matteLabel}, nullptr, kCellGap);
     blendingLabel->setFixedWidth(
-        std::max(kit::px(kit::Size::DropdownWidth), blending->minimumSizeHint().width()));
+        std::max(kit::px(kit::Size::DropdownWidth), blending->sizeHint().width()));
     delete blending;
     row->setFixedHeight(kit::px(kit::Size::Control));
     row->setProperty("headerRow", true);

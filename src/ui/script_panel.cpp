@@ -6,11 +6,11 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QShortcut>
-#include <QSignalBlocker>
+#include <QAction>
+#include <QMenu>
 #include <QVBoxLayout>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
-#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 namespace bloom::ui {
@@ -34,11 +34,17 @@ ScriptPanel::ScriptPanel(std::shared_ptr<ScriptPanelRuntime> runtime, QWidget* p
     const int gap = kit::px(kit::Spacing::S);
     layout->setContentsMargins(gap, gap, gap, gap);
     layout->setSpacing(gap);
-    history_ = new kit::KDropdown(this);
+    // A recall menu, not a value: choosing the same entry twice recalls it twice, which a dropdown
+    // (whose value would not change) cannot do. Entries are titled by their first line.
+    history_ = new kit::KMenuButton(this);
     history_->setObjectName(QStringLiteral("scriptHistory"));
-    history_->addItem(QStringLiteral("History"));
+    history_->setText(QStringLiteral("History"));
     history_->setAccessibleName(QStringLiteral("Script history"));
-    layout->addWidget(history_);
+    historyMenu_ = kit::makeMenu(history_);
+    historyMenu_->setObjectName(QStringLiteral("scriptHistoryMenu"));
+    history_->setMenu(historyMenu_);
+    history_->setEnabled(false);
+    layout->addWidget(history_, 0, Qt::AlignLeft);
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -72,9 +78,10 @@ ScriptPanel::ScriptPanel(std::shared_ptr<ScriptPanelRuntime> runtime, QWidget* p
     keypad->setContext(Qt::WidgetWithChildrenShortcut);
     connect(keypad, &QShortcut::activated, this, &ScriptPanel::run);
     connect(runButton, &kit::KButton::clicked, this, &ScriptPanel::run);
-    connect(history_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
-        if (index > 0 && index <= sources_.size()) {
-            input_->setText(sources_[index - 1]);
+    connect(historyMenu_, &QMenu::triggered, this, [this](QAction* action) {
+        const int index = action->data().toInt();
+        if (index >= 0 && index < sources_.size()) {
+            input_->setText(sources_[index]);
             input_->setFocus();
         }
     });
@@ -112,11 +119,19 @@ void ScriptPanel::run() {
     sources_.prepend(source);
     if (sources_.size() > 32)
         sources_.removeLast();
-    const QSignalBlocker blocker(history_);
-    history_->clearItems();
-    history_->addItem(QStringLiteral("History"));
-    for (const auto& entry : sources_)
-        history_->addItem(entry);
+    historyMenu_->clear();
+    for (int index = 0; index < sources_.size(); ++index) {
+        // A source can be a whole 64 KiB script: the menu shows its first line, elided, and the
+        // tooltip the start of the rest.
+        const QString& entry = sources_[index];
+        const QString first = entry.section(QLatin1Char('\n'), 0, 0).trimmed();
+        auto* action = historyMenu_->addAction(
+            history_->fontMetrics().elidedText(first, Qt::ElideRight,
+                                               kit::px(kit::Size::DialogTextWidth)));
+        action->setData(index);
+        action->setToolTip(entry.left(kit::px(kit::Size::DialogTextWidth)));
+    }
+    history_->setEnabled(!sources_.isEmpty());
     input_->clear();
 #endif
 }

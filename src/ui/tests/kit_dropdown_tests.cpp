@@ -1,15 +1,18 @@
+#include <bloom/ui/kit/accessibility.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/dropdown_popup.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/popup_list.hpp>
+#include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QAbstractItemModel>
+#include <QAccessible>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QFile>
-#include <QFrame>
 #include <QGraphicsProxyWidget>
 #include <QGraphicsScene>
 #include <QGraphicsView>
@@ -18,7 +21,6 @@
 #include <QListView>
 #include <QMouseEvent>
 #include <QRect>
-#include <QRegion>
 #include <QSignalSpy>
 #include <QString>
 #include <QVBoxLayout>
@@ -66,65 +68,59 @@ struct Fixture {
     }
 };
 
-void clickRow(kit::KDropdown& dropdown, const int row) {
+void clickRow(kit::KDropdown& dropdown, const int row,
+              const Qt::MouseButton button = Qt::LeftButton) {
     auto* view = dropdown.popupView();
     const QRect rect = view->visualRect(view->model()->index(row, 0));
     const QPointF centre = rect.center();
     QMouseEvent release(QEvent::MouseButtonRelease, centre, view->viewport()->mapToGlobal(centre),
-                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                        button, Qt::NoButton, Qt::NoModifier);
     QCoreApplication::sendEvent(view->viewport(), &release);
     QCoreApplication::processEvents();
 }
 
-void testTheClosedFieldCarriesTheCurrentValue(Expectations& expectations) {
+void key(QWidget& widget, const int code, const Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+         const QString& text = {}) {
+    QKeyEvent press(QEvent::KeyPress, code, modifiers, text);
+    QCoreApplication::sendEvent(&widget, &press);
+    QCoreApplication::processEvents();
+}
+
+void testBuildingTheListNeverReportsAChoice(Expectations& expectations) {
     Fixture fixture;
     auto& dropdown = *fixture.dropdown;
-    expectations.expect(dropdown.count() == 0, "a fresh dropdown is empty");
+    QSignalSpy changed(&dropdown, &kit::KDropdown::currentIndexChanged);
+    QSignalSpy activated(&dropdown, &kit::KDropdown::activated);
+    QSignalSpy items(&dropdown, &kit::KDropdown::itemsChanged);
     expectations.expect(dropdown.currentIndex() == -1, "an empty dropdown has no current value");
 
     const int linear = dropdown.addItem(QStringLiteral("Linear"), QStringLiteral("linear"));
     const int ease = dropdown.addItem(QStringLiteral("Ease In Out"));
-    expectations.expect(dropdown.count() == 2, "items are added in order");
     expectations.expect(dropdown.currentIndex() == linear,
                         "the first item added becomes the current value");
-    expectations.expect(dropdown.currentText() == QStringLiteral("Linear"),
-                        "the closed field carries the current value");
+    expectations.expect(changed.count() == 0 && activated.count() == 0,
+                        "adding items emits neither currentIndexChanged nor activated: building a "
+                        "list is never a commit");
+    expectations.expect(items.count() == 2, "each added item reports itemsChanged");
     expectations.expect(dropdown.itemData(linear).toString() == QStringLiteral("linear"),
                         "an item's payload survives");
 
-    QSignalSpy changed(&dropdown, &kit::KDropdown::currentIndexChanged);
     dropdown.setCurrentIndex(ease);
-    expectations.expect(dropdown.currentText() == QStringLiteral("Ease In Out"),
-                        "setting the index changes the value");
-    expectations.expect(changed.count() == 1, "changing the value reports it exactly once");
-    dropdown.setCurrentIndex(ease);
-    expectations.expect(changed.count() == 1, "re-setting the same value reports nothing");
-}
+    expectations.expect(changed.count() == 1 && activated.count() == 0,
+                        "a programmatic change reports currentIndexChanged only");
+    dropdown.chooseIndex(linear);
+    expectations.expect(changed.count() == 2 && activated.count() == 1 &&
+                            activated.front().front().toInt() == linear,
+                        "the artist's choice reports both, activated once");
+    dropdown.chooseIndex(linear);
+    expectations.expect(activated.count() == 1,
+                        "re-choosing the value it already holds is not an edit");
 
-void testThePopupOpensOnTheRaisedSurfaceAndCloses(Expectations& expectations) {
-    Fixture fixture;
-    auto& dropdown = *fixture.dropdown;
-    (void)dropdown.addItem(QStringLiteral("Linear"));
-    (void)dropdown.addItem(QStringLiteral("Ease In Out"));
-
-    expectations.expect(!dropdown.isPopupVisible(), "the popup starts closed");
-    dropdown.showPopup();
-    QCoreApplication::processEvents();
-    expectations.expect(dropdown.isPopupVisible(), "the popup opens");
-    expectations.expect(dropdown.visualState() == kit::State::Pressed,
-                        "an open dropdown reads as pressed, not as resting");
-    expectations.expect(dropdown.popupView()->model()->rowCount() == 2,
-                        "the popup lists every item");
-    expectations.expect(dropdown.popupView()->textElideMode() == Qt::ElideRight,
-                        "an oversized row ellipsizes rather than widening the popup");
-    expectations.expect(dropdown.popup()->objectName() == QStringLiteral("kDropdownPopup"),
-                        "the popup is findable by name");
-
-    dropdown.hidePopup();
-    QCoreApplication::processEvents();
-    expectations.expect(!dropdown.isPopupVisible(), "the popup closes");
-    expectations.expect(dropdown.visualState() != kit::State::Pressed,
-                        "closing the popup releases the pressed state");
+    dropdown.setItemText(ease, QStringLiteral("Ease"));
+    dropdown.clearItems();
+    expectations.expect(items.count() == 4, "renaming and clearing report itemsChanged");
+    expectations.expect(changed.count() == 2 && activated.count() == 1,
+                        "and neither reports a choice");
 }
 
 void testChoosingFromThePopupCommitsAndCloses(Expectations& expectations) {
@@ -133,13 +129,21 @@ void testChoosingFromThePopupCommitsAndCloses(Expectations& expectations) {
     (void)dropdown.addItem(QStringLiteral("Linear"));
     const int ease = dropdown.addItem(QStringLiteral("Ease In Out"));
 
-    QSignalSpy changed(&dropdown, &kit::KDropdown::currentIndexChanged);
+    QSignalSpy activated(&dropdown, &kit::KDropdown::activated);
     dropdown.showPopup();
     QCoreApplication::processEvents();
+    expectations.expect(dropdown.isPopupVisible() && dropdown.visualState() == kit::State::Pressed,
+                        "an open dropdown reads as pressed");
+    expectations.expect(dropdown.popup()->objectName() == QStringLiteral("kDropdownPopup"),
+                        "the popup is findable by name");
+    clickRow(dropdown, ease, Qt::RightButton);
+    clickRow(dropdown, ease, Qt::MiddleButton);
+    expectations.expect(dropdown.currentIndex() == 0 && activated.count() == 0 &&
+                            dropdown.isPopupVisible(),
+                        "a right or middle release on a row commits nothing");
     clickRow(dropdown, ease);
-
-    expectations.expect(dropdown.currentIndex() == ease, "clicking a row commits that value");
-    expectations.expect(changed.count() == 1, "committing reports the change once");
+    expectations.expect(dropdown.currentIndex() == ease && activated.count() == 1,
+                        "a left release on a row commits it, as the artist's choice");
     expectations.expect(!dropdown.isPopupVisible(), "committing closes the popup");
 }
 
@@ -149,60 +153,64 @@ void testADisabledItemIsVisibleButNotSelectable(Expectations& expectations) {
     const int linear = dropdown.addItem(QStringLiteral("Linear"));
     const int unavailable = dropdown.addItem(QStringLiteral("Bezier"));
     dropdown.setItemEnabled(unavailable, false);
-
-    expectations.expect(!dropdown.isItemEnabled(unavailable), "the item reports as disabled");
-    expectations.expect(dropdown.count() == 2,
-                        "a disabled item stays in the list rather than disappearing");
-    expectations.expect(dropdown.itemText(unavailable) == QStringLiteral("Bezier"),
-                        "a disabled item stays readable");
+    expectations.expect(dropdown.count() == 2 &&
+                            dropdown.itemText(unavailable) == QStringLiteral("Bezier"),
+                        "a disabled item stays in the list and readable");
 
     QSignalSpy changed(&dropdown, &kit::KDropdown::currentIndexChanged);
     dropdown.setCurrentIndex(unavailable);
-    expectations.expect(dropdown.currentIndex() == linear,
-                        "setCurrentIndex refuses a disabled item: the programmatic path is closed "
-                        "too, not just the click");
-    expectations.expect(changed.count() == 0, "a refused selection reports nothing");
+    dropdown.chooseIndex(unavailable);
+    expectations.expect(dropdown.currentIndex() == linear && changed.count() == 0,
+                        "both paths refuse a disabled item and report nothing");
 
     dropdown.showPopup();
     QCoreApplication::processEvents();
     clickRow(dropdown, unavailable);
-    expectations.expect(dropdown.currentIndex() == linear,
-                        "clicking a disabled row commits nothing");
-    expectations.expect(dropdown.isPopupVisible(),
-                        "a disabled row swallows the click rather than closing the popup");
+    expectations.expect(dropdown.currentIndex() == linear && dropdown.isPopupVisible(),
+                        "a disabled row swallows the click and leaves the popup open");
     dropdown.hidePopup();
+
+    // Disabling the CURRENT item keeps it the value (it is what the document holds), shown muted
+    // with that item's own explanation rather than silently falling to no value.
+    dropdown.setItemToolTip(linear, QStringLiteral("Unavailable in this composition"));
+    dropdown.setItemEnabled(linear, false);
+    expectations.expect(dropdown.currentIndex() == linear && changed.count() == 0,
+                        "disabling the current item keeps it current and emits nothing");
+    expectations.expect(dropdown.toolTip() == QStringLiteral("Unavailable in this composition"),
+                        "the field carries the disabled item's own reason");
 }
 
-void testAnOversizedValueElidesInTheClosedField(Expectations& expectations) {
+void testAnOversizedValueElidesAndTheFloorIsReal(Expectations& expectations) {
     Fixture fixture;
     auto& dropdown = *fixture.dropdown;
     const QString longValue =
         QStringLiteral("A qualified display transform with a very long descriptive name");
     (void)dropdown.addItem(longValue);
     QCoreApplication::processEvents();
+    expectations.expect(dropdown.minimumSizeHint().width() < dropdown.sizeHint().width() / 2,
+                        "the minimum is a few characters, not the widest item");
 
     dropdown.resize(120, dropdown.sizeHint().height());
-    QCoreApplication::processEvents();
     const QString displayed = dropdown.displayedText();
-    expectations.expect(displayed != longValue, "an oversized value does not print in full");
-    expectations.expect(displayed.endsWith(QChar(0x2026)),
+    expectations.expect(displayed != longValue && displayed.endsWith(QChar(0x2026)),
                         "an oversized value ends in an ellipsis");
     expectations.expect(dropdown.currentText() == longValue,
                         "eliding is presentation only: the value itself is untouched");
-
     dropdown.resize(dropdown.sizeHint());
-    QCoreApplication::processEvents();
     expectations.expect(dropdown.displayedText() == longValue,
                         "given its preferred width the value prints in full");
+
+    dropdown.setWidthFloor(kit::px(kit::Size::PropertiesDropdownWidth));
+    expectations.expect(dropdown.minimumWidth() == kit::px(kit::Size::PropertiesDropdownWidth) &&
+                            dropdown.maximumWidth() == QWIDGETSIZE_MAX &&
+                            dropdown.sizePolicy().horizontalPolicy() == QSizePolicy::Maximum,
+                        "setWidthFloor is a floor: it neither fixes the width nor stretches it");
 }
 
 void testTheStateMachineAndDisabledDropdown(Expectations& expectations) {
     Fixture fixture;
     auto& dropdown = *fixture.dropdown;
     (void)dropdown.addItem(QStringLiteral("Linear"));
-
-    // Showing the host hands focus to its only focusable child, so resting has to be established
-    // rather than assumed.
     dropdown.clearFocus();
     QCoreApplication::processEvents();
     expectations.expect(dropdown.visualState() == kit::State::Normal,
@@ -211,49 +219,32 @@ void testTheStateMachineAndDisabledDropdown(Expectations& expectations) {
     QCoreApplication::processEvents();
     expectations.expect(dropdown.visualState() == kit::State::Focused, "focus is its own state");
     dropdown.clearFocus();
-
     dropdown.setEnabled(false);
     expectations.expect(dropdown.visualState() == kit::State::Disabled,
                         "disabled outranks the rest");
-    dropdown.showPopup();
-    QCoreApplication::processEvents();
-    // showPopup() is reachable programmatically, but a disabled control must never be opened by
-    // the artist; the click path is what is closed here.
-    dropdown.hidePopup();
+    expectations.expect(dropdown.cursor().shape() == Qt::ArrowCursor,
+                        "a disabled dropdown does not show the pointing hand");
     dropdown.setEnabled(true);
+    expectations.expect(dropdown.cursor().shape() == Qt::PointingHandCursor,
+                        "an enabled one does");
 }
 
 // task U8, issue #131, fix 3: the design sheet's dropdown chrome -- bordered closed field with the
-// vendored double up/down chevron, bordered popup at Radius::Small.
+// vendored double up/down chevron.
 void testTheClosedFieldIsBorderedWithTheVendoredDoubleChevron(Expectations& expectations) {
     Fixture fixture;
     auto& dropdown = *fixture.dropdown;
     (void)dropdown.addItem(QStringLiteral("Linear"));
-    QCoreApplication::processEvents();
-
     expectations.expect(
         QFile::exists(kit::iconResourcePath(kit::IconId::CaretUpDown, kit::IconWeight::Regular)) &&
             QFile::exists(kit::iconResourcePath(kit::IconId::CaretUpDown, kit::IconWeight::Fill)),
         "the vendored double-chevron asset backs IconId::CaretUpDown in both weights");
-
-    // Drive the widget to REST before sampling: on some offscreen platforms (CI's Qt 6.8.3) the
-    // freshly shown window hands activation focus to its only focusable child on a later
-    // event-loop pass, and a cursor parked at the origin can leave it hovered -- both repaint the
-    // border in a state colour and would make the rest-state pins fail for environmental reasons.
     QCoreApplication::processEvents();
     dropdown.clearFocus();
     QEvent leave(QEvent::Leave);
     QCoreApplication::sendEvent(&dropdown, &leave);
     QCoreApplication::processEvents();
-
-    const QPixmap rendered = dropdown.grab();
-    expectations.expect(!rendered.isNull(), "the bordered closed field renders offscreen");
-
-    // task U8, formal amendment 1, A2: the closed field's fill is ControlSurface (not Field), and
-    // it still borders with Border (#222222) as A2 asked to verify.
-    const QImage image = rendered.toImage();
-    const QColor controlSurface = kit::color(kit::Color::ControlSurface);
-    const QColor border = kit::color(kit::Color::Border);
+    const QImage image = dropdown.grab().toImage();
     const auto near = [](const QColor& left, const QColor& right) {
         return std::abs(left.red() - right.red()) <= 2 &&
                std::abs(left.green() - right.green()) <= 2 &&
@@ -261,154 +252,131 @@ void testTheClosedFieldIsBorderedWithTheVendoredDoubleChevron(Expectations& expe
     };
     bool sawFill = false;
     bool sawBorder = false;
-    for (int y = 0; y < image.height() && (!sawFill || !sawBorder); ++y) {
+    for (int y = 0; y < image.height(); ++y)
         for (int x = 0; x < image.width(); ++x) {
-            const QColor pixel = image.pixelColor(x, y);
-            if (near(pixel, controlSurface)) {
-                sawFill = true;
-            }
-            if (near(pixel, border)) {
-                sawBorder = true;
-            }
+            sawFill = sawFill || near(image.pixelColor(x, y), kit::color(kit::Color::ControlSurface));
+            sawBorder = sawBorder || near(image.pixelColor(x, y), kit::color(kit::Color::Border));
         }
+    expectations.expect(sawFill && sawBorder,
+                        "the closed field paints ControlSurface inside a Border hairline");
+}
+
+// Windows and Linux: Up/Down step a closed dropdown's value; Alt+Down, F4, Space and Enter open
+// it; typing jumps to the next item that starts with what was typed. Every one of these is the
+// artist's choice.
+void testTheClosedFieldKeyboard(Expectations& expectations) {
+    Fixture fixture;
+    auto& dropdown = *fixture.dropdown;
+    for (const char* name : {"Normal", "Multiply", "Screen", "Overlay", "Soft Light"})
+        (void)dropdown.addItem(QString::fromLatin1(name));
+    dropdown.setItemEnabled(1, false);
+    QSignalSpy activated(&dropdown, &kit::KDropdown::activated);
+#if !defined(Q_OS_MACOS)
+    key(dropdown, Qt::Key_Down);
+    expectations.expect(dropdown.currentIndex() == 2 && activated.count() == 1,
+                        "Down steps to the next enabled value, skipping the disabled one");
+    key(dropdown, Qt::Key_Up);
+    expectations.expect(dropdown.currentIndex() == 0, "Up steps back over it too");
+    key(dropdown, Qt::Key_End);
+    expectations.expect(dropdown.currentIndex() == 4, "End chooses the last value");
+    key(dropdown, Qt::Key_Down, Qt::AltModifier);
+    expectations.expect(dropdown.isPopupVisible() && dropdown.currentIndex() == 4,
+                        "Alt+Down opens the list without changing the value");
+    dropdown.hidePopup();
+#endif
+    key(dropdown, Qt::Key_F4);
+    expectations.expect(dropdown.isPopupVisible(), "F4 opens the list");
+    dropdown.hidePopup();
+    key(dropdown, Qt::Key_Space, Qt::NoModifier, QStringLiteral(" "));
+    expectations.expect(dropdown.isPopupVisible(), "Space opens the list");
+    dropdown.hidePopup();
+    key(dropdown, Qt::Key_O, Qt::NoModifier, QStringLiteral("o"));
+    expectations.expect(dropdown.currentText() == QStringLiteral("Overlay"),
+                        "typing a letter jumps to the next value that starts with it");
+    key(dropdown, Qt::Key_Escape);
+    expectations.expect(dropdown.currentText() == QStringLiteral("Overlay") &&
+                            !dropdown.isPopupVisible(),
+                        "Esc on a closed field changes nothing");
+}
+
+void testItemsChangedFollowsEveryListEdit(Expectations& expectations) {
+    Fixture fixture;
+    auto& dropdown = *fixture.dropdown;
+    (void)dropdown.addItem(QStringLiteral("Fit"));
+    QSignalSpy items(&dropdown, &kit::KDropdown::itemsChanged);
+    dropdown.setItemEnabled(0, false);
+    dropdown.setItemEnabled(0, true);
+    dropdown.setEnabled(false);
+    expectations.expect(items.count() == 3,
+                        "enabling or disabling an item, or the dropdown, reports itemsChanged");
+    dropdown.setItemEnabled(0, true);
+    dropdown.setItemText(0, QStringLiteral("Fit"));
+    expectations.expect(items.count() == 3, "a change that changes nothing reports nothing");
+}
+
+void testTheKitControlsAreAccessible(Expectations& expectations) {
+    Fixture fixture;
+    auto& dropdown = *fixture.dropdown;
+    dropdown.setAccessibleName(QStringLiteral("Blending"));
+    (void)dropdown.addItem(QStringLiteral("Normal"));
+    (void)dropdown.addItem(QStringLiteral("Screen"));
+    dropdown.setCurrentIndex(1);
+    auto* combo = QAccessible::queryAccessibleInterface(&dropdown);
+    expectations.expect(combo != nullptr && combo->role() == QAccessible::ComboBox,
+                        "a KDropdown is a combo box to assistive technology");
+    if (combo != nullptr) {
+        expectations.expect(combo->text(QAccessible::Name) == QStringLiteral("Blending") &&
+                                combo->text(QAccessible::Value) == QStringLiteral("Screen"),
+                            "its name and value are the accessible name and current text");
+        expectations.expect(combo->state().collapsed && !combo->state().expanded,
+                            "a closed dropdown reads collapsed");
+        dropdown.showPopup();
+        QCoreApplication::processEvents();
+        expectations.expect(combo->state().expanded, "an open one reads expanded");
+        dropdown.hidePopup();
     }
-    expectations.expect(sawFill, "the closed field really paints ControlSurface");
-    expectations.expect(sawBorder, "the closed field really paints the Border hairline");
+
+    kit::KRadioGroup group(&fixture.host);
+    (void)group.addOption(QStringLiteral("Left"));
+    (void)group.addOption(QStringLiteral("Right"));
+    group.setOptionEnabled(1, false);
+    auto* options = QAccessible::queryAccessibleInterface(&group);
+    expectations.expect(options != nullptr && options->childCount() == 2,
+                        "a KRadioGroup exposes one accessible child per option");
+    if (options != nullptr && options->childCount() == 2) {
+        auto* left = options->child(0);
+        auto* right = options->child(1);
+        expectations.expect(left->role() == QAccessible::RadioButton && left->state().checked &&
+                                left->text(QAccessible::Name) == QStringLiteral("Left"),
+                            "an option is a radio button carrying its label and checked state");
+        expectations.expect(right->state().disabled && !right->state().checked,
+                            "a disabled option reads disabled");
+        expectations.expect(options->indexOfChild(right) == 1 && options->child(1) == right,
+                            "the children are stable");
+    }
 }
 
-void testThePopupFrameIsBorderedAtRadiusSmall(Expectations& expectations) {
-    Fixture fixture;
-    auto& dropdown = *fixture.dropdown;
-    (void)dropdown.addItem(QStringLiteral("Linear"));
-    const QString sheet = dropdown.popup()->styleSheet();
-    expectations.expect(sheet.contains(QStringLiteral("border: %1px solid %2;")
-                                           .arg(static_cast<int>(kit::kHairlineWidth))
-                                           .arg(kit::hex(kit::Color::Border))),
-                        "the popup frame carries the Border hairline");
-    expectations.expect(
-        sheet.contains(
-            QStringLiteral("border-radius: %1px;").arg(kit::radiusPx(kit::Radius::Small, 0))),
-        "the popup frame corners are Radius::Small, matching the closed field");
-    expectations.expect(sheet.contains(kit::hex(kit::Color::SurfaceRaised)),
-                        "the popup rests on SurfaceRaised");
+void testARadioGroupKeepsADisabledCurrentAndEntersFromMixed(Expectations& expectations) {
+    QWidget host;
+    kit::KRadioGroup group(&host);
+    for (const char* name : {"A", "B", "C"})
+        (void)group.addOption(QString::fromLatin1(name));
+    group.setCurrentIndex(1);
+    group.setOptionEnabled(1, false);
+    expectations.expect(group.currentIndex() == 1,
+                        "disabling the current option keeps it current, rather than going mixed");
+    group.setOptionEnabled(1, true);
+    group.setMixed();
+    key(group, Qt::Key_Left);
+    expectations.expect(group.currentIndex() == 2, "from mixed, Left enters at the last option");
+    group.setMixed();
+    key(group, Qt::Key_Right);
+    expectations.expect(group.currentIndex() == 0, "and Right at the first");
 }
-
-// Task F1, item F3: the popup is detached. Hover-out does nothing; only a choice, an outside
-// click, or Esc dismisses it.
-void testThePopupIsDetachedAndSurvivesHoverOut(Expectations& expectations) {
-    Fixture fixture;
-    auto& dropdown = *fixture.dropdown;
-    (void)dropdown.addItem(QStringLiteral("Linear"));
-    (void)dropdown.addItem(QStringLiteral("Ease In Out"));
-
-    dropdown.showPopup();
-    QCoreApplication::processEvents();
-    expectations.expect(dropdown.isPopupVisible(), "the popup opens");
-
-    QEvent leavePopup(QEvent::Leave);
-    QCoreApplication::sendEvent(dropdown.popup(), &leavePopup);
-    QCoreApplication::processEvents();
-    expectations.expect(dropdown.isPopupVisible(),
-                        "the pointer leaving the popup does not close it");
-
-    QEvent leaveView(QEvent::Leave);
-    QCoreApplication::sendEvent(dropdown.popupView()->viewport(), &leaveView);
-    QEvent leaveField(QEvent::Leave);
-    QCoreApplication::sendEvent(&dropdown, &leaveField);
-    QCoreApplication::processEvents();
-    expectations.expect(dropdown.isPopupVisible(),
-                        "the pointer leaving the list or the field does not close it either");
-
-    dropdown.hidePopup();
-    QCoreApplication::processEvents();
-}
-
-void testAClickOutsideTheFrameClosesThePopup(Expectations& expectations) {
-    Fixture fixture;
-    auto& dropdown = *fixture.dropdown;
-    (void)dropdown.addItem(QStringLiteral("Linear"));
-    (void)dropdown.addItem(QStringLiteral("Ease In Out"));
-
-    dropdown.showPopup();
-    QCoreApplication::processEvents();
-    auto* popup = dropdown.popup();
-    // Qt hands the active popup clicks that land anywhere, with a position outside its own
-    // rectangle. Well outside the frame AND outside the shadow gutter around it.
-    const QPointF outside(-40.0, -40.0);
-    QMouseEvent press(QEvent::MouseButtonPress, outside, popup->mapToGlobal(outside),
-                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QCoreApplication::sendEvent(popup, &press);
-    QCoreApplication::processEvents();
-    expectations.expect(!dropdown.isPopupVisible(), "a click outside the frame closes the popup");
-
-    dropdown.showPopup();
-    QCoreApplication::processEvents();
-    const QPointF inside(QRectF(dropdown.popup()->surface()->geometry()).center());
-    QMouseEvent insidePress(QEvent::MouseButtonPress, inside, dropdown.popup()->mapToGlobal(inside),
-                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QCoreApplication::sendEvent(dropdown.popup(), &insidePress);
-    QCoreApplication::processEvents();
-    expectations.expect(dropdown.isPopupVisible(),
-                        "a press on the frame itself is the list's business, not a dismissal");
-
-    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
-    QCoreApplication::sendEvent(dropdown.popup(), &escape);
-    QCoreApplication::processEvents();
-    expectations.expect(!dropdown.isPopupVisible(), "Esc closes the popup");
-}
-
-// Task F1, item F3: the FRAME is the rounded container. Rows are rectangular and full width, and
-// the list is clipped to the frame's inner rounded rectangle, so a first-row accent hover bar
-// follows the frame's corner instead of squaring it off.
-void testTheRowsAreRectangularAndClippedByTheFrame(Expectations& expectations) {
-    Fixture fixture;
-    auto& dropdown = *fixture.dropdown;
-    (void)dropdown.addItem(QStringLiteral("Linear"));
-    (void)dropdown.addItem(QStringLiteral("Ease In Out"));
-    dropdown.showPopup();
-    QCoreApplication::processEvents();
-
-    const QString sheet = dropdown.popup()->styleSheet();
-    expectations.expect(sheet.count(QStringLiteral("border-radius")) == 1,
-                        "exactly one rule in the popup sheet rounds anything, and it is the "
-                        "frame's -- no row rounds itself");
-    expectations.expect(sheet.contains(QStringLiteral("QListView#kDropdownList {")) &&
-                            sheet.contains(QStringLiteral("padding: 0px;")),
-                        "the list adds no padding of its own, so rows span the frame edge to edge");
-
-    auto* view = dropdown.popupView();
-    const QRegion mask = view->mask();
-    expectations.expect(!mask.isEmpty(), "the item list is clipped at all");
-    expectations.expect(!mask.contains(QPoint(0, 0)),
-                        "the list's own top-left corner pixel is clipped away, so a full-width "
-                        "hover bar cannot square off the frame's rounded corner");
-    expectations.expect(!mask.contains(QPoint(view->width() - 1, 0)),
-                        "the top-right corner is clipped too");
-    expectations.expect(mask.contains(QPoint(view->width() / 2, 0)),
-                        "the row still reaches the frame edge everywhere between the corners: the "
-                        "bar is full width, only its corners are cut");
-    expectations.expect(mask.contains(QPoint(view->width() / 2, view->height() - 1)),
-                        "and the last row reaches the bottom edge the same way");
-
-    // The rows fill the frame exactly: no list padding leaving a sliver of SurfaceRaised above the
-    // first bar.
-    const int rowHeight = std::max(kit::px(kit::Size::Control), view->sizeHintForRow(0));
-    expectations.expect(view->height() == rowHeight * view->model()->rowCount(),
-                        "the list is exactly its rows tall, with no padding of its own (height " +
-                            std::to_string(view->height()) + ", rows " +
-                            std::to_string(view->model()->rowCount()) + " x " +
-                            std::to_string(rowHeight) + ')');
-
-    dropdown.hidePopup();
-    QCoreApplication::processEvents();
-}
-
-} // namespace
 
 // Regression (owner, 2026-09-15): a dropdown hosted inside a QGraphicsProxyWidget (a node card
-// row) could not open. Qt embeds a child popup of a proxied widget into the scene as a
-// sub-proxy unless the popup bypasses that; the kit popup must stay a real top-level window
-// placed below the anchor's global position.
+// row) could not open. The kit popup must stay a real top-level window placed below the anchor's
+// visual position -- through the view's zoom, not the widget's unscaled size.
 void testAProxiedDropdownOpensATopLevelPopupBelowItself(Expectations& expectations) {
     QGraphicsScene scene;
     QGraphicsView view(&scene);
@@ -419,38 +387,41 @@ void testAProxiedDropdownOpensATopLevelPopupBelowItself(Expectations& expectatio
     dropdown->addItem(QStringLiteral("Add"));
     auto* proxy = scene.addWidget(dropdown);
     proxy->setPos(120, 80);
+    view.scale(0.5, 0.5);
     QCoreApplication::processEvents();
     dropdown->showPopup();
     QCoreApplication::processEvents();
     auto* popup = dropdown->popup();
-    expectations.expect(popup->isVisible(), "a proxied dropdown opens its popup");
-    expectations.expect(popup->graphicsProxyWidget() == nullptr && popup->isWindow(),
-                        "the popup stays a real top-level window, not a scene sub-proxy");
-    const QPoint anchorBottom = dropdown->mapToGlobal(QPoint(0, dropdown->height()));
-    const QRect frame = popup->frameGeometry();
-    expectations.expect(std::abs(frame.top() - anchorBottom.y()) <= 3 * kit::px(kit::Spacing::M) &&
-                            std::abs(frame.left() - anchorBottom.x()) <=
-                                3 * kit::px(kit::Spacing::M),
-                        "the popup sits just below the proxied anchor in global coordinates");
+    expectations.expect(popup->isVisible() && popup->graphicsProxyWidget() == nullptr &&
+                            popup->isWindow(),
+                        "a proxied dropdown opens a real top-level popup, not a scene sub-proxy");
+    const QRect visual = kit::visualGlobalRect(*dropdown);
+    expectations.expect(std::abs(visual.width() - dropdown->width() / 2) <= 1,
+                        "the anchor's visual rectangle follows the view's zoom");
+    const QRect frame = popup->frameRect().translated(popup->pos());
+    expectations.expect(frame.top() == visual.bottom() + 1 + kit::px(kit::Spacing::XXS),
+                        "the frame opens just below what is drawn, not below the unscaled widget");
     dropdown->hidePopup();
 }
 
+} // namespace
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
+    qputenv("BLOOM_REDUCED_MOTION", "1");
     QApplication application(argc, argv);
     kit::installKinetikTheme(application);
     Expectations expectations;
-    testTheClosedFieldCarriesTheCurrentValue(expectations);
-    testThePopupOpensOnTheRaisedSurfaceAndCloses(expectations);
+    testBuildingTheListNeverReportsAChoice(expectations);
     testChoosingFromThePopupCommitsAndCloses(expectations);
     testADisabledItemIsVisibleButNotSelectable(expectations);
-    testAnOversizedValueElidesInTheClosedField(expectations);
+    testAnOversizedValueElidesAndTheFloorIsReal(expectations);
     testTheStateMachineAndDisabledDropdown(expectations);
     testTheClosedFieldIsBorderedWithTheVendoredDoubleChevron(expectations);
-    testThePopupFrameIsBorderedAtRadiusSmall(expectations);
-    testThePopupIsDetachedAndSurvivesHoverOut(expectations);
-    testAClickOutsideTheFrameClosesThePopup(expectations);
-    testTheRowsAreRectangularAndClippedByTheFrame(expectations);
+    testTheClosedFieldKeyboard(expectations);
+    testItemsChangedFollowsEveryListEdit(expectations);
+    testTheKitControlsAreAccessible(expectations);
+    testARadioGroupKeepsADisabledCurrentAndEntersFromMixed(expectations);
     testAProxiedDropdownOpensATopLevelPopupBelowItself(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

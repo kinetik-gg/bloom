@@ -258,7 +258,7 @@ void testBlendingDropdownOnALayerCardCommits() {
     if (screenRow < 0)
         return;
 
-    dropdown->setCurrentIndex(screenRow);
+    dropdown->chooseIndex(screenRow);
     expect(f.session.blendModeForLayer(layerId) == core::BlendMode::Screen,
            "picking a mode on the card commits it to the layer");
     expect(f.session.canUndo() && f.session.undo() &&

@@ -1,32 +1,21 @@
 #pragma once
 
-#include <bloom/ui/kit/tokens.hpp>
-
-#include <QWidget>
+#include <bloom/ui/kit/popup_window.hpp>
 
 class QAbstractItemModel;
-class QFrame;
-class QLineEdit;
 class QListView;
-class QVBoxLayout;
+class QSortFilterProxyModel;
 
 namespace bloom::ui::kit {
 
-// The raised surface a KDropdown opens. A top-level Qt::Popup with a translucent background and a
-// margin the elevation's blur fits into, holding an inner frame that carries the drop shadow, the
-// SurfaceRaised fill, the Radius::Small corners (task U8, issue #131, fix 3), and the item list.
+class KPopupList;
+
+// The popup a KDropdown opens: a KPopupWindow holding one KPopupList over the dropdown's items.
 //
-// The translucent-outer / opaque-inner split is what lets a real drop shadow exist at all: a
-// graphics effect cannot paint outside its widget, so the shadow needs margin to live in.
-//
-// Detached (task F1, item F3): the popup stays open until an item is chosen, a click lands outside
-// the frame, or Esc is pressed. Moving the pointer off it does nothing at all -- there is no
-// close-on-leave anywhere in this class, and leaveEvent() exists precisely to say so.
-//
-// The FRAME is the rounded container, never the rows. Rows are rectangular and full width, and the
-// accent hover bar the first and last of them paint is clipped by the frame's own rounded corners
-// (the list is masked to the frame's inner radius) rather than each row rounding itself.
-class KDropdownPopup final : public QWidget {
+// Searchable, it shows the list's filter and filters through ONE proxy model it keeps for its whole
+// life; the filter is cleared on every open, and the popup re-fits its height as rows filter away
+// or come back, so there is never a dead band under the last row.
+class KDropdownPopup final : public KPopupWindow {
     Q_OBJECT
 
   public:
@@ -35,36 +24,40 @@ class KDropdownPopup final : public QWidget {
     void setModel(QAbstractItemModel* model);
     void setSearchable(bool searchable);
     [[nodiscard]] bool searchable() const noexcept { return searchable_; }
+    [[nodiscard]] KPopupList* list() const noexcept { return list_; }
     [[nodiscard]] QListView* view() const noexcept;
 
-    // The rounded, bordered SurfaceRaised container. Everything the artist sees is inside it; the
-    // widget around it is only the transparent gutter the drop shadow lives in.
-    [[nodiscard]] QFrame* surface() const noexcept;
+    // The surface the artist sees: the list (and its filter), filling the frame inside its hairline.
+    [[nodiscard]] QWidget* surface() const noexcept;
 
-    // Opens the popup directly below `anchor`, matching its width, with the Pop motion's 4-pixel
-    // rise. Under reduced motion it appears at its final position with no animation at all.
-    void openBelow(const QWidget& anchor, int currentIndex);
+    // Opens against `anchor` with `committedRow` checked and current. `anchorTextOffset` is where
+    // the anchor's own text starts, so the popup hangs its check column to the left and its row
+    // text lines up with the closed field's.
+    void openFor(const QWidget& anchor, int committedRow, int anchorTextOffset);
+
+    // The frame size the current rows want: at least `anchorWidth` wide, wide enough for the
+    // widest row, and exactly the rows tall (twelve at most) plus the frame's hairlines.
+    [[nodiscard]] QSize wantedFrameSize(int anchorWidth) const;
+    void setWidestRowText(int widestTextWidth);
 
   Q_SIGNALS:
-    // Emitted only for an item the artist may actually choose; a disabled row swallows the click.
+    // A row the artist chose, in the dropdown's own item numbers. Emitted only for an item that may
+    // be chosen; a disabled row swallows the click.
     void itemChosen(int index);
-
-  protected:
-    bool eventFilter(QObject* watched, QEvent* event) override;
-    void keyPressEvent(QKeyEvent* event) override;
-    void mousePressEvent(QMouseEvent* event) override;
-    void leaveEvent(QEvent* event) override;
+    // Tab or Shift+Tab chose the current row (or nothing) and asks focus to move on.
+    void focusMoveRequested(bool forward);
 
   private:
-    // Clips the item list to the frame's inner rounded rectangle, so a full-width accent hover bar
-    // on the first or last row cannot square off the frame's corners.
-    void applyRoundedListMask();
+    [[nodiscard]] int sourceRow(int row) const;
+    [[nodiscard]] int viewRow(int sourceRow) const;
+    void refitToRows();
 
-    QFrame* surface_ = nullptr;
-    QVBoxLayout* inner_ = nullptr;
-    QListView* view_ = nullptr;
-    QLineEdit* search_ = nullptr;
+    KPopupList* list_ = nullptr;
     QAbstractItemModel* sourceModel_ = nullptr;
+    QSortFilterProxyModel* proxy_ = nullptr;
+    int anchorWidth_ = 0;
+    int widestText_ = 0;
+    int committedSource_ = -1;
     bool searchable_ = false;
 };
 

@@ -76,7 +76,7 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
     bool expanding = false;
     for (auto* value : values) {
         if (auto* dropdown = qobject_cast<kit::KDropdown*>(value)) {
-            dropdown->setControlSize(kit::KDropdown::ControlSize::Compact);
+            dropdown->setControlSize(kit::KDropdown::ControlSize::Dense);
             dropdown->setFont(label->font());
             dropdown->setWidthFloor(kit::px(kit::Size::PropertiesDropdownWidth));
             dropdown->setFixedHeight(kit::px(kit::Size::Control));
@@ -86,8 +86,11 @@ KPropertyRow::KPropertyRow(QLabel* label, QWidget* indicator,
                                kit::px(kit::Size::PropertiesSwatchHeight));
         // A switch paints its track centered in whatever it is given, so it must never be
         // the flexible field: it stays fixed at its own sizeHint at the row's leading edge.
+        // A dropdown is never the flexible field either: it hugs its widest item and elides down
+        // to its floor (KDropdown::setWidthFloor), so it neither stretches nor overflows.
         const bool flexible =
             !leadingIndicator_ && qobject_cast<kit::KSwitch*>(value) == nullptr &&
+            qobject_cast<kit::KDropdown*>(value) == nullptr &&
             (qobject_cast<kit::KSlider*>(value) || value->maximumWidth() == QWIDGETSIZE_MAX);
         expanding = expanding || flexible;
         layout->addWidget(value, flexible ? 1 : 0, Qt::AlignVCenter);
@@ -166,7 +169,7 @@ void KRow::setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<Q
     for (auto* cell : columns) {
         const auto* dropdown = qobject_cast<KDropdown*>(cell);
         cell->setFixedSize(
-            std::max(px(Size::DropdownWidth), dropdown ? dropdown->minimumSizeHint().width() : 0),
+            std::max(px(Size::DropdownWidth), dropdown ? dropdown->sizeHint().width() : 0),
             px(Size::Control));
         cell->setProperty("rowCell", "column");
         cell->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);

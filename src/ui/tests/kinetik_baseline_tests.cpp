@@ -6,7 +6,6 @@
 #include <bloom/ui/workspace_host.hpp>
 
 #include <QApplication>
-#include <QComboBox>
 #include <QEvent>
 #include <QImage>
 #include <QLineEdit>
@@ -266,61 +265,6 @@ void testBacktickTogglesFullscreenForTheActivePanelAndDefersToTextEntry(
     host->toggleMaximizeActiveArea();
 }
 
-// task U8, issue #131, fix 3: the app-wide QComboBox styling (the panel switcher's own widget
-// type) matches the design sheet's dropdown chrome. Checked visually via an offscreen grab, on top
-// of the QSS text assertions in kit_theme_tests.cpp; every plain kit::KDropdown consumer (viewer
-// zoom, timeline blending/parent, picker model selector) is covered separately in
-// kit_dropdown_tests.cpp, since they all share KDropdown's one paintEvent.
-void testTheStyledQComboBoxRendersFieldAndBorder(Expectations& expectations) {
-    QWidget host;
-    auto* layout = new QVBoxLayout(&host);
-    auto* combo = new QComboBox(&host);
-    combo->addItem(QStringLiteral("Viewer"));
-    combo->addItem(QStringLiteral("Timeline"));
-    layout->addWidget(combo);
-    host.resize(200, 60);
-    host.show();
-    QCoreApplication::processEvents();
-    // Drive the widget to REST before sampling: on some offscreen platforms (CI's Qt 6.8.3) the
-    // freshly shown window hands activation focus to its only focusable child on a later
-    // event-loop pass, and a cursor parked at the origin can leave it hovered -- both repaint the
-    // border in a state colour and would make the rest-state pins fail for environmental reasons.
-    QCoreApplication::processEvents();
-    combo->clearFocus();
-    QEvent leave(QEvent::Leave);
-    QCoreApplication::sendEvent(combo, &leave);
-    QCoreApplication::processEvents();
-
-    const QPixmap rendered = combo->grab();
-    expectations.expect(!rendered.isNull(), "the styled QComboBox renders offscreen");
-    if (rendered.isNull()) {
-        return;
-    }
-
-    const QImage image = rendered.toImage();
-    bool sawField = false;
-    bool sawBorder = false;
-    const QColor field = kit::color(kit::Color::Field);
-    const QColor border = kit::color(kit::Color::Border);
-    const auto near = [](const QColor& left, const QColor& right) {
-        return std::abs(left.red() - right.red()) <= 4 &&
-               std::abs(left.green() - right.green()) <= 4 &&
-               std::abs(left.blue() - right.blue()) <= 4;
-    };
-    for (int y = 0; y < image.height() && (!sawField || !sawBorder); ++y) {
-        for (int x = 0; x < image.width(); ++x) {
-            const QColor pixel = image.pixelColor(x, y);
-            if (near(pixel, field)) {
-                sawField = true;
-            }
-            if (near(pixel, border)) {
-                sawBorder = true;
-            }
-        }
-    }
-    expectations.expect(sawField, "the closed field really paints the Field surface");
-    expectations.expect(sawBorder, "the closed field really paints the Border hairline");
-}
 
 // task C1, item C4 (owner: "panels inside window is overlapping with actual window border at the
 // edges; window needs inner padding"): the workspace's single area sits inset from WorkspaceHost's
@@ -331,7 +275,7 @@ void testWorkspaceHostInsetsItsSingleAreaByTheGutterFromItsOwnRect(Expectations&
     const EditorRegistry registry = makeRegistry();
     WorkspaceHost host(registry);
     host.resize(400, 300);
-    // Shown (like testTheStyledQComboBoxRendersFieldAndBorder's own precedent just below):
+    // Shown (like the dropdown captures' precedent):
     // an unshown top-level widget's layout is not guaranteed to activate from resize() and
     // processEvents() alone, so the area would still report its default sizeHint-based geometry
     // rather than the real, gutter-inset one this test means to measure.
@@ -425,7 +369,6 @@ int main(int argc, char** argv) {
     testTheSplitterHandleIsPaintedInBackground(expectations);
     testTheNodeGraphSitsOnTheKinetikBackground(expectations);
     testBacktickTogglesFullscreenForTheActivePanelAndDefersToTextEntry(expectations);
-    testTheStyledQComboBoxRendersFieldAndBorder(expectations);
     testWorkspaceHostInsetsItsSingleAreaByTheGutterFromItsOwnRect(expectations);
     testDefaultWorkspaceUsesTheOwnerArrangement(expectations);
     testMenuBarCarriesItsDocumentedPadding(expectations);

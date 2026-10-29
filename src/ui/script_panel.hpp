@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QStringList>
+class QMenu;
 #include <QWidget>
 #include <bloom/ui/editor_area.hpp>
 #include <memory>
@@ -9,7 +10,7 @@ namespace bloom::ui {
 namespace kit {
 class KLineEdit;
 class KLabel;
-class KDropdown;
+class KMenuButton;
 } // namespace kit
 class ScriptPanelRuntime;
 
@@ -30,7 +31,8 @@ class ScriptPanel final : public QWidget, public EditorChromeProvider {
     kit::KLineEdit* input_ = nullptr;
     kit::KLabel* output_ = nullptr;
     kit::KLabel* status_ = nullptr;
-    kit::KDropdown* history_ = nullptr;
+    kit::KMenuButton* history_ = nullptr;
+    QMenu* historyMenu_ = nullptr;
     QString transcript_;
     QStringList sources_;
 };

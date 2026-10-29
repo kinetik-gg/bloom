@@ -412,9 +412,9 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
 
     alignment_->setObjectName("timelinePropertyAlignment");
     alignment_->setAccessibleName(tr("Alignment"));
-    alignment_->setControlSize(kit::KDropdown::ControlSize::Compact);
+    alignment_->setControlSize(kit::KDropdown::ControlSize::Dense);
 
-    connect(alignment_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
+    connect(alignment_, &kit::KDropdown::activated, this, [this](int index) {
         if (!binding_ && index >= 0)
             (void)session_.setParameterValue(entry_.parameterId,
                                              alignment_->itemData(index).value<std::int64_t>(),
@@ -460,7 +460,7 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
                                        blending_, alignment_, color_, driven_},
                                       this, true);
     layout->addWidget(row, 0, Qt::AlignVCenter);
-    connect(blending_, &kit::KDropdown::currentIndexChanged, this, [this](int index) {
+    connect(blending_, &kit::KDropdown::activated, this, [this](int index) {
         if (binding_ || index < 0)
             return;
         const auto mode =

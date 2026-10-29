@@ -133,7 +133,7 @@ void PropertiesEditor::configureRegistryRows() {
                 for (const auto& binding : node->parameters)
                     if (binding.role == "composition") {
                         const auto parameterId = binding.parameterId;
-                        connect(selector, &kit::KDropdown::currentIndexChanged, this,
+                        connect(selector, &kit::KDropdown::activated, this,
                                 [this, selector, parameterId](int index) {
                                     if (index >= 0 &&
                                         !session_.setParameterValue(
@@ -173,12 +173,12 @@ void PropertiesEditor::configureRegistryRows() {
                 auto* label = kit::makePropertyRowLabel(tr("Audio Stream"), section->body());
                 auto* selector = new kit::KDropdown(section->body());
                 selector->setObjectName(QStringLiteral("propertiesVideoAudioStream"));
-                selector->setControlSize(kit::KDropdown::ControlSize::Compact);
+                selector->setControlSize(kit::KDropdown::ControlSize::Dense);
                 auto* row = new kit::KPropertyRow(label, nullptr, {selector}, section->body());
                 row->setProperty("rowLabel", tr("Audio Stream"));
                 section->bodyLayout()->addWidget(row);
                 const auto nodeId = node->id;
-                connect(selector, &kit::KDropdown::currentIndexChanged, this,
+                connect(selector, &kit::KDropdown::activated, this,
                         [this, selector, nodeId](int index) {
                             if (index < 0 || !selector->isEnabled())
                                 return;
@@ -393,7 +393,7 @@ void PropertiesEditor::addImageSelectionRows(const document::NodeRecord& node,
         imageColourNoteRow_ = row;
     }
     const auto nodeId = node.id;
-    connect(imagePartPicker_, &kit::KDropdown::currentIndexChanged, this,
+    connect(imagePartPicker_, &kit::KDropdown::activated, this,
             [this, nodeId](const int index) {
                 if (index < 0 || imagePartPicker_ == nullptr)
                     return;
@@ -408,7 +408,7 @@ void PropertiesEditor::addImageSelectionRows(const document::NodeRecord& node,
                         document::ParameterValue{std::string{}}, tr("Choose Image Layer")))
                     configureRegistryRows();
             });
-    connect(imageLayerPicker_, &kit::KDropdown::currentIndexChanged, this,
+    connect(imageLayerPicker_, &kit::KDropdown::activated, this,
             [this, nodeId](const int index) {
                 if (index < 0 || imageLayerPicker_ == nullptr)
                     return;
@@ -487,7 +487,7 @@ void PropertiesEditor::addCryptomatteRows(const document::NodeRecord& node,
         row->setProperty("rowLabel", name);
         section->bodyLayout()->addWidget(row);
         cryptomatteLayerPicker_ = picker;
-        connect(picker, &kit::KDropdown::currentIndexChanged, this,
+        connect(picker, &kit::KDropdown::activated, this,
                 [this, nodeId](const int index) {
                     if (index < 0 || cryptomatteLayerPicker_ == nullptr)
                         return;

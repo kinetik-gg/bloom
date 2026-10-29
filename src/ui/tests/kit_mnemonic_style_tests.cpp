@@ -299,8 +299,10 @@ void testTheMenuFrameAndRowMetricsComeFromTokens(Expectations& expectations) {
     expectations.expect(menu.font().pointSizeF() == kit::font(kit::TypeRole::Ui).pointSizeF(),
                         "a menu is set in the UI type role");
     const QRect firstRow = menu.actionGeometry(first);
-    expectations.expect(firstRow.top() >= kit::px(kit::Spacing::XS),
-                        "the frame keeps its own vertical padding above the first row");
+    // No vertical margin (owner, 2026-10-29): the first and last rows meet the frame's hairline,
+    // as a dropdown's do, so nothing is left under the last row.
+    expectations.expect(firstRow.top() == static_cast<int>(std::lround(kit::kHairlineWidth)),
+                        "the first row starts right under the frame's hairline");
     expectations.expect(kit::menuItemTextOffset() == kit::px(kit::Spacing::MenuItemX) +
                                                          kit::menuIconColumnWidth() +
                                                          kit::px(kit::Spacing::S),

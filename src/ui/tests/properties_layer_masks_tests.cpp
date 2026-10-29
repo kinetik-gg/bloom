@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
            "group shows name, Add mode, not inverted");
     expect(opacity->value() == 1.0 && feather->value() == 0.0, "group shows parameter defaults");
 
-    mode->setCurrentIndex(mode->findData(3)); // Intersect
+    mode->chooseIndex(mode->findData(3)); // Intersect
     expect(layerOf(session, *first)->masks[0].mode == document::LayerMaskMode::Intersect,
            "mode dropdown commits SetLayerMaskMode");
     inverted->setChecked(true);
@@ -134,16 +134,16 @@ int main(int argc, char** argv) {
     if (!source || !channel || !invertMatte)
         return 1;
     expect(source->count() == 2 && !channel->isEnabled(), "None plus one candidate; channel off");
-    source->setCurrentIndex(1);
+    source->chooseIndex(1);
     expect(layerOf(session, *first)->trackMatte &&
                layerOf(session, *first)->trackMatte->source == *second,
            "source dropdown sets the matte");
-    channel->setCurrentIndex(1);
+    channel->chooseIndex(1);
     invertMatte->setChecked(true);
     expect(layerOf(session, *first)->trackMatte->channel == document::TrackMatteChannel::Luma &&
                layerOf(session, *first)->trackMatte->inverted,
            "channel and invert commit");
-    source->setCurrentIndex(0);
+    source->chooseIndex(0);
     expect(!layerOf(session, *first)->trackMatte, "None clears the matte");
 
     commands::Transaction lock("Lock", session.snapshot().revision());

@@ -3,7 +3,9 @@
 #include <QEnterEvent>
 #include <QFontMetrics>
 #include <QGridLayout>
+#include <QKeyEvent>
 #include <QKeySequence>
+#include <QCoreApplication>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -36,6 +38,7 @@ KMenuFlow::KMenuFlow(QMenu* menu, QList<QAction*> actions, const int heightCap, 
     : QWidget(parent), menu_(menu), actions_(std::move(actions)), rows_(1) {
     setMouseTracking(true);
     setAttribute(Qt::WA_Hover, true);
+    setFocusPolicy(Qt::StrongFocus);
     setProperty("kitControl", true);
     setProperty("menuFlow", true);
     int width = px(Size::MenuMinWidth);
@@ -111,17 +114,106 @@ void KMenuFlow::leaveEvent(QEvent* event) {
     }
     QWidget::leaveEvent(event);
 }
+void KMenuFlow::trigger(const int index) {
+    auto* action = actions_[index];
+    for (auto* menu = menu_; menu; menu = qobject_cast<QMenu*>(menu->parentWidget()))
+        menu->close();
+    action->trigger();
+}
 void KMenuFlow::mouseReleaseEvent(QMouseEvent* event) {
     const int index = indexAt(event->pos());
     if (event->button() == Qt::LeftButton && index >= 0 && actions_[index]->isEnabled()) {
-        auto* action = actions_[index];
-        for (auto* menu = menu_; menu; menu = qobject_cast<QMenu*>(menu->parentWidget()))
-            menu->close();
-        action->trigger();
+        trigger(index);
         event->accept();
         return;
     }
     QWidget::mouseReleaseEvent(event);
+}
+void KMenuFlow::setCurrentIndex(const int index) {
+    const int next = index >= 0 && index < itemCount() && actions_[index]->isEnabled() ? index : -1;
+    if (next != hovered_) {
+        hovered_ = next;
+        update();
+    }
+}
+// The first enabled row at or after `index`, walking by `step`; -1 when there is none.
+int KMenuFlow::enabledFrom(int index, const int step) const {
+    for (; index >= 0 && index < itemCount(); index += step)
+        if (actions_[index]->isEnabled())
+            return index;
+    return -1;
+}
+void KMenuFlow::focusInEvent(QFocusEvent* event) {
+    if (hovered_ < 0)
+        setCurrentIndex(enabledFrom(0, 1));
+    QWidget::focusInEvent(event);
+}
+void KMenuFlow::keyPressEvent(QKeyEvent* event) {
+    const int current = hovered_;
+    const int row = current < 0 ? -1 : current % rows_;
+    const int column = current < 0 ? 0 : current / rows_;
+    int target = -2;
+    switch (event->key()) {
+    case Qt::Key_Down:
+        target = enabledFrom(current < 0 ? 0 : current + 1, 1);
+        break;
+    case Qt::Key_Up:
+        target = current < 0 ? enabledFrom(itemCount() - 1, -1) : enabledFrom(current - 1, -1);
+        break;
+    case Qt::Key_Home:
+        target = enabledFrom(0, 1);
+        break;
+    case Qt::Key_End:
+        target = enabledFrom(itemCount() - 1, -1);
+        break;
+    case Qt::Key_Right:
+    case Qt::Key_Left: {
+        const int direction = event->key() == Qt::Key_Right ? 1 : -1;
+        if (direction < 0 && column == 0) {
+            // Left from the first column leaves the submenu, as Left does in any submenu.
+            menu_->close();
+            event->accept();
+            return;
+        }
+        // The same row in the neighbouring column, or that column's last row when it is shorter.
+        for (int next = column + direction; next >= 0 && next < columns_; next += direction) {
+            const int base = next * rows_;
+            const int candidate = std::min(base + std::max(row, 0), itemCount() - 1);
+            const int found = enabledFrom(candidate, -1);
+            if (found >= base) {
+                target = found;
+                break;
+            }
+            const int after = enabledFrom(candidate, 1);
+            if (after >= 0 && after < base + rows_) {
+                target = after;
+                break;
+            }
+        }
+        if (target == -2) {
+            event->accept();
+            return;
+        }
+        break;
+    }
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+    case Qt::Key_Space:
+        if (current >= 0 && actions_[current]->isEnabled())
+            trigger(current);
+        event->accept();
+        return;
+    case Qt::Key_Escape:
+        menu_->close();
+        event->accept();
+        return;
+    default:
+        QWidget::keyPressEvent(event);
+        return;
+    }
+    if (target >= 0)
+        setCurrentIndex(target);
+    event->accept();
 }
 KIconButton::KIconButton(QWidget* parent) : QToolButton(parent) {
     ensureKeyboardFocusTracking(*this);
@@ -435,6 +527,29 @@ class FlowMenu final : public QMenu {
     }
 
   protected:
+    // While the body is flowed, the menu's own keyboard handling has only one item to walk (the
+    // flowed body itself); the flow's rows take the navigation keys instead.
+    void keyPressEvent(QKeyEvent* event) override {
+        if (flow_ != nullptr) {
+            switch (event->key()) {
+            case Qt::Key_Up:
+            case Qt::Key_Down:
+            case Qt::Key_Left:
+            case Qt::Key_Right:
+            case Qt::Key_Home:
+            case Qt::Key_End:
+            case Qt::Key_Return:
+            case Qt::Key_Enter:
+            case Qt::Key_Space:
+                flow_->setFocus(Qt::PopupFocusReason);
+                QCoreApplication::sendEvent(flow_, event);
+                return;
+            default:
+                break;
+            }
+        }
+        QMenu::keyPressEvent(event);
+    }
     void showEvent(QShowEvent* event) override {
         QMenu::showEvent(event);
         if (!property("columnFlow").toBool())
@@ -459,6 +574,7 @@ class FlowMenu final : public QMenu {
     // state, which the KMenuItems copied -- that is exactly why every flowed Add entry went grey
     // and refused to trigger (owner, 2026-09-15).
     void restoreActions() {
+        flow_ = nullptr;
         if (columns_) {
             removeAction(columns_);
             columns_->deleteLater();
@@ -483,11 +599,17 @@ class FlowMenu final : public QMenu {
                 flowed.push_back(action);
         auto* content = new QWidget;
         auto* layout = new QVBoxLayout(content);
-        layout->setContentsMargins(0, padding, 0, padding);
+        // No padding above or below the rows: the first and last rows meet the menu frame, as a
+        // plain menu's and a dropdown's do, and nothing is left under the last one.
+        layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(0);
-        // The frame, the widget action's margins and the content padding all sit inside the cap.
-        auto* flow = new KMenuFlow(this, flowed, cap - 6 * padding, content);
+        // The frame and the widget action's margins sit inside the cap.
+        auto* flow = new KMenuFlow(this, flowed, cap - 2 * padding, content);
         layout->addWidget(flow);
+        // A keyboard-selected widget action hands focus to its widget; the flow takes it.
+        content->setFocusPolicy(Qt::StrongFocus);
+        content->setFocusProxy(flow);
+        flow_ = flow;
         for (auto* action : originals_)
             removeAction(action);
         columns_ = new QWidgetAction(this);
@@ -498,6 +620,7 @@ class FlowMenu final : public QMenu {
     }
     QList<QAction*> originals_;
     QWidgetAction* columns_ = nullptr;
+    KMenuFlow* flow_ = nullptr;
 };
 } // namespace
 QMenu* makeMenu(QWidget* parent) { return new FlowMenu({}, parent); }
