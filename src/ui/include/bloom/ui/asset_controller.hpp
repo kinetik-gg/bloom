@@ -142,6 +142,9 @@ class AssetController final : public QObject {
     [[nodiscard]] QString problem(document::AssetId id) const;
     // A data-only image (no colour layer) -- valid, used through its channels.
     [[nodiscard]] bool dataOnly(document::AssetId id) const;
+    // The source's bytes on disk (a sequence's members summed), measured by the thumbnail worker;
+    // empty until it has run, for a missing source, or for a locator that names no file.
+    [[nodiscard]] std::optional<std::uint64_t> fileSize(document::AssetId id) const;
     [[nodiscard]] QString audioDiagnostic(document::AssetId id) const;
     [[nodiscard]] QImage thumbnail(document::AssetId id) const;
     [[nodiscard]] QImage nodeThumbnail(document::NodeId id) const;
@@ -223,6 +226,8 @@ class AssetController final : public QObject {
         // The image has no colour layer: its pixels are data channels (Cryptomatte, AOVs). A
         // valid asset whose thumbnail is the Cryptomatte ID colours or its first data channel.
         bool dataOnly = false;
+        // The source's bytes on disk, measured on the worker (see fileSize()).
+        std::optional<std::uint64_t> fileBytes;
     };
     using Previews = std::map<document::AssetId, Preview>;
     using Waveforms =
