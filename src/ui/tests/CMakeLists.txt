@@ -202,6 +202,9 @@ target_link_libraries(bloom_kit_dropdown_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_popup_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_focus_border_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_fonts_test PRIVATE bloom_ui_kit)
+# The manifest check also reads the vendored files that are not interface resources.
+target_compile_definitions(bloom_kit_fonts_test PRIVATE
+    BLOOM_KIT_THIRD_PARTY_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../kit/third_party")
 target_link_libraries(bloom_kit_panel_switcher_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_icons_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_title_bar_test PRIVATE bloom_ui_kit Qt6::Test)

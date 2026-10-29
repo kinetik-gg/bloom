@@ -167,9 +167,25 @@ Shadow shadow(const Elevation token) {
     return {};
 }
 
-QString interfaceFontFamily() { return QStringLiteral("Inter"); }
+QString interfaceFontFamily() { return QStringLiteral("Inter Variable"); }
 
 QString monospaceFontFamily() { return QStringLiteral("Geist Mono"); }
+
+namespace {
+
+// Inter's optical-size axis at its text cut: every role is chrome text, and pinning it keeps the
+// outlines identical on engines that would otherwise derive it from the point size.
+constexpr float kInterTextOpticalSize = 14.0F;
+
+// A role's weight both as Qt's weight request and as the bundled variable face's own wght axis, so
+// FreeType, CoreText and DirectWrite draw the same instance instead of picking or synthesising
+// their own.
+void setRoleWeight(QFont& value, const QFont::Weight weight) {
+    value.setWeight(weight);
+    value.setVariableAxis(QFont::Tag("wght"), static_cast<float>(weight));
+}
+
+} // namespace
 
 QFont font(const TypeRole role) {
     QFont value;
@@ -182,7 +198,7 @@ QFont font(const TypeRole role) {
     case TypeRole::Ui:
         value.setStyleHint(QFont::SansSerif);
         value.setPointSizeF(pointSizeForDesignPixels(12.0));
-        value.setWeight(QFont::Medium);
+        setRoleWeight(value, QFont::Medium);
         break;
     case TypeRole::UiSmall:
     case TypeRole::UiSmallStrong:
@@ -190,7 +206,7 @@ QFont font(const TypeRole role) {
         // re-applies them.
         value.setStyleHint(QFont::SansSerif);
         value.setPointSizeF(pointSizeForDesignPixels(10.5));
-        value.setWeight(role == TypeRole::UiSmallStrong ? QFont::DemiBold : QFont::Medium);
+        setRoleWeight(value, role == TypeRole::UiSmallStrong ? QFont::DemiBold : QFont::Medium);
         value.setCapitalization(QFont::MixedCase);
         value.setLetterSpacing(QFont::PercentageSpacing, 100.0);
         break;
@@ -198,14 +214,16 @@ QFont font(const TypeRole role) {
         value.setStyleHint(QFont::Monospace);
         value.setFixedPitch(true);
         value.setPointSizeF(pointSizeForDesignPixels(11.5));
-        value.setWeight(QFont::Medium);
+        setRoleWeight(value, QFont::Medium);
         break;
     case TypeRole::Title:
         value.setStyleHint(QFont::SansSerif);
         value.setPointSizeF(pointSizeForDesignPixels(13.0));
-        value.setWeight(QFont::DemiBold);
+        setRoleWeight(value, QFont::DemiBold);
         break;
     }
+    if (role != TypeRole::Value)
+        value.setVariableAxis(QFont::Tag("opsz"), kInterTextOpticalSize);
     return value;
 }
 

@@ -33,10 +33,12 @@ const BundledFontStatus& registerBundledFonts();
 // The current registration result, registering on first use.
 const BundledFontStatus& bundledFontStatus();
 
-// The family list a type role should ask for, best match first, ending in the platform fallback.
-//
-// Inter Medium/SemiBold and Geist Mono Medium expose weight-specific static families. Roles
-// name those verified families first, then the shared family and the platform fallback.
+// The family list a type role should ask for: the bundled variable family (Inter Variable, or Geist
+// Mono for Value) when it registered, then the platform's own family as the reported fallback.
+// The weight is a point on the face's wght axis (kit::font()), never a separate family.
 [[nodiscard]] QStringList fontFamiliesForRole(TypeRole role);
+
+// True when `family` is one of the bundled chrome families and it registered.
+[[nodiscard]] bool isBundledFontFamily(const QString& family);
 
 } // namespace bloom::ui::kit

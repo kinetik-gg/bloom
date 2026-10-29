@@ -324,21 +324,20 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
 )
 
 
-# The bundled interface faces, enumerated the same way and under the same Bloom-owned prefix. The
-# shipped set is deliberately minimal (visual-language.md): Book/Bold/Oblique for the interface
-# family -- one family, three styles, unlike the per-weight families the previous interface face
-# shipped -- and Regular/Medium for the monospaced one.
+# The bundled interface faces, enumerated the same way and under the same Bloom-owned prefix: one
+# upright variable face per family (visual-language.md, "Type roles"), every role weight a point on
+# its wght axis. The static Inter faces beside them are text-layer content the render module
+# embeds; they are not interface resources.
 qt_add_resources(bloom_ui_kit "kinetik_fonts"
     PREFIX "/bloom/kit"
     BASE "kit/third_party"
     FILES
         kit/third_party/inter/LICENSE
-        kit/third_party/inter/Inter-Regular.ttf
-        kit/third_party/inter/Inter-Medium.ttf
-        kit/third_party/inter/Inter-SemiBold.ttf
+        kit/third_party/inter/InterVariable.ttf
         kit/third_party/inter/manifest.json
-        kit/third_party/geist-mono/GeistMono-Medium.ttf
-        kit/third_party/geist-mono/GeistMono-Regular.ttf
+        kit/third_party/geist-mono/LICENSE
+        kit/third_party/geist-mono/GeistMono-Variable.ttf
+        kit/third_party/geist-mono/manifest.json
 )
 
 # Generates the "Open Source Licenses..." embedded catalog (task U2, issue #118, decision 3) BEFORE
