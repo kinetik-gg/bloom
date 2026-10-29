@@ -7,7 +7,6 @@
 #include <bloom/ui/task_monitor_model.hpp>
 
 #include <QAbstractItemView>
-#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QLabel>
@@ -114,24 +113,19 @@ JobsEditor::JobsEditor(TaskMonitorModel& model, QWidget* parent) : QWidget(paren
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    auto* controls = new QWidget(this);
-    controls->setObjectName("jobsControls");
-    auto* controlsLayout = new QHBoxLayout(controls);
-    controlsLayout->setContentsMargins(kit::px(kit::Spacing::S), kit::px(kit::Spacing::XS),
-                                       kit::px(kit::Spacing::S), kit::px(kit::Spacing::XS));
-    controlsLayout->setSpacing(kit::px(kit::Spacing::Gutter));
-    auto* title = new kit::KLabel(tr("Jobs"), controls);
-    title->setObjectName("editorSectionTitle");
-    cancelButton_ = new kit::KButton(tr("Cancel"), controls);
+    // The panel header carries Cancel at its trailing end (the panel switcher already names the
+    // panel), so the Jobs header has the same height, spacing and control look as every header.
+    chrome_.header.objectName = QStringLiteral("jobsHeader");
+    chrome_.header.owner = this;
+    cancelButton_ = new kit::KButton(tr("Cancel"), this);
     cancelButton_->setObjectName("cancelSelectedJobButton");
     cancelButton_->setAccessibleName(tr("Cancel selected job"));
     cancelButton_->setAccessibleDescription(
         tr("Requests cooperative cancellation for the selected queued or running job"));
     cancelButton_->setToolTip(tr("Cancel the selected job"));
     cancelButton_->setEnabled(false);
-    controlsLayout->addWidget(title);
-    controlsLayout->addStretch(1);
-    controlsLayout->addWidget(cancelButton_);
+    chrome_.header.addStretch();
+    chrome_.header.addWidget(cancelButton_);
 
     table_ = new QTableView(this);
     table_->setObjectName("jobsTable");
@@ -170,7 +164,6 @@ JobsEditor::JobsEditor(TaskMonitorModel& model, QWidget* parent) : QWidget(paren
     details_->setMinimumHeight(kit::px(kit::Size::DiagnosticHeight));
     details_->setPlainText(tr("No jobs have been submitted."));
 
-    layout->addWidget(controls);
     layout->addWidget(table_, 2);
     layout->addWidget(details_, 1);
 
