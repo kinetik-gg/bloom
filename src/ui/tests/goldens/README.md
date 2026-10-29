@@ -181,3 +181,5 @@ widen by the former 32 px column. Both references were regenerated with `--updat
 DPR 1 and 1.5 and visually inspected. Before approval the mean channel errors were 12.80 (DPR 1)
 and 12.88 (DPR 1.5), with changed fractions 0.106 and 0.104. Comparison tolerances and full-image
 coverage are unchanged; rendering identity goldens are unchanged.
+After merging the TYPE references the bar's approval was repeated on top of them (mean channel
+errors 12.81 and 12.89 before approval); the change is the same bar row and the same Viewer.
