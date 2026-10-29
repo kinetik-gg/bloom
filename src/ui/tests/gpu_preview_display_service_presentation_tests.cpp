@@ -48,7 +48,6 @@ namespace {
 using namespace std::chrono_literals;
 using bloom::render::GpuBorrowedInstanceView;
 using bloom::render::GpuBorrowedSurface;
-using bloom::render::GpuPresentBackground;
 using bloom::render::GpuPresentChannel;
 using bloom::render::GpuPresentImageParams;
 using bloom::render::GpuPresentRect;
@@ -250,7 +249,6 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
         GpuPresentRect{0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height)};
     update.params.source = GpuPresentSourceWindow{0.0, 0.0, 16.0, 8.0};
     update.params.channel = GpuPresentChannel::Rgba;
-    update.params.background = GpuPresentBackground::Solid;
     return update;
 }
 

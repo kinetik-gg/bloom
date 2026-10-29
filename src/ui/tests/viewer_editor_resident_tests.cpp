@@ -546,48 +546,27 @@ void testResidentFrameGeometryResolvesTheSameMappingDescriptor(Expectations& exp
 
 void testCompositionFrameChromePaintsWithoutADevice(Expectations& expectations) {
     // The resident overlay is the only paint on the GPU route; it records the same composition
-    // frame border and empty-state invitation the CPU path draws. Both are painted here with no
-    // device, so the shared helpers can never silently stop emitting visible ink.
+    // frame border the CPU path draws, and nothing over the frame's interior (a composition with
+    // no layers shows just its frame and background). Painted here with no device, so the shared
+    // helper can never silently stop emitting visible ink or start covering the image.
     const QRectF displayRect(30.0, 20.0, 180.0, 100.0);
-    const QRectF canvasRect(0.0, 0.0, 240.0, 140.0);
-
     QImage canvas(240, 140, QImage::Format_ARGB32_Premultiplied);
     canvas.fill(Qt::transparent);
     QPainter painter(&canvas);
     ui::paintViewerCompositionFrame(painter, displayRect);
-    ui::paintViewerEmptyInvitation(painter, canvasRect, QStringLiteral("Create a layer to begin"));
     painter.end();
     expectations.expect(canvas.pixelColor(30, 20).alpha() > 0,
                         "the composition frame border paints visible ink");
-
-    bool invitationInk = false;
-    for (int y = 40; y < 100 && !invitationInk; ++y) {
-        for (int x = 40; x < 200; ++x) {
-            if (canvas.pixelColor(x, y).alpha() > 0) {
-                invitationInk = true;
-                break;
-            }
-        }
-    }
-    expectations.expect(invitationInk, "the empty-state invitation paints visible ink");
-
-    QImage bare(240, 140, QImage::Format_ARGB32_Premultiplied);
-    bare.fill(Qt::transparent);
-    QPainter barePainter(&bare);
-    ui::paintViewerCompositionFrame(barePainter, displayRect);
-    ui::paintViewerEmptyInvitation(barePainter, canvasRect, QString());
-    barePainter.end();
     bool interiorInk = false;
     for (int y = 40; y < 100 && !interiorInk; ++y) {
         for (int x = 40; x < 200; ++x) {
-            if (bare.pixelColor(x, y).alpha() > 0) {
+            if (canvas.pixelColor(x, y).alpha() > 0) {
                 interiorInk = true;
                 break;
             }
         }
     }
-    expectations.expect(!interiorInk,
-                        "an empty invitation paints no interior ink over the composition");
+    expectations.expect(!interiorInk, "the frame chrome paints no interior ink over the image");
 }
 
 void testViewerEditorBlankCoverIsOpaqueCurrentCpuPaint(Expectations& expectations) {

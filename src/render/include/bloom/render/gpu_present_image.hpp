@@ -3,7 +3,8 @@
 // Bloom-owned, Qt-free and Vulkan-free presentation sampling parameters for the P2
 // GpuPresentationTarget. It describes how a resident GpuDisplayImage (packed straight RGBA8 sRGB)
 // and an optional premultiplied RGBA8 overlay are composed into the already-acquired swapchain
-// image: display-space background/checkerboard, the viewer channel remap, and an explicit affine
+// image: the display-space surround outside the destination, the composition background or the
+// transparency grid inside it, the viewer channel remap, and an explicit affine
 // destination-rectangle / source-image-window mapping. No Qt or Vk type is public.
 //
 // The caller derives `destination` from the live view transform (zoom/pan/fit and pixel aspect),
@@ -29,14 +30,6 @@ enum class GpuPresentChannel : std::uint8_t {
     Green,
     Blue,
     Alpha,
-};
-
-// Mirrors bloom::ui::ViewerBackground exactly.
-enum class GpuPresentBackground : std::uint8_t {
-    Solid,
-    Checkerboard,
-    Black,
-    White,
 };
 
 struct GpuPresentColor final {
@@ -84,14 +77,20 @@ struct GpuPresentImageParams final {
     GpuPresentSourceWindow source;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
     GpuPresentChannel channel = GpuPresentChannel::Rgba;
-    GpuPresentBackground background = GpuPresentBackground::Solid;
-    // The composition background, already composited to opaque by the caller for Solid.
-    GpuPresentColor backgroundColor{0.0F, 0.0F, 0.0F, 1.0F};
-    // Checkerboard tiles, matching the viewer's Surface (base) and SurfaceRaised (raised) roles.
+    // Every colour below is display-referred (encoded, the same space as the display image bytes)
+    // and opaque; the caller resolves it, the presenter never interprets a viewer choice.
+    // Outside the destination rectangle: the Viewer's surround (View > Background).
+    GpuPresentColor surroundColor{0.0F, 0.0F, 0.0F, 1.0F};
+    // Inside the destination rectangle, behind the image: the composition's own background colour.
+    GpuPresentColor frameColor{0.0F, 0.0F, 0.0F, 1.0F};
+    // When set, the checkerboard replaces frameColor inside the destination rectangle (the
+    // Viewer's Transparency Grid). It never reaches the surround.
+    bool transparencyGrid = false;
+    // Checkerboard tiles: A is the base tile, B the alternate one ((row + column) even).
     GpuPresentColor checkerColorA{0.0F, 0.0F, 0.0F, 1.0F};
     GpuPresentColor checkerColorB{1.0F, 1.0F, 1.0F, 1.0F};
-    // Tile size and origin in target pixels (caller multiplies the 22px viewer token by the device
-    // pixel ratio and passes the canvas-surround origin so the pattern aligns exactly).
+    // Tile size and origin in target pixels (the caller multiplies the viewer token by the device
+    // pixel ratio and passes the origin the CPU paint anchors its grid at).
     float checkerTilePixels = 22.0F;
     float checkerOriginX = 0.0F;
     float checkerOriginY = 0.0F;

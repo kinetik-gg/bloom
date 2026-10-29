@@ -8,6 +8,7 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/color.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
@@ -144,31 +145,66 @@ QToolButton* makeFooterButton(const kit::IconId iconId, const QString& toolTip,
     return button;
 }
 
-void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
-                          const ViewerBackground background) {
+ViewerBackground viewerBackgroundFor(const ViewerBackgroundPreference preference) noexcept {
+    switch (preference) {
+    case ViewerBackgroundPreference::Grey:
+        return ViewerBackground::Grey;
+    case ViewerBackgroundPreference::Black:
+        return ViewerBackground::Black;
+    case ViewerBackgroundPreference::White:
+        return ViewerBackground::White;
+    case ViewerBackgroundPreference::Solid:
+        break;
+    }
+    return ViewerBackground::Solid;
+}
+
+QColor viewerSurroundColor(const ViewerBackground background) {
     switch (background) {
+    case ViewerBackground::Grey:
+        return kit::color(kit::Color::CanvasGrey);
     case ViewerBackground::Black:
-        painter.fillRect(bounds, kit::color(kit::Color::CanvasBlack));
-        return;
+        return kit::color(kit::Color::CanvasBlack);
     case ViewerBackground::White:
-        painter.fillRect(bounds, kit::color(kit::Color::CanvasWhite));
-        return;
-    case ViewerBackground::Checkerboard:
+        return kit::color(kit::Color::CanvasWhite);
     case ViewerBackground::Solid:
         break;
     }
-    painter.fillRect(bounds, kit::color(kit::Color::Canvas));
+    return kit::color(kit::Color::Canvas);
+}
+
+QColor compositionFrameColor(const document::Composition* const composition) {
+    if (composition == nullptr)
+        return kit::color(kit::Color::Canvas);
+    const auto authored = composition->backgroundColor();
+    // The same quantization the Composition Settings chip and its hex label use, so the frame
+    // shows exactly the colour the chip shows. A background is opaque in the Viewer (as in After
+    // Effects); its alpha is never presented and never fills export alpha.
+    return kit::KColor{static_cast<float>(authored.red), static_cast<float>(authored.green),
+                       static_cast<float>(authored.blue), 1.0F}
+        .toQColor();
+}
+
+void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
+                          const ViewerBackground background) {
+    painter.fillRect(bounds, viewerSurroundColor(background));
 }
 
 void drawFrameBackground(QPainter& painter, const QRectF& content, const QRectF& frame,
-                         const ViewerBackground background) {
-    if (background != ViewerBackground::Checkerboard || frame.isEmpty())
+                         const QColor& frameColor, const bool transparencyGrid) {
+    const QRectF visible = frame.intersected(content);
+    if (visible.isEmpty())
         return;
-    // The kit's one checkerboard, laid on the content area's grid (the GPU present anchors its
-    // checker at the container origin too) and clipped to the composition frame.
+    if (!transparencyGrid) {
+        painter.fillRect(visible, frameColor);
+        return;
+    }
+    // The Viewer's checker, laid on the content area's grid (the GPU present anchors its checker
+    // at the container origin too) and clipped to the composition frame.
     painter.save();
-    painter.setClipRect(frame.intersected(content), Qt::IntersectClip);
-    kit::drawAlphaCheckerboard(painter, content, kit::px(kit::Size::ViewerChecker));
+    painter.setClipRect(visible, Qt::IntersectClip);
+    kit::drawAlphaCheckerboard(painter, content, kit::px(kit::Size::ViewerChecker),
+                               kit::Color::ViewerCheckerLight, kit::Color::ViewerCheckerDark);
     painter.restore();
 }
 } // namespace viewer_detail

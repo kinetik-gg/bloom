@@ -63,7 +63,6 @@ using bloom::render::GpuDeviceCreationOptions;
 using bloom::render::GpuDisplayImage;
 using bloom::render::GpuImage;
 using bloom::render::GpuPresentationPlatform;
-using bloom::render::GpuPresentBackground;
 using bloom::render::GpuPresentChannel;
 using bloom::render::GpuPresentImageParams;
 using bloom::render::GpuPresentRect;
@@ -367,7 +366,6 @@ int main(int argc, char** argv) {
             GpuPresentRect{0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height)};
         update.params.source = GpuPresentSourceWindow{0.0, 0.0, 16.0, 8.0};
         update.params.channel = GpuPresentChannel::Rgba;
-        update.params.background = GpuPresentBackground::Solid;
         return update;
     };
 

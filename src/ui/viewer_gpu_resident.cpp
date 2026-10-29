@@ -331,13 +331,16 @@ bool ViewerGpuResidentController::present(const runtime::PreparedPreviewFrame& f
         .height = static_cast<double>(geometry->displayExtent.height())};
     params.pixelAspect = geometry->pixelAspect;
     params.channel = request.channel;
-    params.background = request.background;
-    params.backgroundColor = request.backgroundColor;
+    params.surroundColor = request.surroundColor;
+    params.frameColor = request.frameColor;
+    params.transparencyGrid = request.transparencyGrid;
     params.checkerColorA = request.checkerColorA;
     params.checkerColorB = request.checkerColorB;
     params.checkerTilePixels = request.checkerTilePixels;
-    params.checkerOriginX = static_cast<float>(-request.containerRect.left());
-    params.checkerOriginY = static_cast<float>(-request.containerRect.top());
+    // The CPU paint lays its grid from the content area's top-left, which is the native
+    // container's origin, so the target-space origin is zero.
+    params.checkerOriginX = 0.0F;
+    params.checkerOriginY = 0.0F;
     Impl::Publication publication;
     publication.frame = std::make_shared<const runtime::PreparedPreviewFrame>(frame);
     publication.projectId = frame.desiredIdentity().projectId;

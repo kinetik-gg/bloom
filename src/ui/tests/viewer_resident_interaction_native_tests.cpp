@@ -798,9 +798,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 checks.expect(probe.valid, "the empty composition records a resident overlay");
                 checks.expect(probe.framePixels() >= 4U,
                               "the empty composition still draws its composition frame border");
-                checks.expect(
-                    probe.centreInkPixels() >= 10U,
-                    "the empty composition records the 'Create a layer to begin' invitation");
+                checks.expect(probe.centreInkPixels() == 0U,
+                              "the empty composition records no invitation over its frame");
             }
         }
         if (options.transitions) {

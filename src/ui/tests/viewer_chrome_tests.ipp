@@ -8,17 +8,18 @@ struct FooterRank {
     const char* name;
     int rank;
 };
-constexpr std::array<FooterRank, 11> kFooterRanks{{{"viewerLookToggle", 1},
+constexpr std::array<FooterRank, 12> kFooterRanks{{{"viewerLookToggle", 1},
                                                    {"viewerDisplayView", 2},
                                                    {"viewerExposure", 3},
                                                    {"viewerGamma", 3},
                                                    {"viewerRoiToggle", 4},
-                                                   {"viewerChannelDropdown", 5},
-                                                   {"timelineRamPreviewButton", 7},
-                                                   {"viewerStepToStartButton", 8},
-                                                   {"viewerStepToEndButton", 8},
-                                                   {"viewerZoomDropdown", 9},
-                                                   {"viewerResolutionDropdown", 9}}};
+                                                   {"viewerTransparencyGridToggle", 5},
+                                                   {"viewerChannelDropdown", 6},
+                                                   {"timelineRamPreviewButton", 8},
+                                                   {"viewerStepToStartButton", 9},
+                                                   {"viewerStepToEndButton", 9},
+                                                   {"viewerZoomDropdown", 10},
+                                                   {"viewerResolutionDropdown", 10}}};
 constexpr std::array<const char*, 5> kNeverCollapses{
     "timelineStepBackButton", "playPauseButton", "timelineStepForwardButton",
     "timelineLoopIndicator", "viewerTimeReadout"};
@@ -66,7 +67,8 @@ void testViewerFooterLayoutAtEveryWidth(Expectations& expectations) {
         for (const auto& entry : kFooterRanks)
             ordered = ordered && (entry.rank > highestCollapsed || control(entry.name)->isHidden());
         expectations.expect(ordered, "the footer collapses Look, Display/View, exposure/gamma, "
-                                     "ROI, channel, then the rest, in that order" +
+                                     "ROI, transparency grid, channel, then the rest, in that "
+                                     "order" +
                                          at);
         expectations.expect(overflow->isHidden() == (highestCollapsed == 0),
                             "View options appears exactly when something collapsed" + at);
@@ -129,7 +131,8 @@ void testViewerFooterControlsShareOneVocabulary(Expectations& expectations) {
                             child->objectName().toStdString() + " is one Control tall");
     }
     // The toggles are icon buttons with one Selected plate: the same kind as the transport.
-    for (const char* name : {"viewerRoiToggle", "viewerLookToggle", "timelineLoopIndicator"}) {
+    for (const char* name : {"viewerRoiToggle", "viewerTransparencyGridToggle", "viewerLookToggle",
+                             "timelineLoopIndicator"}) {
         auto* toggle = footer->findChild<ui::kit::KIconButton*>(QString::fromLatin1(name));
         expectations.expect(toggle != nullptr && toggle->isCheckable() &&
                                 qobject_cast<ui::kit::KIconToggle*>(toggle) == nullptr &&
@@ -163,10 +166,11 @@ void testViewerFooterControlsShareOneVocabulary(Expectations& expectations) {
 }
 
 // An empty project: the selectors say there is nothing to choose, the canvas shows the plain
-// surround (no checkerboard) under the invitation, and its button runs New Composition.
+// surround (no frame background or grid) under the invitation, and its button runs New
+// Composition.
 void testViewerEmptyProjectChrome(Expectations& expectations) {
     using namespace bloom;
-    QSettings().remove("viewer/background"); // Checkerboard, the default.
+    QSettings().setValue("viewer/transparency-grid", true); // even with the grid on
     document::Project emptyProject(document::ProjectId::fromRaw(1), "Empty chrome project");
     document::Document document(std::move(emptyProject));
     commands::CommandStack commands(document);
@@ -245,6 +249,7 @@ void testViewerEmptyProjectChrome(Expectations& expectations) {
         plain = plain && image.pixelColor(QPointF(point * ratio).toPoint()) == canvasColor;
     }
     expectations.expect(plain, "with no composition the canvas paints no checkerboard");
+    QSettings().remove("viewer/transparency-grid");
     delete viewer;
     reachQuiescence(controller, bridge, scheduler, expectations);
 }
@@ -391,37 +396,3 @@ void testViewerMenusAreOrganisedAndShared(Expectations& expectations) {
     toolShutdown(fixture, expectations);
 }
 
-// Checkerboard is an alpha indicator for the composition: inside the frame, under the image; the
-// surround around the frame stays the plain Canvas.
-void testViewerCheckerStaysInsideTheFrame(Expectations& expectations) {
-    using namespace bloom;
-    QSettings().remove("viewer/background");
-    ViewerFixture fixture(makeTestProject("Checker inside the frame"));
-    fixture.viewer.resize(900, 650);
-    fixture.viewer.show();
-    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the checker fixture reaches a ready frame");
-    expectations.expect(fixture.viewer.backgroundForTest() == ui::ViewerBackground::Checkerboard,
-                        "the checker fixture starts on Checkerboard");
-    const QImage image = fixture.viewer.grab().toImage();
-    const auto ratio = image.devicePixelRatio();
-    const auto at = [&](const QPointF point) {
-        return image.pixelColor(QPointF(point * ratio).toPoint());
-    };
-    const QRect content = fixture.viewer.contentRectForTest().toRect();
-    const QColor canvas = ui::kit::color(ui::kit::Color::Canvas);
-    expectations.expect(at(content.topLeft() + QPoint(3, 3)) == canvas &&
-                            at(content.bottomRight() - QPoint(3, 3)) == canvas,
-                        "the surround outside the composition frame is plain Canvas");
-    // Below the centre, clear of the "Create a layer to begin" invitation.
-    const QRectF frame = fixture.viewer.canvasRectForTest();
-    const QPointF centre = frame.center() + QPointF(0, frame.height() / 4);
-    const int cell = ui::kit::px(ui::kit::Size::ViewerChecker);
-    const QColor light = ui::kit::color(ui::kit::Color::CheckerLight);
-    const QColor dark = ui::kit::color(ui::kit::Color::CheckerDark);
-    const QColor a = at(centre);
-    const QColor b = at(centre + QPointF(cell, 0));
-    expectations.expect((a == light || a == dark) && (b == light || b == dark) && a != b,
-                        "a transparent composition shows the checker inside its frame");
-    reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
-}

@@ -26,7 +26,8 @@ constexpr auto kNodeLinkStyleKey = "nodes/link-style";
 constexpr auto kNodeSnapKey = "nodes/snap";
 constexpr auto kNodeGridSizeKey = "nodes/grid-size";
 constexpr auto kViewerResolutionKey = "viewer/resolution";
-constexpr auto kViewerBackgroundKey = "viewer/background";
+constexpr auto kViewerBackgroundKey = kViewerBackgroundSettingKey;
+constexpr auto kViewerTransparencyGridKey = kViewerTransparencyGridSettingKey;
 constexpr auto kViewerSafeAreasKey = "viewer/overlay/safe-areas";
 constexpr auto kViewerCentreCrossKey = "viewer/overlay/centre-cross";
 constexpr auto kViewerThirdsKey = "viewer/overlay/thirds";
@@ -131,16 +132,15 @@ void writeByteBudget(QSettings& settings, const char* const key, const std::uint
 }
 
 [[nodiscard]] ViewerBackgroundPreference viewerBackgroundFromString(const QString& value) {
-    if (value == QLatin1StringView("Checkerboard"))
-        return ViewerBackgroundPreference::Checkerboard;
+    if (value == QLatin1StringView("Grey"))
+        return ViewerBackgroundPreference::Grey;
     if (value == QLatin1StringView("Black"))
         return ViewerBackgroundPreference::Black;
     if (value == QLatin1StringView("White"))
         return ViewerBackgroundPreference::White;
-    if (value == QLatin1StringView("Solid"))
-        return ViewerBackgroundPreference::Solid;
-    // An unrecognized spelling reads as the default, which is Checkerboard.
-    return ViewerBackgroundPreference::Checkerboard;
+    // Solid, the pre-split Checkerboard (whose checker is now the Transparency Grid) and any
+    // unrecognized spelling read as the default, Solid.
+    return ViewerBackgroundPreference::Solid;
 }
 
 } // namespace
@@ -174,9 +174,9 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
     preferences.nodeGridSize = positiveDoubleFromSettings(settings, kNodeGridSizeKey, 16.0);
     preferences.viewerResolution = viewerResolutionFromString(
         settings.value(QLatin1String(kViewerResolutionKey), QStringLiteral("Auto")).toString());
-    preferences.viewerBackground = viewerBackgroundFromString(
-        settings.value(QLatin1String(kViewerBackgroundKey), QStringLiteral("Checkerboard"))
-            .toString());
+    const auto backdrop = viewerBackdropFromSettings(settings);
+    preferences.viewerBackground = backdrop.background;
+    preferences.viewerTransparencyGrid = backdrop.transparencyGrid;
     preferences.viewerSafeAreas =
         settings.value(QLatin1String(kViewerSafeAreasKey), false).toBool();
     preferences.viewerCentreCross =
@@ -219,6 +219,8 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
                       QLatin1String(viewerResolutionValue(preferences.viewerResolution)));
     settings.setValue(QLatin1String(kViewerBackgroundKey),
                       QLatin1String(viewerBackgroundValue(preferences.viewerBackground)));
+    settings.setValue(QLatin1String(kViewerTransparencyGridKey),
+                      preferences.viewerTransparencyGrid);
     settings.setValue(QLatin1String(kViewerSafeAreasKey), preferences.viewerSafeAreas);
     settings.setValue(QLatin1String(kViewerCentreCrossKey), preferences.viewerCentreCross);
     settings.setValue(QLatin1String(kViewerThirdsKey), preferences.viewerThirds);
@@ -256,10 +258,21 @@ const char* viewerResolutionValue(const ViewerResolutionPreference policy) noexc
     return "Auto";
 }
 
+ViewerBackdropSetting viewerBackdropFromSettings(const QSettings& settings) {
+    const auto stored =
+        settings.value(QLatin1String(kViewerBackgroundKey), QStringLiteral("Solid")).toString();
+    ViewerBackdropSetting backdrop;
+    backdrop.background = viewerBackgroundFromString(stored);
+    const bool legacyChecker = stored == QLatin1StringView("Checkerboard");
+    backdrop.transparencyGrid =
+        settings.value(QLatin1String(kViewerTransparencyGridKey), legacyChecker).toBool();
+    return backdrop;
+}
+
 const char* viewerBackgroundValue(const ViewerBackgroundPreference background) noexcept {
     switch (background) {
-    case ViewerBackgroundPreference::Checkerboard:
-        return "Checkerboard";
+    case ViewerBackgroundPreference::Grey:
+        return "Grey";
     case ViewerBackgroundPreference::Black:
         return "Black";
     case ViewerBackgroundPreference::White:

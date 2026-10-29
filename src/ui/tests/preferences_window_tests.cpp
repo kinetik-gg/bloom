@@ -57,7 +57,8 @@ namespace ui = bloom::ui;
     prefs.nodeSnap = true;
     prefs.nodeGridSize = 32.0;
     prefs.viewerResolution = ui::ViewerResolutionPreference::Half;
-    prefs.viewerBackground = ui::ViewerBackgroundPreference::Checkerboard;
+    prefs.viewerBackground = ui::ViewerBackgroundPreference::Grey;
+    prefs.viewerTransparencyGrid = true;
     prefs.viewerThirds = true;
     return prefs;
 }
@@ -100,8 +101,13 @@ void testControlsReflectPreferences(Expectations& check) {
     auto* background = window.findChild<ui::kit::KDropdown*>(
         QStringLiteral("preferencesViewerBackgroundDropdown"));
     check.expect(background != nullptr &&
-                     background->currentData().toString() == QStringLiteral("Checkerboard"),
-                 "the background dropdown reflects the stored value");
+                     background->currentData().toString() == QStringLiteral("Grey") &&
+                     background->findData(QStringLiteral("Checkerboard")) < 0,
+                 "the surround dropdown reflects the stored value and offers no checker");
+    auto* transparencyGrid = window.findChild<QAbstractButton*>(
+        QStringLiteral("preferencesViewerTransparencyGridSwitch"));
+    check.expect(transparencyGrid != nullptr && transparencyGrid->isChecked(),
+                 "the Transparency grid switch reflects the stored value");
 
     auto* grid =
         window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesNodeGridSizeField"));

@@ -70,7 +70,6 @@ using bloom::core::Color4d;
 using bloom::core::RationalTime;
 using bloom::render::GpuBorrowedInstanceView;
 using bloom::render::GpuBorrowedSurface;
-using bloom::render::GpuPresentBackground;
 using bloom::render::GpuPresentChannel;
 using bloom::render::GpuPresentRect;
 using bloom::render::GpuPresentSourceWindow;
@@ -295,7 +294,6 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
                            : GpuPresentSourceWindow{0.0, 0.0, static_cast<double>(lease.width()),
                                                     static_cast<double>(lease.height())};
     update.params.channel = GpuPresentChannel::Rgba;
-    update.params.background = GpuPresentBackground::Solid;
     return update;
 }
 

@@ -49,13 +49,14 @@ struct PresentImageUniforms final {
     float destinationRect[4];
     float imageWindow[4];
     float sourceExtent[4];
-    float backgroundColor[4];
+    float surroundColor[4];
+    float frameColor[4];
     float checkerColorA[4];
     float checkerColorB[4];
     float checkerParams[4];
     std::uint32_t modes[4];
 };
-static_assert(sizeof(PresentImageUniforms) == 144, "present uniform block must be 144 bytes");
+static_assert(sizeof(PresentImageUniforms) == 160, "present uniform block must be 160 bytes");
 
 // One fixed sampler pipeline plus the swapchain-generation render targets it draws into. Created
 // lazily on the device owner thread and rebuilt when the swapchain/format generation changes.

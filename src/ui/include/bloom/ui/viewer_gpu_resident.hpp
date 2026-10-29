@@ -85,8 +85,11 @@ struct ResidentPresentRequest final {
     QRectF containerRect; // widget-logical rect the native container covers
     double devicePixelRatio = 1.0;
     render::GpuPresentChannel channel = render::GpuPresentChannel::Rgba;
-    render::GpuPresentBackground background = render::GpuPresentBackground::Solid;
-    render::GpuPresentColor backgroundColor{0.0F, 0.0F, 0.0F, 1.0F};
+    // Display-referred, opaque: the surround outside the destination, the composition background
+    // inside it, and whether the transparency grid replaces that background.
+    render::GpuPresentColor surroundColor{0.0F, 0.0F, 0.0F, 1.0F};
+    render::GpuPresentColor frameColor{0.0F, 0.0F, 0.0F, 1.0F};
+    bool transparencyGrid = false;
     render::GpuPresentColor checkerColorA{0.0F, 0.0F, 0.0F, 1.0F};
     render::GpuPresentColor checkerColorB{1.0F, 1.0F, 1.0F, 1.0F};
     float checkerTilePixels = 22.0F;

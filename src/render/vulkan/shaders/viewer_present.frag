@@ -2,11 +2,14 @@
 // Bloom viewer presentation fragment shader (offline compiled; do not load at runtime).
 //
 // Reproduces the current viewer's paintEvent composition in the target's pixel space:
-//   - display-space background (solid / black / white over the whole target; the checkerboard
-//     only inside the destination rectangle, with the solid surround outside it),
+//   - the display-space surround colour outside the destination rectangle (View > Background),
+//   - inside it, the composition's own background colour, or the checkerboard when the
+//     Transparency Grid is on,
 //   - the resident packed-RGBA8 display image sampled through an explicit destination rectangle and
 //     source image window, with the viewer's channel remap,
-//   - straight-alpha source-over onto the background (the display buffer is straight RGBA8 sRGB),
+//   - straight-alpha source-over onto that backdrop (the display buffer is straight RGBA8 sRGB, and
+//     every backdrop colour is already display-encoded, so the composite happens in display space
+//     exactly as the CPU QPainter path composites),
 //   - an optional premultiplied RGBA8 overlay composited last.
 //
 // The display image is STRAIGHT RGBA8. QPainter's SmoothPixmapTransform premultiplies before it
@@ -31,11 +34,12 @@ layout(set = 0, binding = 2) uniform BloomPresentParams {
     vec4 destinationRect;   // xy, wh = destination rectangle in target pixels
     vec4 imageWindow;       // xy, wh = source window in display-image pixels
     vec4 sourceExtent;      // xy = full display-image extent in pixels
-    vec4 backgroundColor;   // solid background (straight, opaque)
+    vec4 surroundColor;     // outside the destination (display-encoded, opaque)
+    vec4 frameColor;        // inside the destination, behind the image (display-encoded, opaque)
     vec4 checkerColorA;     // base tile color
     vec4 checkerColorB;     // raised tile color
     vec4 checkerParams;     // x = tile pixels, z,w = checker origin in target pixels
-    uvec4 modes;            // x = channel, y = background, z = hasOverlay, w = flags
+    uvec4 modes;            // x = channel, y = transparency grid, z = hasOverlay, w = flags
 } present;
 
 const uint kChannelRgba = 0u;
@@ -44,11 +48,6 @@ const uint kChannelRed = 2u;
 const uint kChannelGreen = 3u;
 const uint kChannelBlue = 4u;
 const uint kChannelAlpha = 5u;
-
-const uint kBackgroundSolid = 0u;
-const uint kBackgroundCheckerboard = 1u;
-const uint kBackgroundBlack = 2u;
-const uint kBackgroundWhite = 3u;
 
 vec4 remapChannel(vec4 source, uint channel)
 {
@@ -104,20 +103,19 @@ void main()
                         targetPixel.x < destination.x + destination.z &&
                         targetPixel.y >= destination.y &&
                         targetPixel.y < destination.y + destination.w;
-    // The checkerboard is an alpha indicator for the composition, so it covers the destination
-    // rectangle only; outside it the surround stays the solid background colour.
-    vec4 background = present.backgroundColor;
-    const uint backgroundMode = present.modes.y;
-    if (backgroundMode == kBackgroundBlack) {
-        background = vec4(0.0, 0.0, 0.0, 1.0);
-    } else if (backgroundMode == kBackgroundWhite) {
-        background = vec4(1.0, 1.0, 1.0, 1.0);
-    } else if (backgroundMode == kBackgroundCheckerboard && inside) {
-        const float tile = max(present.checkerParams.x, 1.0);
-        const ivec2 cell = ivec2(floor((targetPixel - present.checkerParams.zw) / tile));
-        // The viewer raises (row + column) even; see viewer_editor.cpp drawCheckerboard().
-        const bool raised = ((cell.x + cell.y) & 1) == 0;
-        background = raised ? present.checkerColorB : present.checkerColorA;
+    // The surround is the Viewer's own background; it never reaches inside the composition
+    // frame. Inside, the backdrop is the composition's background colour, or the checkerboard
+    // (an alpha indicator for the composition) when the Transparency Grid is on.
+    vec4 background = present.surroundColor;
+    if (inside) {
+        background = present.frameColor;
+        if (present.modes.y != 0u) {
+            const float tile = max(present.checkerParams.x, 1.0);
+            const ivec2 cell = ivec2(floor((targetPixel - present.checkerParams.zw) / tile));
+            // The viewer raises (row + column) even; see kit::drawAlphaCheckerboard().
+            const bool raised = ((cell.x + cell.y) & 1) == 0;
+            background = raised ? present.checkerColorB : present.checkerColorA;
+        }
     }
 
     vec3 color = background.rgb;

@@ -51,9 +51,10 @@ enum class ViewerResolutionPreference : std::uint8_t {
     Quarter,
 };
 
+// The Viewer's surround outside the composition frame (ViewerBackground).
 enum class ViewerBackgroundPreference : std::uint8_t {
     Solid,
-    Checkerboard,
+    Grey,
     Black,
     White,
 };
@@ -88,7 +89,10 @@ struct ApplicationPreferences final {
 
     // Viewer.
     ViewerResolutionPreference viewerResolution = ViewerResolutionPreference::Auto;
-    ViewerBackgroundPreference viewerBackground = ViewerBackgroundPreference::Checkerboard;
+    ViewerBackgroundPreference viewerBackground = ViewerBackgroundPreference::Solid;
+    // The checkerboard inside the composition frame. Off by default (After Effects), so the
+    // composition's own background colour shows.
+    bool viewerTransparencyGrid = false;
     bool viewerSafeAreas = false;
     bool viewerCentreCross = false;
     bool viewerThirds = false;
@@ -118,5 +122,18 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
 [[nodiscard]] const char* nodeLinkStyleValue(NodeLinkStyle style) noexcept;
 [[nodiscard]] const char* viewerResolutionValue(ViewerResolutionPreference policy) noexcept;
 [[nodiscard]] const char* viewerBackgroundValue(ViewerBackgroundPreference background) noexcept;
+
+// The stored Viewer surround and Transparency Grid, read with the one migration rule both the
+// Preferences model and the Viewer use: the pre-split "Checkerboard" background (which drew the
+// checker in the frame) reads as Solid with the grid on, unless a grid value was stored since, so
+// an old choice keeps showing a checker and a later grid choice is never overridden. Missing or
+// unrecognized values read as Solid with the grid off.
+struct ViewerBackdropSetting final {
+    ViewerBackgroundPreference background = ViewerBackgroundPreference::Solid;
+    bool transparencyGrid = false;
+};
+[[nodiscard]] ViewerBackdropSetting viewerBackdropFromSettings(const QSettings& settings);
+inline constexpr auto kViewerBackgroundSettingKey = "viewer/background";
+inline constexpr auto kViewerTransparencyGridSettingKey = "viewer/transparency-grid";
 
 } // namespace bloom::ui

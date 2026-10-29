@@ -47,7 +47,6 @@ using bloom::render::GpuImageUpload;
 using bloom::render::GpuImageUploadDiagnosticCode;
 using bloom::render::GpuImageUploadPollResult;
 using bloom::render::GpuPresentationTargetCode;
-using bloom::render::GpuPresentBackground;
 using bloom::render::GpuPresentColor;
 using bloom::render::GpuPresentImageParams;
 using bloom::render::GpuPresentOverlay;
@@ -457,8 +456,8 @@ renderOffscreen(const std::shared_ptr<DeviceAllocatorState>& control, const VkFo
         GpuPresentRect{0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height)};
     params.source =
         GpuPresentSourceWindow{0.0, 0.0, static_cast<double>(width), static_cast<double>(height)};
-    params.background = GpuPresentBackground::Black;
-    params.backgroundColor = GpuPresentColor{0.0F, 0.0F, 0.0F, 1.0F};
+    params.surroundColor = GpuPresentColor{0.0F, 0.0F, 0.0F, 1.0F};
+    params.frameColor = GpuPresentColor{0.0F, 0.0F, 0.0F, 1.0F};
     return params;
 }
 

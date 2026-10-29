@@ -5,9 +5,11 @@
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
+#include <QColor>
 #include <QString>
 
 #include <array>
@@ -21,6 +23,9 @@ class QWidget;
 
 namespace bloom::ui::kit {
 class KValueField;
+}
+namespace bloom::document {
+class Composition;
 }
 
 namespace bloom::ui {
@@ -39,10 +44,11 @@ inline constexpr std::array<const char*, 4> kResolutionCompactNames = {"Auto", "
 // Task VIEW-1. Channel order is the artist's reading order, not the buffer's byte order: the
 // composite first, then the composite without alpha, then the three colour channels, then alpha.
 inline constexpr std::array<const char*, 6> kChannelNames = {"RGBA", "RGB", "R", "G", "B", "Alpha"};
-inline constexpr std::array<const char*, 4> kBackgroundNames = {"Solid", "Checkerboard", "Black",
-                                                                 "White"};
+// The surround names, in ViewerBackground order; also the stored spellings.
+inline constexpr std::array<const char*, 4> kBackgroundNames = {"Solid", "Grey", "Black", "White"};
 inline constexpr auto kResolutionSetting = "viewer/resolution";
-inline constexpr auto kBackgroundSetting = "viewer/background";
+inline constexpr auto kBackgroundSetting = kViewerBackgroundSettingKey;
+inline constexpr auto kTransparencyGridSetting = kViewerTransparencyGridSettingKey;
 // Deliberately the SAME key the timeline's own View > Frames/Timecode pair already writes: the
 // display format of time is one question with one answer, and a second key would let the ruler and
 // the footer disagree about it.
@@ -61,11 +67,12 @@ enum CollapseRank : int {
     CollapseDisplayView = 2,
     CollapseViewAdjust = 3,
     CollapseRoi = 4,
-    CollapseChannel = 5,
-    CompactResolution = 6,
-    CollapseRamPreview = 7,
-    CollapseStepToEnds = 8,
-    CollapseFraming = 9,
+    CollapseTransparencyGrid = 5,
+    CollapseChannel = 6,
+    CompactResolution = 7,
+    CollapseRamPreview = 8,
+    CollapseStepToEnds = 9,
+    CollapseFraming = 10,
 };
 
 [[nodiscard]] std::optional<color::ResolvedBloomNeutralConfig>
@@ -92,14 +99,21 @@ resolveViewerColorConfig(const CompositionSession& session);
 // label or from its context menu (which also offers `resetBoth`).
 void attachDefaultReset(kit::KValueField& field, double defaultValue, QString resetLabel,
                         QAction* resetBoth);
-// The canvas surround for a background mode: Solid paints the Canvas token, Black and White the
-// exact CanvasBlack/CanvasWhite tokens, and Checkerboard the plain Canvas surround -- its checker
-// belongs inside the composition frame (drawFrameBackground).
+// The Viewer surround a stored preference names.
+[[nodiscard]] ViewerBackground viewerBackgroundFor(ViewerBackgroundPreference preference) noexcept;
+// The surround colour for a background choice: Solid is the Canvas token, Grey/Black/White the
+// exact CanvasGrey/CanvasBlack/CanvasWhite tokens.
+[[nodiscard]] QColor viewerSurroundColor(ViewerBackground background);
+// A composition's background colour as the Viewer presents it inside the frame. The authored value
+// is display-referred straight RGBA (docs/architecture/color-management.md), so it is quantized
+// exactly like its Composition Settings chip and shown opaque; null shows the Canvas token.
+[[nodiscard]] QColor compositionFrameColor(const document::Composition* composition);
+// Paints the surround over `bounds` (the whole content area).
 void drawCanvasBackground(QPainter& painter, const QRectF& bounds, ViewerBackground background);
-// What a background mode paints inside the composition frame under the image: the kit checker for
-// Checkerboard (on the same grid as the content area, so it matches the GPU present), nothing for
-// the others, whose surround already covers the frame.
+// What the Viewer paints inside the composition frame under the image: the composition's
+// background colour, or the Viewer checker when the Transparency Grid is on (on the same grid as
+// the content area, so it matches the GPU present).
 void drawFrameBackground(QPainter& painter, const QRectF& content, const QRectF& frame,
-                         ViewerBackground background);
+                         const QColor& frameColor, bool transparencyGrid);
 } // namespace viewer_detail
 } // namespace bloom::ui

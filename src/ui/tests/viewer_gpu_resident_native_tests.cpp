@@ -298,7 +298,6 @@ makeResidentFrame(const runtime::GpuResidentFrameLease& lease, const std::uint64
     request.destination = QRectF(0.0, 0.0, width, height);
     request.devicePixelRatio = 1.0;
     request.channel = render::GpuPresentChannel::Rgba;
-    request.background = render::GpuPresentBackground::Solid;
     return request;
 }
 

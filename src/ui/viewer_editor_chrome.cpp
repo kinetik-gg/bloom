@@ -385,6 +385,24 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     connect(channelDropdown_, &kit::KDropdown::currentIndexChanged, this,
             [this](const int index) { chooseChannelDropdownIndex(index); });
 
+    // The Transparency Grid (After Effects' Toggle Transparency Grid): one action behind the
+    // footer toggle, View and the overflow menu. Its checked state is restored with the surround in
+    // the Background block below, before anything can present.
+    transparencyGridAction_ = new QAction(tr("Transparency Grid"), this);
+    transparencyGridAction_->setObjectName(QStringLiteral("viewerTransparencyGridAction"));
+    transparencyGridAction_->setCheckable(true);
+    transparencyGridAction_->setIcon(
+        kit::icon(kit::IconId::TransparencyGrid, kit::IconRole::Control));
+    transparencyGridAction_->setToolTip(
+        tr("Transparency grid: show a checkerboard instead of the composition background "
+           "colour; viewer display only"));
+    connect(transparencyGridAction_, &QAction::toggled, this,
+            [this](const bool enabled) { setTransparencyGrid(enabled); });
+    transparencyGridButton_ = makeFooterButton(
+        kit::IconId::TransparencyGrid, transparencyGridAction_->toolTip(),
+        tr("Transparency grid"), QStringLiteral("viewerTransparencyGridToggle"), footer);
+    transparencyGridButton_->setDefaultAction(transparencyGridAction_);
+
     // ROI: one action behind the footer toggle, View and the overflow menu. Clear ROI is offered
     // only while a region exists.
     roiAction_ = new QAction(tr("Region of Interest"), this);
@@ -575,26 +593,19 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     resolutionReadout_->hide();
     resolutionDropdown_->setToolTip(tr("Resolution: %1").arg(viewerResolutionText(previewController_)));
 
-    // Retired as a footer item, kept for automation and the preferences path: Background is
-    // chosen from View.
+    // Retired as a footer item, kept for automation and the preferences path: the surround is
+    // chosen from View > Background. The stored value goes through the Preferences model's one
+    // migration rule, so a pre-split "Checkerboard" reads as Solid with the Transparency Grid on.
     backgroundDropdown_ = new kit::KDropdown(footer);
     backgroundDropdown_->setObjectName("viewerBackgroundDropdown");
     backgroundDropdown_->setAccessibleName(tr("Background"));
     for (const auto* name : kBackgroundNames) {
         backgroundDropdown_->addItem(tr(name));
     }
-    // The default background is Checkerboard, so alpha inside the composition is always visible.
-    // A missing or unrecognized viewer/background reads as it.
-    const auto savedBackground =
-        QSettings().value(kBackgroundSetting, QStringLiteral("Checkerboard")).toString();
-    int backgroundIndex = static_cast<int>(ViewerBackground::Checkerboard);
-    for (std::size_t i = 0; i < kBackgroundNames.size(); ++i) {
-        if (savedBackground == QLatin1StringView(kBackgroundNames[i])) {
-            backgroundIndex = static_cast<int>(i);
-        }
-    }
-    background_ = static_cast<ViewerBackground>(backgroundIndex);
-    backgroundDropdown_->setCurrentIndex(backgroundIndex);
+    const auto backdrop = viewerBackdropFromSettings(QSettings());
+    background_ = viewerBackgroundFor(backdrop.background);
+    transparencyGrid_ = backdrop.transparencyGrid;
+    backgroundDropdown_->setCurrentIndex(static_cast<int>(background_));
     connect(backgroundDropdown_, &kit::KDropdown::currentIndexChanged, this,
             [this](const int index) {
                 if (index < 0 || index >= static_cast<int>(kBackgroundNames.size())) {
@@ -603,6 +614,10 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
                 setBackground(static_cast<ViewerBackground>(index));
             });
     backgroundDropdown_->hide();
+    {
+        const QSignalBlocker blocker(transparencyGridAction_);
+        transparencyGridAction_->setChecked(transparencyGrid_);
+    }
 
     // RAM Preview: a labelled toggle, because caching a range and playing it are different
     // commands; its label carries the caching progress (updateRamPreviewButton()).
@@ -666,7 +681,8 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
 
     // ---- The row -------------------------------------------------------------------------------
     for (auto* control : std::initializer_list<QWidget*>{
-             channelDropdown_, roiButton_, roiClearButton_, exposureField_, gammaField_,
+             channelDropdown_, transparencyGridButton_, roiButton_, roiClearButton_,
+             exposureField_, gammaField_,
              viewerDisplayView_, viewerLookToggle_})
         row.addWidget(control);
     row.beginCentre();
@@ -684,6 +700,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     row.setCollapse(gammaField_, CollapseViewAdjust, resetViewAdjustAction_);
     row.setCollapse(roiButton_, CollapseRoi, roiAction_);
     row.setCollapse(roiClearButton_, CollapseRoi, clearRoiAction_);
+    row.setCollapse(transparencyGridButton_, CollapseTransparencyGrid, transparencyGridAction_);
     row.setCollapse(channelDropdown_, CollapseChannel, channelMenu_->menuAction());
     row.setCompactForm(resolutionDropdown_, CompactResolution,
                        kit::px(kit::Size::ViewerResolutionCompactWidth),
