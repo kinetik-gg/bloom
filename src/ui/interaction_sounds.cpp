@@ -23,9 +23,10 @@ namespace {
 constexpr auto kHooked = "bloomSoundHooked";
 constexpr auto kPressed = "bloomSoundPressed";
 
-bool inToolColumn(const QWidget* widget) {
+bool inToolGroup(const QWidget* widget) {
     for (const QWidget* p = widget->parentWidget(); p != nullptr; p = p->parentWidget()) {
-        if (qobject_cast<const kit::KToolColumn*>(p) != nullptr) {
+        // The contextual bar's tool group (context_bar.cpp).
+        if (p->objectName() == QLatin1String("contextBarTools")) {
             return true;
         }
     }
@@ -69,13 +70,18 @@ void InteractionSounds::hook(QWidget& widget) {
         // A checkable control cues only when a gesture pressed it first; setChecked() is silent.
         connect(button, &QAbstractButton::pressed, this,
                 [button] { button->setProperty(kPressed, button->isCheckable()); });
+        // A press that changed nothing (an already-checked tool) must not arm a later
+        // programmatic change: forget it once the click has been handled.
+        connect(button, &QAbstractButton::clicked, this, [button] {
+            QTimer::singleShot(0, button, [button] { button->setProperty(kPressed, false); });
+        });
         if (toggle) {
             connect(button, &QAbstractButton::toggled, this, [this, button](const bool checked) {
                 if (!button->property(kPressed).toBool()) {
                     return;
                 }
                 button->setProperty(kPressed, false);
-                if (qobject_cast<kit::KIconToggle*>(button) != nullptr && inToolColumn(button)) {
+                if (qobject_cast<kit::KIconToggle*>(button) != nullptr && inToolGroup(button)) {
                     if (checked) {
                         feedback_.play(FeedbackEvent::ToolSwitch);
                     }
