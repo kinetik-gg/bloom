@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-17
+Updated: 2026-10-30
 
 ## Purpose
 
@@ -99,7 +99,8 @@ presentation defaults and do not enter document state.
 Schema version 2 stores this five-area default as a left region (the Viewer/Nodes row over the
 Timeline) beside a full-height right column (Assets over Properties). Assets and Properties are
 pinned into the default and migrated layout, while editor areas remain replaceable during use. The
-menu bar remains the only fixed application surface.
+menu bar and the contextual tool bar under it remain the only fixed application surfaces
+([ADR 0031](../decisions/0031-contextual-tool-bar.md)).
 
 The application first validates and restores a legacy version-1 layout, then replaces its panel
 arrangement with this complete default. Window geometry is retained. This intentional reset prevents

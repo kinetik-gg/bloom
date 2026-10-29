@@ -114,7 +114,8 @@ bloom.ops.composition.set_settings(frameRateNumerator=30000, frameRateDenominato
 ```
 
 Arguments that name what you are already looking at default from `bloom.context` when you omit
-them: `composition`, `time`, and `layer`/`selection` for operations that edit the selection. They
+them: `composition`, `time`, `layer`/`selection` for operations that edit the selection, and
+`layers` (every selected layer) for align and distribute. They
 stay keyword-only, so an explicit target always reads as one. The schema carries the same
 `contextual` flag that the CLI and MCP clients use, so all three apply identical defaults, and
 `help()` names the context value each one falls back to. When the session cannot answer — a
@@ -126,6 +127,32 @@ required, optional or filled from context, and an example call. `dir(bloom.ops)`
 families and `dir(bloom.ops.layer)` the operations in one. `bloom.ui`, `bloom.addons`, `bloom.props`
 and contribution types are reserved stubs whose unsupported access raises `NotImplementedError` with
 ADR 0022 and ADR 0012 references.
+
+### Align and distribute
+
+`bloom.ops.layer.align_layers` lines layers up and `bloom.ops.layer.distribute_layers` spaces their
+centres evenly, exactly as the context bar's selection actions do
+([ADR 0031](../decisions/0031-contextual-tool-bar.md),
+[Layer Alignment](../architecture/layer-alignment.md)):
+
+```python
+red, green, blue = 12, 15, 18  # layer ids, or layer proxies from bloom.data.layers()
+bloom.ops.layer.align_layers("left", target="composition", layers=(red, green, blue))
+bloom.ops.layer.align_layers("vertical-middle", target="key-object", key=red,
+                             layers=(green, blue))
+bloom.ops.layer.distribute_layers("horizontal", layers=(red, green, blue))
+```
+
+`edge` is `left`, `horizontal-centre`, `right`, `top`, `vertical-middle` or `bottom`; `axis` is
+`horizontal` or `vertical` and needs three or more layers. `target` is `selection` (the default:
+the union of the layers' bounds), `composition` (the frame) or `key-object` (the `key` layer, which
+never moves). The operation measures each layer's evaluated visual bounds at `time` with the CPU
+reference evaluation of the current project, then moves Position in each layer's parent space; an
+animated Position gets a key at that time. Locked layers and layers whose Position is driven are
+skipped and reported as warnings (`movedLayer` and `skippedLayer` outputs name them); if no layer
+can move, the call raises `OperationError` and nothing changes. The result is one undo step. The
+measurement sees the project as it is before the transaction, so put an alignment after the edits
+it depends on, in a transaction of its own.
 
 ## Transactions and undo
 

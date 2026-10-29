@@ -25,8 +25,8 @@
   color, media, and pipeline mechanisms.
 - UI surfaces read project state and issue commands; they do not own or directly mutate project
   truth.
-- The menu bar is the only fixed application surface. Workspace content is composed from replaceable
-  editor panels.
+- The menu bar and the contextual tool bar under it are the only fixed application surfaces
+  (ADR 0031). Workspace content is composed from replaceable editor panels.
 - Never perform media I/O, decoding, evaluation, rendering, proxy generation, hashing, import,
   export, or other potentially heavy work on the UI thread.
 - Long-running work must expose cancellation, progress or indeterminate activity, diagnostics, and

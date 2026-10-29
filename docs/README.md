@@ -26,6 +26,7 @@ provide research or rationale, but they are not binding until adopted here.
    [`architecture/layer-graph-model.md`](architecture/layer-graph-model.md),
    [`architecture/value-node-library.md`](architecture/value-node-library.md),
    [`architecture/animation-and-time.md`](architecture/animation-and-time.md),
+   [`architecture/layer-alignment.md`](architecture/layer-alignment.md),
    [`architecture/evaluation-primitives.md`](architecture/evaluation-primitives.md),
    [`architecture/task-system.md`](architecture/task-system.md),
    [`architecture/workspace-layout.md`](architecture/workspace-layout.md),
@@ -58,6 +59,8 @@ gate, so production service-backed RAM fill defaults to width one. See the
   which need a restart, and what is project or session state instead.
 - [Memory](user-guide/memory.md) — the cache budgets Bloom chooses, the two override keys, and what
   actual OS limits affect selected targets.
+- [The Context Bar](user-guide/context-bar.md) — aligning and distributing layers (stub; the bar's
+  tools and options are documented with the bar).
 - [Scripting Bloom with Python](user-guide/python.md) — Python package, transactions and embedding.
 - [Using Bloom from an agent](user-guide/mcp.md) — stdio MCP tools and request limits.
 - [Headless scripting](user-guide/scripting.md) — `bloom-cli`, JSON transactions, and headless
