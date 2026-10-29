@@ -166,7 +166,6 @@ void PropertiesEditor::configureDrivenRows() {
             layout->setContentsMargins(0, 0, 0, 0);
             auto* jump = new kit::KButton(display);
             jump->setObjectName("propertiesDriverLink");
-            jump->setVariant(kit::KButton::Variant::Ghost);
             jump->setIconId(kit::IconId::Link);
             jump->setFixedHeight(kit::px(kit::Size::Control));
             layout->addWidget(jump);

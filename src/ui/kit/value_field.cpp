@@ -290,10 +290,9 @@ Color KValueField::borderToken() const {
 }
 
 QColor KValueField::cellBorderColor() const {
-    const Color role = borderToken();
-    // Borderless at rest: the resting token resolves to nothing drawn at all, so the cell is a
-    // plain Field rectangle until hover or focus gives it its one border.
-    return role == Color::Border ? QColor(Qt::transparent) : color(role);
+    // Borderless at rest (a compact field excepted): the resting token resolves to nothing drawn
+    // at all, so the cell is a plain Field rectangle until hover or focus gives it its one border.
+    return fieldColors(isEnabled(), editing_ || hasKeyboardFocus(*this), hovered_, compact_).border;
 }
 
 State KValueField::visualState() const {
@@ -684,12 +683,12 @@ void KValueField::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     const State state = visualState();
 
+    // The one text-entry recipe (kit::fieldColors): a Field well that reads differently from every
+    // button. A compact field stands in a chrome row or a node card, so it keeps a resting outline.
     const QRectF cell = cellRect();
-    fillRoundedSurface(
-        painter, cell,
-        color(surfaceForState(compact_ ? Color::ControlSurface : Color::Field, state)),
-        compact_ && borderToken() == Color::Border ? color(Color::Border) : cellBorderColor(),
-        Radius::Small);
+    const ButtonColors colors = fieldColors(isEnabled(), editing_ || hasKeyboardFocus(*this),
+                                            hovered_, compact_);
+    fillRoundedSurface(painter, cell, colors.fill, colors.border, Radius::Small);
     if (!label_.isEmpty()) {
         painter.setFont(kit::font(TypeRole::UiSmall));
         painter.setPen(inkForState(Color::Muted, state));

@@ -462,16 +462,17 @@ void KDropdown::paintEvent(QPaintEvent* event) {
     const State state = visualState();
     const QRectF bounds = snappedToDevicePixels(painter, controlBounds(*this));
 
-    // A closed field rests on ControlSurface (task U8, issue 131, formal amendment 1, A2 --
-    // previously Field). ControlSurface is not a surfaceStep() rung, so its hover step is the
-    // border alone, exactly like Field's own behavior at the top of the ladder before it.
-    fillRoundedSurface(painter, bounds, color(surfaceForState(Color::ControlSurface, state)),
-                       color(borderToken()), Radius::Small);
+    // A closed field is a button, so it wears the one control look (kit::buttonColors Secondary):
+    // a SurfaceRaised plate stepped by state, Foreground ink. An open popup holds it pressed and
+    // lights the border Accent, exactly as keyboard focus does.
+    const ButtonColors colors = buttonColors(ButtonKind::Secondary, state,
+                                             isPopupVisible() || hasKeyboardFocus(*this));
+    fillRoundedSurface(painter, bounds, colors.fill, colors.border, Radius::Small);
 
     // A value that is no longer available (its item was disabled under it) reads muted.
     const bool unavailable = currentIndex_ >= 0 && !isItemEnabled(currentIndex_);
     const QColor ink =
-        inkForState(mutedValue_ || unavailable ? Color::Muted : Color::Foreground, state);
+        mutedValue_ || unavailable ? inkForState(Color::Muted, state) : colors.ink;
     const qreal ratio = devicePixelRatioF();
     const auto snap = [ratio](const qreal value) { return std::round(value * ratio) / ratio; };
 
@@ -490,7 +491,10 @@ void KDropdown::paintEvent(QPaintEvent* event) {
     const auto glyph = itemIcon(currentIndex_);
     if (!glyph.isNull()) {
         const int box = px(Size::IconMedium);
-        const auto pixmap = glyph.pixmap(QSize(box, box), ratio);
+        // The closed field's glyph takes the field's Foreground ink with its label: a kit icon's
+        // Active rendering is exactly that, and its Disabled one the faded ink.
+        const auto pixmap = glyph.pixmap(QSize(box, box), ratio,
+                                         isEnabled() ? QIcon::Active : QIcon::Disabled);
         painter.drawPixmap(QPointF(snap(bounds.left() + horizontalPadding()),
                                    snap(bounds.center().y() - box / 2.0)),
                            pixmap);

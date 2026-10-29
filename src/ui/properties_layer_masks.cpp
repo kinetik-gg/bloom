@@ -221,7 +221,6 @@ void buildGroup(CompositionSession& session, MasksState& state, const document::
         auto* b = new kit::KButton(header);
         b->setObjectName(name);
         b->setIconId(icon);
-        b->setVariant(kit::KButton::Variant::Ghost);
         b->setToolTip(tip);
         b->setAccessibleName(tip);
         b->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));

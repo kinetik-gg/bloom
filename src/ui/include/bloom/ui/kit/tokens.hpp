@@ -32,10 +32,6 @@ enum class Color : std::uint8_t {
     Surface,
     SurfaceRaised,
     Field,
-    // task U8 (issue 131), formal amendment 1, A2: the recessed fill for header-variant icon
-    // buttons and every dropdown closed field. Not a surfaceStep() rung -- darker than
-    // Background itself by design, so it never joins the surface ladder.
-    ControlSurface,
     Foreground,
     Muted,
     Faint,

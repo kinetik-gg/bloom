@@ -47,9 +47,6 @@ void testEveryColorRoleResolvesToItsSpecifiedValue(Expectations& expectations) {
     expectHex(kit::Color::Surface, "#181818");
     expectHex(kit::Color::SurfaceRaised, "#222222");
     expectHex(kit::Color::Field, "#2b2b2b");
-    // task U8, issue #131, formal amendment 1, A2: header-variant icon buttons and every dropdown
-    // closed field -- darker than Background itself, by design.
-    expectHex(kit::Color::ControlSurface, "#0e0e0e");
     expectHex(kit::Color::Foreground, "#ffffff");
     expectHex(kit::Color::Muted, "#999999");
     expectHex(kit::Color::Faint, "#666666");

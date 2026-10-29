@@ -712,7 +712,6 @@ void PropertiesEditor::populateCryptomatteRows(const document::NodeRecord& node)
         const auto name = QString::fromStdString(mattes[index]);
         auto* remove = new kit::KButton(kit::IconId::Subtract, tr("Remove"), list);
         remove->setObjectName("propertiesCryptomatteRemove");
-        remove->setVariant(kit::KButton::Variant::Ghost);
         remove->setControlSize(kit::KButton::ControlSize::Compact);
         remove->setToolTip(tr("Remove %1 from the matte").arg(name));
         remove->setProperty("matteName", name);

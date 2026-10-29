@@ -28,7 +28,6 @@ const auto& colorPlaceholders() {
         {QLatin1StringView("Surface"), Color::Surface},
         {QLatin1StringView("SurfaceRaised"), Color::SurfaceRaised},
         {QLatin1StringView("Field"), Color::Field},
-        {QLatin1StringView("ControlSurface"), Color::ControlSurface},
         {QLatin1StringView("Foreground"), Color::Foreground},
         {QLatin1StringView("Muted"), Color::Muted},
         {QLatin1StringView("Faint"), Color::Faint},
@@ -132,6 +131,28 @@ const auto& numberPlaceholders() {
     rules += selector + QStringLiteral("[bloomKeyboardFocus=\"true\"] {\n    border-color: ") +
              cssColor(buttonColors(kind, State::Normal, true).border) + QStringLiteral(";\n}\n");
     return rules;
+}
+
+// The generated rules for the kit line edits (KLineEdit, KSearchField), from the one text-entry
+// recipe (kit::fieldColors), so a typed name reads exactly like a typed number. The well is drawn in
+// the control body: a ControlInset margin inside the Control-tall widget, like every kit control.
+[[nodiscard]] QString lineEditRules() {
+    const QString selector = QStringLiteral("QLineEdit[kitControl=\"true\"]");
+    const auto rule = [&selector](const QString& pseudo, const ButtonColors& colors) {
+        return selector + pseudo + QStringLiteral(" {\n") + buttonDeclarations(colors) +
+               QStringLiteral("}\n");
+    };
+    return selector + QStringLiteral(" {\n    border: %1px solid transparent;\n"
+                                     "    border-radius: %2px;\n    margin: %3px;\n"
+                                     "    padding: 0px %4px;\n}\n")
+                          .arg(static_cast<int>(kHairlineWidth))
+                          .arg(radiusPx(Radius::Small, 0))
+                          .arg(px(Spacing::ControlInset))
+                          .arg(px(Spacing::XS)) +
+           rule({}, fieldColors(true, false, false, false)) +
+           rule(QStringLiteral(":hover"), fieldColors(true, false, true, false)) +
+           rule(QStringLiteral(":focus"), fieldColors(true, true, false, false)) +
+           rule(QStringLiteral(":disabled"), fieldColors(false, false, false, false));
 }
 
 } // namespace
@@ -388,7 +409,7 @@ QScrollBar::add-page, QScrollBar::sub-page {
         QStringLiteral("QToolButton[headerMenuButton=\"true\"]:open {\n") +
         buttonDeclarations(buttonColors(ButtonKind::MenuItem, State::Pressed, false)) +
         QStringLiteral("}\n") + buttonRules(QStringLiteral("QPushButton"), ButtonKind::Secondary) +
-        buttonRules(QStringLiteral("QPushButton:default"), ButtonKind::Primary);
+        buttonRules(QStringLiteral("QPushButton:default"), ButtonKind::Primary) + lineEditRules();
     return expandTokens(kTemplate) + kButtons;
 }
 

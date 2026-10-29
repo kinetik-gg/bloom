@@ -115,9 +115,8 @@ class ChromeRow final : public QWidget {
                     dropdown->setMinimumWidth(minimum);
                 }
             }
-            entry.control->setFixedHeight(kit::px(qobject_cast<kit::KIconToggle*>(entry.control)
-                                                      ? kit::Size::ToggleCell
-                                                      : kit::Size::Control));
+            // One control height in every chrome row, toggles included.
+            entry.control->setFixedHeight(kit::px(kit::Size::Control));
             entry.control->setProperty("chromeControl", true);
             entry.control->setVisible(entry.visible);
             if (entry.collapseRank > 0)

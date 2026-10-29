@@ -193,11 +193,10 @@ void KColorPicker::buildChrome() {
         }
     });
 
-    // Decision 5: the eyedropper affordance. Ghost + checkable, so "active" reads as pressed the
-    // same way an open KDropdown's own field does -- no bespoke "sampling" visual state needed.
+    // Decision 5: the eyedropper affordance. The one control look, checkable, so "sampling"
+    // reads as the Selected plate every checked button shows -- no bespoke visual state needed.
     eyedropperButton_ = new KButton(tr("Sample"), this);
     eyedropperButton_->setObjectName(QStringLiteral("kColorPickerEyedropper"));
-    eyedropperButton_->setVariant(KButton::Variant::Ghost);
     eyedropperButton_->setControlSize(KButton::ControlSize::Compact);
     eyedropperButton_->setCheckable(true);
     eyedropperButton_->setToolTip(QString::fromUtf8(kSamplerScopeTooltip));

@@ -355,6 +355,8 @@ class TimelineLayerRow final : public kit::KRow {
         for (int index = 0; index < kToggleCellCount; ++index) {
             auto* toggle = new kit::KIconToggle(toggleIcon(index), this);
             toggle->setProperty("layerSwitch", true);
+            // The dense switch strip: ToggleCell cells, each exactly one control body.
+            toggle->setFixedSize(kToggleCellWidth, kToggleCellWidth);
             auto policy = toggle->sizePolicy();
             policy.setRetainSizeWhenHidden(true);
             toggle->setSizePolicy(policy);

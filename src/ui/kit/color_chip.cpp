@@ -228,17 +228,17 @@ void KColorChip::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     const State state = visualState();
-    const auto ringMargin = kFocusRingWidth;
-    const QRectF bounds = QRectF(rect()).adjusted(ringMargin, ringMargin, -ringMargin, -ringMargin);
 
     const auto display = color_.converted(ColorSpace::Display, converter_);
     const QColor swatch = display ? display->toQColor() : tokenColor(Color::Muted);
-    if (swatch.alpha() < 255) {
-        drawAlphaCheckerboard(painter, bounds, checkerCellPx(),
-                              shape_ == Shape::Circle ? Radius::Full : Radius::Small);
-    }
 
     if (shape_ == Shape::Circle) {
+        // A round chip is a swatch alone (a palette dot), ringed for focus.
+        const auto ringMargin = kFocusRingWidth;
+        const QRectF bounds =
+            QRectF(rect()).adjusted(ringMargin, ringMargin, -ringMargin, -ringMargin);
+        if (swatch.alpha() < 255)
+            drawAlphaCheckerboard(painter, bounds, checkerCellPx(), Radius::Full);
         painter.save();
         painter.setBrush(swatch);
         painter.setPen(Qt::NoPen);
@@ -248,14 +248,23 @@ void KColorChip::paintEvent(QPaintEvent* event) {
         painter.setBrush(Qt::NoBrush);
         const qreal inset = painter.pen().widthF() / 2.0;
         painter.drawEllipse(bounds.adjusted(inset, inset, -inset, -inset));
-    } else {
-        fillRoundedSurface(painter, bounds, swatch, tokenColor(borderForState(state)),
-                           Radius::Small);
+        if (hasKeyboardFocus(*this) && state != State::Disabled)
+            drawFocusRing(painter, bounds, Radius::Full);
+        return;
     }
 
-    if (hasKeyboardFocus(*this) && state != State::Disabled) {
-        drawFocusRing(painter, bounds, shape_ == Shape::Circle ? Radius::Full : Radius::Small);
-    }
+    // A square chip is a button that opens the picker, so its frame is the one control look
+    // (Secondary) in the control body -- plate, state border, Accent under keyboard focus -- and the
+    // artist's colour sits inside it as the swatch, one XXS step in, with a concentric corner.
+    const QRectF body = controlBody(*this);
+    const ButtonColors colors = buttonColors(ButtonKind::Secondary, state, hasKeyboardFocus(*this));
+    fillRoundedSurface(painter, body, colors.fill, colors.border, Radius::Small);
+    const auto gap = static_cast<qreal>(px(Spacing::XXS));
+    const QRectF well = body.adjusted(gap, gap, -gap, -gap);
+    const qreal corner = std::max(0.0, static_cast<qreal>(radiusPx(Radius::Small, 0)) - gap);
+    if (swatch.alpha() < 255)
+        drawAlphaCheckerboard(painter, well, checkerCellPx(), Radius::Small);
+    fillRoundedSurface(painter, well, swatch, {}, corner);
 }
 
 KColorABPair::KColorABPair(QWidget* parent) : QWidget(parent) {

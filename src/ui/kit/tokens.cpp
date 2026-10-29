@@ -34,9 +34,6 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     {Color::Surface, 0x181818U},
     {Color::SurfaceRaised, 0x222222U},
     {Color::Field, 0x2B2B2BU},
-    // task U8 (issue 131), formal amendment 1, A2: the recessed fill for header-variant icon
-    // buttons and every dropdown closed field -- darker than Background itself, by design.
-    {Color::ControlSurface, 0x0E0E0EU},
     {Color::Foreground, 0xFFFFFFU},
     {Color::Muted, 0x999999U},
     {Color::Faint, 0x666666U},

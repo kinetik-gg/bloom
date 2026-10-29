@@ -63,14 +63,15 @@ class KMenuFlow final : public QWidget {
     QSize cell_;
     int hovered_ = -1;
 };
-// An icon-only button in a recessed ControlSurface well (header buttons), or plate-less as a
-// disclosure / header-row glyph. Colours come from kit::buttonColors(ButtonKind::Recessed); the
+// An icon-only button, one Size::Control square, wearing the one control look
+// (kit::buttonColors(ButtonKind::Secondary)) with its glyph in the recipe's ink -- or plate-less as a
+// disclosure caret ("disclosure" property) or a column heading's glyph (a "headerRow" parent). The
 // focus border follows keyboard focus only, never a click.
 class KIconButton : public QToolButton {
     Q_OBJECT
   public:
     explicit KIconButton(QWidget* parent = nullptr);
-    [[nodiscard]] State visualState() const;
+    [[nodiscard]] virtual State visualState() const;
     // The single border's state channel (kit::borderForInteraction): keyboard focus only.
     [[nodiscard]] Color borderToken() const;
 
@@ -86,6 +87,7 @@ class KIconToggle final : public KIconButton {
     Q_OBJECT
   public:
     explicit KIconToggle(IconId id, QWidget* parent = nullptr);
+    [[nodiscard]] State visualState() const override;
     void setGlyph(IconId id);
     [[nodiscard]] IconId glyph() const noexcept { return glyph_; }
     [[nodiscard]] QPixmap glyphPixmap() const;
@@ -154,6 +156,29 @@ class KLabel : public QLabel {
     QString fullText_;
     bool elides_ = false;
     Color tone_ = Color::Foreground;
+};
+// A read-only value in the one text-entry box (kit::fieldColors): the Field well in the control body,
+// Border at rest, BorderHover under the pointer -- for a composite field that lays its own labels out
+// inside and swaps in a KLineEdit to edit (the Viewer's frame field). While setEditing(true) it
+// paints nothing, because the line edit draws the same box, focused, in the same place.
+class KFieldFrame : public QWidget {
+    Q_OBJECT
+  public:
+    explicit KFieldFrame(QWidget* parent = nullptr);
+    void setEditing(bool editing);
+    [[nodiscard]] bool editing() const noexcept { return editing_; }
+    // The horizontal room between the widget's edge and the text inside the box: the control inset
+    // plus the line edit's own text padding, so a label and the editor line their text up.
+    [[nodiscard]] static int textInset();
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
+    void enterEvent(QEnterEvent* event) override;
+    void leaveEvent(QEvent* event) override;
+
+  private:
+    bool hovered_ = false;
+    bool editing_ = false;
 };
 class KLineEdit : public QLineEdit {
     Q_OBJECT
