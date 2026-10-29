@@ -1,9 +1,13 @@
 #include "editor_chrome_test_support.hpp"
 #include "layer_mask_support.hpp"
+#include "node_editor_add.hpp"
+#include <QAction>
+#include <QTest>
 #include <array>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/context_bar.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -2077,6 +2081,111 @@ void testAddMenuOffersShapeLayers(Expectations& expectations) {
                         "shape add-menu fixture shuts down");
 }
 
+// Lane C: the Viewer's Delete Composition takes the Assets delete path (a used composition warns
+// first), and Custom Safe Areas reads the composition by id, so a composition removed while the
+// dialog is open is refused instead of dereferenced.
+[[nodiscard]] bloom::ui::kit::KDialog* visibleDialog(const QString& name) {
+    for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* dialog = qobject_cast<bloom::ui::kit::KDialog*>(widget);
+            dialog && dialog->isVisible() && dialog->objectName() == name)
+            return dialog;
+    return nullptr;
+}
+
+void testViewerDialogsUseIdsAndTheDeleteWarning(Expectations& expectations) {
+    using namespace bloom;
+    auto newProject = makeTestProject("Viewer dialogs");
+    const auto outer = newProject.initialCompositionId;
+    document::Document document(std::move(newProject.project));
+    commands::CommandStack commands(document);
+    ui::CompositionSession session(document, commands, outer);
+    commands::Transaction create("Nested", session.snapshot().revision());
+    create.emplace<commands::AddComposition>("Nested", document::CompositionFormat{},
+                                             core::RationalTime::fromInteger(3));
+    expectations.expect(session.executeTransaction(std::move(create)).succeeded(),
+                        "viewer dialogs: a second composition");
+    document::CompositionId nested;
+    for (const auto& composition : session.snapshot().project().compositions())
+        if (composition.id() != outer)
+            nested = composition.id();
+    commands::Transaction use("Use nested", session.snapshot().revision());
+    use.emplace<ui::node_editor::AddCompositionSource>(outer, nested, document::Vec2d{}, true);
+    expectations.expect(session.executeTransaction(std::move(use)).succeeded(),
+                        "viewer dialogs: the outer composition uses the nested one");
+    expectations.expect(session.setComposition(nested), "viewer dialogs: the nested one is active");
+
+    runtime::TaskScheduler scheduler(testSchedulerConfig());
+    ui::TaskUiBridge bridge(scheduler, nullptr, 1ms);
+    runtime::NodeDefinitionRegistry definitions;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(definitions),
+                        "viewer dialogs: built-in node definitions");
+    definitions.freeze();
+    runtime::SnapshotCompiler compiler(definitions);
+    const runtime::CpuCompositionEvaluator evaluator;
+    const runtime::CpuReferenceDisplayPreparer displayPreparer;
+    runtime::QualifiedDisplayProcessorProvider qualifiedProvider;
+    auto pipeline =
+        ui::makeCompositionPreviewPipeline(compiler, evaluator, displayPreparer, qualifiedProvider);
+    ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline);
+    ui::ViewerEditor viewer(session, controller);
+    viewer.resize(320, 240);
+    viewer.show();
+    QApplication::processEvents();
+
+    auto* remove = viewer.findChild<QAction*>(QStringLiteral("viewerDeleteCompositionAction"));
+    expectations.expect(remove != nullptr, "viewer dialogs: Delete Composition exists");
+    if (remove != nullptr) {
+        remove->trigger();
+        auto* warning = visibleDialog(QStringLiteral("assetsDeleteConfirmation"));
+        expectations.expect(warning != nullptr,
+                            "viewer dialogs: deleting a used composition warns first");
+        expectations.expect(session.snapshot().project().findComposition(nested) != nullptr,
+                            "viewer dialogs: nothing is deleted before the answer");
+        if (warning != nullptr)
+            warning->reject();
+        QApplication::processEvents();
+        expectations.expect(session.snapshot().project().findComposition(nested) != nullptr,
+                            "viewer dialogs: Cancel keeps the used composition");
+    }
+
+    auto* safeAreas = viewer.findChild<QAction*>(QStringLiteral("viewerCustomSafeAreasAction"));
+    expectations.expect(safeAreas != nullptr, "viewer dialogs: Custom Safe Areas exists");
+    if (safeAreas == nullptr)
+        return;
+    safeAreas->trigger();
+    auto* dialog = visibleDialog(QStringLiteral("viewerSafeAreaDialog"));
+    expectations.expect(dialog != nullptr, "viewer dialogs: the safe area dialog opens");
+    if (dialog == nullptr)
+        return;
+    auto* title =
+        dialog->findChild<ui::kit::KValueField*>(QStringLiteral("viewerTitleSafeAreaField"));
+    auto* action =
+        dialog->findChild<ui::kit::KValueField*>(QStringLiteral("viewerActionSafeAreaField"));
+    expectations.expect(title && action, "viewer dialogs: the shared safe area fields");
+    if (title && action) {
+        title->setValue(95.0);
+        action->setValue(90.0);
+        expectations.expect(dialog->refusal().has_value() && dialog->refusal()->field == title &&
+                                !dialog->button(ui::kit::KDialog::Role::Accept)->isEnabled(),
+                            "viewer dialogs: title safe outside action safe is refused inline");
+        title->setValue(80.0);
+    }
+    // The composition goes away while the dialog is open: the dialog refuses rather than
+    // dereferencing it, and closing it commits nothing.
+    expectations.expect(ui::deleteComposition(session, nested),
+                        "viewer dialogs: the composition is removed under the dialog");
+    expectations.expect(dialog->refusal().has_value() &&
+                            !dialog->button(ui::kit::KDialog::Role::Accept)->isEnabled(),
+                        "viewer dialogs: the dialog refuses once its composition is gone");
+    const auto history = commands.size();
+    QTest::keyClick(dialog, Qt::Key_Return, Qt::ControlModifier);
+    dialog->reject();
+    QApplication::processEvents();
+    expectations.expect(commands.size() == history,
+                        "viewer dialogs: nothing is committed for a composition that is gone");
+    reachQuiescence(controller, bridge, scheduler, expectations);
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -2087,6 +2196,7 @@ int main(int argc, char** argv) {
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     Expectations expectations;
     testToolColumnUsesViewGestures(expectations);
+    testViewerDialogsUseIdsAndTheDeleteWarning(expectations);
     try {
         testViewerProbe(expectations);
         testViewerAdjustments(expectations);

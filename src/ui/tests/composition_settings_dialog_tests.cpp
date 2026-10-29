@@ -51,6 +51,10 @@
 
 namespace {
 
+// Every kit dialog needs an owner window; main() provides one.
+QWidget* gOwner = nullptr;
+[[nodiscard]] QWidget& owner() { return *gOwner; }
+
 using namespace bloom;
 using ui::CompositionSettingsDialog;
 
@@ -187,11 +191,11 @@ void testPresets() {
 
 void testDialogPresetsAndValidation() {
     CompositionSettingsDialog dialog(CompositionSettingsDialog::Mode::Create, baseSettings(),
-                                     spaces());
+                                     spaces(), owner());
     auto* preset = child<ui::kit::KDropdown>(dialog, "compositionSettingsPreset");
-    auto* width = child<ui::kit::KValueField>(dialog, "assetsWidthField");
-    auto* height = child<ui::kit::KValueField>(dialog, "assetsHeightField");
-    auto* ok = child<QPushButton>(dialog, "assetsDialogOk");
+    auto* width = child<ui::kit::KValueField>(dialog, "compositionSettingsWidth");
+    auto* height = child<ui::kit::KValueField>(dialog, "compositionSettingsHeight");
+    auto* ok = child<QAbstractButton>(dialog, "compositionSettingsOk");
     auto* nameError = child<QLabel>(dialog, "compositionSettingsNameError");
     auto* rateError = child<QLabel>(dialog, "compositionSettingsRateError");
     auto* safeError = child<QLabel>(dialog, "compositionSettingsSafeError");
@@ -214,14 +218,14 @@ void testDialogPresetsAndValidation() {
     expect(height->value() == 720, "the aspect lock keeps 16:9");
     lock->setChecked(false);
 
-    auto* name = child<QLineEdit>(dialog, "assetsNameField");
+    auto* name = child<QLineEdit>(dialog, "compositionSettingsName");
     name->setText(QString{});
     expect(!ok->isEnabled() && !nameError->isHidden() &&
                nameError->text().contains(QStringLiteral("name")) && rateError->isHidden(),
            "an empty name is refused under the name field only");
     name->setText(QStringLiteral("Main"));
-    auto* rateField = child<QLineEdit>(dialog, "assetsFrameRateField");
-    auto* ratePresets = child<ui::kit::KDropdown>(dialog, "assetsFrameRatePresetDropdown");
+    auto* rateField = child<QLineEdit>(dialog, "compositionSettingsRate");
+    auto* ratePresets = child<ui::kit::KDropdown>(dialog, "compositionSettingsRatePreset");
     expect(ratePresets->currentText() == QStringLiteral("24 fps") && rateField->isHidden(),
            "a preset rate shows one dropdown and no custom field");
     rateField->setText(QStringLiteral("abc"));
@@ -236,9 +240,9 @@ void testDialogPresetsAndValidation() {
     auto* drop = child<QAbstractButton>(dialog, "compositionSettingsDropFrame");
     expect(drop && drop->isEnabled(), "drop-frame is offered at 29.97");
     drop->setChecked(true);
-    auto* unit = child<ui::kit::KDropdown>(dialog, "assetsDurationUnitDropdown");
+    auto* unit = child<ui::kit::KDropdown>(dialog, "compositionSettingsDurationUnit");
     unit->setCurrentIndex(2);
-    auto* duration = child<QLineEdit>(dialog, "assetsDurationField");
+    auto* duration = child<QLineEdit>(dialog, "compositionSettingsDuration");
     duration->setText(QStringLiteral("00:01:00;02"));
     auto* start = child<QLineEdit>(dialog, "compositionSettingsStart");
     start->setText(QStringLiteral("01:00:00;00"));
@@ -292,13 +296,14 @@ void testCreateAndSettingsCommands() {
         for (auto* widget : QApplication::topLevelWidgets())
             if (auto* dialog = dynamic_cast<CompositionSettingsDialog*>(widget);
                 dialog && dialog->isVisible()) {
-                child<QLineEdit>(*dialog, "assetsNameField")->setText(QStringLiteral("Square"));
+                child<QLineEdit>(*dialog, "compositionSettingsName")
+                    ->setText(QStringLiteral("Square"));
                 auto* preset = child<ui::kit::KDropdown>(*dialog, "compositionSettingsPreset");
                 preset->setCurrentIndex(findText(*preset, QStringLiteral("Square 1080")));
-                child<QPushButton>(*dialog, "assetsDialogOk")->click();
+                child<QAbstractButton>(*dialog, "compositionSettingsOk")->click();
             }
     });
-    const auto added = ui::showNewCompositionDialog(session, nullptr);
+    const auto added = ui::showNewCompositionDialog(session, owner());
     const auto* square = added ? document.snapshot().project().findComposition(*added) : nullptr;
     expect(square && square->name() == "Square" && square->format().width() == 1080 &&
                square->format().height() == 1080,
@@ -323,13 +328,13 @@ void testCreateAndSettingsCommands() {
         for (auto* widget : QApplication::topLevelWidgets())
             if (auto* dialog = dynamic_cast<CompositionSettingsDialog*>(widget);
                 dialog && dialog->isVisible()) {
-                child<ui::kit::KValueField>(*dialog, "assetsWidthField")->setValue(1200);
+                child<ui::kit::KValueField>(*dialog, "compositionSettingsWidth")->setValue(1200);
                 anchorGrid(*dialog)->choosePoint(0);
-                child<QLineEdit>(*dialog, "assetsFrameRateField")->setText(QStringLiteral("30"));
-                child<QPushButton>(*dialog, "assetsDialogOk")->click();
+                child<QLineEdit>(*dialog, "compositionSettingsRate")->setText(QStringLiteral("30"));
+                child<QAbstractButton>(*dialog, "compositionSettingsOk")->click();
             }
     });
-    expect(ui::showCompositionSettingsDialog(session, composition, nullptr),
+    expect(ui::showCompositionSettingsDialog(session, composition, owner()),
            "Composition Settings commits");
     const auto* edited = document.snapshot().project().findComposition(composition);
     expect(edited->format().width() == 1200 && edited->format().frameRate() == rate(30) &&
@@ -342,8 +347,9 @@ void testCreateAndSettingsCommands() {
 
 void testDialogPresentation() {
     CompositionSettingsDialog create(CompositionSettingsDialog::Mode::Create, baseSettings(),
-                                     spaces());
-    CompositionSettingsDialog edit(CompositionSettingsDialog::Mode::Edit, baseSettings(), spaces());
+                                     spaces(), owner());
+    CompositionSettingsDialog edit(CompositionSettingsDialog::Mode::Edit, baseSettings(), spaces(),
+                                   owner());
     expect(create.windowTitle() == QStringLiteral("New Composition") &&
                edit.windowTitle() == QStringLiteral("Composition Settings"),
            "the window title names the mode");
@@ -369,7 +375,7 @@ void testDialogPresentation() {
     edit.show();
     child<ui::kit::KSection>(edit, "compositionSettingsAdvanced")->setCollapsed(false);
     settle(50);
-    expect(child<QWidget>(edit, "assetsNameField")->mapTo(&edit, QPoint{}).x() ==
+    expect(child<QWidget>(edit, "compositionSettingsName")->mapTo(&edit, QPoint{}).x() ==
                child<QWidget>(edit, "compositionSettingsWorkingSpace")->mapTo(&edit, QPoint{}).x(),
            "Basic and Advanced share one label column");
     expect(grid->isVisible(), "settings mode shows the resize anchor");
@@ -445,7 +451,7 @@ void writeScreenshots(const QString& directory) {
     auto settings = baseSettings();
     {
         CompositionSettingsDialog dialog(CompositionSettingsDialog::Mode::Create, settings,
-                                         spaces());
+                                         spaces(), owner());
         dialog.show();
         screenshot(dialog, directory + QStringLiteral("/composition-create.png"));
         auto* preset = child<ui::kit::KDropdown>(dialog, "compositionSettingsPreset");
@@ -464,23 +470,25 @@ void writeScreenshots(const QString& directory) {
                           3840, 2160, core::PixelAspectRatio::square(), rate(30000, 1001))
                           .value_or(edit.format);
         edit.background = {0.08, 0.1, 0.14, 1.0};
-        CompositionSettingsDialog dialog(CompositionSettingsDialog::Mode::Edit, edit, spaces());
+        CompositionSettingsDialog dialog(CompositionSettingsDialog::Mode::Edit, edit, spaces(),
+                                         owner());
         dialog.show();
-        child<ui::kit::KDropdown>(dialog, "assetsDurationUnitDropdown")->setCurrentIndex(2);
+        child<ui::kit::KDropdown>(dialog, "compositionSettingsDurationUnit")->setCurrentIndex(2);
         screenshot(dialog, directory + QStringLiteral("/composition-settings.png"));
         child<ui::kit::KSection>(dialog, "compositionSettingsAdvanced")->setCollapsed(false);
         anchorGrid(dialog)->choosePoint(0);
         screenshot(dialog, directory + QStringLiteral("/composition-advanced.png"));
         child<ui::kit::KSection>(dialog, "compositionSettingsAdvanced")->setCollapsed(true);
-        auto* rates = child<ui::kit::KDropdown>(dialog, "assetsFrameRatePresetDropdown");
+        auto* rates = child<ui::kit::KDropdown>(dialog, "compositionSettingsRatePreset");
         rates->setCurrentIndex(rates->count() - 1);
-        child<QLineEdit>(dialog, "assetsFrameRateField")->setText(QStringLiteral("0"));
+        child<QLineEdit>(dialog, "compositionSettingsRate")->setText(QStringLiteral("0"));
         screenshot(dialog, directory + QStringLiteral("/composition-validation-error.png"));
     }
     settle(200);
     {
         // The wider dialog with Advanced open, resized past its minimum.
-        CompositionSettingsDialog dialog(CompositionSettingsDialog::Mode::Edit, settings, spaces());
+        CompositionSettingsDialog dialog(CompositionSettingsDialog::Mode::Edit, settings, spaces(),
+                                         owner());
         dialog.show();
         child<ui::kit::KSection>(dialog, "compositionSettingsAdvanced")->setCollapsed(false);
         settle(200);
@@ -519,6 +527,8 @@ void writeScreenshots(const QString& directory) {
 int main(int argc, char** argv) {
     const auto screenshots = qEnvironmentVariable("BLOOM_SCREENSHOT_DIR");
     QApplication application(argc, argv);
+    QWidget ownerWindow;
+    gOwner = &ownerWindow;
     ui::kit::installKinetikTheme(application);
     QTemporaryDir settingsDirectory;
     QSettings::setDefaultFormat(QSettings::IniFormat);

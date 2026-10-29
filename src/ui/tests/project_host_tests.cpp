@@ -5,15 +5,26 @@
 #include <bloom/commands/result.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/color_settings.hpp>
+#include <bloom/document/new_project.hpp>
 #include <bloom/host/project_session.hpp>
+#include <bloom/project/canonical_document.hpp>
+#include <bloom/project/canonical_manifest.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+
+#include "zip_container_test_support.hpp"
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFileDialog>
+#include <QLabel>
 #include <QString>
 #include <QTimer>
+#include <QWidget>
+#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/dialog.hpp>
 
 #include <algorithm>
 #include <array>
@@ -21,11 +32,13 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <mutex>
 #include <optional>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -868,7 +881,201 @@ void testSaveCopyUnavailableOnEditableContent(Expectations& expectations) {
                         "refusal");
 }
 
+// ADR 0032 / issue #381: a project saved before document 1.28 whose video asset relied on the
+// previous Auto colour default shows the one-time note when opened. Saving it records 1.28, so
+// reopening shows no note, and an asset with an explicit input colour never triggers it.
+[[nodiscard]] std::string encodeVideoProjectAtMinor(const bool explicitInputColour,
+                                                    const std::uint32_t minor) {
+    auto seed = bloom::document::makeNewProject("Older video", "Main",
+                                                bloom::core::RationalTime::fromInteger(2));
+    bloom::document::AssetRecord asset;
+    asset.id = bloom::document::AssetId::fromRaw(1);
+    asset.kind = bloom::document::AssetKind::Video;
+    asset.locator = {"file", "project-relative", "clip.mp4", "file:///clip.mp4"};
+    asset.width = 1280;
+    asset.height = 720;
+    asset.frames = 48;
+    asset.duration = *bloom::core::RationalTime::create(2, 1);
+    asset.name = "clip";
+    if (explicitInputColour)
+        asset.interpretation.inputColorSpaceId = "lin_rec709_scene";
+    bloom::document::AssetVideoStream stream;
+    stream.kind = 1;
+    stream.codec = "h264";
+    stream.timebase = *bloom::core::RationalTime::create(1, 24);
+    stream.framePeriod = *bloom::core::RationalTime::create(1, 24);
+    stream.duration = *bloom::core::RationalTime::create(2, 1);
+    stream.width = 1280;
+    stream.height = 720;
+    // An untagged phone clip: no primaries, transfer, matrix or range.
+    asset.videoStreams = {stream};
+    if (!seed.project.addAsset(std::move(asset)))
+        throw std::logic_error("older video asset");
+    const bloom::document::Document document{std::move(seed.project)};
+    const auto snapshot = document.snapshot();
+    const auto settings = bloom::document::makeBloomNeutralColorSettingsV1({});
+    std::array<char, 64> payloadScratch{};
+    std::array<std::size_t, 64> sortScratch{};
+    const bloom::project::CanonicalDocumentV1 input{&snapshot, &settings, payloadScratch,
+                                                    sortScratch};
+    const auto size = bloom::project::canonicalDocumentSize(input);
+    std::string text(size ? *size.value() : 0U, '\0');
+    if (!size || !bloom::project::encodeCanonicalDocument(input, text))
+        throw std::runtime_error("older video document encode");
+    const auto current = "\"minor\": " +
+                         std::to_string(bloom::project::kCanonicalDocumentSchemaVersionV1.minor) +
+                         "\n  },\n  \"project\"";
+    const auto anchor = text.find(current);
+    if (anchor == std::string::npos)
+        throw std::runtime_error("older video version anchor");
+    text.replace(anchor, current.find('\n'), "\"minor\": " + std::to_string(minor));
+    return text;
+}
+
+void writeArchiveAtMinor(const std::filesystem::path& path, const std::string& documentText,
+                         const std::uint32_t minor) {
+    const bloom::project::CanonicalManifestV1 manifest{.documentSchemaVersion = {1, minor},
+                                                       .requirements = {}};
+    const auto manifestSize = bloom::project::canonicalManifestSize(manifest);
+    std::string manifestText(manifestSize ? *manifestSize.value() : 0U, '\0');
+    if (!manifestSize || !bloom::project::encodeCanonicalManifest(manifest, manifestText))
+        throw std::runtime_error("older video manifest encode");
+    namespace zip = bloom::project::test;
+    const auto archive =
+        zip::buildConformingArchive(zip::makeStoredEntry("manifest.json", zip::toBytes(manifestText)),
+                                    zip::makeStoredEntry("document.json", zip::toBytes(documentText)));
+    std::ofstream file(path, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(archive.data()),
+               static_cast<std::streamsize>(archive.size()));
+}
+
+void testOlderProjectVideoColourNotice(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "video colour notice: temp directory is available");
+        return;
+    }
+    const auto older = directory.path() / "older.bloom";
+    const auto overridden = directory.path() / "overridden.bloom";
+    const auto resaved = directory.path() / "resaved.bloom";
+    writeArchiveAtMinor(older, encodeVideoProjectAtMinor(false, 27), 27);
+    writeArchiveAtMinor(overridden, encodeVideoProjectAtMinor(true, 27), 27);
+
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost host(scheduler);
+    OutcomeCapture openCapture;
+    OutcomeCapture saveCapture;
+    connectOpenCapture(host, openCapture);
+    connectSaveCapture(host, saveCapture);
+    QString noticeAtSignal;
+    QObject::connect(&host, &ProjectHost::openFinished,
+                     [&] { noticeAtSignal = host.openNotice(); });
+
+    host.beginOpen(older);
+    expectations.expect(waitUntilIdle(host) && openCapture.count == 1 &&
+                            openCapture.outcome == ProjectHostOperationOutcome::Published,
+                        "video colour notice: the 1.27 project opens");
+    expectations.expect(
+        !noticeAtSignal.isEmpty() && noticeAtSignal.contains("earlier version of Bloom") &&
+            noticeAtSignal.contains("affects 1 video in") && noticeAtSignal.contains("Input Colour"),
+        "video colour notice: an older project with an Auto video asset shows the note, got: " +
+            noticeAtSignal.toStdString());
+
+    host.beginSaveAs(resaved);
+    expectations.expect(waitUntilIdle(host) && saveCapture.count == 1 &&
+                            saveCapture.outcome == ProjectHostOperationOutcome::Published,
+                        "video colour notice: the older project saves");
+    host.beginOpen(resaved);
+    expectations.expect(waitUntilIdle(host) && openCapture.count == 2 &&
+                            openCapture.outcome == ProjectHostOperationOutcome::Published,
+                        "video colour notice: the resaved project opens");
+    expectations.expect(noticeAtSignal.isEmpty() && host.openNotice().isEmpty(),
+                        "video colour notice: a project saved at 1.28 shows the note no more");
+
+    host.beginOpen(overridden);
+    expectations.expect(waitUntilIdle(host) && openCapture.count == 3 &&
+                            openCapture.outcome == ProjectHostOperationOutcome::Published,
+                        "video colour notice: the overridden 1.27 project opens");
+    expectations.expect(noticeAtSignal.isEmpty(),
+                        "video colour notice: an explicit input colour is preserved and needs no "
+                        "note");
+    const auto snapshot = host.stateSnapshot();
+    auto [document, stack] = host.liveDocumentAndStack();
+    expectations.expect(
+        snapshot.contentKind == ProjectSessionContentKind::DecodedDocument && document != nullptr &&
+            document->snapshot().project().assets().front().interpretation.inputColorSpaceId ==
+                "lin_rec709_scene",
+        "video colour notice: the explicit input colour opens exactly as saved");
+}
+
 } // namespace
+
+// ---------------------------------------------------------------------------------------------
+// Lane C: the DEFAULT dialogs. Save As goes through kit::chooseFile(), which adds `.bloom` to a
+// name typed without it, and the unsaved-change prompt names the project and the action, with
+// Save as its default.
+// ---------------------------------------------------------------------------------------------
+
+void testDefaultSaveAsAddsBloomSuffix(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "default Save As: temp directory is available");
+        return;
+    }
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost host(scheduler);
+    QWidget window;
+    host.setDialogOwner(&window);
+    OutcomeCapture saveCapture;
+    connectSaveCapture(host, saveCapture);
+    const auto typed = QString::fromStdString((directory.path() / "shot").string());
+    bool dialogSeen = false;
+    QTimer::singleShot(0, [&] {
+        for (auto* widget : QApplication::topLevelWidgets())
+            if (auto* dialog = qobject_cast<QFileDialog*>(widget); dialog && dialog->isVisible()) {
+                dialogSeen = dialog->parentWidget() == &window;
+                dialog->selectFile(typed);
+                QMetaObject::invokeMethod(dialog, "accept");
+                return;
+            }
+    });
+    host.requestSaveAs();
+    expectations.expect(waitUntilIdle(host), "default Save As: the save completes");
+    expectations.expect(dialogSeen, "default Save As: the file dialog is owned by the window");
+    expectations.expect(host.displayPath() == std::optional(directory.path() / "shot.bloom") &&
+                            std::filesystem::exists(directory.path() / "shot.bloom"),
+                        "default Save As: a name typed without .bloom is saved with it");
+}
+
+void testDefaultUnsavedPromptNamesTheAction(Expectations& expectations) {
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost host(scheduler);
+    QWidget window;
+    host.setDialogOwner(&window);
+    expectations.expect(executeRename(host, "Dirty"), "unsaved prompt: the project is dirty");
+    QString heading;
+    bool saveIsDefault = false;
+    QTimer::singleShot(0, [&] {
+        for (auto* widget : QApplication::topLevelWidgets())
+            if (auto* dialog = qobject_cast<bloom::ui::kit::KDialog*>(widget);
+                dialog && dialog->isVisible() &&
+                dialog->objectName() == QStringLiteral("projectUnsavedChanges")) {
+                if (auto* label = dialog->findChild<QLabel*>("projectUnsavedChangesHeading"))
+                    heading = label->text();
+                saveIsDefault = dialog->defaultRole() == bloom::ui::kit::KDialog::Role::Accept &&
+                                dialog->button(bloom::ui::kit::KDialog::Role::Accept)->text() ==
+                                    QStringLiteral("Save");
+                dialog->reject();
+                return;
+            }
+    });
+    host.requestOpen();
+    expectations.expect(heading.contains(QStringLiteral("Untitled")) &&
+                            heading.contains(QStringLiteral("before opening another project")),
+                        "unsaved prompt: it names the project and the action");
+    expectations.expect(saveIsDefault, "unsaved prompt: Save is the visible default");
+    expectations.expect(host.isDirty() && !host.isBusy(), "unsaved prompt: Cancel keeps the edit");
+}
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -889,5 +1096,8 @@ int main(int argc, char** argv) {
     testUnsavedChangeDecisionSeamForOpen(expectations);
     testPathlessSaveRoutesToSaveAsDecision(expectations);
     testSaveCopyUnavailableOnEditableContent(expectations);
+    testDefaultSaveAsAddsBloomSuffix(expectations);
+    testDefaultUnsavedPromptNamesTheAction(expectations);
+    testOlderProjectVideoColourNotice(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

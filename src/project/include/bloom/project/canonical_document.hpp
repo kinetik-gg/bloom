@@ -25,8 +25,12 @@ namespace bloom::project {
 // that merely names a CanonicalDocumentV1.
 class RoundTripState;
 
-inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 27};
+inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 28};
 inline constexpr document::SchemaVersion kMinimumDocumentSchemaVersionV1{1, 15};
+// ADR 0032: the first document version saved after Auto began showing ordinary and untagged SDR
+// video through the sRGB texture space. Opening an older project that relied on the previous
+// Auto default shows a one-time note.
+inline constexpr document::SchemaVersion kSdrVideoColourDefaultDocumentVersionV1{1, 28};
 // The v1 expanded document.json resource limit from docs/architecture/project-format.md.
 inline constexpr std::size_t kCanonicalDocumentMaximumBytes = 268'435'456;
 // Deepest canonical document emission is nine containers (root through a vec2 keyframe value

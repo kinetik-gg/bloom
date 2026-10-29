@@ -311,7 +311,7 @@ void AssetsEditor::showContextMenu(const QPoint position) {
     } else if (const auto composition = compositionId(item); composition.isValid()) {
         add(tr("Open"), "assetsOpenAction", [this, composition] { openComposition(composition); });
         add(tr("Composition Settings…"), "assetsCompositionSettingsAction", [this, composition] {
-            (void)bloom::ui::showCompositionSettingsDialog(session_, composition, this);
+            (void)bloom::ui::showCompositionSettingsDialog(session_, composition, *this);
         });
         menu->addSeparator();
         rename();
@@ -334,7 +334,7 @@ void AssetsEditor::duplicateComposition(const document::CompositionId id) {
 }
 
 void AssetsEditor::showNewCompositionDialog() {
-    if (const auto id = bloom::ui::showNewCompositionDialog(session_, this, selectedFolder());
+    if (const auto id = bloom::ui::showNewCompositionDialog(session_, *this, selectedFolder());
         id.has_value())
         openComposition(*id);
 }

@@ -1,11 +1,10 @@
 #include "asset_input_picker_guard.hpp"
 #include "assets_editor_internal.hpp"
+#include "project_change_check.hpp"
+#include "project_item_delete.hpp"
 #include "reveal_in_file_manager.hpp"
-#include <QDialog>
-#include <QDialogButtonBox>
 #include <QHBoxLayout>
-#include <QMessageBox>
-#include <QPushButton>
+#include <QPointer>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QTreeWidgetItemIterator>
@@ -21,8 +20,10 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <filesystem>
+#include <memory>
 #include <set>
 #include <tuple>
 
@@ -78,35 +79,34 @@ void AssetsEditor::editTags(document::AssetId id) {
     if (std::ranges::find(ids, id) == ids.end())
         ids = {id};
     const auto tags = asset->tags;
-    const auto snapshot = session_.snapshot();
-    QDialog dialog(this);
-    dialog.setObjectName(QStringLiteral("assetsTagsDialog"));
-    dialog.setWindowTitle(tr("Edit Tags"));
-    auto* layout = new QVBoxLayout(&dialog);
-    layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
-                               kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
-    layout->setSpacing(kit::px(kit::Spacing::S));
+    auto check = std::make_shared<ProjectChangeCheck>(session_);
+    auto* dialog = new kit::KDialog(tr("Edit Tags"), QStringLiteral("assetsTagsDialog"), *this);
+    auto* layout = dialog->contentLayout();
     auto* label =
         new kit::KLabel(ids.size() > 1 ? tr("Replace tags on %1 selected assets").arg(ids.size())
                                        : tr("One tag per field"),
-                        &dialog);
+                        dialog);
     layout->addWidget(label);
-    auto* scroll = new QScrollArea(&dialog);
+    auto* scroll = new QScrollArea(dialog);
     scroll->setWidgetResizable(true);
-    scroll->setMinimumSize(kit::px(kit::Size::DropdownWidth) * 3, kit::px(kit::Size::ListRow) * 4);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setMinimumHeight(kit::px(kit::Size::ListRow) * 4);
+    // The tag rows sit on the dialog's own surface, not in a darker well.
+    scroll->viewport()->setAutoFillBackground(false);
     auto* fields = new QWidget(scroll);
     auto* rows = new QVBoxLayout(fields);
     rows->setContentsMargins(0, 0, 0, 0);
     rows->setSpacing(kit::px(kit::Spacing::XS));
     rows->addStretch();
     scroll->setWidget(fields);
-    layout->addWidget(scroll);
-    auto* add = new kit::KButton(tr("Add Tag"), &dialog);
+    fields->setAutoFillBackground(false);
+    layout->addWidget(scroll, 1);
+    auto* add = new kit::KButton(tr("Add Tag"), dialog);
     add->setObjectName(QStringLiteral("assetsAddTagButton"));
-    layout->addWidget(add);
-    std::vector<kit::KLineEdit*> editors;
-    const auto addTag = [&](const QString& text) {
-        if (editors.size() >= 64)
+    layout->addWidget(add, 0, Qt::AlignLeft);
+    auto editors = std::make_shared<std::vector<QPointer<kit::KLineEdit>>>();
+    const auto addTag = [dialog, fields, rows, add, editors](const QString& text) {
+        if (editors->size() >= 64)
             return;
         auto* row = new QWidget(fields);
         auto* rowLayout = new QHBoxLayout(row);
@@ -123,52 +123,52 @@ void AssetsEditor::editTags(document::AssetId id) {
         rowLayout->addWidget(edit, 1);
         rowLayout->addWidget(remove);
         rows->insertWidget(rows->count() - 1, row);
-        editors.push_back(edit);
-        connect(remove, &kit::KIconButton::clicked, &dialog, [&, row, edit] {
-            std::erase(editors, edit);
+        editors->emplace_back(edit);
+        connect(remove, &kit::KIconButton::clicked, dialog, [editors, add, row, edit] {
+            std::erase(*editors, QPointer<kit::KLineEdit>(edit));
             row->hide();
             row->deleteLater();
             add->setEnabled(true);
         });
-        add->setEnabled(editors.size() < 64);
+        add->setEnabled(editors->size() < 64);
         edit->setFocus();
     };
     for (const auto& tag : tags)
         addTag(QString::fromStdString(tag));
     if (tags.empty())
         addTag({});
-    connect(add, &kit::KButton::clicked, &dialog, [&] { addTag({}); });
-    auto* buttons = new QHBoxLayout;
-    buttons->addStretch();
-    auto* cancel = new kit::KButton(tr("Cancel"), &dialog);
-    auto* apply = new kit::KButton(tr("Apply"), &dialog);
-    apply->setVariant(kit::KButton::Variant::Primary);
-    apply->setObjectName(QStringLiteral("assetsApplyTagsButton"));
-    buttons->addWidget(cancel);
-    buttons->addWidget(apply);
-    layout->addLayout(buttons);
-    connect(cancel, &kit::KButton::clicked, &dialog, &QDialog::reject);
-    connect(apply, &kit::KButton::clicked, &dialog, &QDialog::accept);
-    if (dialog.exec() != QDialog::Accepted)
-        return;
-    std::vector<std::string> edited;
-    for (const auto* field : editors) {
-        const auto tag = field->text().trimmed();
-        if (!tag.isEmpty())
-            edited.push_back(tag.toStdString());
-    }
-    if (&snapshot.project() != &session_.snapshot().project()) {
-        emit session_.commandRejected(
-            tr("Assets changed while editing tags. Open Edit Tags again."));
-        return;
-    }
-    commands::Transaction transaction("Edit Asset Tags", snapshot.revision());
-    transaction.emplace<commands::SetAssetTags>(ids, std::move(edited));
-    (void)session_.executeTransaction(std::move(transaction));
+    connect(add, &kit::KButton::clicked, dialog, [addTag] { addTag({}); });
+    dialog->addButton(kit::KDialog::Role::Accept, tr("Apply"))
+        ->setObjectName(QStringLiteral("assetsApplyTagsButton"));
+    dialog->addButton(kit::KDialog::Role::Reject, tr("Cancel"));
+    // Accept-time (and live) check: tags read from a project that has since changed are not
+    // written over it.
+    dialog->setValidator([check]() -> std::optional<kit::KRefusal> {
+        if (check->projectChanged())
+            return kit::KRefusal{nullptr, tr("The project changed while editing tags. Cancel and "
+                                             "open Edit Tags again.")};
+        return std::nullopt;
+    });
+    connect(&session_, &CompositionSession::snapshotChanged, dialog, &kit::KDialog::revalidate);
+    if (!editors->empty())
+        dialog->setInitialFocus(editors->front());
+    QPointer<CompositionSession> session(&session_);
+    dialog->open([session, check, ids = std::move(ids), editors](const kit::KDialog::Role role) {
+        if (role != kit::KDialog::Role::Accept || !session || check->projectChanged())
+            return;
+        std::vector<std::string> edited;
+        for (const auto& field : *editors) {
+            const auto tag = field ? field->text().trimmed() : QString{};
+            if (!tag.isEmpty())
+                edited.push_back(tag.toStdString());
+        }
+        commands::Transaction transaction("Edit Asset Tags", check->snapshot().revision());
+        transaction.emplace<commands::SetAssetTags>(ids, std::move(edited));
+        (void)session->executeTransaction(std::move(transaction));
+    });
 }
 void AssetsEditor::editInputColor(const document::AssetId id) {
-    const auto snapshot = session_.snapshot();
-    const auto* asset = snapshot.project().findAsset(id);
+    const auto* asset = session_.snapshot().project().findAsset(id);
     auto* controller = session_.assetController();
     if (!asset || !controller || !controller->acceptsEdits())
         return;
@@ -178,34 +178,31 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
         emit session_.commandRejected(tr("The project colour configuration is unavailable."));
         return;
     }
-    QDialog dialog(this);
-    bool documentRebound = false;
-    connect(&session_, &CompositionSession::documentRebound, &dialog,
-            [&] { documentRebound = true; });
-    dialog.setObjectName(QStringLiteral("assetsInputColorDialog"));
-    dialog.setWindowTitle(tr("Input Colour — %1").arg(QString::fromStdString(asset->name)));
-    auto* layout = new QVBoxLayout(&dialog);
+    // Issue #381 (Interpret Footage) will replace this dialog; it stays a minimal kit port.
+    auto check = std::make_shared<ProjectChangeCheck>(session_);
+    auto* dialog =
+        new kit::KDialog(tr("Input Colour — %1").arg(QString::fromStdString(asset->name)),
+                         QStringLiteral("assetsInputColorDialog"), *this);
     auto* explanation = new kit::KLabel(
         tr("Choose how this asset's pixels are interpreted. A source node can override this "
            "choice in Properties."),
-        &dialog);
+        dialog);
     explanation->setWordWrap(true);
-    layout->addWidget(explanation);
-    auto* selector = new kit::KDropdown(&dialog);
+    dialog->contentLayout()->addWidget(explanation);
+    auto* selector = new kit::KDropdown(dialog);
     selector->setObjectName(QStringLiteral("assetsInputColorSelector"));
     selector->setSearchable(true);
     selector->setWidthFloor(kit::px(kit::Size::DropdownWidth) * 2);
-    layout->addWidget(selector);
-    auto* status = new kit::KLabel(&dialog);
+    dialog->contentLayout()->addWidget(selector);
+    auto* status = new kit::KLabel(dialog);
     status->setObjectName(QStringLiteral("assetsInputColorStatus"));
     status->setWordWrap(true);
-    layout->addWidget(status);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, &dialog);
-    buttons->addButton(tr("Apply"), QDialogButtonBox::AcceptRole);
-    buttons->setObjectName(QStringLiteral("assetsInputColorButtons"));
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    status->setTone(kit::Color::Muted);
+    dialog->contentLayout()->addWidget(status);
+    dialog->contentLayout()->addStretch(1);
+    dialog->buttonBox()->setObjectName(QStringLiteral("assetsInputColorButtons"));
+    dialog->addButton(kit::KDialog::Role::Accept, tr("Apply"));
+    dialog->addButton(kit::KDialog::Role::Reject, tr("Cancel"));
     const auto initial = [&] {
         if (!asset->interpretation.inputColorSpaceId.empty())
             return QStringLiteral("id:") +
@@ -222,7 +219,10 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
         }
         return QStringLiteral("auto");
     }();
-    const auto refreshChoices = [&] {
+    QPointer<AssetController> guardedController(controller);
+    const auto refreshChoices = [selector, status, initial, guardedController] {
+        if (!guardedController)
+            return;
         const QString selected = selector->count() ? selector->currentData().toString() : initial;
         const QSignalBlocker blocked(selector);
         selector->clearItems();
@@ -230,7 +230,7 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
         selector->addItem(tr("Raw data (no colour conversion)"), QStringLiteral("raw"));
         selector->addItem(tr("Legacy sRGB"), QStringLiteral("srgb"));
         selector->addItem(tr("Legacy Linear"), QStringLiteral("linear"));
-        if (const auto* spaces = controller->inputColorSpaces()) {
+        if (const auto* spaces = guardedController->inputColorSpaces()) {
             auto ordered = *spaces;
             std::ranges::sort(ordered, [](const auto& left, const auto& right) {
                 return std::tie(left.family, left.id) < std::tie(right.family, right.id);
@@ -242,8 +242,8 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
                                   QStringLiteral("id:") + name);
             }
             status->setText(tr("OCIO colour spaces from the selected project configuration."));
-        } else if (!controller->inputColorCatalogDiagnostic().isEmpty()) {
-            status->setText(controller->inputColorCatalogDiagnostic());
+        } else if (!guardedController->inputColorCatalogDiagnostic().isEmpty()) {
+            status->setText(guardedController->inputColorCatalogDiagnostic());
         } else {
             status->setText(tr("Preparing OCIO colour spaces…"));
         }
@@ -253,73 +253,64 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
         const auto index = selector->findData(selected);
         selector->setCurrentIndex(index < 0 ? 0 : index);
     };
-    connect(controller, &AssetController::changed, &dialog, refreshChoices);
+    connect(controller, &AssetController::changed, dialog, refreshChoices);
     controller->requestInputColorSpaces();
     refreshChoices();
-    if (dialog.exec() != QDialog::Accepted)
-        return;
-    const auto live = session_.snapshot();
-    if (documentRebound ||
-        !detail::assetInputPickerTargetMatches(snapshot.project().id(), id, initialInterpretation,
-                                               live.project()) ||
-        session_.colorIntent() != *initialColorIntent) {
-        emit session_.commandRejected(tr("This asset or its colour configuration changed while "
-                                         "choosing input colour. Open the picker again."));
-        return;
-    }
-    const auto choice = selector->currentData().toString();
-    if (choice == initial)
-        return;
-    document::AssetColorSpace legacy = document::AssetColorSpace::Auto;
-    std::string inputId;
-    if (choice == QStringLiteral("raw"))
-        legacy = document::AssetColorSpace::Raw;
-    else if (choice == QStringLiteral("srgb"))
-        legacy = document::AssetColorSpace::Srgb;
-    else if (choice == QStringLiteral("linear"))
-        legacy = document::AssetColorSpace::Linear;
-    else if (choice.startsWith(QStringLiteral("id:"))) {
-        inputId = choice.mid(3).toStdString();
-        const auto* spaces = controller->inputColorSpaces();
-        if (!spaces ||
-            std::ranges::none_of(*spaces, [&](const auto& space) { return space.id == inputId; })) {
-            emit session_.commandRejected(tr("That OCIO colour space is unavailable. Reopen the "
-                                             "picker after the configuration is ready."));
+    QPointer<CompositionSession> session(&session_);
+    // The shared accept-time check, with this dialog's narrower rule: only this asset's
+    // interpretation and the project's colour configuration need to be what the dialog showed.
+    const auto stale = [session, check, id, initialInterpretation,
+                        initialColorIntent = *initialColorIntent] {
+        return !session || check->documentRebound() ||
+               !detail::assetInputPickerTargetMatches(check->snapshot().project().id(), id,
+                                                      initialInterpretation,
+                                                      session->snapshot().project()) ||
+               session->colorIntent() != initialColorIntent;
+    };
+    dialog->setValidator([stale]() -> std::optional<kit::KRefusal> {
+        if (stale())
+            return kit::KRefusal{nullptr, tr("This asset or its colour configuration changed "
+                                             "while choosing input colour. Cancel and open the "
+                                             "picker again.")};
+        return std::nullopt;
+    });
+    connect(&session_, &CompositionSession::snapshotChanged, dialog, &kit::KDialog::revalidate);
+    dialog->setInitialFocus(selector);
+    QPointer<kit::KDropdown> choiceField(selector);
+    dialog->open([session, stale, choiceField, initial, id,
+                  guardedController](const kit::KDialog::Role role) {
+        if (role != kit::KDialog::Role::Accept || !session || !choiceField || stale())
             return;
-        }
-    } else if (choice != QStringLiteral("auto"))
-        return;
-    commands::Transaction transaction("Set Asset Input Colour", live.revision());
-    transaction.emplace<commands::SetAssetInputColor>(id, legacy, std::move(inputId));
-    (void)session_.executeTransaction(std::move(transaction));
+        const auto choice = choiceField->currentData().toString();
+        if (choice == initial)
+            return;
+        document::AssetColorSpace legacy = document::AssetColorSpace::Auto;
+        std::string inputId;
+        if (choice == QStringLiteral("raw"))
+            legacy = document::AssetColorSpace::Raw;
+        else if (choice == QStringLiteral("srgb"))
+            legacy = document::AssetColorSpace::Srgb;
+        else if (choice == QStringLiteral("linear"))
+            legacy = document::AssetColorSpace::Linear;
+        else if (choice.startsWith(QStringLiteral("id:"))) {
+            inputId = choice.mid(3).toStdString();
+            const auto* spaces =
+                guardedController ? guardedController->inputColorSpaces() : nullptr;
+            if (!spaces || std::ranges::none_of(
+                               *spaces, [&](const auto& space) { return space.id == inputId; })) {
+                emit session->commandRejected(tr("That OCIO colour space is unavailable. Reopen "
+                                                 "the picker after the configuration is ready."));
+                return;
+            }
+        } else if (choice != QStringLiteral("auto"))
+            return;
+        commands::Transaction transaction("Set Asset Input Colour", session->snapshot().revision());
+        transaction.emplace<commands::SetAssetInputColor>(id, legacy, std::move(inputId));
+        (void)session->executeTransaction(std::move(transaction));
+    });
 }
-namespace {
-// Everything a folder holds, deepest folders first so they can be removed bottom-up.
-struct FolderContents final {
-    std::vector<document::AssetFolderId> folders;
-    std::vector<document::AssetId> assets;
-    std::vector<document::CompositionId> compositions;
-};
-void collect(const document::Project& project, const document::AssetFolderId folder,
-             FolderContents& contents) {
-    for (const auto& child : project.assetFolders())
-        if (child.parent == folder)
-            collect(project, child.id, contents);
-    for (const auto& asset : project.assets())
-        if (asset.folder == folder)
-            contents.assets.push_back(asset.id);
-    for (const auto& composition : project.compositions())
-        if (composition.folder() == folder)
-            contents.compositions.push_back(composition.id());
-    contents.folders.push_back(folder);
-}
-} // namespace
 void AssetsEditor::removeSelected() {
-    const auto snapshot = session_.snapshot();
-    const auto& project = snapshot.project();
-    std::vector<document::AssetId> assets;
-    std::vector<document::CompositionId> compositions;
-    std::vector<document::AssetFolderId> folders;
+    ProjectItemSelection selection;
     for (QTreeWidgetItemIterator it(tree_, QTreeWidgetItemIterator::Selected); *it; ++it) {
         // A selected folder already accounts for what it holds.
         bool insideSelectedFolder = false;
@@ -328,116 +319,14 @@ void AssetsEditor::removeSelected() {
         if (insideSelectedFolder)
             continue;
         if (const auto asset = assets::assetId(*it); asset.isValid())
-            assets.push_back(asset);
+            selection.assets.push_back(asset);
         else if (const auto composition = assets::compositionId(*it); composition.isValid())
-            compositions.push_back(composition);
+            selection.compositions.push_back(composition);
         else if (const auto folder = assets::folderId(*it))
-            folders.push_back(*folder);
+            selection.folders.push_back(*folder);
     }
-    if (assets.empty() && compositions.empty() && folders.empty())
-        return;
-    FolderContents contents;
-    for (const auto folder : folders)
-        collect(project, folder, contents);
-    const bool holdsItems = contents.folders.size() > folders.size() || !contents.assets.empty() ||
-                            !contents.compositions.empty();
-    // Used items among those that would be deleted, with or without the folders' contents.
-    std::size_t usedDirect = 0, usedInside = 0;
-    for (const auto asset : assets)
-        usedDirect += assets::assetUsage(project, asset).uses > 0 ? 1 : 0;
-    for (const auto composition : compositions)
-        usedDirect += assets::compositionUsage(project, composition).uses > 0 ? 1 : 0;
-    for (const auto asset : contents.assets)
-        usedInside += assets::assetUsage(project, asset).uses > 0 ? 1 : 0;
-    for (const auto composition : contents.compositions)
-        usedInside += assets::compositionUsage(project, composition).uses > 0 ? 1 : 0;
-    bool withContents = false;
-    if (usedDirect > 0 || holdsItems) {
-        // As After Effects does, a used item is never deleted without saying so first.
-        QMessageBox box(this);
-        box.setObjectName(QStringLiteral("assetsDeleteConfirmation"));
-        box.setIcon(QMessageBox::Warning);
-        box.setWindowTitle(tr("Delete"));
-        QString text;
-        if (assets.size() + compositions.size() == 1 && folders.empty() && usedDirect == 1) {
-            const auto usage = assets.empty()
-                                   ? assets::compositionUsage(project, compositions.front())
-                                   : assets::assetUsage(project, assets.front());
-            const auto name = assets.empty() ? project.findComposition(compositions.front())->name()
-                                             : project.findAsset(assets.front())->name;
-            text =
-                tr("\u201c%1\u201d is used %2 in %3.")
-                    .arg(QString::fromStdString(name),
-                         usage.uses == 1 ? tr("once") : tr("%1 times").arg(usage.uses),
-                         usage.compositions == 1 ? tr("1 composition")
-                                                 : tr("%1 compositions").arg(usage.compositions));
-        } else if (usedDirect > 0)
-            text = tr("%n of the selected items are used in compositions.", nullptr,
-                      static_cast<int>(usedDirect));
-        if (holdsItems) {
-            const auto count = contents.assets.size() + contents.compositions.size() +
-                               contents.folders.size() - folders.size();
-            if (!text.isEmpty())
-                text += QStringLiteral("\n");
-            text += folders.size() == 1 ? tr("The folder holds %1 items.").arg(count)
-                                        : tr("The folders hold %1 items.").arg(count);
-            if (usedInside > 0)
-                text += QStringLiteral(" ") +
-                        tr("%1 of them are used in compositions.").arg(usedInside);
-        }
-        box.setText(text);
-        box.setInformativeText(
-            holdsItems ? tr("Delete only the folders and move their contents up, or delete the "
-                            "contents too? Undo restores either.")
-                       : tr("Layers that use it will show it as missing. Undo restores it."));
-        QAbstractButton* keep =
-            holdsItems ? box.addButton(tr("Delete Folders Only"), QMessageBox::AcceptRole)
-                       : nullptr;
-        QAbstractButton* everything = box.addButton(
-            holdsItems ? tr("Delete with Contents") : tr("Delete"), QMessageBox::DestructiveRole);
-        box.addButton(QMessageBox::Cancel);
-        if (keep)
-            keep->setObjectName(QStringLiteral("assetsDeleteFoldersOnlyButton"));
-        everything->setObjectName(QStringLiteral("assetsDeleteConfirmButton"));
-        box.setDefaultButton(QMessageBox::Cancel);
-        box.exec();
-        const auto* clicked = box.clickedButton();
-        if (clicked == nullptr || (clicked != keep && clicked != everything))
-            return;
-        withContents = clicked == everything;
-        if (&snapshot.project() != &session_.snapshot().project()) {
-            emit session_.commandRejected(tr("Assets changed while confirming. Delete again."));
-            return;
-        }
-    }
-    const bool wasActive = [&] {
-        const auto active = session_.compositionId();
-        return std::ranges::find(compositions, active) != compositions.end() ||
-               (withContents &&
-                std::ranges::find(contents.compositions, active) != contents.compositions.end());
-    }();
-    commands::Transaction transaction("Delete", snapshot.revision());
-    for (const auto asset : assets)
-        transaction.emplace<commands::RemoveAsset>(asset);
-    for (const auto composition : compositions)
-        transaction.emplace<commands::DeleteComposition>(composition);
-    if (withContents) {
-        for (const auto asset : contents.assets)
-            transaction.emplace<commands::RemoveAsset>(asset);
-        for (const auto composition : contents.compositions)
-            transaction.emplace<commands::DeleteComposition>(composition);
-        for (const auto folder : contents.folders)
-            transaction.emplace<commands::RemoveAssetFolder>(folder);
-    } else
-        for (const auto folder : folders)
-            transaction.emplace<commands::RemoveAssetFolder>(folder);
-    if (!session_.executeTransaction(std::move(transaction)).succeeded())
-        return;
-    const auto remaining = session_.snapshot().project().compositions();
-    if (wasActive && !remaining.empty())
-        (void)session_.setComposition(std::ranges::min(remaining, {}, [](const auto& composition) {
-                                          return composition.id().value();
-                                      }).id());
+    // The same path, and the same in-use warning, as Composition > Delete Composition.
+    requestDeleteProjectItems(session_, *this, std::move(selection));
 }
 void AssetsEditor::revealInFileManager(const document::AssetId id) {
     const auto* controller = session_.assetController();

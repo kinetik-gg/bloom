@@ -6,6 +6,7 @@
 #include <bloom/render/image.hpp>
 #include <filesystem>
 #include <functional>
+#include <string_view>
 
 namespace bloom::output {
 struct MediaOutputFacetV1 {
@@ -32,7 +33,30 @@ struct H264RuntimeAvailabilityV1 {
     std::filesystem::path directory;
     std::string detail;
 };
+// Which H.264 encoder this platform's export provider uses. A pure platform answer: it opens no
+// file and probes no device, so a dialog may ask it on the UI thread.
+// - macOS: VideoToolbox, inside the AVFoundation provider; nothing to install or consent to.
+// - Linux x86-64: Cisco OpenH264 (installed after consent, or located), or VA-API hardware.
+// - Linux on other processors: VA-API hardware only; Cisco publishes no binary there.
+// - Windows: none yet (the supervised FFmpeg worker is not available there).
+enum class H264EncoderV1 : std::uint8_t { None, VideoToolbox, OpenH264 };
+struct H264EncoderSupportV1 {
+    // The encoder used without hardware.
+    H264EncoderV1 software = H264EncoderV1::None;
+    // The provider can encode on VA-API hardware when a render node exists.
+    bool hardwareVaapi = false;
+    // Why software is None.
+    std::string_view softwareReason;
+};
+[[nodiscard]] H264EncoderSupportV1 h264EncoderSupportV1() noexcept;
+// Whether a VA-API render node (/dev/dri/renderD*) exists. A filesystem probe: call it on a
+// worker, never on the UI thread.
+[[nodiscard]] bool vaapiRenderNodeAvailableV1();
+// Verifies the installed OpenH264 binary (a SHA-256 of the library): worker only.
 [[nodiscard]] H264RuntimeAvailabilityV1 verifyH264RuntimeV1();
+// Verifies and installs a downloaded OpenH264 binary (hash and copy): worker only, cancellable.
+[[nodiscard]] H264RuntimeAvailabilityV1
+locateH264RuntimeV1(const std::filesystem::path& file, const std::function<bool()>& cancelled = {});
 [[nodiscard]] H264RuntimeAvailabilityV1
 installH264RuntimeV1(bool explicitConsent, const std::function<void(std::uint64_t)>& progress = {});
 [[nodiscard]] media::provider::Result<MediaOutputAnalysisV1>

@@ -31,6 +31,7 @@ class CompositionPreviewController;
 class CompositionSession;
 class EditorRegistry;
 class FrameExportController;
+class LicensesWindow;
 class ProjectHost;
 class RamPreviewController;
 class PlaybackController;
@@ -219,6 +220,7 @@ class MainWindow final : public QMainWindow {
     QAction* viewAudioEnabledAction_ = nullptr;
     QAction* reportIssueAction_ = nullptr;
     QAction* openSourceLicensesAction_ = nullptr;
+    QPointer<LicensesWindow> licensesWindow_;
     QAction* purgePreviewCacheAction_ = nullptr;
     QAction* purgeMediaCacheAction_ = nullptr;
     bool workspaceLayoutWritable_ = true;

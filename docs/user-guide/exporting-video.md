@@ -26,12 +26,18 @@ fail to ascend, contain path separators or change the preset extension.
 1. With the same ACES composition, select **Review H.264 (Rec.709, look on)**.
 2. Choose the range, a `.mov` destination and whether to include audio. The preset uses
    **Rec.1886 Rec.709 - Display / ACES 1.0 - SDR Video** with the look on.
-3. If needed, choose **Install OpenH264…** and accept Cisco's binary licence. Bloom downloads
-   Cisco OpenH264 2.6.0 only after consent and verifies its digest. **Locate downloaded file…**
-   verifies an existing download. When available, **Use hardware (VA-API)** selects the hardware
-   alternative. No Cisco binary is bundled.
+3. The dialog says which H.264 encoder this computer uses. On macOS it is Apple VideoToolbox and
+   there is nothing to install. On Linux, if Cisco OpenH264 is not installed yet, choose
+   **Install OpenH264…** and accept Cisco's binary licence: Bloom downloads Cisco OpenH264 2.6.0
+   only after consent and verifies its digest. **Locate Downloaded File…** verifies and copies a
+   download you already have (your file stays where it is); a busy bar and **Cancel** show while it
+   is checked. When a VA-API device is present, **Use hardware (VA-API)** selects the hardware
+   alternative; on Linux computers Cisco publishes no binary for, it is the only H.264 encoder and
+   stays on. No Cisco binary is bundled. **Continue** stays disabled, with the reason under the
+   field, until a destination, a valid range and an encoder are chosen.
 4. Choose **Continue**. Check the display/view pair and `look: baked (N look-tagged effects)` in
-   the approval report, then choose **Export**.
+   the approval prompt, then choose **Export**. The prompt does not stop Bloom while it waits; the
+   preset's id and the approval digest are in its tooltip.
 
 The review movie uses H.264 High, a 30 Mbps default target, 8-bit 4:2:0, a one-second GOP and
 Rec.709 limited-range tags. Look-tagged effects and the display transform are baked into the

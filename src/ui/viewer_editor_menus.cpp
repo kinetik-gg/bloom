@@ -4,6 +4,7 @@
 // specified in docs/ux/ui-grammar.md ("Viewer menus").
 #include "composition_editor_support.hpp"
 #include "layer_drop.hpp"
+#include "safe_area_fields.hpp"
 #include "viewer_editor_internal.hpp"
 
 #include <bloom/commands/node_operations.hpp>
@@ -18,20 +19,20 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <QAction>
 #include <QActionGroup>
 #include <QContextMenuEvent>
-#include <QDialog>
-#include <QDialogButtonBox>
-#include <QDoubleSpinBox>
-#include <QFormLayout>
 #include <QKeySequence>
 #include <QMenu>
+#include <QPointer>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QVBoxLayout>
 
 #include <algorithm>
 #include <functional>
@@ -489,54 +490,52 @@ void ViewerEditor::showCustomSafeAreaDialog() {
     if (composition == nullptr) {
         return;
     }
-    QDialog dialog(this);
-    dialog.setObjectName(QStringLiteral("viewerSafeAreaDialog"));
-    dialog.setWindowTitle(tr("Custom Safe Areas"));
-    auto* form = new QFormLayout(&dialog);
-    auto* action = new QDoubleSpinBox(&dialog);
-    action->setObjectName(QStringLiteral("viewerActionSafeAreaField"));
-    action->setRange(1.0, 100.0);
-    action->setDecimals(1);
-    action->setSuffix(QStringLiteral("%"));
-    action->setValue(composition->safeAreas().action * 100.0);
-    form->addRow(tr("Action"), action);
-    auto* title = new QDoubleSpinBox(&dialog);
-    title->setObjectName(QStringLiteral("viewerTitleSafeAreaField"));
-    title->setRange(1.0, 100.0);
-    title->setDecimals(1);
-    title->setSuffix(QStringLiteral("%"));
-    title->setValue(composition->safeAreas().title * 100.0);
-    form->addRow(tr("Title"), title);
-    auto* error = new kit::KLabel(&dialog);
-    error->setObjectName(QStringLiteral("viewerSafeAreaErrorLabel"));
-    error->hide();
-    form->addRow(error);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    buttons->setObjectName(QStringLiteral("viewerSafeAreaDialogButtons"));
-    form->addRow(buttons);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, action, title, error] {
-        if (title->value() > action->value()) {
-            error->setText(QObject::tr("Title safe area must not exceed Action safe area."));
-            error->show();
-            return;
-        }
-        dialog.accept();
+    // The id, never the pointer: the project can be replaced (or the composition deleted) while
+    // the dialog is open, and the commit looks the composition up again.
+    const auto compositionId = composition->id();
+    auto* dialog =
+        new kit::KDialog(tr("Custom Safe Areas"), QStringLiteral("viewerSafeAreaDialog"), *this);
+    auto* form = dialog->addForm();
+    // The Composition dialog's own Action / Title Safe control.
+    auto safe = SafeAreaFields::create(*form, QStringLiteral("viewerActionSafeAreaField"),
+                                       QStringLiteral("viewerTitleSafeAreaField"));
+    safe.setSettings(composition->safeAreas());
+    (void)form->addRow(tr("Action Safe"), safe.action);
+    (void)form->addRow(tr("Title Safe"), safe.title);
+    dialog->contentLayout()->addStretch(1);
+    dialog->buttonBox()->setObjectName(QStringLiteral("viewerSafeAreaDialogButtons"));
+    dialog->addButton(kit::KDialog::Role::Accept, tr("OK"));
+    dialog->addButton(kit::KDialog::Role::Reject, tr("Cancel"));
+    QPointer<CompositionSession> session(&session_);
+    dialog->setValidator([safe, session, compositionId]() -> std::optional<kit::KRefusal> {
+        if (!session || session->snapshot().project().findComposition(compositionId) == nullptr)
+            return kit::KRefusal{nullptr, tr("The composition is no longer in the project.")};
+        if (const auto issue = safe.issue())
+            return kit::KRefusal{safe.title, *issue};
+        return std::nullopt;
     });
-    if (dialog.exec() != QDialog::Accepted) {
-        return;
-    }
-    const document::SafeAreaSettings settings{action->value() / 100.0, title->value() / 100.0};
-    commands::Transaction transaction(QStringLiteral("Set Custom Safe Areas").toStdString(),
-                                      session_.snapshot().revision());
-    transaction.emplace<commands::SetCompositionSafeAreas>(composition->id(), settings);
-    if (session_.executeTransaction(std::move(transaction)).succeeded()) {
-        overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Custom;
-        QSettings().setValue(safeAreaPresetSetting(composition->id()),
-                             safeAreaPresetName(ViewerSafeAreaPreset::Custom));
-        updateOverlayActions();
-        update();
-    }
+    dialog->watch(safe.action);
+    dialog->watch(safe.title);
+    connect(&session_, &CompositionSession::snapshotChanged, dialog, &kit::KDialog::revalidate);
+    dialog->setInitialFocus(safe.action);
+    QPointer<ViewerEditor> self(this);
+    dialog->open([self, safe, compositionId](const kit::KDialog::Role role) {
+        if (role != kit::KDialog::Role::Accept || !self)
+            return;
+        auto& session = self->session_;
+        if (session.snapshot().project().findComposition(compositionId) == nullptr)
+            return;
+        commands::Transaction transaction(QStringLiteral("Set Custom Safe Areas").toStdString(),
+                                          session.snapshot().revision());
+        transaction.emplace<commands::SetCompositionSafeAreas>(compositionId, safe.settings());
+        if (session.executeTransaction(std::move(transaction)).succeeded()) {
+            self->overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Custom;
+            QSettings().setValue(safeAreaPresetSetting(compositionId),
+                                 safeAreaPresetName(ViewerSafeAreaPreset::Custom));
+            self->updateOverlayActions();
+            self->update();
+        }
+    });
 }
 
 // ---- Canvas context menu -----------------------------------------------------------------------

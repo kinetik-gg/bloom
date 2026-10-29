@@ -39,7 +39,12 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
+#include <QLabel>
+#include <QLineEdit>
 #include <QString>
+#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/dialog.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 
 #include <algorithm>
 #include <array>
@@ -78,6 +83,7 @@ namespace platform = bloom::platform;
 namespace runtime = bloom::runtime;
 
 using bloom::ui::CompositionSession;
+using bloom::ui::FrameExportActivity;
 using bloom::ui::FrameExportApprovalDecision;
 using bloom::ui::FrameExportApprovalPrompt;
 using bloom::ui::FrameExportController;
@@ -145,6 +151,19 @@ class TempDirectory final {
   private:
     std::filesystem::path path_;
 };
+
+// Every kit dialog needs an owner window; main() provides one.
+QWidget* gOwner = nullptr;
+[[nodiscard]] QWidget& owner() { return *gOwner; }
+[[nodiscard]] bloom::ui::CompositionExportDialogOptions
+exportOptions(const QString& key = {}, const bloom::document::ColorSettings* settings = nullptr) {
+    bloom::ui::CompositionExportDialogOptions options;
+    options.maximumFrame = 47;
+    options.sampleRate = 48000;
+    options.projectKey = key;
+    options.colorSettings = settings;
+    return options;
+}
 
 template <typename Predicate> [[nodiscard]] bool waitUntil(Predicate predicate) {
     QElapsedTimer timer;
@@ -1181,7 +1200,7 @@ void testCompositionExportUi(Expectations& expectations) {
         }
         dialog->reject();
     });
-    expectations.expect(!bloom::ui::compositionExportDialog(47, 48000),
+    expectations.expect(!bloom::ui::compositionExportDialog(owner(), exportOptions()),
                         "dialog cancellation yields no request");
     if (!output::outputPresetAvailabilityV1(output::OutputPresetV1::ProResMovV1).available)
         return;
@@ -1259,9 +1278,9 @@ void testDeliverableDialog(Expectations& expectations) {
         if (dialog)
             dialog->reject();
     });
-    expectations.expect(
-        !bloom::ui::compositionExportDialog(47, 48000, "neutral-color", &neutralSettings),
-        "unsupported deliverable dialog cancels without a request");
+    expectations.expect(!bloom::ui::compositionExportDialog(
+                            owner(), exportOptions("neutral-color", &neutralSettings)),
+                        "unsupported deliverable dialog cancels without a request");
     Fixture neutralFixture;
     if (neutralFixture.setUp(expectations, "neutral deliverable preflight fixture")) {
         int refusals = 0;
@@ -1290,8 +1309,9 @@ void testDeliverableDialog(Expectations& expectations) {
         if (!dialog)
             return;
         auto* preset = dialog->findChild<bloom::ui::kit::KDropdown*>("compositionExportPreset");
-        auto* start = dialog->findChild<QSpinBox*>("compositionExportStartFrame");
-        auto* padding = dialog->findChild<QSpinBox*>("compositionExportPadding");
+        auto* start =
+            dialog->findChild<bloom::ui::kit::KValueField*>("compositionExportStartFrame");
+        auto* padding = dialog->findChild<bloom::ui::kit::KValueField*>("compositionExportPadding");
         auto* compression =
             dialog->findChild<bloom::ui::kit::KDropdown*>("compositionExportCompression");
         auto* space = dialog->findChild<bloom::ui::kit::KLineEdit*>("compositionExportOutputSpace");
@@ -1311,7 +1331,8 @@ void testDeliverableDialog(Expectations& expectations) {
         padding->setValue(5);
         dialog->accept();
     });
-    const auto request = bloom::ui::compositionExportDialog(47, 48000, "color5-a", &acesSettings);
+    const auto request =
+        bloom::ui::compositionExportDialog(owner(), exportOptions("color5-a", &acesSettings));
     expectations.expect(
         request && request->deliverable == bloom::ui::DeliverablePreset::VfxHandoff &&
             request->range.naming.startFrame == 1010 && request->range.naming.framePadding == 5 &&
@@ -1340,8 +1361,9 @@ void testDeliverableDialog(Expectations& expectations) {
             }
             dialog->reject();
         });
-        expectations.expect(!bloom::ui::compositionExportDialog(47, 48000, key, &acesSettings),
-                            "persistence probe cancelled");
+        expectations.expect(
+            !bloom::ui::compositionExportDialog(owner(), exportOptions(key, &acesSettings)),
+            "persistence probe cancelled");
     }
     settings.remove("export/projects/color5-a");
 }
@@ -1403,9 +1425,144 @@ void testHandoffApproval(Expectations& expectations) {
 
 } // namespace
 
+// -------------------------------------------------------------------------------------------
+// Lane C: Export Frame Range is ONE dialog (destination + first/last frame), and the approval is
+// an asynchronous window-modal prompt that never blocks the poll and shows no raw digest.
+// -------------------------------------------------------------------------------------------
+
+[[nodiscard]] QList<bloom::ui::kit::KDialog*> visibleKitDialogs() {
+    QList<bloom::ui::kit::KDialog*> dialogs;
+    for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* dialog = qobject_cast<bloom::ui::kit::KDialog*>(widget);
+            dialog && dialog->isVisible())
+            dialogs << dialog;
+    return dialogs;
+}
+
+void testFrameRangeIsOneDialog(Expectations& expectations) {
+    const auto duration = core::RationalTime::create(4, 24);
+    if (!duration.has_value())
+        return;
+    Fixture fixture(smallFormat(), *duration);
+    if (!fixture.setUp(expectations, "range dialog: fixture is available"))
+        return;
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.5, 0.5, 0.5, 1.0}),
+        "range dialog: a layer is added");
+    fixture.controller().setDialogOwner(&owner());
+    fixture.controller().setApprovalDecisionProvider(
+        [](const FrameExportApprovalPrompt&) { return FrameExportApprovalDecision::Cancel; });
+    const auto base = fixture.directory.path() / "range";
+    int dialogsSeen = 0;
+    bool refusedWhileEmpty = false;
+    QTimer::singleShot(0, [&] {
+        const auto dialogs = visibleKitDialogs();
+        dialogsSeen = static_cast<int>(dialogs.size());
+        auto* dialog = dialogs.isEmpty() ? nullptr : dialogs.front();
+        auto* destination =
+            dialog ? dialog->findChild<QLineEdit*>("exportFrameRangeDestination") : nullptr;
+        auto* first =
+            dialog ? dialog->findChild<bloom::ui::kit::KValueField*>("kRangeFirst") : nullptr;
+        auto* last =
+            dialog ? dialog->findChild<bloom::ui::kit::KValueField*>("kRangeLast") : nullptr;
+        if (!dialog || !destination || !first || !last) {
+            if (dialog)
+                dialog->reject();
+            return;
+        }
+        refusedWhileEmpty = dialog->refusal().has_value() &&
+                            !dialog->button(bloom::ui::kit::KDialog::Role::Accept)->isEnabled();
+        destination->setText(QString::fromStdString(base.string()));
+        first->setValue(1);
+        last->setValue(2);
+        dialog->button(bloom::ui::kit::KDialog::Role::Accept)->click();
+    });
+    int finished = 0;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](FrameExportOutcome, const QString&) { ++finished; });
+    fixture.controller().requestRangeExport();
+    expectations.expect(dialogsSeen == 1, "range dialog: destination and range are one dialog");
+    expectations.expect(refusedWhileEmpty, "range dialog: no destination keeps Export disabled");
+    expectations.expect(fixture.controller().totalFrameCount() == 2 ||
+                            waitUntil([&] { return finished == 1; }),
+                        "range dialog: the chosen range starts exporting");
+    (void)waitUntil([&] { return finished == 1; });
+}
+
+void testApprovalIsAsynchronous(Expectations& expectations) {
+    Fixture fixture;
+    if (!fixture.setUp(expectations, "async approval: fixture is available"))
+        return;
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.4, 0.4, 0.4, 1.0}),
+        "async approval: the solid layer is added");
+    fixture.controller().setDialogOwner(&owner());
+    // The production requester, not a test seam: it must ask without blocking.
+    int finished = 0;
+    FrameExportOutcome outcome = FrameExportOutcome::Refused;
+    QObject::connect(&fixture.controller(), &FrameExportController::exportFinished,
+                     [&](const FrameExportOutcome result, const QString&) {
+                         ++finished;
+                         outcome = result;
+                     });
+    const auto target = fixture.directory.path() / "approved.png";
+    fixture.controller().beginExport(target);
+    bloom::ui::kit::KDialog* prompt = nullptr;
+    expectations.expect(waitUntil([&] {
+                            for (auto* dialog : visibleKitDialogs())
+                                if (dialog->objectName() == QStringLiteral("exportApproval"))
+                                    prompt = dialog;
+                            return prompt != nullptr;
+                        }),
+                        "async approval: the prompt opens while the event loop keeps running");
+    if (prompt == nullptr)
+        return;
+    expectations.expect(fixture.controller().activity() == FrameExportActivity::AwaitingApproval,
+                        "async approval: the export waits for the answer");
+    auto* detail = prompt->findChild<QLabel*>(QStringLiteral("exportApprovalDetail"));
+    expectations.expect(
+        detail && detail->text().contains(QStringLiteral("PNG (8-bit sRGB)")) &&
+            !detail->text().contains(QStringLiteral("PngRgba8SrgbV1")) &&
+            !detail->text().contains(QStringLiteral("Digest")) &&
+            detail->toolTip().contains(QStringLiteral("PngRgba8SrgbV1")),
+        "async approval: human-readable text; the id and digest are in the tooltip");
+    prompt->button(bloom::ui::kit::KDialog::Role::Accept)->click();
+    expectations.expect(waitUntil([&] { return finished == 1; }),
+                        "async approval: the answer continues the export");
+    expectations.expect(outcome == FrameExportOutcome::Published && std::filesystem::exists(target),
+                        "async approval: Export publishes the frame");
+
+    // Cancelling while the question is open closes it and cancels cleanly.
+    finished = 0;
+    prompt = nullptr;
+    fixture.controller().beginExport(fixture.directory.path() / "withdrawn.png");
+    expectations.expect(waitUntil([&] {
+                            for (auto* dialog : visibleKitDialogs())
+                                if (dialog->objectName() == QStringLiteral("exportApproval"))
+                                    prompt = dialog;
+                            return prompt != nullptr;
+                        }),
+                        "async approval: the second prompt opens");
+    fixture.controller().requestCancellation();
+    expectations.expect(waitUntil([&] { return finished == 1; }) &&
+                            outcome == FrameExportOutcome::Cancelled,
+                        "async approval: cancelling withdraws the question");
+    expectations.expect(waitUntil([&] {
+                            for (auto* dialog : visibleKitDialogs())
+                                if (dialog->objectName() == QStringLiteral("exportApproval"))
+                                    return false;
+                            return true;
+                        }),
+                        "async approval: the withdrawn prompt closes");
+    expectations.expect(waitUntil([&] { return fixture.controller().chargedResourceBytes() == 0; }),
+                        "async approval: the withdrawn attempt releases its reservation");
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    QWidget ownerWindow;
+    gOwner = &ownerWindow;
     Expectations expectations;
     testCanExportGatesOnComposition(expectations);
     testFullDriveApprovedAndPublished(expectations);
@@ -1423,5 +1580,7 @@ int main(int argc, char** argv) {
     testHandoffApproval(expectations);
     testFrameRangeExportsEveryFrameAtItsOwnTime(expectations);
     testFrameRangeRefusalAndCancellation(expectations);
+    testFrameRangeIsOneDialog(expectations);
+    testApprovalIsAsynchronous(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

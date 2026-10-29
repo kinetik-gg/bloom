@@ -33,6 +33,7 @@
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
+#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QDialog>
@@ -57,6 +58,10 @@
 #include <utility>
 
 namespace {
+
+// Every kit dialog needs an owner window; main() provides one.
+QWidget* gOwner = nullptr;
+[[nodiscard]] QWidget& owner() { return *gOwner; }
 
 using namespace bloom;
 
@@ -143,7 +148,7 @@ runNewCompositionDialog(ui::CompositionSession& session,
         }
         interact(*dialog, expectations);
     });
-    return ui::showNewCompositionDialog(session, nullptr);
+    return ui::showNewCompositionDialog(session, owner());
 }
 
 void testBlankStartupOwningSession(Expectations& expectations) {
@@ -263,7 +268,7 @@ void testEmptyWorkspaceEditorsAndFirstComposition(Expectations& expectations) {
             return;
         }
         dialogOpened = true;
-        if (auto* ok = dialog->findChild<QPushButton*>(QStringLiteral("assetsDialogOk")))
+        if (auto* ok = dialog->findChild<QAbstractButton*>(QStringLiteral("compositionSettingsOk")))
             ok->click();
         else
             dialog->reject();
@@ -372,10 +377,11 @@ void testDurationDefaultsToTenSecondsInFrames(Expectations& expectations) {
     const auto id = runNewCompositionDialog(
         *session,
         [](QDialog& dialog, Expectations& expect) {
-            auto* duration = dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
-            auto* unit =
-                dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
-            auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
+            auto* duration =
+                dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsDuration"));
+            auto* unit = dialog.findChild<ui::kit::KDropdown*>(
+                QStringLiteral("compositionSettingsDurationUnit"));
+            auto* ok = dialog.findChild<QAbstractButton*>(QStringLiteral("compositionSettingsOk"));
             expect.expect(duration != nullptr && unit != nullptr && ok != nullptr,
                           "default duration: controls exist");
             if (duration != nullptr) {
@@ -416,10 +422,12 @@ void testFramesAtTwentyFiveAndThirtyFps(Expectations& expectations) {
         const auto id = runNewCompositionDialog(
             *session,
             [fps](QDialog& dialog, Expectations& expect) {
-                auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
+                auto* rate =
+                    dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsRate"));
                 auto* duration =
-                    dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
-                auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
+                    dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsDuration"));
+                auto* ok =
+                    dialog.findChild<QAbstractButton*>(QStringLiteral("compositionSettingsOk"));
                 if (rate == nullptr || duration == nullptr || ok == nullptr) {
                     expect.expect(false, "fps duration: controls exist");
                     dialog.reject();
@@ -451,11 +459,12 @@ void testFractionalSeconds(Expectations& expectations) {
     const auto id = runNewCompositionDialog(
         *session,
         [](QDialog& dialog, Expectations& expect) {
-            auto* unit =
-                dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
-            auto* duration = dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
-            auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
-            auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
+            auto* unit = dialog.findChild<ui::kit::KDropdown*>(
+                QStringLiteral("compositionSettingsDurationUnit"));
+            auto* duration =
+                dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsDuration"));
+            auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsRate"));
+            auto* ok = dialog.findChild<QAbstractButton*>(QStringLiteral("compositionSettingsOk"));
             if (unit == nullptr || duration == nullptr || rate == nullptr || ok == nullptr) {
                 expect.expect(false, "fractional seconds: controls exist");
                 dialog.reject();
@@ -487,10 +496,11 @@ void testSwitchUnitsPreservesDuration(Expectations& expectations) {
     const auto id = runNewCompositionDialog(
         *session,
         [](QDialog& dialog, Expectations& expect) {
-            auto* unit =
-                dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
-            auto* duration = dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
-            auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
+            auto* unit = dialog.findChild<ui::kit::KDropdown*>(
+                QStringLiteral("compositionSettingsDurationUnit"));
+            auto* duration =
+                dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsDuration"));
+            auto* ok = dialog.findChild<QAbstractButton*>(QStringLiteral("compositionSettingsOk"));
             if (unit == nullptr || duration == nullptr || ok == nullptr) {
                 expect.expect(false, "switch units: controls exist");
                 dialog.reject();
@@ -530,10 +540,12 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
         const auto id = runNewCompositionDialog(
             *session,
             [](QDialog& dialog, Expectations& expect) {
-                auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
+                auto* rate =
+                    dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsRate"));
                 auto* duration =
-                    dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
-                auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
+                    dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsDuration"));
+                auto* ok =
+                    dialog.findChild<QAbstractButton*>(QStringLiteral("compositionSettingsOk"));
                 if (rate == nullptr || duration == nullptr || ok == nullptr) {
                     expect.expect(false, "fps frames: controls exist");
                     dialog.reject();
@@ -563,11 +575,13 @@ void testFpsChangeKeepsEnteredUnit(Expectations& expectations) {
             *session,
             [](QDialog& dialog, Expectations& expect) {
                 auto* unit = dialog.findChild<ui::kit::KDropdown*>(
-                    QStringLiteral("assetsDurationUnitDropdown"));
+                    QStringLiteral("compositionSettingsDurationUnit"));
                 auto* duration =
-                    dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
-                auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
-                auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
+                    dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsDuration"));
+                auto* rate =
+                    dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsRate"));
+                auto* ok =
+                    dialog.findChild<QAbstractButton*>(QStringLiteral("compositionSettingsOk"));
                 if (unit == nullptr || duration == nullptr || rate == nullptr || ok == nullptr) {
                     expect.expect(false, "fps seconds: controls exist");
                     dialog.reject();
@@ -599,10 +613,11 @@ void testInvalidValuesRemainVisible(Expectations& expectations) {
     const auto id = runNewCompositionDialog(
         *session,
         [](QDialog& dialog, Expectations& expect) {
-            auto* duration = dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
-            auto* unit =
-                dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
-            auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
+            auto* duration =
+                dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsDuration"));
+            auto* unit = dialog.findChild<ui::kit::KDropdown*>(
+                QStringLiteral("compositionSettingsDurationUnit"));
+            auto* ok = dialog.findChild<QAbstractButton*>(QStringLiteral("compositionSettingsOk"));
             if (duration == nullptr || unit == nullptr || ok == nullptr) {
                 expect.expect(false, "invalid values: controls exist");
                 dialog.reject();
@@ -664,9 +679,10 @@ void testInheritsCurrentCompositionDuration(Expectations& expectations) {
     const auto id = runNewCompositionDialog(
         *session,
         [](QDialog& dialog, Expectations& expect) {
-            auto* duration = dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
-            auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
-            auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
+            auto* duration =
+                dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsDuration"));
+            auto* rate = dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsRate"));
+            auto* ok = dialog.findChild<QAbstractButton*>(QStringLiteral("compositionSettingsOk"));
             if (duration == nullptr || rate == nullptr || ok == nullptr) {
                 expect.expect(false, "inherit duration: controls exist");
                 dialog.reject();
@@ -695,6 +711,8 @@ void testInheritsCurrentCompositionDuration(Expectations& expectations) {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    QWidget ownerWindow;
+    gOwner = &ownerWindow;
     Expectations expectations;
 
     testBlankStartupOwningSession(expectations);

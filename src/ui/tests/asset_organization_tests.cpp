@@ -9,10 +9,11 @@
 #include <QDropEvent>
 #include <QElapsedTimer>
 #include <QHeaderView>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
-#include <QMessageBox>
 #include <QMimeData>
+#include <QSet>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
@@ -30,6 +31,7 @@
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -92,25 +94,34 @@ void rename(QTreeWidget& tree, QTreeWidgetItem* item, const QString& name, bool 
     QApplication::processEvents();
     QApplication::processEvents();
 }
-// Answers the delete confirmation with one of its buttons (by object name), or Cancel.
+// Answers the delete confirmation (an asynchronous kit dialog) with one of its buttons (by object
+// name), or Cancel.
+[[nodiscard]] ui::kit::KDialog* visibleConfirmation() {
+    for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* dialog = qobject_cast<ui::kit::KDialog*>(widget);
+            dialog && dialog->isVisible() &&
+            dialog->objectName() == QStringLiteral("assetsDeleteConfirmation"))
+            return dialog;
+    return nullptr;
+}
 class Confirmation final {
   public:
     explicit Confirmation(QString button) : button_(std::move(button)) {
         timer_.setInterval(5);
         QObject::connect(&timer_, &QTimer::timeout, [this] {
-            for (auto* widget : QApplication::topLevelWidgets()) {
-                auto* box = qobject_cast<QMessageBox*>(widget);
-                if (box == nullptr || !box->isVisible() ||
-                    box->objectName() != QStringLiteral("assetsDeleteConfirmation"))
-                    continue;
-                ++shown_;
-                text_ = box->text();
-                if (auto* chosen = box->findChild<QAbstractButton*>(button_);
-                    chosen && !button_.isEmpty())
-                    chosen->click();
-                else
-                    box->reject();
-            }
+            auto* box = visibleConfirmation();
+            if (box == nullptr || answered_.contains(box))
+                return;
+            answered_.insert(box);
+            ++shown_;
+            if (auto* heading =
+                    box->findChild<QLabel*>(QStringLiteral("assetsDeleteConfirmationHeading")))
+                text_ = heading->text();
+            if (auto* chosen = box->findChild<QAbstractButton*>(button_);
+                chosen && !button_.isEmpty())
+                chosen->click();
+            else
+                box->reject();
         });
         timer_.start();
     }
@@ -120,6 +131,7 @@ class Confirmation final {
   private:
     QString button_;
     QTimer timer_;
+    QSet<QObject*> answered_;
     int shown_ = 0;
     QString text_;
 };
@@ -130,6 +142,10 @@ void pressDelete(QTreeWidget& tree, const QList<QTreeWidgetItem*>& items) {
     tree.setCurrentItem(items.front(), 0, QItemSelectionModel::NoUpdate);
     tree.setFocus();
     QTest::keyClick(&tree, Qt::Key_Delete);
+    QApplication::processEvents();
+    // The warning is asynchronous: let it appear and be answered.
+    QTest::qWait(40);
+    (void)QTest::qWaitFor([] { return visibleConfirmation() == nullptr; }, 2000);
     QApplication::processEvents();
 }
 // Triggers one action of the context menu for `item`.
@@ -310,6 +326,10 @@ void run() {
             dialog->reject();
     });
     contextAction(*tree, item(assets::kAssetRole, a.value()), "assetsEditTagsAction");
+    // Edit Tags is an asynchronous kit dialog: wait for it to be answered.
+    (void)QTest::qWaitFor(
+        [&] { return editedDialog && session.snapshot().project().findAsset(a)->tags.size() == 2; },
+        2000);
     require(editedDialog && session.snapshot().project().findAsset(a)->tags ==
                                 std::vector<std::string>{"hero", "review"},
             "tag dialog authors normalized tags");
@@ -369,7 +389,7 @@ void run() {
                 "deleting a used asset warns with its usage, and Cancel keeps it");
     }
     {
-        Confirmation answer(QStringLiteral("assetsDeleteConfirmButton"));
+        Confirmation answer(QStringLiteral("assetsDeleteConfirmationDestructiveButton"));
         pressDelete(*tree, {item(assets::kAssetRole, b.value())});
         require(answer.shown() == 1 && !session.snapshot().project().findAsset(b),
                 "confirming deletes the used asset");
@@ -377,7 +397,7 @@ void run() {
                 "used delete undo restores it");
     }
     {
-        Confirmation answer(QStringLiteral("assetsDeleteFoldersOnlyButton"));
+        Confirmation answer(QStringLiteral("assetsDeleteConfirmationAlternateButton"));
         pressDelete(*tree, {item(assets::kFolderRole, shots.value())});
         const auto& project = session.snapshot().project();
         require(answer.shown() == 1 && !project.findAssetFolder(shots) &&
@@ -387,7 +407,7 @@ void run() {
         require(session.undo(), "folder-only delete undo");
     }
     {
-        Confirmation answer(QStringLiteral("assetsDeleteConfirmButton"));
+        Confirmation answer(QStringLiteral("assetsDeleteConfirmationDestructiveButton"));
         pressDelete(*tree, {item(assets::kFolderRole, shots.value())});
         const auto& project = session.snapshot().project();
         require(answer.shown() == 1 && !project.findAssetFolder(shots) &&

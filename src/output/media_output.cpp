@@ -3,6 +3,8 @@
 #include <bloom/media/provider/openh264_runtime.hpp>
 #include <bloom/output/media_output.hpp>
 #include <cmath>
+#include <filesystem>
+#include <system_error>
 
 namespace bloom::output {
 using namespace media::provider;
@@ -13,6 +15,40 @@ H264RuntimeAvailabilityV1 verifyH264RuntimeV1() {
             .digest = status.digest,
             .directory = status.directory,
             .detail = status.detail};
+}
+H264EncoderSupportV1 h264EncoderSupportV1() noexcept {
+#if defined(__APPLE__)
+    return {.software = H264EncoderV1::VideoToolbox, .hardwareVaapi = false, .softwareReason = {}};
+#elif defined(__linux__)
+    if (OpenH264Runtime::platformSupported())
+        return {.software = H264EncoderV1::OpenH264, .hardwareVaapi = true, .softwareReason = {}};
+    return {.software = H264EncoderV1::None,
+            .hardwareVaapi = true,
+            .softwareReason = "Cisco publishes no OpenH264 binary for this processor, so H.264 "
+                              "is encoded on VA-API hardware."};
+#else
+    return {.software = H264EncoderV1::None,
+            .hardwareVaapi = false,
+            .softwareReason = "This platform has no H.264 encoder yet."};
+#endif
+}
+bool vaapiRenderNodeAvailableV1() {
+#if defined(__linux__)
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator("/dev/dri", error))
+        if (entry.path().filename().string().starts_with("renderD"))
+            return true;
+#endif
+    return false;
+}
+H264RuntimeAvailabilityV1 locateH264RuntimeV1(const std::filesystem::path& file,
+                                              const std::function<bool()>& cancelled) {
+    const auto result = OpenH264Runtime().locate(file, cancelled);
+    return {.installed = result.installed,
+            .version = OpenH264Runtime::version(),
+            .digest = result.installed ? OpenH264Runtime::libraryDigest() : std::string{},
+            .directory = result.directory,
+            .detail = result.detail};
 }
 H264RuntimeAvailabilityV1 installH264RuntimeV1(const bool explicitConsent,
                                                const std::function<void(std::uint64_t)>& progress) {

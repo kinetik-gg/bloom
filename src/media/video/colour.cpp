@@ -40,6 +40,15 @@ constexpr std::string_view kOverride =
            matrix == kMatrixBt2020Ncl;
 }
 [[nodiscard]] bool knownRange(const std::int32_t range) { return range == 1 || range == 2; }
+// Ordinary SDR video (ADR 0032): a Rec.709 or Rec.601 (BT.470BG / SMPTE 170M) stream with the
+// BT.709 / SMPTE 170M transfer. Auto shows it through the config's sRGB texture space.
+[[nodiscard]] bool ordinarySdr(const ColourTags& tags) {
+    if (tags.transfer != 1 && tags.transfer != 6)
+        return false;
+    const bool sd = (tags.primaries == kMatrixBt470bg || tags.primaries == kMatrixSmpte170m) &&
+                    (tags.matrix == kMatrixBt470bg || tags.matrix == kMatrixSmpte170m);
+    return sd || (tags.primaries == 1 && (tags.matrix == kMatrixBt709 || tags.matrix == 0));
+}
 // Names every tag a conversion needs but the stream lacks, for diagnostics.
 [[nodiscard]] std::string missingTags(const ColourTags& tags, const bool needTransfer) {
     std::vector<std::string_view> missing;
@@ -279,28 +288,25 @@ VideoInputColorSpaceResolution resolveVideoInputColorSpace(
     }
     if (const auto missing = missingTags(tags, true); !missing.empty())
         return refuse("Video stream has no " + missing + " tag" + std::string(kOverride));
-    // Rec.601 (BT.470BG / SMPTE 170M) SD shares the BT.709 transfer curve; its primaries map to
-    // the config's Rec.709 video space, the matrix is honoured by the YUV conversion.
-    const bool sd = (tags.primaries == kMatrixBt470bg || tags.primaries == kMatrixSmpte170m) &&
-                    (tags.matrix == kMatrixBt470bg || tags.matrix == kMatrixSmpte170m) &&
-                    (tags.transfer == 1 || tags.transfer == 6);
-    if (sd) {
-        if (config.rec709VideoColorSpaceId().empty())
-            return refuse("The OCIO config has no Rec.709 camera/video colour space");
-        return selected(config, std::string(config.rec709VideoColorSpaceId()), true);
-    }
+    // Ordinary SDR video (ADR 0032): the YUV step decodes the stream's matrix and range, and the
+    // R'G'B' it yields is interpreted as players show it, through the config's sRGB texture space,
+    // so footage matches players and Bloom's own sRGB stills. The BT.709 inverse OETF (the
+    // config's Rec.709 camera space) is an explicit interpretation, never the Auto default.
+    const auto sdrDisplay = [&] {
+        if (config.sRgbTextureColorSpaceId().empty())
+            return refuse("The OCIO config has no sRGB texture colour space" +
+                          std::string(kOverride));
+        return selected(config, std::string(config.sRgbTextureColorSpaceId()), true);
+    };
+    // Rec.601 SD's matrix is honoured by the YUV conversion; its R'G'B' is shown like Rec.709's.
+    if (ordinarySdr(tags))
+        return sdrDisplay();
     if (tags.primaries != 1 || (tags.matrix != kMatrixBt709 && tags.matrix != 0))
         return refuse("Rec.2020 or other non-Rec.709 video without a PQ or HLG transfer has no "
                       "automatic config space" +
                       std::string(kOverride));
-    if (tags.transfer == 1 || tags.transfer == 6) {
-        if (config.rec709VideoColorSpaceId().empty())
-            return VideoInputColorSpaceResolution{
-                "", "", "The OCIO config has no Rec.709 camera/video colour space", false, true};
-        return selected(config, std::string(config.rec709VideoColorSpaceId()), true);
-    }
     if (tags.transfer == 13)
-        return selected(config, std::string(config.sRgbTextureColorSpaceId()), true);
+        return sdrDisplay();
     if (tags.transfer == 8)
         return selected(config, std::string(config.processColorSpaceId()), true);
     return VideoInputColorSpaceResolution{
@@ -342,13 +348,22 @@ AssumedVideoColour assumeMissingVideoColour(const ColourTags& source,
         return result;
     result.assumed = true;
     const bool wide = tags.primaries == kPrimariesBt2020 || tags.matrix == kMatrixBt2020Ncl;
+    // Says what Auto now assumes: the matrix family and, for SDR, the sRGB display transfer the
+    // R'G'B' is shown with (ADR 0032).
+    const bool sdr = !wide && (tags.transfer == 1 || tags.transfer == 6 || tags.transfer == 13);
     result.note = std::string("Colour tags missing — assumed ") +
                   (wide ? "Rec.2020" : hd ? "Rec.709" : "Rec.601") +
-                  ". Change in Assets → Input Colour";
-    result.identity = "assumed-colour-v1:" + filled + ":" + std::to_string(tags.primaries) + "," +
+                  (sdr ? " with the sRGB transfer" : "") + ". Change in Assets → Input Colour";
+    // v2: the SDR assumption resolves to the sRGB texture space instead of the camera/linear one.
+    result.identity = "assumed-colour-v2:" + filled + ":" + std::to_string(tags.primaries) + "," +
                       std::to_string(tags.transfer) + "," + std::to_string(tags.matrix) + "," +
                       std::to_string(tags.range);
     return result;
+}
+
+bool sdrVideoColourDefaultApplies(const ColourTags& tags, const VideoGeometry& geometry) {
+    const auto assumed = assumeMissingVideoColour(tags, geometry).tags;
+    return missingTags(assumed, true).empty() && ordinarySdr(assumed);
 }
 
 VideoInputColorSpaceResolution resolveVideoInputColorSpace(

@@ -357,8 +357,11 @@ normalized and presented as a newly saved native document.
 ## Unsaved-Change State Machine
 
 New, Open, window close, and application quit submit a continuation intent. When the current
-editable project is dirty, a UI adapter presents Save, Discard, and Cancel without a nested blocking
-event loop:
+editable project is dirty, a UI adapter presents Save, Discard, and Cancel. The default adapter is a
+kit confirmation over the main window that names the project and the action ("Save changes to
+“Shot 12” before opening another project?"), with Save as its default; it answers synchronously
+(`exec()`), because `ProjectHost` reads its activity and the protected recovery offer right after
+asking. Save itself never blocks: it starts the foreground save below.
 
 ```text
 requested -> awaiting choice

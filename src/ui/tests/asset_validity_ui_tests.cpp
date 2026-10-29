@@ -217,7 +217,7 @@ void statusBarVideoNote(const std::filesystem::path& clip, const std::string& fa
     std::cout << "status bar video cell: " << text << '\n';
     expect(text.starts_with("Video: software") &&
                text.ends_with("Colour tags missing — assumed " + family +
-                              ". Change in Assets → Input Colour"),
+                              " with the sRGB transfer. Change in Assets → Input Colour"),
            "status bar: the decode route and the assumed-colour note are shown");
     expect(bar.videoToolTipForTest().contains(QString::fromStdString(assets.front().name)),
            "status bar: the tooltip names the source");
@@ -288,7 +288,8 @@ int main(int argc, char** argv) {
             expect(video.thumbnail && video.problem.empty(),
                    label + ": Auto shows a thumbnail instead of a colour refusal");
             expect(video.assumed && video.colourNote == "Colour tags missing — assumed " + family +
-                                                            ". Change in Assets → Input Colour",
+                                                            " with the sRGB transfer. Change in "
+                                                            "Assets → Input Colour",
                    label + ": the assumption is a visible note naming its fix");
             expect(video.inputDisplay.rfind("Auto (assumed: ", 0) == 0,
                    label + ": the input colour display says the space was assumed");
@@ -352,8 +353,8 @@ int main(int argc, char** argv) {
             report(path.filename().string(), video);
             expect(video.imported && !video.missing && video.thumbnail && video.problem.empty() &&
                        video.assumed &&
-                       video.colourNote == "Colour tags missing — assumed Rec.709. Change in "
-                                           "Assets → Input Colour",
+                       video.colourNote == "Colour tags missing — assumed Rec.709 with the "
+                                           "sRGB transfer. Change in Assets → Input Colour",
                    path.filename().string() + ": renders in Auto with the Rec.709 note");
         }
         for (const auto& path : extra)
