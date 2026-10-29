@@ -160,3 +160,14 @@ options. Both references were regenerated with `--update-goldens` at DPR 1 and 1
 inspected. Before approval the mean channel errors were 1.86695 (DPR 1) and 1.86923 (DPR 1.5), with
 changed fractions 0.0284935 and 0.0282184. Comparison tolerances and full-image coverage are
 unchanged; rendering identity goldens are unchanged.
+
+TYPE approval (2026-10-30, Qt 6.11.2): every type role is drawn from the bundled upright variable
+faces (Inter Variable for the interface, Geist Mono's variable face for values) at the same
+weights and sizes, in place of the static Inter Medium/SemiBold and Geist Mono Medium files; glyph
+edges move by subpixels and nothing reflows. Both references were regenerated with
+`--update-goldens` at DPR 1 and 1.5 and visually inspected. Before approval the mean channel errors
+were 0.0406176 (DPR 1) and 0.0575914 (DPR 1.5), with changed fractions 0.000478733 and
+0.000605131. A run against the new references still differs by about 0.03 in the status bar's
+operation-cache hit counter, which varies from run to run independently of this change.
+Comparison tolerances and full-image coverage are unchanged; rendering identity goldens are
+unchanged.

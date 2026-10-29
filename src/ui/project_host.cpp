@@ -1,19 +1,21 @@
 #include <bloom/ui/project_host.hpp>
 
-#include "network_share_paths.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/project/canonical_document.hpp>
 #include <bloom/project/save_archive.hpp>
+#include <bloom/runtime/input_color_context.hpp>
 
-#include <QFileDialog>
-#include <QMessageBox>
 #include <QStandardPaths>
 #include <QUuid>
+#include <bloom/ui/kit/dialog_prompts.hpp>
+#include <bloom/ui/kit/file_chooser.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
@@ -105,55 +107,62 @@ ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
     }
     memoryCoordinator_.emplace(std::move(*memoryResult));
 
-    decisionProvider_ = [] {
-        QMessageBox box;
-        box.setWindowTitle(tr("Unsaved Changes"));
-        box.setText(tr("This project has unsaved changes."));
-        box.setInformativeText(tr("Do you want to save your changes before continuing?"));
-        box.setStandardButtons(QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
-        box.setDefaultButton(QMessageBox::Save);
-        switch (box.exec()) {
-        case QMessageBox::Save:
+    // The default prompts are kit dialogs over the dialog owner. Each is synchronous (exec):
+    // these seams hand their answer straight back to the flow that asked.
+    decisionProvider_ = [this] {
+        if (!dialogOwner_)
+            return UnsavedChangeDecision::Cancel;
+        const auto path = displayPath();
+        const auto name = path ? QString::fromStdString(path->stem().string()) : tr("Untitled");
+        const std::unique_ptr<kit::KDialog> prompt(
+            buildUnsavedChangesPrompt(*dialogOwner_, name, pendingUnsavedAction_));
+        prompt->exec();
+        switch (prompt->chosenRole()) {
+        case kit::KDialog::Role::Accept:
             return UnsavedChangeDecision::Save;
-        case QMessageBox::Discard:
+        case kit::KDialog::Role::Destructive:
             return UnsavedChangeDecision::Discard;
         default:
             return UnsavedChangeDecision::Cancel;
         }
     };
-    // A real QFileDialog instance rather than the static getOpenFileName()/getSaveFileName()
-    // convenience: still native when the platform theme provides one (unchanged behaviour), but
-    // constructing it lets configureFileDialogSidebar() add the mounted network shares before
-    // exec(), which the static functions give no opportunity to do.
-    openPathProvider_ = []() -> std::optional<std::filesystem::path> {
-        QFileDialog dialog(nullptr, tr("Open Project"), {}, tr("Bloom Projects (*.bloom)"));
-        dialog.setAcceptMode(QFileDialog::AcceptOpen);
-        dialog.setFileMode(QFileDialog::ExistingFile);
-        configureFileDialogSidebar(dialog);
-        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+    openPathProvider_ = [this]() -> std::optional<std::filesystem::path> {
+        if (!dialogOwner_)
             return std::nullopt;
-        }
-        return std::filesystem::path(dialog.selectedFiles().front().toStdString());
+        const auto chosen =
+            kit::chooseFile(*dialogOwner_, {.mode = kit::KFileRequest::Mode::Open,
+                                            .title = tr("Open Project"),
+                                            .kind = QStringLiteral("project"),
+                                            .nameFilters = tr("Bloom Projects (*.bloom)"),
+                                            .defaultSuffix = QStringLiteral("bloom"),
+                                            .startPath = {}});
+        if (!chosen)
+            return std::nullopt;
+        return std::filesystem::path(chosen->toStdString());
     };
-    saveAsPathProvider_ = []() -> std::optional<std::filesystem::path> {
-        QFileDialog dialog(nullptr, tr("Save Project As"), {}, tr("Bloom Projects (*.bloom)"));
-        dialog.setAcceptMode(QFileDialog::AcceptSave);
-        configureFileDialogSidebar(dialog);
-        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+    saveAsPathProvider_ = [this]() -> std::optional<std::filesystem::path> {
+        if (!dialogOwner_)
             return std::nullopt;
-        }
-        return std::filesystem::path(dialog.selectedFiles().front().toStdString());
+        // `.bloom` is added to a name typed without one, on every platform's dialog.
+        const auto chosen =
+            kit::chooseFile(*dialogOwner_, {.mode = kit::KFileRequest::Mode::Save,
+                                            .title = tr("Save Project As"),
+                                            .kind = QStringLiteral("project"),
+                                            .nameFilters = tr("Bloom Projects (*.bloom)"),
+                                            .defaultSuffix = QStringLiteral("bloom"),
+                                            .startPath = {}});
+        if (!chosen)
+            return std::nullopt;
+        return std::filesystem::path(chosen->toStdString());
     };
 
-    recoveryDecisionProvider_ = [](const std::filesystem::path& recoveryPath) {
-        QMessageBox box;
-        box.setWindowTitle(tr("Recover Unsaved Changes"));
-        box.setText(tr("Bloom closed unexpectedly with unsaved changes."));
-        box.setInformativeText(tr("Recover the unsaved changes from %1?")
-                                   .arg(QString::fromStdString(recoveryPath.filename().string())));
-        box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-        box.setDefaultButton(QMessageBox::Yes);
-        return box.exec() == QMessageBox::Yes;
+    recoveryDecisionProvider_ = [this](const std::filesystem::path& recoveryPath) {
+        if (!dialogOwner_)
+            return false;
+        const std::unique_ptr<kit::KDialog> prompt(
+            buildRecoveryPrompt(*dialogOwner_, recoveryPath));
+        prompt->exec();
+        return prompt->chosenRole() == kit::KDialog::Role::Accept;
     };
     recoveryDirectory_ = defaultRecoveryDirectory();
 
@@ -449,12 +458,14 @@ void ProjectHost::handleRecoveryOffer(const host::SessionRecoveryOffer& offer) {
     }
     // Recovering IS opening: the recovery file is an ordinary Bloom archive, so it goes through
     // the same Open the artist would run on it themselves, unsaved-change prompt included.
-    confirmUnsavedChanges([this, path = offer.recoveryPath] {
-        beginOpen(path);
-        if (activity_ != ProjectHostActivity::Opening) {
-            protectedRecoveryOfferPath_.reset();
-        }
-    });
+    confirmUnsavedChanges(
+        [this, path = offer.recoveryPath] {
+            beginOpen(path);
+            if (activity_ != ProjectHostActivity::Opening) {
+                protectedRecoveryOfferPath_.reset();
+            }
+        },
+        false, UnsavedChangeAction::RecoverProject);
     if (activity_ != ProjectHostActivity::Opening && activity_ != ProjectHostActivity::Saving) {
         protectedRecoveryOfferPath_.reset();
     }
@@ -600,8 +611,60 @@ bool ProjectHost::hasDirtyDecodedContent() const {
            snapshot.dirty.value_or(false);
 }
 
+void ProjectHost::setDialogOwner(QWidget* owner) { dialogOwner_ = owner; }
+
+kit::KDialog* ProjectHost::buildUnsavedChangesPrompt(QWidget& owner, const QString& name,
+                                                     const UnsavedChangeAction action) {
+    QString heading;
+    switch (action) {
+    case UnsavedChangeAction::NewProject:
+        heading = tr("Save changes to \u201c%1\u201d before starting a new project?").arg(name);
+        break;
+    case UnsavedChangeAction::OpenProject:
+        heading = tr("Save changes to \u201c%1\u201d before opening another project?").arg(name);
+        break;
+    case UnsavedChangeAction::RecoverProject:
+        heading =
+            tr("Save changes to \u201c%1\u201d before recovering the unsaved project?").arg(name);
+        break;
+    case UnsavedChangeAction::Close:
+        heading = tr("Save changes to \u201c%1\u201d before closing?").arg(name);
+        break;
+    case UnsavedChangeAction::Continue:
+        heading = tr("Save changes to \u201c%1\u201d?").arg(name);
+        break;
+    }
+    kit::KConfirmSpec spec;
+    spec.title = tr("Unsaved Changes");
+    spec.objectName = QStringLiteral("projectUnsavedChanges");
+    spec.tone = kit::KPromptTone::Warning;
+    spec.heading = heading;
+    spec.detail = tr("If you don't save, your changes since the last save are lost.");
+    spec.acceptText = tr("Save");
+    spec.destructiveText = tr("Don't Save");
+    spec.rejectText = tr("Cancel");
+    spec.defaultRole = kit::KDialog::Role::Accept;
+    return kit::buildConfirm(owner, spec);
+}
+
+kit::KDialog* ProjectHost::buildRecoveryPrompt(QWidget& owner,
+                                               const std::filesystem::path& recoveryPath) {
+    kit::KConfirmSpec spec;
+    spec.title = tr("Recover Unsaved Changes");
+    spec.objectName = QStringLiteral("projectRecoverUnsaved");
+    spec.tone = kit::KPromptTone::Question;
+    spec.heading = tr("Recover the changes Bloom had not saved when it closed unexpectedly?");
+    spec.detail = tr("They are kept in %1. Not now leaves them there.")
+                      .arg(QString::fromStdString(recoveryPath.filename().string()));
+    spec.acceptText = tr("Recover");
+    spec.rejectText = tr("Not Now");
+    spec.defaultRole = kit::KDialog::Role::Accept;
+    return kit::buildConfirm(owner, spec);
+}
+
 void ProjectHost::confirmUnsavedChanges(std::function<void()> onProceed,
-                                        const bool retireRecoveryOnProceed) {
+                                        const bool retireRecoveryOnProceed,
+                                        const UnsavedChangeAction action) {
     if (activity_ == ProjectHostActivity::ResolvingUnsavedChanges) {
         // "Only one destructive continuation is active. Duplicate close/quit requests are
         // idempotent." (docs/architecture/project-session.md, "Unsaved-Change State Machine").
@@ -620,7 +683,9 @@ void ProjectHost::confirmUnsavedChanges(std::function<void()> onProceed,
     }
 
     setActivity(ProjectHostActivity::ResolvingUnsavedChanges);
+    pendingUnsavedAction_ = action;
     const auto decision = decisionProvider_();
+    pendingUnsavedAction_ = UnsavedChangeAction::Continue;
     switch (decision) {
     case UnsavedChangeDecision::Cancel:
         setActivity(ProjectHostActivity::Idle);
@@ -641,6 +706,7 @@ void ProjectHost::confirmUnsavedChanges(std::function<void()> onProceed,
     case UnsavedChangeDecision::Save:
         pendingUnsavedContinuation_ = std::move(onProceed);
         pendingUnsavedRetireOnProceed_ = retireRecoveryOnProceed;
+        pendingUnsavedContinuationAction_ = action;
         // Let beginSave() own activity tracking from here; it refuses while busy, and this flow
         // is itself the only reason activity_ is currently non-Idle.
         setActivity(ProjectHostActivity::Idle);
@@ -662,23 +728,26 @@ void ProjectHost::newProject() {
     if (isBusy()) {
         return;
     }
-    confirmUnsavedChanges([this] { replaceWithNewProject(); });
+    confirmUnsavedChanges([this] { replaceWithNewProject(); }, false,
+                          UnsavedChangeAction::NewProject);
 }
 
 void ProjectHost::requestOpen() {
     if (isBusy()) {
         return;
     }
-    confirmUnsavedChanges([this] {
-        if (!openPathProvider_) {
-            return;
-        }
-        auto chosen = openPathProvider_();
-        if (!chosen.has_value()) {
-            return;
-        }
-        beginOpen(*chosen);
-    });
+    confirmUnsavedChanges(
+        [this] {
+            if (!openPathProvider_) {
+                return;
+            }
+            auto chosen = openPathProvider_();
+            if (!chosen.has_value()) {
+                return;
+            }
+            beginOpen(*chosen);
+        },
+        false, UnsavedChangeAction::OpenProject);
 }
 
 void ProjectHost::requestSaveAs() {
@@ -1090,11 +1159,35 @@ void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
         // while saving, the flow returns to a fresh decision instead of discarding the newer
         // edit"): confirmUnsavedChanges() re-reads dirty state now, so a clean project proceeds
         // immediately, a still-dirty one (failure/supersession/an intervening edit) re-prompts.
-        confirmUnsavedChanges(std::move(continuation), retireOnProceed);
+        confirmUnsavedChanges(std::move(continuation), retireOnProceed,
+                              pendingUnsavedContinuationAction_);
         if (activity_ != ProjectHostActivity::Opening && activity_ != ProjectHostActivity::Saving) {
             protectedRecoveryOfferPath_.reset();
         }
     }
+}
+
+QString ProjectHost::videoColourDefaultNotice(const host::SessionOpenResult& result) const {
+    // ADR 0032: only a decoded project saved before document 1.28 relied on the previous Auto
+    // video colour default; saving it records 1.28, so the note shows once per project.
+    const auto version = result.openedDocumentSchemaVersion();
+    if (!session_.has_value() || !version ||
+        *version >= project::kSdrVideoColourDefaultDocumentVersionV1 ||
+        result.attemptedContentKind() != host::ProjectSessionContentKind::DecodedDocument)
+        return {};
+    const auto snapshot = session_->decodedSnapshot();
+    if (!snapshot)
+        return {};
+    const auto affected = std::ranges::count_if(snapshot.snapshot().project().assets(),
+                                                runtime::detail::assetUsesSdrVideoColourDefault);
+    if (affected == 0)
+        return {};
+    const auto videos = affected == 1 ? tr("1 video") : tr("%1 videos").arg(affected);
+    return tr("This project was saved by an earlier version of Bloom. Video without a chosen input "
+              "colour now looks the way video players show it, so it is less pale than before. "
+              "This affects %1 in this project. To interpret a video differently, choose its "
+              "input colour in Assets → Input Colour.")
+        .arg(videos);
 }
 
 void ProjectHost::handleOpenResult(
@@ -1180,6 +1273,7 @@ void ProjectHost::handleOpenResult(
     }
     pendingOpenRecoveryPath_.clear();
     protectedRecoveryOfferPath_.reset();
+    openNotice_ = installed ? videoColourDefaultNotice(result) : QString{};
 
     emit dirtyStateChanged();
     emit openFinished(outcome, message);

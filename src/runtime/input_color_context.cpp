@@ -1,6 +1,7 @@
 #include "input_color_context.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/media/video/colour.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -147,6 +148,26 @@ prepareInputColorProcessor(const color::ResolvedBloomNeutralConfig& config,
         return {};
     }
     return std::move(prepared).takeProcessor();
+}
+
+bool assetUsesSdrVideoColourDefault(const document::AssetRecord& asset) {
+    if (asset.kind != document::AssetKind::Video ||
+        asset.interpretation.colorSpace != document::AssetColorSpace::Auto ||
+        !asset.interpretation.inputColorSpaceId.empty())
+        return false;
+    // The stream Auto interprets: the first captured video stream, as Assets shows it.
+    const auto stream = std::ranges::find(asset.videoStreams, 1U, &document::AssetVideoStream::kind);
+    if (stream == asset.videoStreams.end())
+        return false;
+    const media::provider::ColourTags tags{
+        static_cast<std::int32_t>(stream->primaries), static_cast<std::int32_t>(stream->transfer),
+        static_cast<std::int32_t>(stream->matrix), static_cast<std::int32_t>(stream->range)};
+    const auto period = stream->framePeriod;
+    return media::video::sdrVideoColourDefaultApplies(
+        tags, {stream->width, stream->height,
+               period.numerator() > 0 ? static_cast<double>(period.denominator()) /
+                                            static_cast<double>(period.numerator())
+                                      : 0.0});
 }
 
 } // namespace bloom::runtime::detail

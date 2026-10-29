@@ -38,6 +38,7 @@
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
+#include <bloom/ui/h264_encoder_service.hpp>
 #include <bloom/ui/jobs_editor.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/main_window.hpp>
@@ -507,6 +508,10 @@ int main(int argc, char* argv[]) try {
         projectHost.publicationCoordinator(), projectHost.artifactCoordinator(), {},
         &qualifiedDisplayProcessorProvider, gpuExportProvider);
     frameExportController.setSequenceExportRetirementOwner(sequenceExportRetirement);
+    // Which H.264 encoder this platform uses, and whether OpenH264 is verified, checked on a
+    // worker for the Export dialog (never hashed on the UI thread).
+    bloom::ui::H264EncoderService h264Encoder(taskScheduler, taskUiBridge);
+    frameExportController.setH264EncoderService(&h264Encoder);
     frameExportController.setProjectPathProvider(
         [&projectHost] { return projectHost.displayPath(); });
     QObject::connect(&shutdownCoordinator,
@@ -629,6 +634,9 @@ int main(int argc, char* argv[]) try {
                                  frameExportController, &ramPreviewController, &previewController,
                                  nullptr, &playback, cpuEvaluator.operationCache().get(),
                                  mediaDiskCache.get(), &accelerationStatus, &cachePurgeController);
+    // Every default dialog of the project host and the export controller opens over the window.
+    projectHost.setDialogOwner(&window);
+    frameExportController.setDialogOwner(&window);
     // Apply memory preferences to their owning caches now. Disk cache configuration alone
     // remains restart-required; live processing admission is independent of retention targets.
     QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &playback, [&] {

@@ -22,7 +22,11 @@ target_sources(
         kit/color_picker.cpp
         kit/color_sampler.cpp
         kit/color_swatches.cpp
+        kit/dialog.cpp
+        kit/dialog_prompts.cpp
         kit/dropdown.cpp
+        kit/file_chooser.cpp
+        kit/network_shares.cpp
         kit/search_popup.cpp
         kit/section.cpp
         kit/dropdown_popup.cpp
@@ -46,6 +50,8 @@ target_sources(
         kit/thumbnail.cpp
         kit/title_bar.cpp
         kit/tokens.cpp
+        kit/task_dialog.cpp
+        kit/typography.cpp
         kit/value_field.cpp
         kit/value_field_input.cpp
         kit/value_expression.cpp
@@ -61,7 +67,11 @@ target_sources(
             include/bloom/ui/kit/color_picker.hpp
             include/bloom/ui/kit/color_sampler.hpp
             include/bloom/ui/kit/color_swatches.hpp
+            include/bloom/ui/kit/dialog.hpp
+            include/bloom/ui/kit/dialog_prompts.hpp
             include/bloom/ui/kit/dropdown.hpp
+            include/bloom/ui/kit/file_chooser.hpp
+            include/bloom/ui/kit/network_shares.hpp
             include/bloom/ui/kit/search_popup.hpp
             include/bloom/ui/kit/section.hpp
             include/bloom/ui/kit/dropdown_popup.hpp
@@ -75,6 +85,7 @@ target_sources(
             include/bloom/ui/kit/panel_switcher.hpp
             include/bloom/ui/kit/surfaces.hpp
             include/bloom/ui/kit/thumbnail.hpp
+            include/bloom/ui/kit/typography.hpp
             include/bloom/ui/kit/controls.hpp
             include/bloom/ui/kit/row.hpp
             include/bloom/ui/kit/progress_bar.hpp
@@ -86,6 +97,7 @@ target_sources(
             include/bloom/ui/kit/text_field.hpp
             include/bloom/ui/kit/value_expression.hpp
             include/bloom/ui/kit/switch_control.hpp
+            include/bloom/ui/kit/task_dialog.hpp
             include/bloom/ui/kit/theme.hpp
             include/bloom/ui/kit/title_bar.hpp
             include/bloom/ui/kit/tokens.hpp
@@ -331,21 +343,20 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
 )
 
 
-# The bundled interface faces, enumerated the same way and under the same Bloom-owned prefix. The
-# shipped set is deliberately minimal (visual-language.md): Book/Bold/Oblique for the interface
-# family -- one family, three styles, unlike the per-weight families the previous interface face
-# shipped -- and Regular/Medium for the monospaced one.
+# The bundled interface faces, enumerated the same way and under the same Bloom-owned prefix: one
+# upright variable face per family (visual-language.md, "Type roles"), every role weight a point on
+# its wght axis. The static Inter faces beside them are text-layer content the render module
+# embeds; they are not interface resources.
 qt_add_resources(bloom_ui_kit "kinetik_fonts"
     PREFIX "/bloom/kit"
     BASE "kit/third_party"
     FILES
         kit/third_party/inter/LICENSE
-        kit/third_party/inter/Inter-Regular.ttf
-        kit/third_party/inter/Inter-Medium.ttf
-        kit/third_party/inter/Inter-SemiBold.ttf
+        kit/third_party/inter/InterVariable.ttf
         kit/third_party/inter/manifest.json
-        kit/third_party/geist-mono/GeistMono-Medium.ttf
-        kit/third_party/geist-mono/GeistMono-Regular.ttf
+        kit/third_party/geist-mono/LICENSE
+        kit/third_party/geist-mono/GeistMono-Variable.ttf
+        kit/third_party/geist-mono/manifest.json
 )
 
 # Generates the "Open Source Licenses..." embedded catalog (task U2, issue #118, decision 3) BEFORE
@@ -387,6 +398,7 @@ target_sources(
         script_panel.hpp
         frame_export_controller.cpp
         frame_export_controller_composition.cpp
+        frame_export_controller_dialogs.cpp
         frame_export_controller_deliverables.cpp
         composition_export_dialog.cpp
         composition_export_dialog.hpp
@@ -419,7 +431,6 @@ target_sources(
         reveal_in_file_manager.hpp
         import_progress_dialog.cpp
         import_progress_dialog.hpp
-        network_share_paths.cpp
         network_share_paths.hpp
         media_disk_cache_settings.cpp
         node_editor.cpp
@@ -447,6 +458,15 @@ target_sources(
         path_editing.cpp
         composition_presets.cpp
         composition_settings_dialog.cpp
+        safe_area_fields.cpp
+        safe_area_fields.hpp
+        project_change_check.cpp
+        project_change_check.hpp
+        project_item_delete.cpp
+        project_item_delete.hpp
+        project_color_settings_dialog.cpp
+        project_color_settings_dialog.hpp
+        h264_encoder_service.cpp
         timeline_layer_timing_gesture.cpp
         timeline_key_time.cpp
         timeline_key_time.hpp
@@ -534,6 +554,7 @@ target_sources(
             include/bloom/ui/editor_native_surface.hpp
             include/bloom/ui/native_surface_retirement.hpp
             include/bloom/ui/frame_export_controller.hpp
+            include/bloom/ui/h264_encoder_service.hpp
             include/bloom/ui/frameless_window_support.hpp
             include/bloom/ui/jobs_editor.hpp
             include/bloom/ui/licenses_window.hpp

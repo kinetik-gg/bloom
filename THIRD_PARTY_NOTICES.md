@@ -49,7 +49,7 @@ absent.
 | Phosphor Icons (core assets) | v2.0.8 | MIT | `src/ui/kit/third_party/phosphor-icons/` | `LICENSE`, `provenance.md` |
 | Inter | v4.1 | SIL Open Font License 1.1 | `src/ui/kit/third_party/inter/` | `LICENSE`, `manifest.json`, `provenance.md` |
 | DejaVu Sans | 2.37 | Bitstream Vera Fonts Copyright + Arev Fonts Copyright, DejaVu changes public domain | `src/ui/kit/third_party/dejavu-sans/` | `LICENSE`, `provenance.md` |
-| Geist Mono | v1.7.2 | SIL Open Font License 1.1 | `src/ui/kit/third_party/geist-mono/` | `LICENSE`, `provenance.md` |
+| Geist Mono | v1.7.2 | SIL Open Font License 1.1 | `src/ui/kit/third_party/geist-mono/` | `LICENSE`, `manifest.json`, `provenance.md` |
 
 Each component directory retains its upstream license text unmodified and a `provenance.md` that
 records the exact upstream release, the source archive URL, the SHA-256 of the archive the assets
@@ -80,11 +80,13 @@ render module's text source. Interface typography uses Inter.
 
 Copyright 2016 The Inter Project Authors (<https://rsms.me/inter/>). Licensed under the
 SIL Open Font License 1.1; complete text: `src/ui/kit/third_party/inter/LICENSE`.
-Bloom bundles unmodified Regular, Medium and SemiBold static TTFs from release `v4.1`.
-The manifest and provenance beside the files record computed archive and file digests.
-The render module embeds those same three vendored TTFs at configure time for its Qt-free CPU text
-rasterizer; it does not read font files at runtime or use Qt's font database. The embedded payloads
-are guarded by per-face byte-count assertions in `src/render/CMakeLists.txt`.
+Bloom bundles the unmodified upright variable font `InterVariable.ttf` and the unmodified
+Regular, Medium and SemiBold static TTFs from release `v4.1`. The manifest and provenance beside
+the files record computed archive and file digests. Interface typography uses the variable face
+through Qt's application font database. The static faces are text-layer content only: the render
+module embeds them at configure time for its Qt-free CPU text rasterizer; it does not read font
+files at runtime or use Qt's font database. The embedded payloads are guarded by per-face
+byte-count assertions in `src/render/CMakeLists.txt`.
 
 ### Geist Mono
 
@@ -92,9 +94,9 @@ Copyright 2024 The Geist Project Authors (<https://github.com/vercel/geist-font>
 the SIL Open Font License, Version 1.1. The complete license text is at
 `src/ui/kit/third_party/geist-mono/LICENSE`, byte-identical to the upstream `OFL.txt`.
 
-Bloom vendors the Geist Mono Regular and Medium static TTFs, unmodified, from the pinned `v1.7.2`
-release. The Geist sans family, the Geist Pixel family, the variable fonts, and the italic faces
-are not vendored.
+Bloom vendors the upright Geist Mono variable TTF (`GeistMono[wght].ttf`, stored as
+`GeistMono-Variable.ttf`), unmodified, from the pinned `v1.7.2` release. The Geist sans family,
+the Geist Pixel family, the static faces, and the italic faces are not vendored.
 
 ## Vendored source libraries
 

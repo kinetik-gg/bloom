@@ -578,7 +578,11 @@ void run() {
     require(cardAsset->currentText() == "Missing asset" && cardAsset->mutedValue() &&
                 cardAsset->toolTip().contains(QString::number(asset.value())),
             "missing card asset is muted with stable id in tooltip");
-    require(selector->currentText() == "Missing asset" && selector->mutedValue(),
+    // The timeline drop selects the Layer it creates (ADR 0030); show the source again.
+    session.selectNode(source);
+    QApplication::processEvents();
+    selector = properties.findChild<ui::kit::KDropdown*>("propertiesImageAsset");
+    require(selector && selector->currentText() == "Missing asset" && selector->mutedValue(),
             "missing Properties asset remains explicit");
     const auto missingCard = renderCard();
     int glyphPixels = 0;

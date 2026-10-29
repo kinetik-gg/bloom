@@ -20,17 +20,14 @@ struct BundledFace {
     bool isMonospace;
 };
 
-// Pinned static faces; role families name their weight explicitly on every Qt platform.
+// One variable face per family: every type role is a named weight on the face's own 'wght' axis
+// (kit::font()), so FreeType, CoreText and DirectWrite all draw the same outlines from the same
+// file. No per-weight family exists to name.
 constexpr auto kBundledFaces = std::to_array<BundledFace>({
-    {QLatin1StringView(":/bloom/kit/inter/Inter-Regular.ttf"), QLatin1StringView("Inter"), false},
-    {QLatin1StringView(":/bloom/kit/inter/Inter-Medium.ttf"), QLatin1StringView("Inter Medium"),
+    {QLatin1StringView(":/bloom/kit/inter/InterVariable.ttf"), QLatin1StringView("Inter Variable"),
      false},
-    {QLatin1StringView(":/bloom/kit/inter/Inter-SemiBold.ttf"), QLatin1StringView("Inter SemiBold"),
-     false},
-    {QLatin1StringView(":/bloom/kit/geist-mono/GeistMono-Regular.ttf"),
+    {QLatin1StringView(":/bloom/kit/geist-mono/GeistMono-Variable.ttf"),
      QLatin1StringView("Geist Mono"), true},
-    {QLatin1StringView(":/bloom/kit/geist-mono/GeistMono-Medium.ttf"),
-     QLatin1StringView("Geist Mono Medium"), true},
 });
 
 std::optional<BundledFontStatus>& memo() {
@@ -38,33 +35,14 @@ std::optional<BundledFontStatus>& memo() {
     return value;
 }
 
-// Some platforms (CoreText on macOS) collapse a weight-specific static face into its base family
-// and expose the weight as a style, so "Inter Medium" registers as "Inter" with style "Medium".
-// The face is still the expected asset; only the family spelling differs. Stripping the weight
-// suffix lets role resolution accept either spelling without treating normalisation as a swapped
-// asset.
-[[nodiscard]] QString baseFamilyFor(const QString& family) {
-    for (const auto& suffix : {QStringLiteral(" Medium"), QStringLiteral(" SemiBold")}) {
-        if (family.endsWith(suffix)) {
-            return family.left(family.size() - suffix.size());
-        }
-    }
-    return family;
-}
-
-[[nodiscard]] QString resolvedRoleFamily(const BundledFontStatus& status, const QString& expected) {
-    if (status.registeredFamilies.contains(expected)) {
-        return expected;
-    }
-    QString base = baseFamilyFor(expected);
-    if (base != expected && status.registeredFamilies.contains(base)) {
-        return base;
-    }
-    return {};
-}
-
 [[nodiscard]] BundledFontStatus loadBundledFaces() {
     BundledFontStatus status;
+    // The system font database is populated first, deliberately. A face registered under a family,
+    // foundry and style the system already has replaces the system face in Qt's database, but only
+    // if the system faces are there already: registered into a database Qt has not populated yet,
+    // the bundled face is overwritten by the system's own copy when Qt populates it later. A
+    // workstation with its own "Geist Mono" (a different revision) would then draw that instead.
+    (void)QFontDatabase::families();
     for (const auto& [resourcePath, expectedFamily, isMonospace] : kBundledFaces) {
         QFile file(resourcePath);
         if (!file.open(QIODevice::ReadOnly)) {
@@ -90,16 +68,14 @@ std::optional<BundledFontStatus>& memo() {
             continue;
         }
         const QString expected = QString(expectedFamily);
-        const QString base = baseFamilyFor(expected);
-        const bool acceptedAsExpected = families.contains(expected);
-        const bool acceptedAsNormalised = base != expected && families.contains(base);
-        if (!acceptedAsExpected && !acceptedAsNormalised) {
+        if (!families.contains(expected)) {
             // The face loaded but is not the face this build expects -- a swapped or re-released
-            // asset. Reported rather than trusted: fontFamiliesForRole() will simply not offer a
-            // family it cannot see, and the role degrades to its next choice.
+            // asset. Reported rather than trusted: the role does not ask for it and degrades to
+            // the platform family.
             status.diagnostics.append(
                 QStringLiteral("bundled font %1 registered as %2, not the expected %3")
                     .arg(resourcePath, families.join(QStringLiteral(", ")), expected));
+            continue;
         }
         status.registeredFamilies.append(families);
         if (isMonospace) {
@@ -134,15 +110,6 @@ std::optional<BundledFontStatus>& memo() {
     return QFontDatabase::systemFont(role).family();
 }
 
-// Appends `family` when the bundled set actually registered it, so a role never asks for a face
-// that is not there and never ends up with Qt's own last-resort default by accident.
-void appendIfRegistered(QStringList& families, const BundledFontStatus& status,
-                        const QString& family) {
-    if (status.registeredFamilies.contains(family)) {
-        families.append(family);
-    }
-}
-
 } // namespace
 
 const BundledFontStatus& registerBundledFonts() {
@@ -157,41 +124,22 @@ const BundledFontStatus& bundledFontStatus() { return registerBundledFonts(); }
 
 QStringList fontFamiliesForRole(const TypeRole role) {
     const BundledFontStatus& status = bundledFontStatus();
+    const bool monospace = role == TypeRole::Value;
     QStringList families;
-
-    switch (role) {
-    case TypeRole::Ui:
-    case TypeRole::UiSmall: {
-        const QString medium = resolvedRoleFamily(status, QStringLiteral("Inter Medium"));
-        if (!medium.isEmpty()) {
-            families.append(medium);
-        }
-        appendIfRegistered(families, status, interfaceFontFamily());
-        families.append(platformFallback(QFontDatabase::GeneralFont));
-        break;
-    }
-    case TypeRole::UiSmallStrong:
-    case TypeRole::Title: {
-        const QString semiBold = resolvedRoleFamily(status, QStringLiteral("Inter SemiBold"));
-        if (!semiBold.isEmpty()) {
-            families.append(semiBold);
-        }
-        appendIfRegistered(families, status, interfaceFontFamily());
-        families.append(platformFallback(QFontDatabase::GeneralFont));
-        break;
-    }
-    case TypeRole::Value: {
-        const QString medium = resolvedRoleFamily(status, QStringLiteral("Geist Mono Medium"));
-        if (!medium.isEmpty()) {
-            families.append(medium);
-        }
-        appendIfRegistered(families, status, monospaceFontFamily());
-        families.append(platformFallback(QFontDatabase::FixedFont));
-        break;
-    }
-    }
+    // The bundled family first, then the platform's own family: the only time a platform font may
+    // appear in chrome is when the bundled face failed to load (reported in registerBundledFonts).
+    if (monospace ? status.monospaceRegistered : status.interfaceRegistered)
+        families.append(monospace ? monospaceFontFamily() : interfaceFontFamily());
+    families.append(
+        platformFallback(monospace ? QFontDatabase::FixedFont : QFontDatabase::GeneralFont));
     families.removeDuplicates();
     return families;
+}
+
+bool isBundledFontFamily(const QString& family) {
+    const BundledFontStatus& status = bundledFontStatus();
+    return (status.interfaceRegistered && family == interfaceFontFamily()) ||
+           (status.monospaceRegistered && family == monospaceFontFamily());
 }
 
 } // namespace bloom::ui::kit

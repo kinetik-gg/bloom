@@ -121,16 +121,17 @@ void migration() {
         auto text = encode(makeDocument(timecode, 0));
         // A 1.24 file has no field order or timecode type.
         text = replaceRegex(text, R"(,\s*"fieldOrder": \d+,\s*"timecodeType": \d+)", "");
-        text = replaceRegex(text, R"("minor": 27(\s*\}))", "\"minor\": 24$1");
+        text = replaceRegex(text, R"("minor": 28(\s*\}))", "\"minor\": 24$1");
         auto operation = memory();
         auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
         expect(static_cast<bool>(parsed), "1.24 video fixture parses");
         if (!parsed)
             continue;
-        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 27},
+        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 28},
                                                  kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 3,
-               "1.24 to the current schema runs the video-metadata, channel-set and folder steps");
+        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 4,
+               "1.24 to the current schema runs the video-metadata, channel-set, folder and "
+               "video-colour-default steps");
         if (migrated.outcome() != MigrationOutcome::Migrated)
             continue;
         const auto decoded = decodeDocumentEnvelope(*migrated.migratedRoot());
@@ -144,10 +145,53 @@ void migration() {
     }
 }
 } // namespace
+// Document 1.28 (issue #381, ADR 0032): the 1.27 -> 1.28 step changes only the version, so a video
+// asset's Auto or explicit input colour opens exactly as it was saved; the source version alone
+// tells the open path that the project predates the SDR video colour default.
+void videoColourDefaultMigration() {
+    for (const auto* explicitId : {"", "lin_rec709_scene"}) {
+        auto document = makeDocument({}, 0);
+        auto draft = document.draft(document.snapshot());
+        auto* asset = draft.project().findAsset(AssetId::fromRaw(1));
+        if (asset == nullptr)
+            throw std::logic_error("video colour default asset");
+        asset->interpretation.inputColorSpaceId = explicitId;
+        if (!document.commit(document.snapshot().revision(), std::move(draft)).committed())
+            throw std::logic_error("video colour default commit");
+        auto text = encode(document);
+        const auto current = encode(document);
+        text = replaceRegex(text, R"("minor": 28(\s*\}))", "\"minor\": 27$1");
+        auto operation = memory();
+        auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
+        expect(static_cast<bool>(parsed), "1.27 video colour fixture parses");
+        if (!parsed)
+            continue;
+        const auto older = decodeDocumentEnvelope(parsed.document()->root());
+        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 27}, {1, 28},
+                                                 kProductionDocumentMigrationSteps, {}, operation);
+        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 1,
+               "1.27 to 1.28 runs one version-only step");
+        if (migrated.outcome() != MigrationOutcome::Migrated)
+            continue;
+        const auto upgraded = decodeDocumentEnvelope(*migrated.migratedRoot());
+        expect(older && upgraded && *older.value() == *upgraded.value() &&
+                   upgraded.value()->assets.front().interpretation.inputColorSpaceId == explicitId,
+               "the migrated video asset keeps its Auto or explicit input colour exactly");
+        auto reparsed = parseStrictJsonDom(std::as_bytes(std::span(current)), {}, operation);
+        expect(static_cast<bool>(reparsed), "the 1.28 video colour document parses");
+        if (!reparsed)
+            continue;
+        const auto saved = decodeDocumentEnvelope(reparsed.document()->root());
+        expect(saved && upgraded && *saved.value() == *upgraded.value(),
+               "a migrated 1.27 document equals the same project saved at 1.28");
+    }
+}
+
 int main() {
     try {
         roundTrip();
         migration();
+        videoColourDefaultMigration();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

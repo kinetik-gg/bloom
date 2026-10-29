@@ -123,4 +123,40 @@ void validateDocumentSchemaV1_27(const json::Value& schema) {
 void validateManifestSchemaV1_27(const json::Value& schema) {
     validateManifestSchemaV1_26(previousVersionV1_27(schema, true));
 }
+// Document 1.28 (#381, ADR 0032) changes no member: it marks projects saved after the SDR video
+// colour default changed. Replacing the version must give back the 1.27 artifact exactly.
+namespace {
+json::Value previousVersionV1_28(const json::Value& schema, bool manifest) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    const std::string kind = manifest ? "manifest" : "document";
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-" + kind + ":1.28",
+                       "video colour default schema id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.28").at("properties").at("minor"),
+                 R"({"const":28})", "video colour default minor");
+    const auto& version =
+        manifest ? schema.at("$defs").at("document-1.0").at("properties").at("schemaVersion")
+                 : schema.at("properties").at("schemaVersion");
+    requireExact(version, R"({"$ref":"#/$defs/fixedVersion-1.28"})", "schema version");
+    auto previous = schema;
+    for (auto& member : previous.at("$defs").asObject())
+        if (member.first == "fixedVersion-1.28")
+            member.first = "fixedVersion-1.27";
+    previous.at("$defs").at("fixedVersion-1.27").at("properties").at("minor") =
+        json::parse(R"({"const":27})");
+    auto& previousRef =
+        manifest ? previous.at("$defs").at("document-1.0").at("properties").at("schemaVersion")
+                 : previous.at("properties").at("schemaVersion");
+    previousRef = json::parse(R"({"$ref":"#/$defs/fixedVersion-1.27"})");
+    previous.at("$id") =
+        json::Value(std::string("urn:kinetik:bloom:schema:project-" + kind + ":1.27"));
+    return previous;
+}
+} // namespace
+void validateDocumentSchemaV1_28(const json::Value& schema) {
+    validateDocumentSchemaV1_27(previousVersionV1_28(schema, false));
+}
+void validateManifestSchemaV1_28(const json::Value& schema) {
+    validateManifestSchemaV1_27(previousVersionV1_28(schema, true));
+}
 } // namespace bloom::quality

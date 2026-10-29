@@ -73,6 +73,9 @@ class AltUnderlineProxyStyle final : public QProxyStyle {
     // A menu is painted with rounded corners, so its window must be able to leave those corners
     // unpainted rather than showing a square plate behind them.
     void polish(QWidget* widget) override;
+    // QApplication::setStyle() refills the platform class fonts just before this is called; the
+    // type roles are re-applied here (kit::applyTypeRoleFonts) before any widget is re-polished.
+    void polish(QApplication* application) override;
     using QProxyStyle::polish;
 };
 

@@ -208,6 +208,9 @@ target_link_libraries(bloom_kit_dropdown_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_popup_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_focus_border_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_fonts_test PRIVATE bloom_ui_kit)
+# The manifest check also reads the vendored files that are not interface resources.
+target_compile_definitions(bloom_kit_fonts_test PRIVATE
+    BLOOM_KIT_THIRD_PARTY_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../kit/third_party")
 target_link_libraries(bloom_kit_panel_switcher_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_icons_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_title_bar_test PRIVATE bloom_ui_kit Qt6::Test)
@@ -346,9 +349,11 @@ endif()
 target_link_libraries(bloom_composition_session_animation_test PRIVATE bloom_ui)
 target_link_libraries(bloom_composition_session_rebind_test PRIVATE bloom_ui)
 target_link_libraries(bloom_application_shutdown_test PRIVATE bloom_ui)
-target_link_libraries(bloom_project_host_test PRIVATE bloom_ui)
+target_link_libraries(bloom_project_host_test PRIVATE bloom_ui ZLIB::ZLIB)
+# The ADR 0032 open-notice test assembles an older-version archive with the project test helper.
+target_include_directories(bloom_project_host_test PRIVATE "${PROJECT_SOURCE_DIR}/src/project/tests")
 target_link_libraries(bloom_task_monitor_test PRIVATE bloom_ui)
-target_link_libraries(bloom_viewer_editor_test PRIVATE bloom_ui)
+target_link_libraries(bloom_viewer_editor_test PRIVATE bloom_ui Qt6::Test)
 target_include_directories(bloom_viewer_editor_test PRIVATE ..)
 target_link_libraries(bloom_timeline_frame_math_test PRIVATE bloom_ui)
 target_link_libraries(bloom_timeline_ruler_test PRIVATE bloom_ui)
@@ -1165,7 +1170,7 @@ bloom_add_test(
 # The Settings window: control/preference binding, dirty-state gating, Apply emission, restore
 # defaults, restart badges, category navigation, and the read-only Performance page.
 add_executable(bloom_preferences_window_test preferences_window_tests.cpp)
-target_link_libraries(bloom_preferences_window_test PRIVATE bloom_ui)
+target_link_libraries(bloom_preferences_window_test PRIVATE bloom_ui Qt6::Test)
 target_include_directories(bloom_preferences_window_test PRIVATE ..)
 bloom_enable_warnings(bloom_preferences_window_test)
 bloom_add_test(
@@ -1232,6 +1237,20 @@ foreach(scale IN ITEMS 1 1.5 2)
         LABELS "ui;grammar" TIMEOUT 60)
 endforeach()
 
+# Bloom's type roles win over the platform theme: the main-window fixture and every offscreen
+# surface under a hostile theme resolve and paint only the bundled faces.
+add_executable(bloom_kit_typography_test kit_typography_tests.cpp)
+target_include_directories(bloom_kit_typography_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_kit_typography_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_kit_typography_test PRIVATE BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_kit_typography_test)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.kit_typography.dpr${scale} COMMAND bloom_kit_typography_test)
+    set_tests_properties(bloom.ui.kit_typography.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;kit;grammar" TIMEOUT 120)
+endforeach()
+
 add_executable(bloom_window_golden_test window_golden_tests.cpp)
 target_link_libraries(bloom_window_golden_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_window_golden_test PRIVATE
@@ -1254,6 +1273,14 @@ endif()
 # The maximized Viewer at a small and a large size, with and without a composition: captures for
 # review, plus the check that no hosted header or footer control lies outside its row.
 # The popup chin check: holds one dropdown popup or menu open for a compositor screenshot.
+# Lane C review captures of every dialog (a tool, not a test): bloom_dialog_capture <dir> <1|1.5>.
+add_executable(bloom_dialog_capture dialog_capture.cpp)
+target_include_directories(bloom_dialog_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_dialog_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_dialog_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_dialog_capture)
+
 add_executable(bloom_popup_capture popup_capture.cpp)
 target_link_libraries(bloom_popup_capture PRIVATE bloom_ui_kit)
 bloom_enable_warnings(bloom_popup_capture)
@@ -1409,6 +1436,31 @@ bloom_add_test(
     LABELS ui media integration
     TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1"
+)
+
+# Lane C: the kit dialog primitive (KDialog, form, prompts, chooseFile, task dialog).
+add_executable(bloom_kit_dialog_test kit_dialog_tests.cpp)
+target_link_libraries(bloom_kit_dialog_test PRIVATE bloom_ui_kit Qt6::Test)
+bloom_enable_warnings(bloom_kit_dialog_test)
+bloom_add_test(
+    NAME bloom.ui.kit_dialog
+    COMMAND bloom_kit_dialog_test
+    LABELS ui unit kit
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+)
+
+# Lane C: Export Composition's H.264 encoder gate and its worker-only verify/Locate.
+add_executable(bloom_composition_export_dialog_test composition_export_dialog_tests.cpp)
+target_include_directories(bloom_composition_export_dialog_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_composition_export_dialog_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_composition_export_dialog_test)
+bloom_add_test(
+    NAME bloom.ui.composition-export-dialog
+    COMMAND bloom_composition_export_dialog_test
+    LABELS ui unit media
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
 )
 
 add_executable(bloom_network_share_paths_test network_share_paths_tests.cpp)

@@ -58,7 +58,12 @@ std::string read(const std::filesystem::path& path) {
 std::vector<RepositoryFinding> uiGrammarViolations(const std::filesystem::path& path,
                                                    std::string_view source) {
     std::vector<RepositoryFinding> findings;
-    if (!applicationSource(path.generic_string()))
+    // Inline implementation parts are held to the font rules only: chrome text everywhere takes
+    // its font from a kit type role.
+    const auto generic = path.generic_string();
+    const bool inlinePart = generic.ends_with(".ipp") &&
+                            applicationSource(generic.substr(0, generic.size() - 4) + ".cpp");
+    if (!applicationSource(generic) && !inlinePart)
         return findings;
     const auto code = codeOnly(source);
     const auto append = [&](const std::regex& pattern, const std::string& kind) {
@@ -101,6 +106,17 @@ std::vector<RepositoryFinding> uiGrammarViolations(const std::filesystem::path& 
             R"(\b(?:new\s+)?(?:QToolButton|QPushButton|QComboBox|QLineEdit|QCheckBox|QSlider|QLabel|QMenu)\s*(?:[({]|\s+[A-Za-z_]\w*\s*[({])|\bmake_(?:unique|shared)\s*<\s*(?:QToolButton|QPushButton|QComboBox|QLineEdit|QCheckBox|QSlider|QLabel|QMenu)\s*>)"),
         "raw-control");
     append(std::regex(R"(\bQFont\s*[({]|\bQFont\s+[A-Za-z_]\w*\s*[({])"), "font");
+    // A font is a role: no family, size, weight or style is set outside the kit, and no platform
+    // font is asked for (visual-language.md, "Type roles").
+    append(
+        std::regex(
+            R"((?:\.|->)set(?:Family|Families|PointSizeF?|PixelSize|Weight|Bold|Italic|StyleHint|VariableAxis|LetterSpacing|WordSpacing|Capitalization)\s*\(|\bQFontDatabase\s*::\s*(?:systemFont|addApplicationFont\w*)\b)"),
+        "font");
+    if (inlinePart) {
+        std::erase_if(findings,
+                      [](const RepositoryFinding& finding) { return finding.category != "font"; });
+        return findings;
+    }
     append(
         std::regex(R"(\bvoid\s+(?:[A-Za-z_]\w*::)?paintEvent\s*\([^;{}]*\)\s*(?:override\s*)?\{)"),
         "paint");

@@ -4,10 +4,13 @@
 #include <bloom/platform/process_supervisor.hpp>
 #include <bloom/platform/user_data_directory.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
+#include <iterator>
 #include <random>
 #include <system_error>
+#include <vector>
 
 namespace bloom::media::provider {
 namespace {
@@ -103,6 +106,44 @@ std::string digestFile(const std::filesystem::path& file) {
     return std::string(hex.data(), hex.size());
 }
 
+// Copies `source` to `destination` while hashing it, checking `cancelled` between chunks. Returns
+// the lowercase digest, or empty on a read/write failure or cancellation (the copy is removed).
+std::string copyAndDigest(const std::filesystem::path& source,
+                          const std::filesystem::path& destination,
+                          const std::function<bool()>& cancelled, bool& wasCancelled) {
+    wasCancelled = false;
+    std::ifstream in(source, std::ios::binary);
+    std::ofstream out(destination, std::ios::binary | std::ios::trunc);
+    if (!in || !out)
+        return {};
+    core::Sha256Hasher hasher;
+    std::array<std::byte, static_cast<std::size_t>(64U * 1024U)> buffer{};
+    bool ok = true;
+    while (in && ok) {
+        if (cancelled && cancelled()) {
+            wasCancelled = true;
+            ok = false;
+            break;
+        }
+        in.read(reinterpret_cast<char*>(buffer.data()),
+                static_cast<std::streamsize>(buffer.size()));
+        const auto count = in.gcount();
+        if (count <= 0)
+            break;
+        ok = hasher.update(std::span(buffer).first(static_cast<std::size_t>(count))) &&
+             static_cast<bool>(out.write(reinterpret_cast<const char*>(buffer.data()), count));
+    }
+    ok = ok && in.eof();
+    out.close();
+    if (!ok || !out) {
+        std::error_code error;
+        std::filesystem::remove(destination, error);
+        return {};
+    }
+    const auto hex = hasher.finalize().toLowercaseHex();
+    return std::string(hex.data(), hex.size());
+}
+
 bool publish(const std::filesystem::path& source, const std::filesystem::path& destination) {
     std::error_code error;
 #if defined(_WIN32)
@@ -112,6 +153,26 @@ bool publish(const std::filesystem::path& source, const std::filesystem::path& d
 #endif
     std::filesystem::rename(source, destination, error);
     return !error;
+}
+
+// Records consent in the per-user Bloom.conf once, however many times Bloom installs: rewritten
+// through a temporary file so a crash never leaves it half written.
+bool recordConsent(const std::filesystem::path& conf) {
+    std::string existing;
+    if (std::ifstream in(conf, std::ios::binary); in) {
+        existing.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    const auto text = OpenH264Runtime::withConsentRecorded(existing);
+    auto temporary = conf;
+    temporary += ".tmp";
+    {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        out.write(text.data(), static_cast<std::streamsize>(text.size()));
+        out.close();
+        if (!out)
+            return false;
+    }
+    return publish(temporary, conf);
 }
 
 OpenH264InstallResult failure(const OpenH264RuntimeFailure reason, std::string detail,
@@ -278,10 +339,7 @@ OpenH264InstallResult OpenH264Runtime::install(
     if (!license)
         return failure(OpenH264RuntimeFailure::InstallFailed,
                        "Could not publish OpenH264 binary licence", root_);
-    std::ofstream consent(root_.parent_path().parent_path() / "Bloom.conf",
-                          std::ios::binary | std::ios::app);
-    consent << "[media]\nopenh264-consent=" << kVersion << "\n";
-    if (!consent)
+    if (!recordConsent(root_.parent_path().parent_path() / "Bloom.conf"))
         return failure(OpenH264RuntimeFailure::InstallFailed, "Could not persist OpenH264 consent",
                        root_);
     std::filesystem::remove(staging, error);
@@ -294,16 +352,32 @@ OpenH264InstallResult OpenH264Runtime::install(
 #endif
 }
 
-OpenH264InstallResult OpenH264Runtime::locate(const std::filesystem::path& file) const {
+OpenH264InstallResult OpenH264Runtime::locate(const std::filesystem::path& file,
+                                              const std::function<bool()>& cancelled) const {
     if (!std::filesystem::is_regular_file(file))
         return failure(OpenH264RuntimeFailure::NotInstalled, "Selected OpenH264 file is missing",
                        root_);
-    if (digestFile(file) != kLibraryDigest)
-        return failure(OpenH264RuntimeFailure::LibraryDigestMismatch,
-                       "Selected OpenH264 file does not match Cisco's verified digest", root_);
     std::error_code error;
     std::filesystem::create_directories(root_, error);
-    if (error || !publish(file, root_ / std::string(kLibrary)))
+    if (error)
+        return failure(OpenH264RuntimeFailure::InstallFailed, "Could not create OpenH264 directory",
+                       root_);
+    const auto staging = root_ / ".libopenh264.locate.staging";
+    bool wasCancelled = false;
+    const auto digest = copyAndDigest(file, staging, cancelled, wasCancelled);
+    if (wasCancelled)
+        return failure(OpenH264RuntimeFailure::NotInstalled, "Locating OpenH264 was cancelled",
+                       root_);
+    if (digest != kLibraryDigest) {
+        std::filesystem::remove(staging, error);
+        return failure(digest.empty() ? OpenH264RuntimeFailure::InstallFailed
+                                      : OpenH264RuntimeFailure::LibraryDigestMismatch,
+                       digest.empty()
+                           ? "Selected OpenH264 file could not be read"
+                           : "Selected OpenH264 file does not match Cisco's verified digest",
+                       root_);
+    }
+    if (!publish(staging, root_ / std::string(kLibrary)))
         return failure(OpenH264RuntimeFailure::InstallFailed,
                        "Could not publish selected OpenH264 file", root_);
     std::ofstream license(root_ / "BINARY_LICENSE.txt", std::ios::binary | std::ios::trunc);
@@ -312,15 +386,71 @@ OpenH264InstallResult OpenH264Runtime::locate(const std::filesystem::path& file)
     license.close();
     if (!license)
         return failure(OpenH264RuntimeFailure::InstallFailed, "Could not write licence", root_);
-    std::ofstream consent(root_.parent_path().parent_path() / "Bloom.conf",
-                          std::ios::binary | std::ios::app);
-    consent << "[media]\nopenh264-consent=" << kVersion << "\n";
-    if (!consent)
+    if (!recordConsent(root_.parent_path().parent_path() / "Bloom.conf"))
         return failure(OpenH264RuntimeFailure::InstallFailed, "Could not persist OpenH264 consent",
                        root_);
     return {.installed = true,
             .failure = OpenH264RuntimeFailure::None,
             .directory = root_,
             .detail = "OpenH264 file installed and verified"};
+}
+
+std::string OpenH264Runtime::withConsentRecorded(const std::string_view existing) {
+    // Line-based: every line kept except earlier openh264-consent entries in [media] groups, and
+    // [media] headers those removals leave empty; then one entry in the first [media] group left,
+    // or a new group at the end.
+    std::vector<std::string> lines;
+    for (std::size_t start = 0; start < existing.size();) {
+        const auto end = existing.find('\n', start);
+        const auto stop = end == std::string_view::npos ? existing.size() : end;
+        auto line = std::string(existing.substr(start, stop - start));
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        lines.push_back(std::move(line));
+        start = stop + 1;
+    }
+    const auto isHeader = [](const std::string& line) {
+        return !line.empty() && line.front() == '[';
+    };
+    std::vector<std::string> kept;
+    bool inMedia = false;
+    for (const auto& line : lines) {
+        if (isHeader(line))
+            inMedia = line == "[media]";
+        else if (inMedia && line.starts_with("openh264-consent="))
+            continue;
+        kept.push_back(line);
+    }
+    std::vector<std::string> compact;
+    for (std::size_t index = 0; index < kept.size(); ++index) {
+        if (kept[index] == "[media]") {
+            std::size_t next = index + 1;
+            while (next < kept.size() && kept[next].empty())
+                ++next;
+            if (next == kept.size() || isHeader(kept[next])) {
+                index = next - 1;
+                continue;
+            }
+        }
+        compact.push_back(kept[index]);
+    }
+    while (!compact.empty() && compact.back().empty())
+        compact.pop_back();
+    const auto entry = "openh264-consent=" + std::string(kVersion);
+    const auto media = std::ranges::find(compact, std::string("[media]"));
+    if (media != compact.end()) {
+        compact.insert(std::next(media), entry);
+    } else {
+        if (!compact.empty())
+            compact.emplace_back();
+        compact.emplace_back("[media]");
+        compact.push_back(entry);
+    }
+    std::string text;
+    for (const auto& line : compact) {
+        text += line;
+        text += '\n';
+    }
+    return text;
 }
 } // namespace bloom::media::provider

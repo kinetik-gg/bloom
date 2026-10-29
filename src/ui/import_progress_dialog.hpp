@@ -3,30 +3,25 @@
 // The import progress modal (#377). Every batch import the AssetController prepares (File >
 // Import, Add > Import…, the Assets footer, file and folder drops) is shown here: overall progress,
 // "3 of 12", the item in progress and Cancel, then a summary when anything was skipped, cancelled
-// or refused. The work itself stays on the import worker; the dialog only reads its reports.
+// or refused. The work itself stays on the import worker; the dialog only reads its reports. It is
+// the kit task dialog (kit::KTaskDialog) with the import's own wording and automation names.
 
 #include <bloom/ui/asset_controller.hpp>
 
-#include <QDialog>
+#include <bloom/ui/kit/task_dialog.hpp>
+
 #include <QElapsedTimer>
 #include <QPointer>
-#include <QTimer>
 
 #include <chrono>
 #include <memory>
 #include <utility>
 
-class QVBoxLayout;
 class QWidget;
 
 namespace bloom::ui {
-namespace kit {
-class KButton;
-class KLabel;
-class KProgressBar;
-} // namespace kit
 
-class ImportProgressDialog final : public QDialog {
+class ImportProgressDialog final : public kit::KTaskDialog {
     Q_OBJECT
 
   public:
@@ -35,50 +30,15 @@ class ImportProgressDialog final : public QDialog {
     // once the same file has been read for this long; a batch of quick files stays determinate.
     static constexpr std::chrono::milliseconds kItemBusyAfter{400};
 
-    explicit ImportProgressDialog(QWidget* parent = nullptr);
+    explicit ImportProgressDialog(QWidget& owner);
 
     void showProgress(const AssetController::ImportProgressState& state);
     void showSummary(const AssetController::ImportReport& report);
-    [[nodiscard]] bool summarizing() const noexcept { return summarizing_; }
-    // Closes the dialog whatever it shows; the artist's own close only stops an import.
-    void dismiss();
-
-    // What the dialog says, for tests and accessibility checks.
-    [[nodiscard]] QString headingText() const;
-    [[nodiscard]] QString detailText() const;
-    [[nodiscard]] kit::KProgressBar* progressBar() const noexcept { return bar_; }
-    [[nodiscard]] kit::KButton* cancelButton() const noexcept { return cancel_; }
-    [[nodiscard]] kit::KButton* closeButton() const noexcept { return close_; }
-
-  Q_SIGNALS:
-    // Cancel, Escape or closing the window while the import runs.
-    void stopRequested();
-
-  public Q_SLOTS:
-    void reject() override;
-
-  protected:
-    void closeEvent(QCloseEvent* event) override;
-    void keyPressEvent(QKeyEvent* event) override;
 
   private:
-    void requestStop();
-
-    kit::KLabel* heading_ = nullptr;
-    kit::KLabel* detail_ = nullptr;
-    kit::KProgressBar* bar_ = nullptr;
-    kit::KLabel* counts_ = nullptr;
-    kit::KLabel* note_ = nullptr;
-    QWidget* skippedPanel_ = nullptr;
-    QVBoxLayout* skippedRows_ = nullptr;
-    kit::KButton* cancel_ = nullptr;
-    kit::KButton* close_ = nullptr;
-    QString detailFull_;
     // The item the last report was reading, and since when, for kItemBusyAfter.
     std::pair<std::size_t, QString> readingItem_;
     QElapsedTimer readingSince_;
-    bool summarizing_ = false;
-    bool dismissing_ = false;
 };
 
 // Shows the dialog for the controller's batch imports over `window`. An import that finishes
@@ -111,8 +71,7 @@ class ImportProgressPresenter final : public QObject {
 
     QPointer<AssetController> controller_;
     QWidget& window_;
-    QTimer showTimer_;
-    QTimer refreshTimer_;
+    kit::KTaskTiming timing_;
     QPointer<ImportProgressDialog> dialog_;
     std::unique_ptr<QObject> inputHold_;
 };

@@ -71,14 +71,20 @@ chromaticities: AP0 maps to **ACES2065-1**, AP1 to **ACEScg**, and Rec.709/D65 t
 Rec.709 scene space. An EXR with no chromaticities assumes the working space and shows a warning;
 unrecognized chromaticities require an explicit choice.
 
-For camera footage, Bloom reads the stream's container colour tags. Rec.709-tagged footage uses the
-config's Rec.709 camera/video space, sRGB-tagged footage uses the sRGB-texture space, and linear
-footage uses the working space. The video asset tooltip retains the numeric container tags.
-Footage with missing colour tags is not refused: Bloom follows the usual NLE convention and
+For camera footage, Bloom reads the stream's container colour tags. Ordinary Rec.709 and Rec.601
+footage (phone and camera H.264, for example) is shown as video players show it: Bloom decodes its
+YCbCr with the stream's matrix and range and reads the result with the sRGB transfer, the same
+sRGB-texture space it uses for 8-bit stills, so the footage matches a player and your sRGB images
+without adjustment. sRGB-tagged footage uses the same space, and linear footage uses the working
+space. To work with the camera's scene light instead, choose the Rec.709 camera space (the BT.709
+inverse OETF; the picker currently lists it as **Rec.709 video**) as the input colour space. The video asset tooltip retains the numeric container
+tags. Footage with missing colour tags is not refused: Bloom follows the usual NLE convention and
 assumes Rec.709 for HD and larger pictures and Rec.601 for SD, with video (limited) range, and
 fills only the tags that are missing. The asset then shows an Info mark and the note "Colour tags
-missing — assumed Rec.709. Change in Assets → Input Colour"; choose an explicit input colour space
-to replace the assumption. ARRI
+missing — assumed Rec.709 with the sRGB transfer. Change in Assets → Input Colour"; choose an
+explicit input colour space to replace the assumption. A project saved by a Bloom version before
+this default (document 1.28) shows a one-time note when you open it if any of its video looks
+different now; saving the project records the new default. ARRI
 LogC3 and RED Log3G10 are not reliable container tags, so choose their colour space explicitly in
 the searchable **Input colour space** picker. The picker lists every non-data colour space from the
 selected configuration grouped by family.

@@ -317,6 +317,11 @@ enum class Size : int {
     PickerSquare = 160,
     PickerMarker = 8,
     CheckerCell = 8,
+
+    // ---- Dialog extents (lane C, kit::KDialog). Kept together for the lane merge. ----
+    // The minimum height of a dialog whose body is a long document or a page stack (Open Source
+    // Licenses, Preferences), so it opens at a readable size rather than at its smallest layout.
+    DialogDocumentHeight = 480,
 };
 
 [[nodiscard]] constexpr int px(const Spacing token) noexcept { return static_cast<int>(token); }

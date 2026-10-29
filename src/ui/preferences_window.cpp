@@ -14,18 +14,20 @@
 
 #include <QAbstractButton>
 #include <QDialogButtonBox>
-#include <QFileDialog>
+#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QPushButton>
+#include <QPointer>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <bloom/ui/kit/dialog_prompts.hpp>
+#include <bloom/ui/kit/file_chooser.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -64,7 +66,10 @@ constexpr auto kRestartBadgeObjectName = "preferencesRestartBadge";
     scroll->setObjectName(objectName);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
+    // Pages sit on the dialog's own surface, like every other dialog's sections.
+    scroll->viewport()->setAutoFillBackground(false);
     scroll->setWidget(content);
+    content->setAutoFillBackground(false);
     return scroll;
 }
 
@@ -78,20 +83,15 @@ QWidget* addPreferencesRow(QVBoxLayout* layout, QWidget* parent, QLabel* label,
 
 } // namespace
 
-PreferencesWindow::PreferencesWindow(const ApplicationPreferences& current,
+PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreferences& current,
                                      const AccelerationStatusProvider* const accelerationStatus,
-                                     QWidget* parent,
                                      const runtime::MemoryBudgetLedger& memoryLedger)
-    : QDialog(parent), draft_(current), applied_(current), accelerationStatus_(accelerationStatus),
+    : kit::KDialog(tr("Preferences"), QStringLiteral("preferencesWindow"), owner, Qt::WindowModal,
+                   Width::Wide),
+      draft_(current), applied_(current), accelerationStatus_(accelerationStatus),
       memoryLedger_(memoryLedger) {
-    setObjectName(QStringLiteral("preferencesWindow"));
-    setWindowTitle(tr("Preferences"));
-    resize(880, 620);
-
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
-                             kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
-    root->setSpacing(kit::px(kit::Spacing::M));
+    // A page stack to read, so it opens at a readable height rather than its smallest layout.
+    setMinimumHeight(kit::px(kit::Size::DialogDocumentHeight));
 
     auto* body = new QHBoxLayout;
     body->setSpacing(kit::px(kit::Spacing::L));
@@ -105,7 +105,7 @@ PreferencesWindow::PreferencesWindow(const ApplicationPreferences& current,
     pages_ = new QStackedWidget(this);
     pages_->setObjectName(QStringLiteral("preferencesPages"));
     body->addWidget(pages_, 1);
-    root->addLayout(body, 1);
+    contentLayout()->addLayout(body, 1);
 
     const auto pages = buildPages();
     connect(performanceRefreshTimer_, &QTimer::timeout, this,
@@ -121,28 +121,62 @@ PreferencesWindow::PreferencesWindow(const ApplicationPreferences& current,
         pages_->setCurrentIndex(0);
     }
 
-    auto* buttons =
-        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel |
-                                 QDialogButtonBox::Apply | QDialogButtonBox::RestoreDefaults,
-                             this);
-    buttons->setObjectName(QStringLiteral("preferencesButtonBox"));
-    applyButton_ = buttons->button(QDialogButtonBox::Apply);
+    buttonBox()->setObjectName(QStringLiteral("preferencesButtonBox"));
+    addButton(Role::Accept, tr("OK"))->setObjectName(QStringLiteral("preferencesOkButton"));
+    addButton(Role::Reject, tr("Cancel"))->setObjectName(QStringLiteral("preferencesCancelButton"));
+    applyButton_ = addButton(Role::Apply, tr("Apply"));
     applyButton_->setObjectName(QStringLiteral("preferencesApplyButton"));
-    if (auto* restore = buttons->button(QDialogButtonBox::RestoreDefaults); restore != nullptr) {
-        restore->setObjectName(QStringLiteral("preferencesRestoreDefaultsButton"));
-        connect(restore, &QPushButton::clicked, this,
-                [this] { setPreferences(defaultApplicationPreferences()); });
-    }
-    connect(buttons, &QDialogButtonBox::accepted, this, [this] {
-        commitPreferences();
-        accept();
+    addButton(Role::Reset, tr("Restore Defaults"))
+        ->setObjectName(QStringLiteral("preferencesRestoreDefaultsButton"));
+    connect(this, &QDialog::accepted, this, [this] { commitPreferences(); });
+    connect(this, &kit::KDialog::applyRequested, this, [this] { commitPreferences(); });
+    connect(this, &kit::KDialog::resetRequested, this, &PreferencesWindow::confirmRestoreDefaults);
+    setValidator([this]() -> std::optional<kit::KRefusal> {
+        if (!cacheDirectoryIssue_.isEmpty())
+            return kit::KRefusal{cacheDirectoryField_, cacheDirectoryIssue_};
+        return std::nullopt;
     });
-    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    connect(applyButton_, &QPushButton::clicked, this, [this] { commitPreferences(); });
-    root->addWidget(buttons);
 
     refreshControls();
     updateApplyEnabled();
+}
+
+void PreferencesWindow::confirmRestoreDefaults() {
+    kit::KConfirmSpec spec;
+    spec.title = tr("Restore Defaults");
+    spec.objectName = QStringLiteral("preferencesRestoreDefaultsConfirmation");
+    spec.tone = kit::KPromptTone::Warning;
+    spec.heading = tr("Restore every preference to its default?");
+    spec.detail = tr("Nothing is saved until you choose OK or Apply.");
+    spec.destructiveText = tr("Restore Defaults");
+    spec.rejectText = tr("Cancel");
+    spec.defaultRole = Role::Reject;
+    QPointer<PreferencesWindow> self(this);
+    kit::confirm(*this, spec, [self](const Role role) {
+        if (self && role == Role::Destructive)
+            self->setPreferences(defaultApplicationPreferences());
+    });
+}
+
+void PreferencesWindow::checkCacheDirectory(const QString& directory) {
+    cacheDirectoryIssue_.clear();
+    const auto path = directory.trimmed();
+    if (!path.isEmpty()) {
+        const QFileInfo info(path);
+        if (info.exists() && !info.isDir()) {
+            cacheDirectoryIssue_ = tr("This is a file, not a folder.");
+        } else if (info.exists() && !info.isWritable()) {
+            cacheDirectoryIssue_ = tr("Bloom cannot write to this folder.");
+        } else if (!info.exists()) {
+            // The nearest folder that exists must let Bloom create the rest.
+            QFileInfo parent(info.absolutePath());
+            while (!parent.exists() && parent.absoluteFilePath() != parent.absolutePath())
+                parent = QFileInfo(parent.absolutePath());
+            if (!parent.isDir() || !parent.isWritable())
+                cacheDirectoryIssue_ = tr("Bloom cannot create this folder here.");
+        }
+    }
+    revalidate();
 }
 
 ApplicationPreferences PreferencesWindow::preferences() const { return draft_; }
@@ -383,16 +417,23 @@ QWidget* PreferencesWindow::buildMemoryPage() {
     directory->setText(QString::fromStdString(draft_.mediaDiskCacheDirectory));
     auto* browse = new kit::KButton(tr("Browse…"), content);
     browse->setObjectName(QStringLiteral("preferencesMediaDiskCacheBrowseButton"));
-    connect(browse, &QPushButton::clicked, this, [this, directory] {
-        const auto picked = QFileDialog::getExistingDirectory(this, tr("Choose a cache directory"),
-                                                              directory->text());
-        if (picked.isEmpty()) {
+    connect(browse, &QAbstractButton::clicked, this, [this, directory] {
+        const auto picked = kit::chooseFile(*this, {.mode = kit::KFileRequest::Mode::Directory,
+                                                    .title = tr("Choose a Cache Folder"),
+                                                    .kind = QStringLiteral("cache-directory"),
+                                                    .nameFilters = {},
+                                                    .defaultSuffix = {},
+                                                    .startPath = directory->text()});
+        if (!picked) {
             return;
         }
-        directory->setText(picked);
-        draft_.mediaDiskCacheDirectory = picked.toStdString();
+        directory->setText(*picked);
+        draft_.mediaDiskCacheDirectory = picked->toStdString();
+        checkCacheDirectory(*picked);
         updateApplyEnabled();
     });
+    connect(directory, &QLineEdit::editingFinished, this,
+            [this, directory] { checkCacheDirectory(directory->text()); });
     connect(directory, &QLineEdit::textChanged, this, [this](const QString& text) {
         draft_.mediaDiskCacheDirectory = text.toStdString();
         updateApplyEnabled();
@@ -403,6 +444,15 @@ QWidget* PreferencesWindow::buildMemoryPage() {
     });
     addPreferencesRow(diskRows, content, properties::makeRowLabel(tr("Cache directory"), content),
                       {directory, browse, makeRestartBadge(content)});
+    // The directory's inline reason, under its row.
+    auto* directoryReason = new kit::KLabel(QString{}, content, kit::TypeRole::UiSmall);
+    directoryReason->setObjectName(QStringLiteral("preferencesMediaDiskCacheDirectoryReason"));
+    directoryReason->setWordWrap(true);
+    directoryReason->setTone(kit::Color::Error);
+    directoryReason->hide();
+    diskRows->addWidget(directoryReason);
+    cacheDirectoryField_ = directory;
+    registerReason(directory, directoryReason);
 
     auto* budget = addValueFieldRow(
         diskRows, content, QStringLiteral("preferencesMediaDiskCacheBudgetField"),
