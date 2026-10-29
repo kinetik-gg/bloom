@@ -29,6 +29,9 @@ target_sources(
             include/bloom/host/bloom_neutral_profile.hpp
             include/bloom/host/copy_async_io.hpp
             include/bloom/host/copy_publication.hpp
+            include/bloom/host/export_presets.hpp
+            include/bloom/host/export_queue.hpp
+            include/bloom/host/export_verification.hpp
             include/bloom/host/frame_export_publication.hpp
             include/bloom/host/frame_range_runner.hpp
             include/bloom/host/gpu_export_provider.hpp
@@ -127,6 +130,17 @@ if(BUILD_TESTING)
         NAME bloom.host.bloom-neutral-profile
         COMMAND bloom_host_bloom_neutral_profile_test --root "${PROJECT_SOURCE_DIR}"
         LABELS unit host color quality
+    )
+
+    # ADR 0033 (proposed): the export queue contract headers compile and their value types and
+    # constexpr helpers behave as documented. The service itself is not implemented yet.
+    add_executable(bloom_host_export_queue_contract_test tests/export_queue_contract_tests.cpp)
+    target_link_libraries(bloom_host_export_queue_contract_test PRIVATE bloom_host)
+    bloom_enable_warnings(bloom_host_export_queue_contract_test)
+    bloom_add_test(
+        NAME bloom.host.export-queue-contract
+        COMMAND bloom_host_export_queue_contract_test
+        LABELS unit host
     )
 
     add_executable(bloom_host_frame_range_runner_test tests/frame_range_runner_tests.cpp)

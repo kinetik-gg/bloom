@@ -34,6 +34,7 @@ target_sources(
             include/bloom/document/color_settings.hpp
             include/bloom/document/composition_settings.hpp
             include/bloom/document/document.hpp
+            include/bloom/document/export_queue.hpp
             include/bloom/document/extension_records.hpp
             include/bloom/document/data_block.hpp
             include/bloom/document/graph.hpp
