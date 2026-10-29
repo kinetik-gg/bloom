@@ -282,6 +282,9 @@ class RemoveAsset final : public Operation {
   private:
     document::AssetId id_;
 };
+// The composition background is viewer presentation metadata: no compiled or evaluated input reads
+// it and it never fills export alpha (docs/architecture/project-format.md), so changing it cannot
+// change a rendered pixel. The Viewer re-presents the frame it already has with the new colour.
 class SetCompositionBackgroundColor final : public Operation {
   public:
     SetCompositionBackgroundColor(document::CompositionId composition, core::Color4d color)
@@ -290,6 +293,7 @@ class SetCompositionBackgroundColor final : public Operation {
         return "bloom.composition.set-background-color";
     }
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] bool renderAffecting() const noexcept override { return false; }
 
   private:
     document::CompositionId composition_;

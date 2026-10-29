@@ -310,6 +310,32 @@ void testLayerTiming(TestContext& test) {
     test.expect(!refused.changed(), "a range wholly after the composition is refused");
 }
 
+// The composition background is viewer presentation only: setting it changes the document (and
+// undoes and redoes as one step) but is never render-affecting, so retained frames survive it.
+void testBackgroundColorIsPresentationOnly(TestContext& test) {
+    Fixture fixture;
+    const core::Color4d before = composition(fixture.document.snapshot()).backgroundColor();
+    const core::Color4d after{0.8, 0.2, 0.4, 1.0};
+    const auto set = apply<SetCompositionBackgroundColor>(fixture, after);
+    test.expect(set.changed() && !set.renderAffecting && !set.affectedTimes.has_value(),
+                "a background colour edit changes the document but no rendered pixel");
+    test.expect(composition(fixture.document.snapshot()).backgroundColor() == after,
+                "the edit stores the new background colour");
+    const auto undone = fixture.stack.undo();
+    test.expect(undone.changed() && !undone.renderAffecting &&
+                    composition(fixture.document.snapshot()).backgroundColor() == before,
+                "undo restores the colour and is still not render-affecting");
+    const auto redone = fixture.stack.redo();
+    test.expect(redone.changed() && !redone.renderAffecting &&
+                    composition(fixture.document.snapshot()).backgroundColor() == after,
+                "redo reapplies the colour, not render-affecting");
+    Transaction mixed("Mixed", fixture.document.snapshot().revision());
+    mixed.emplace<SetCompositionBackgroundColor>(kCompositionId, before);
+    mixed.emplace<SetLayerEnabled>(kCompositionId, kFirstLayerId, false);
+    test.expect(fixture.stack.execute(std::move(mixed)).renderAffecting,
+                "a transaction that also changes a pixel stays render-affecting");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -323,6 +349,7 @@ int main() {
         bloom::commands::test::testCompositionSourceReference(test);
         bloom::commands::test::testAffectedCompositionScope(test);
         bloom::commands::test::testLayerTiming(test);
+        bloom::commands::test::testBackgroundColorIsPresentationOnly(test);
     } catch (const std::exception& error) {
         test.fail(error.what());
     }
