@@ -153,6 +153,10 @@ class ProjectHost final : public QObject {
     // Publication", item 5) for the currently installed decoded content; a default-constructed
     // (invalid) CompositionId when there is no decoded content or no composition at all.
     [[nodiscard]] document::CompositionId lowestCompositionId() const;
+    // A one-time note for the last successful Open, empty when there is none. ADR 0032: a project
+    // saved before document 1.28 whose video assets relied on the previous Auto colour default
+    // says that they are now shown as players show them. Set before openFinished() fires.
+    [[nodiscard]] const QString& openNotice() const noexcept { return openNotice_; }
 
     // Seam setters (decision 4). Defaults are installed at construction (QMessageBox/QFileDialog);
     // tests replace them before driving New/Open/Save.
@@ -240,6 +244,7 @@ class ProjectHost final : public QObject {
     void recoveryDiagnostic(QString message);
 
   private:
+    [[nodiscard]] QString videoColourDefaultNotice(const host::SessionOpenResult& result) const;
     void poll();
     void scheduleNextPoll();
     void setActivity(ProjectHostActivity activity);
@@ -285,6 +290,7 @@ class ProjectHost final : public QObject {
     // copyFinished()'s success message once the async operation completes.
     std::filesystem::path pendingCopyTargetPath_;
     std::filesystem::path pendingOpenRecoveryPath_;
+    QString openNotice_;
 
     std::variant<std::monostate, host::AsyncSessionSave, host::AsyncSessionOpen,
                  host::AsyncCopyPublication>

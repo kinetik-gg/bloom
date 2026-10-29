@@ -119,6 +119,7 @@ installOpenedArchiveResult(ProjectSession& session, const OpenIntentCapture inte
     // Opened: build a DecodedReplacementContent from the OpenedArchive, mirroring its shape
     // one-to-one (see open_archive.hpp's file comment and DecodedReplacementContent's own comment).
     auto openedValue = std::move(opened).takeOpened();
+    const auto openedVersion = openedValue.documentSchemaVersion;
     DecodedReplacementReservations reservations(std::move(openedValue.manifestReservation),
                                                 std::move(openedValue.decodeReservation),
                                                 std::move(openedValue.reconstructionReservation));
@@ -130,7 +131,8 @@ installOpenedArchiveResult(ProjectSession& session, const OpenIntentCapture inte
         // detection needs a capability registry that does not exist yet (see this task's design
         // decision 2) -- every opened archive installs as fully Editable here.
         DecodedProjectEditability::Editable, std::move(displayPath), std::move(reservations));
-    return installDecodedAndReport(session, intent, std::move(content));
+    return installDecodedAndReport(session, intent, std::move(content))
+        .withOpenedDocumentSchemaVersion(openedVersion);
 }
 
 SessionOpenResult openSessionArchive(ProjectSession& session, std::span<const std::byte> archive,

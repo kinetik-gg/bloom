@@ -352,8 +352,52 @@ void testSourcePrecedenceAndCache(Expectations& expectations) {
 
 } // namespace
 
+// ADR 0032 compatibility: exactly the Auto video assets whose stored tags make Auto show them as
+// ordinary SDR video (and so looked different before document 1.28) trigger the open note.
+void testSdrVideoColourDefaultAssets(Expectations& expectations) {
+    const auto video = [](const std::int64_t primaries, const std::int64_t transfer,
+                          const std::int64_t matrix, const std::int64_t range,
+                          const std::uint32_t width = 1920, const std::uint32_t height = 1080) {
+        bloom::document::AssetRecord asset;
+        asset.kind = bloom::document::AssetKind::Video;
+        bloom::document::AssetVideoStream stream;
+        stream.kind = 1;
+        stream.width = width;
+        stream.height = height;
+        stream.framePeriod = *bloom::core::RationalTime::create(1, 25);
+        stream.primaries = primaries;
+        stream.transfer = transfer;
+        stream.matrix = matrix;
+        stream.range = range;
+        asset.videoStreams = {stream};
+        return asset;
+    };
+    using bloom::runtime::detail::assetUsesSdrVideoColourDefault;
+    expectations.expect(assetUsesSdrVideoColourDefault(video(-1, -1, -1, -1)) &&
+                            assetUsesSdrVideoColourDefault(video(2, 2, 2, 0, 720, 576)) &&
+                            assetUsesSdrVideoColourDefault(video(1, 1, 1, 1)) &&
+                            assetUsesSdrVideoColourDefault(video(6, 6, 6, 1, 720, 480)),
+                        "untagged, Rec.709 and Rec.601 SDR video in Auto uses the SDR default");
+    auto explicitChoice = video(1, 1, 1, 1);
+    explicitChoice.interpretation.inputColorSpaceId = "lin_rec709_scene";
+    auto legacyChoice = video(1, 1, 1, 1);
+    legacyChoice.interpretation.colorSpace = bloom::document::AssetColorSpace::Linear;
+    auto image = video(1, 1, 1, 1);
+    image.kind = bloom::document::AssetKind::Image;
+    expectations.expect(
+        !assetUsesSdrVideoColourDefault(video(9, 16, 9, 1)) &&
+            !assetUsesSdrVideoColourDefault(video(9, 18, 9, 1)) &&
+            !assetUsesSdrVideoColourDefault(video(1, 13, 1, 2)) &&
+            !assetUsesSdrVideoColourDefault(video(1, 8, 1, 1)) &&
+            !assetUsesSdrVideoColourDefault(video(9, 1, 9, 1)) &&
+            !assetUsesSdrVideoColourDefault(explicitChoice) &&
+            !assetUsesSdrVideoColourDefault(legacyChoice) && !assetUsesSdrVideoColourDefault(image),
+        "HDR, sRGB, linear and Rec.2020 tags, explicit or legacy choices and stills are unaffected");
+}
+
 int main() {
     Expectations expectations;
+    testSdrVideoColourDefaultAssets(expectations);
     testImageRules(expectations);
     testVideoRules(expectations);
     testSourcePrecedenceAndCache(expectations);
