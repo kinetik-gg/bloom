@@ -50,6 +50,7 @@ absent.
 | Inter | v4.1 | SIL Open Font License 1.1 | `src/ui/kit/third_party/inter/` | `LICENSE`, `manifest.json`, `provenance.md` |
 | DejaVu Sans | 2.37 | Bitstream Vera Fonts Copyright + Arev Fonts Copyright, DejaVu changes public domain | `src/ui/kit/third_party/dejavu-sans/` | `LICENSE`, `provenance.md` |
 | Geist Mono | v1.7.2 | SIL Open Font License 1.1 | `src/ui/kit/third_party/geist-mono/` | `LICENSE`, `manifest.json`, `provenance.md` |
+| SND01 "sine" (UI sounds, processed) | SND01_sine.zip | MIT; snd.dev Terms of Use | `src/ui/sound/assets/` | `src/ui/kit/third_party/snd01-sine/LICENSE`, `src/ui/sound/assets/provenance.md` |
 
 Each component directory retains its upstream license text unmodified and a `provenance.md` that
 records the exact upstream release, the source archive URL, the SHA-256 of the archive the assets
@@ -97,6 +98,20 @@ the SIL Open Font License, Version 1.1. The complete license text is at
 Bloom vendors the upright Geist Mono variable TTF (`GeistMono[wght].ttf`, stored as
 `GeistMono-Variable.ttf`), unmodified, from the pinned `v1.7.2` release. The Geist sans family,
 the Geist Pixel family, the static faces, and the italic faces are not vendored.
+
+### SND01 "sine" UI sounds
+
+UI sounds: SND01 "sine" by Yasuhiro Tsuchiya, from SND (<https://snd.dev/>) by Dentsu Inc. CX
+Creative Center. Licensed as published by SND (MIT); the snd.dev Terms of Use allow free and
+commercial use with credit appreciated, and prohibit redistributing the unprocessed materials by
+themselves or using them as a trademark sound logo.
+
+Bloom bundles 13 sounds from the pack, each processed (trimmed, resampled to 48 kHz,
+level-matched, peak-limited, converted to 16-bit mono WAV) and embedded as application resources
+for interface feedback. The original archive and unprocessed files are not redistributed. The
+archive digest, the selection, the processing steps and every file digest are in
+`src/ui/sound/assets/provenance.md`; the notice shown in the Open Source Licenses window is
+`src/ui/kit/third_party/snd01-sine/LICENSE`.
 
 ## Vendored source libraries
 

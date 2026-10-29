@@ -1,0 +1,19 @@
+SND01 "sine" -- UI sounds
+
+UI sounds: SND01 "sine" by Yasuhiro Tsuchiya, from SND (snd.dev) by Dentsu Inc. CX Creative Center.
+
+Source: https://snd.dev/ (SND01_sine.zip)
+Licence: MIT, as published for the SND01 sound pack.
+
+Terms of Use (summary of the snd.dev Terms of Use as recorded when Bloom adopted the pack):
+  - Free use, commercial use included. Credit is appreciated.
+  - Redistributing the unprocessed materials by themselves is prohibited.
+  - Using the materials as a trademark sound logo is prohibited.
+
+Bloom does not redistribute the pack. It bundles a small set of derived sounds that were trimmed
+of silence, resampled to 48 kHz, level-matched, peak-limited and converted to 16-bit mono WAV.
+The unmodified archive is not part of this repository or of any Bloom build. The exact selection,
+processing steps and file digests are recorded in src/ui/sound/assets/provenance.md.
+
+The sounds play only for Bloom's own interface feedback (render and import results, warnings and,
+when the artist turns them on, interaction cues). They are not used as a trademark or sound logo.
