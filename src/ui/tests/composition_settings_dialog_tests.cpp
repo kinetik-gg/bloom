@@ -2,9 +2,10 @@
 // the timecode labels it authors, and the one command each mode commits.
 //
 // With BLOOM_SCREENSHOT_DIR set, the test also writes review screenshots of create mode, settings
-// mode, the open preset dropdown, the open Advanced section and an inline validation error.
+// mode, the open preset dropdown, the Advanced tab and an inline validation error.
 
 #include "composition_settings_dialog.hpp"
+#include <bloom/ui/kit/tab_bar.hpp>
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
@@ -41,6 +42,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QTest>
 #include <QTimer>
 
 #include <cstdlib>
@@ -238,7 +240,9 @@ void testDialogPresetsAndValidation() {
     expect(ratePresets->currentText() == QStringLiteral("29.97 fps") && rateField->isHidden(),
            "30000/1001 shows the 29.97 preset");
     auto* drop = child<QAbstractButton>(dialog, "compositionSettingsDropFrame");
-    expect(drop && drop->isEnabled(), "drop-frame is offered at 29.97");
+    auto* advancedPage = child<QWidget>(dialog, "compositionSettingsAdvanced");
+    expect(drop && drop->isEnabled() && drop->isVisibleTo(advancedPage),
+           "drop-frame is offered at 29.97");
     drop->setChecked(true);
     auto* unit = child<ui::kit::KDropdown>(dialog, "compositionSettingsDurationUnit");
     unit->setCurrentIndex(2);
@@ -254,14 +258,24 @@ void testDialogPresetsAndValidation() {
                authored->timecode.start == *core::RationalTime::create(107892 * 1001, 30000),
            "a drop-frame start of 01:00:00;00 is frame 107892");
     rateField->setText(QStringLiteral("25"));
-    expect(drop->isEnabled() == false && dialog.settings() &&
+    expect(!drop->isVisibleTo(advancedPage) && dialog.settings() &&
                !dialog.settings()->timecode.dropFrame,
-           "at 25 fps drop-frame is unavailable and not authored");
+           "at 25 fps the drop-frame row is not offered and nothing drop-frame is authored");
     auto* titleSafe = child<ui::kit::KValueField>(dialog, "compositionSettingsTitleSafe");
     titleSafe->setValue(95);
+    auto* tabs = child<ui::kit::KTabs>(dialog, "compositionSettingsTabs");
+    tabs->setCurrentIndex(0);
     expect(!ok->isEnabled() && safeError->text().contains(QStringLiteral("Title safe")) &&
-               !child<ui::kit::KSection>(dialog, "compositionSettingsAdvanced")->isCollapsed(),
-           "title safe outside action safe is refused under it, opening Advanced");
+               tabs->bar()->tabAlert(1) && !tabs->bar()->tabAlert(0),
+           "title safe outside action safe is refused under it, with an Error dot on Advanced");
+    expect(!dialog.activate(ui::kit::KDialog::Role::Accept) && tabs->currentIndex() == 1 &&
+               !tabs->bar()->tabAlert(1),
+           "accepting switches to the tab with the refused field");
+    tabs->setCurrentIndex(0);
+    QTest::keyClick(&dialog, Qt::Key_Return);
+    expect(tabs->currentIndex() == 1 && dialog.result() == QDialog::Rejected,
+           "Enter on the refused dialog also shows the refused field's tab");
+    tabs->setCurrentIndex(0);
     titleSafe->setValue(80);
     expect(ok->isEnabled(), "valid settings enable Add");
 
@@ -373,15 +387,32 @@ void testDialogPresentation() {
     auto* grid = anchorGrid(edit);
     expect(grid != nullptr && grid->selectedPoint() == 4, "the resize anchor is the kit grid");
     edit.show();
-    child<ui::kit::KSection>(edit, "compositionSettingsAdvanced")->setCollapsed(false);
+    auto* editTabs = child<ui::kit::KTabs>(edit, "compositionSettingsTabs");
+    editTabs->setCurrentIndex(0);
     settle(50);
-    expect(child<QWidget>(edit, "compositionSettingsName")->mapTo(&edit, QPoint{}).x() ==
+    const int basicHeight = edit.height();
+    const int nameX = child<QWidget>(edit, "compositionSettingsName")->mapTo(&edit, QPoint{}).x();
+    editTabs->setCurrentIndex(1);
+    settle(50);
+    expect(nameX ==
                child<QWidget>(edit, "compositionSettingsWorkingSpace")->mapTo(&edit, QPoint{}).x(),
            "Basic and Advanced share one label column");
-    expect(grid->isVisible(), "settings mode shows the resize anchor");
+    expect(edit.height() == basicHeight, "switching tabs never resizes the dialog");
+    expect(!grid->isVisible(), "the resize anchor waits for a size change");
+    child<ui::kit::KValueField>(edit, "compositionSettingsWidth")->setValue(1280);
+    settle(50);
+    expect(grid->isVisible(), "a size change in settings mode offers the resize anchor");
+    // Ctrl+Tab steps the tabs from inside a field.
+    editTabs->setCurrentIndex(0);
+    QTest::keyClick(child<QWidget>(edit, "compositionSettingsName"), Qt::Key_Tab,
+                    Qt::ControlModifier);
+    expect(editTabs->currentIndex() == 1, "Ctrl+Tab moves to the next tab");
+    QTest::keyClick(child<QWidget>(edit, "compositionSettingsWorkingSpace"), Qt::Key_Backtab,
+                    Qt::ControlModifier | Qt::ShiftModifier);
+    expect(editTabs->currentIndex() == 0, "Ctrl+Shift+Tab moves back");
     edit.hide();
     create.show();
-    child<ui::kit::KSection>(create, "compositionSettingsAdvanced")->setCollapsed(false);
+    child<ui::kit::KTabs>(create, "compositionSettingsTabs")->setCurrentIndex(1);
     settle(50);
     expect(!child<QWidget>(create, "compositionSettingsAnchor")->isVisible(),
            "create mode has no layers to anchor");
@@ -475,10 +506,10 @@ void writeScreenshots(const QString& directory) {
         dialog.show();
         child<ui::kit::KDropdown>(dialog, "compositionSettingsDurationUnit")->setCurrentIndex(2);
         screenshot(dialog, directory + QStringLiteral("/composition-settings.png"));
-        child<ui::kit::KSection>(dialog, "compositionSettingsAdvanced")->setCollapsed(false);
+        child<ui::kit::KTabs>(dialog, "compositionSettingsTabs")->setCurrentIndex(1);
         anchorGrid(dialog)->choosePoint(0);
         screenshot(dialog, directory + QStringLiteral("/composition-advanced.png"));
-        child<ui::kit::KSection>(dialog, "compositionSettingsAdvanced")->setCollapsed(true);
+        child<ui::kit::KTabs>(dialog, "compositionSettingsTabs")->setCurrentIndex(0);
         auto* rates = child<ui::kit::KDropdown>(dialog, "compositionSettingsRatePreset");
         rates->setCurrentIndex(rates->count() - 1);
         child<QLineEdit>(dialog, "compositionSettingsRate")->setText(QStringLiteral("0"));
@@ -490,7 +521,7 @@ void writeScreenshots(const QString& directory) {
         CompositionSettingsDialog dialog(CompositionSettingsDialog::Mode::Edit, settings, spaces(),
                                          owner());
         dialog.show();
-        child<ui::kit::KSection>(dialog, "compositionSettingsAdvanced")->setCollapsed(false);
+        child<ui::kit::KTabs>(dialog, "compositionSettingsTabs")->setCurrentIndex(1);
         settle(200);
         dialog.resize(ui::kit::px(ui::kit::Size::DialogWideWidth) + 200, dialog.height());
         screenshot(dialog, directory + QStringLiteral("/composition-advanced-wide.png"));

@@ -30,6 +30,7 @@ class KForm;
 class KIconButton;
 class KIconToggle;
 class KSection;
+class KTabs;
 class KValueField;
 } // namespace kit
 
@@ -76,7 +77,8 @@ class CompositionSettingsDialog final : public kit::KDialog {
     void showPresetRefusal(const QString& reason);
     void promptPresetName(bool rename);
     void confirmDeletePreset();
-    void buildBasic(kit::KForm& form);
+    void buildBasic(kit::KForm& form, kit::KForm& advanced);
+    [[nodiscard]] QString frameAspectText() const;
     void buildAdvanced(kit::KForm& form);
     void rebuildPresetItems();
     void selectMatchingPreset();
@@ -117,7 +119,10 @@ class CompositionSettingsDialog final : public kit::KDialog {
     QLineEdit* durationField_ = nullptr;
     kit::KDropdown* unit_ = nullptr;
     kit::KColorChip* background_ = nullptr;
-    kit::KSection* advanced_ = nullptr;
+    kit::KTabs* tabs_ = nullptr;
+    kit::KForm* advancedForm_ = nullptr;
+    QWidget* anchorRow_ = nullptr;
+    QLabel* aspect_ = nullptr;
     kit::KDropdown* workingSpace_ = nullptr;
     kit::KAnchorGrid* anchorGrid_ = nullptr;
     SafeAreaFields safe_;
@@ -128,6 +133,7 @@ class CompositionSettingsDialog final : public kit::KDialog {
     QWidget* sizeRow_ = nullptr;
     QWidget* rateRow_ = nullptr;
     QWidget* durationRow_ = nullptr;
+    QWidget* startRow_ = nullptr;
     QWidget* safeRow_ = nullptr;
 };
 
