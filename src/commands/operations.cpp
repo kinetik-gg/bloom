@@ -617,15 +617,29 @@ OperationResult AddShapeLayer::apply(document::Draft& draft) const {
         auto value = parameter.defaultValue;
         if (parameter.role == "kind")
             value = static_cast<std::int64_t>(kind_);
-        if (kind_ == document::ShapeKind::Line ||
-            (kind_ == document::ShapeKind::Path && geometry_.path && !geometry_.path->closed)) {
-            if (parameter.role == "fillEnabled")
-                value = false;
-            if (parameter.role == "strokeEnabled")
-                value = true;
-            if (parameter.role == "strokeColor")
-                value = core::Color4d{1, 1, 1, 1};
-        }
+        // An open outline is visible by default: a white stroke where a closed shape has black.
+        if ((kind_ == document::ShapeKind::Line ||
+             (kind_ == document::ShapeKind::Path && geometry_.path && !geometry_.path->closed)) &&
+            parameter.role == "strokeColor")
+            value = core::Color4d{1, 1, 1, 1};
+        // The style applies first, so a Line's or open path's fixed fill and stroke still win.
+        if (parameter.role == "fillEnabled" && style_.fillEnabled)
+            value = *style_.fillEnabled;
+        if (parameter.role == "fillColor" && style_.fillColor)
+            value = *style_.fillColor;
+        if (parameter.role == "strokeEnabled" && style_.strokeEnabled)
+            value = *style_.strokeEnabled;
+        if (parameter.role == "strokeColor" && style_.strokeColor)
+            value = *style_.strokeColor;
+        if (parameter.role == "strokeWidth" && style_.strokeWidth)
+            value = *style_.strokeWidth;
+        const bool openOutline =
+            kind_ == document::ShapeKind::Line ||
+            (kind_ == document::ShapeKind::Path && geometry_.path && !geometry_.path->closed);
+        if (openOutline && parameter.role == "fillEnabled")
+            value = false;
+        if (openOutline && parameter.role == "strokeEnabled")
+            value = true;
         if (parameter.role == "size" && geometry_.size)
             value = *geometry_.size;
         if (parameter.role == "lineStart" && geometry_.lineStart)
@@ -831,10 +845,27 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
                                          "Text layer content must be valid UTF-8");
     }
 
-    const auto fontAssetId = ensureDefaultTextFont(draft);
+    if (style_.alignment && (*style_.alignment < 0 || *style_.alignment > 2))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Text alignment must be left, centre or right");
+    std::optional<document::AssetId> fontAssetId;
+    if (style_.font) {
+        if (style_.font->kind != document::AssetKind::Font)
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "The text font must be a Font asset");
+        const auto ensured = EnsureFontAsset(*style_.font).apply(draft);
+        if (ensured.status == OperationStatus::Rejected)
+            return ensured;
+        for (const auto& output : ensured.outputs)
+            if (output.name == "asset")
+                if (const auto* id = std::get_if<document::AssetId>(&output.id))
+                    fontAssetId = *id;
+    } else {
+        fontAssetId = ensureDefaultTextFont(draft);
+    }
     if (!fontAssetId)
         return OperationResult::rejected(OperationIssueCode::Unsupported,
-                                         "The default text Font asset could not be created");
+                                         "The text Font asset could not be created");
 
     return addStructuredLayer(
         draft, *composition, name_,
@@ -849,7 +880,7 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
           {document::kTextColorParameterRole, document::kTextColorParameterSchemaKey, color_,
            kAddTextLayerColorParameterOutput},
           {document::kTextAlignmentParameterRole, document::kTextAlignmentParameterSchemaKey,
-           std::int64_t{0}, "alignmentParameter"},
+           style_.alignment.value_or(std::int64_t{0}), "alignmentParameter"},
           {document::kTextLineHeightParameterRole, document::kTextLineHeightParameterSchemaKey, 1.0,
            "lineHeightParameter"},
           {document::kTextLetterSpacingParameterRole,

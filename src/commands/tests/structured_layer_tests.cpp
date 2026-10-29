@@ -1,6 +1,7 @@
 #include "command_test_support.hpp"
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/core/sha256.hpp>
 
 #include <algorithm>
 #include <array>
@@ -506,6 +507,124 @@ void testShapeLayers(TestContext& test) {
     }
 }
 
+// The constant a created node's parameter `role` holds in `snapshot`, or nothing.
+[[nodiscard]] std::optional<document::ParameterValue>
+createdConstant(const document::Snapshot& snapshot, const NodeId node,
+                const std::string_view role) {
+    const auto& value = composition(snapshot);
+    const auto* record = value.graph().findNode(node);
+    if (record == nullptr)
+        return std::nullopt;
+    for (const auto& binding : record->parameters)
+        if (binding.role == role)
+            if (const auto* parameter = value.parameters().find(binding.parameterId))
+                if (const auto* constant = std::get_if<ConstantValueSource>(&parameter->source))
+                    return constant->value;
+    return std::nullopt;
+}
+
+// The context bar's new-shape options reach the created shape in the same one-step creation; a
+// Line keeps its open-outline fill and stroke switches but takes the style's colour and width.
+void testShapeLayerStyle(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const core::Color4d fill{0.2, 0.4, 0.6, 1.0};
+    const core::Color4d stroke{0.9, 0.1, 0.1, 1.0};
+    const ShapeLayerStyle style{true, fill, true, stroke, 7.5};
+    Transaction rectangle("Add Shape", document.snapshot().revision());
+    rectangle.emplace<AddShapeLayer>(kCompositionId, document::ShapeKind::Rectangle,
+                                     ShapeLayerGeometry{}, style);
+    const auto created = stack.execute(std::move(rectangle));
+    const auto node = created.outputId<NodeId>("shapeNode");
+    const auto snapshot = document.snapshot();
+    test.expect(created.changed() && node &&
+                    createdConstant(snapshot, *node, "fillColor") ==
+                        document::ParameterValue{fill} &&
+                    createdConstant(snapshot, *node, "strokeEnabled") ==
+                        document::ParameterValue{true} &&
+                    createdConstant(snapshot, *node, "strokeColor") ==
+                        document::ParameterValue{stroke} &&
+                    createdConstant(snapshot, *node, "strokeWidth") ==
+                        document::ParameterValue{7.5} &&
+                    stack.size() == 1,
+                "a styled shape is created with its fill and stroke in one history entry");
+
+    Transaction line("Add Line", document.snapshot().revision());
+    line.emplace<AddShapeLayer>(kCompositionId, document::ShapeKind::Line, ShapeLayerGeometry{},
+                                ShapeLayerStyle{true, fill, false, stroke, 3.0});
+    const auto lineResult = stack.execute(std::move(line));
+    const auto lineNode = lineResult.outputId<NodeId>("shapeNode");
+    const auto lineSnapshot = document.snapshot();
+    test.expect(lineNode &&
+                    createdConstant(lineSnapshot, *lineNode, "fillEnabled") ==
+                        document::ParameterValue{false} &&
+                    createdConstant(lineSnapshot, *lineNode, "strokeEnabled") ==
+                        document::ParameterValue{true} &&
+                    createdConstant(lineSnapshot, *lineNode, "strokeColor") ==
+                        document::ParameterValue{stroke} &&
+                    createdConstant(lineSnapshot, *lineNode, "strokeWidth") ==
+                        document::ParameterValue{3.0},
+                "a line always strokes and never fills, in the style's colour and width");
+
+    Transaction plain("Add Line", document.snapshot().revision());
+    plain.emplace<AddShapeLayer>(kCompositionId, document::ShapeKind::Line);
+    const auto plainNode = stack.execute(std::move(plain)).outputId<NodeId>("shapeNode");
+    test.expect(plainNode && createdConstant(document.snapshot(), *plainNode, "strokeColor") ==
+                                 document::ParameterValue{core::Color4d{1, 1, 1, 1}},
+                "an unstyled line keeps its visible white stroke");
+
+    Transaction invalid("Add Shape", document.snapshot().revision());
+    invalid.emplace<AddShapeLayer>(kCompositionId, document::ShapeKind::Rectangle,
+                                   ShapeLayerGeometry{},
+                                   ShapeLayerStyle{std::nullopt, std::nullopt, std::nullopt,
+                                                   std::nullopt, -1.0});
+    test.expect(stack.execute(std::move(invalid)).status == CommandStatus::Rejected,
+                "a negative stroke width is refused by the shape schema");
+}
+
+// New text takes the bar's alignment and font in its creation step; a bad alignment is refused.
+void testTextLayerStyle(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const auto digest = core::Sha256Digest::fromLowercaseHex(
+        "1111111111111111111111111111111111111111111111111111111111111111");
+    requireFixture(digest.has_value(), "font digest fixture");
+    document::AssetRecord face;
+    face.kind = document::AssetKind::Font;
+    face.locator = {"font", "system", "/fonts/Example.ttf", "file:///fonts/Example.ttf"};
+    face.contentDigest = *digest;
+    face.fontFamily = "Example";
+    face.fontStyle = "Bold";
+    Transaction add("Add Text", document.snapshot().revision());
+    add.emplace<AddTextLayer>(kCompositionId, "Title", "Hi", Vec2d{10, 10}, 1.0, 40.0,
+                              core::Color4d{1, 1, 1, 1}, TextLayerStyle{face, std::int64_t{2}});
+    const auto result = stack.execute(std::move(add));
+    const auto node = result.outputId<NodeId>(kAddTextLayerTextNodeOutput);
+    const auto snapshot = document.snapshot();
+    const auto font = node ? createdConstant(snapshot, *node, document::kTextFontParameterRole)
+                           : std::nullopt;
+    const auto* fontId = font ? std::get_if<std::string>(&*font) : nullptr;
+    const auto* asset =
+        fontId ? snapshot.project().findAsset(document::AssetId::fromRaw(std::stoull(*fontId)))
+               : nullptr;
+    test.expect(result.changed() && node &&
+                    createdConstant(snapshot, *node, document::kTextAlignmentParameterRole) ==
+                        document::ParameterValue{std::int64_t{2}} &&
+                    asset != nullptr && asset->fontFamily == "Example" &&
+                    asset->fontStyle == "Bold" && stack.size() == 1,
+                "styled text is created right-aligned in the chosen face as one step");
+    test.expect(stack.undo().changed() && snapshot.project().assets().size() >
+                                              document.snapshot().project().assets().size(),
+                "undoing the styled text also removes the font asset it introduced");
+
+    Transaction invalid("Add Text", document.snapshot().revision());
+    invalid.emplace<AddTextLayer>(kCompositionId, "Title", "Hi", Vec2d{}, 1.0, 40.0,
+                                  core::Color4d{1, 1, 1, 1},
+                                  TextLayerStyle{std::nullopt, std::int64_t{3}});
+    test.expect(stack.execute(std::move(invalid)).status == CommandStatus::Rejected,
+                "an alignment outside left, centre and right is refused");
+}
+
 void testAddSolidLayerBuildsOneCanonicalTopology(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
@@ -664,6 +783,8 @@ int main() {
     bloom::commands::test::TestContext test;
     try {
         bloom::commands::test::testShapeLayers(test);
+        bloom::commands::test::testShapeLayerStyle(test);
+        bloom::commands::test::testTextLayerStyle(test);
         bloom::commands::test::testAddTextLayerBuildsOneCanonicalTopology(test);
         bloom::commands::test::testAddTextLayerRejectsInvalidInputs(test);
         bloom::commands::test::testCompositionFormatCommand(test);
