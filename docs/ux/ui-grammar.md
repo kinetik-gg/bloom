@@ -26,8 +26,9 @@ Every interactive control is a kit class: `KDropdown`, `KMenuButton`, `KButton`,
 `KTextField` (and its `KLineEdit` and `KSearchField` forms), `KTextArea`, `KFieldFrame`, `KSection`,
 `KRadioGroup`, or `KColorSwatchRow`. Text uses TypeRole-bound `KLabel`.
 Read-only progress uses `KProgressBar` (see "Import Progress Dialog" below). A read-only picture
-uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken`, showing a
-worker-decoded proxy or a glyph fitted without changing its aspect ratio; it never loads anything.
+uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken` (`Cell::Card`), or the Assets
+summary strip's 64 × 40 Field well (`Cell::Strip`), showing a worker-decoded proxy or a glyph fitted
+without changing its aspect ratio; it never loads anything.
 The panel switcher is the icon variant of **KDropdown**, with the same height, styling,
 interaction and popup. Menus are created only through `kit::makeMenu`. A popup is a
 `KPopupWindow` and a list in one is a `KPopupList` (dropdowns, the Add search, the colour picker);
@@ -758,51 +759,93 @@ row to exact reference numbers with the `reference` suffix.
 ## Image Assets And Source Cards
 
 Assets is one tree after the After Effects Project panel (#378): folders, compositions and
-imported assets together, with a selection header and a search field above it. The columns are
-Name, Type, Size, Duration, Frame Rate, Tags and File Location. Name carries the kind glyph in its
-per-kind label colour (the Timeline bar colours): Composition (`cube`, DataComposition), Folder
-(`folder`, Label 3), Image or EXR (`image`, DataImage), Sequence (`images`, DataSequence), Video
-(`film-slate`, DataImage), Audio (`music-notes`, DataAudio), Font (`text-t`, DataClip) and LUT
-(`sliders-horizontal`, muted). Type names the kind; Size is `W × H`;
-Duration has one format for video, image sequences and compositions (#380): After Effects timecode
-`H:MM:SS:FF` at the item's rate followed by the frame count, `0:00:02:00 (48 frames)` (`(1 frame)`
-in the singular). A sequence plays one member per composition frame, so it is timed at the active
-composition's rate (24 fps with none open) over its whole numbered range. Audio shows seconds.
-Frame Rate is a composition's or video's rate. A missing or unshowable source
-replaces the Name glyph with the warning glyph in Warn ink, and an untagged video whose colour was
-assumed shows the Info glyph in muted ink; the tooltip states the reason, the input colour space and
-the colour note. A data-only image has no mark.
+imported assets together. Above it sit a compact summary strip and, when opened, a search row; the
+panel footer keeps New Composition, New Folder, Import and Delete as fast icon buttons.
+
+**Columns.** Name, Type, Dimensions, Duration, Frame Rate, File Size, Tags and File Location. Name,
+Type and Dimensions show by default; the others are chosen from the header's context menu or
+View > Columns (Name always shows). Name is the header's one `QHeaderView::Stretch` section, so the
+shown columns always span the viewport exactly at any panel width and no dead band is left to the
+right; every other shown column fits its content (never below `ValueCellMin`) until the user drags
+it. Visibility, dragged widths, order and sort are a per-user setting (`assets/header-state-v2`,
+`assets/sized-columns`), never project data. Type names the kind; Dimensions is `W × H` (Size was
+renamed: size reads as bytes on disk). Duration shows the After Effects timecode `H:MM:SS:FF` at
+the item's rate; its tooltip carries the frame count and rate in the one duration format (#380),
+`0:00:02:00 (48 frames) at 24 fps` (`(1 frame)` in the singular). A sequence plays one member per
+composition frame, so it is timed at the active composition's rate (24 fps with none open) over
+its whole numbered range; audio shows seconds. Frame Rate is a composition's or video's rate. File
+Size is the source's bytes on disk in SI units, a sequence's members summed, measured by the asset
+controller's thumbnail worker (cancellable, beside the probes that already resolve those paths;
+nothing is stat'ed on the interface thread) and blank until it has run. File Location elides in the
+middle so the file name stays; the full path is its tooltip.
+
+**Rows.** One `Size::AssetRow` (26, one control height, so the inline rename field fits a row
+exactly) at the kit's Ui type size. Each level indents by `Size::AssetIndent` (20: one 16-pixel
+icon plus an XS gap), which is also the caret column: the Phosphor caret (Muted, monochrome) sits
+in the indent in front of the row, the kind glyph at the Name cell's left and the name one indent
+later, so a child's glyph starts exactly where its parent's name does and a root row has only the
+one caret column in front of its glyph. `AssetRowDelegate` paints every cell: the glyph, the name in
+Foreground (Muted on the Data group's rows) with a folder's muted child count after it
+(`test · 1`), and every other column in Muted. `AssetTree::drawRow` paints the row background across
+the whole viewport before the cells -- the alternating Background/Surface rows, the full-width
+hover step and the one selected-row recipe (selection wash with the 2-pixel Accent edge at the
+row's left, never at its indent) -- so nested rows are never notched.
+
+**Glyphs.** Monochrome, in the row's ink (Foreground; Muted on secondary rows; OnAccent selected):
+Composition (`film-strip`), Folder (`folder`, `folder-open` while expanded), Image or EXR
+(`image`), Sequence (`images`), Video (`film-slate`), Audio (`music-notes`), Font (`text-t`) and LUT
+(`sliders-horizontal`). Colour is kept for state: a missing or unshowable source replaces the glyph
+with the warning glyph in Warn ink; an untagged video whose colour was assumed shows the Info glyph
+in the row's ink. The tooltip states the reason, the input colour space and the colour note. A
+data-only image has no mark.
 
 Every column sorts on a header click; folders stay first and the Data group last in either
 direction, sizes, times and rates sort by value and names in natural, case-insensitive order.
-Columns resize and reorder by dragging; the header's context menu and View > Columns choose which
-columns show (Name always shows; Tags starts hidden). Visibility, widths, order and sort are a
-per-user setting, never project data. Folder rows expand with Qt's own branch and keyboard
+Columns resize and reorder by dragging. Folder rows expand with Qt's own branch and keyboard
 navigation; expansion and selection survive project projections, and filtering temporarily opens
 matching ancestors.
 
-The selection header pairs a `KThumbnail` (the controller's worker thumbnail, including
-Cryptomatte ID colours and the first data channel of a data-only image; for a composition a frame
-rendered by the composition preview pipeline; or the kind glyph when there is no picture yet, never
-a blank cell) with four Control-height `KLabel` lines: the name; kind, size, duration and rate
-(`Video · 1920 × 1080 · 0:00:02:00 (48 frames), 24 fps`); colour; and usage
-(`Used 3 times in 2 compositions`, `Not used`). The colour line names the input colour space by its
-plain name, then the alpha, then the colour note once:
-`Colour: sRGB · Straight alpha · Colour tags missing — assumed Rec.709 with the sRGB transfer. Change
-in Assets → Input Colour`. Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene` is
-**Linear Rec.709**, `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space **Rec.709
-video**); another config's spaces show the names the config gives them. A space Auto read from the
-file's own tags adds `(from the file)`; an assumed one is explained by the note alone.
+**Summary strip.** One fixed `Size::SummaryStrip` (52: two Control-height lines) for every
+selection, so the tree never moves. With one item: a `KThumbnail::Cell::Strip` well
+(`StripThumbnailWidth` × `StripThumbnailHeight`, 64 × 40, on Field) letterboxing the controller's
+worker thumbnail at its own aspect ratio (Cryptomatte ID colours or the first data channel of a
+data-only image; for a composition a frame rendered by the composition preview pipeline; otherwise
+the kind glyph, Muted, never a blank cell); line 1 the name in Ui Foreground, elided, with the usage
+trailing in UiSmall Faint (`Used 3 times in 2 compositions`, `Not used`); line 2 the facts in UiSmall
+Muted as chips separated by thin dots: `Sequence · 2048 × 858 · 0:00:16:02 · 386 f · 24 fps · sRGB ·
+Straight`. Each line's tooltip is its whole sentence (`Sequence · 2048 × 858 · 0:00:16:02 (386
+frames), 24 fps`; `Colour: sRGB (from the file) · Straight alpha`). The colour facts name the input
+colour space by its plain name, then the alpha, then the colour note once; a note, a missing source
+or an unshowable one turns that part Warn, with the detail in its tooltip
+(`Colour: sRGB · Straight alpha · Colour tags missing — assumed Rec.709 with the sRGB transfer.
+Change in Assets → Input Colour`). Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene`
+is **Linear Rec.709**, `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space
+**Rec.709 video**); another config's spaces show the names the config gives them. A space Auto read
+from the file's own tags adds `(from the file)` in the tooltip; an assumed one is explained by the
+note alone. Several items: `3 items selected` and their kinds (`2 sequences · 1 composition`). None:
+one centred Faint line of what the project holds (`7 items · 5 sequences · 2 compositions ·
+1 folder`), never an empty tile -- a fixed strip is chosen over collapsing it, so selecting never
+pushes the tree down. View > Show Info hides the strip (`assets/show-info`, per user).
 
-A composition's header frame is its first frame, prepared on a worker by the same compile,
+A composition's strip frame is its first frame, prepared on a worker by the same compile,
 evaluate and display-transform pipeline the Viewer's analysis uses, at a proxy no larger than
-144 device pixels on its longest edge (twice the cell, for a device pixel ratio of two). The
-`CompositionThumbnailController` keeps the newest frame per composition with the document revision
-it was prepared from (at most 64 compositions), prepares a revision once (a frame that cannot be
-prepared is not retried until an edit), shows the previous frame while an edit is prepared and
-cancels on shutdown. Nothing is evaluated or decoded on the interface thread. The lines keep their height when empty, so the tree
-never moves with the selection. Usage counts nodes whose asset, font, LUT or
-composition reference names the item.
+144 device pixels on its longest edge. The `CompositionThumbnailController` keeps the newest frame
+per composition with the document revision it was prepared from (at most 64 compositions), prepares
+a revision once (a frame that cannot be prepared is not retried until an edit), shows the previous
+frame while an edit is prepared and cancels on shutdown. Nothing is evaluated or decoded on the
+interface thread. Usage counts nodes whose asset, font, LUT or composition reference names the item.
+
+**Search.** Collapsed by default: a Search toggle (`magnifying-glass`, "Search (Ctrl+F)") at the
+panel header's trailing end beside Maximize, and Ctrl+F (Cmd+F on macOS) while the panel has focus,
+open a slim Control-height row directly under the header with a `KSearchField`, a Muted match count
+(`3 of 7`: the assets and compositions the filter keeps, not their folders) and a Close button.
+Opening focuses the field. Escape clears the text; Escape on an empty field (or Close) closes the
+row and returns focus to the tree. While text filters the tree the row stays open even after focus
+leaves, and the toggle stays in its Selected state, so a filter can never silently hide assets.
+Typing while the tree has focus is the tree's own type-ahead to an item, not search. The header is
+a priority row: as the panel narrows its menus fold one at a time into the overflow
+(`dots-three-vertical`) -- Select first, then Add, then View -- and the Search toggle keeps its
+place beside Maximize. Text set by any other route (a Tags cell, automation) opens the row too.
 
 Context menus follow After Effects. An asset: New Composition from Selection, Input Colour…
 (interpret footage), Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…,
@@ -820,8 +863,8 @@ Tags column lists an asset's tags; clicking it filters by the first tag. Edit Ta
 line edit per tag with Add Tag and Remove Tag controls; applying to multiple selected assets
 replaces their sets in one transaction.
 
-Search accepts `tag:` followed by a case-insensitive tag substring; plain text matches names and
-tags. Unmatched ancestors remain visible only when a descendant matches. Internal drags move assets,
+Search accepts `tag:` followed by a case-insensitive tag substring (clicking a Tags cell opens the
+row with `tag:` and its first tag); plain text matches names and tags. Unmatched ancestors remain visible only when a descendant matches. Internal drags move assets,
 compositions and folders together onto a folder row, into the folder of the row under the pointer,
 or to the root on empty space; a folder never moves into itself or a subfolder. Rows are sorted, so
 a drop names a folder, never a position. The internal selection MIME coexists with

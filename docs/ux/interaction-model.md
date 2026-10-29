@@ -226,17 +226,21 @@ the playhead on the layer's own clock when the path is keyed), and clicking an o
 ## Assets
 
 Assets is the project panel (#378), after the After Effects Project panel: one tree of folders,
-compositions and imported assets with columns, a search field and a selection header
+compositions and imported assets with columns, a collapsible search row and a summary strip
 (`ui-grammar.md` owns the presentation). Its keys belong to the focused tree, which claims them
 through `ShortcutOverride` so a window-level shortcut cannot take them; text entry stays in the
 search or inline rename field.
 
 | Gesture or control | Action |
 | --- | --- |
-| Search field text | Filters the tree by name and tag, case-insensitively; `tag:` matches tags only; matching rows keep their folders visible |
+| Header Search toggle, Ctrl+F (Cmd+F) with the panel focused | Opens the search row under the header and focuses its field; the toggle closes an empty row and focuses a filtering one |
+| Search field text | Filters the tree by name and tag, case-insensitively; `tag:` matches tags only; matching rows keep their folders visible; a muted count says how many items match. The row stays open while it filters |
+| Escape in the search field, search Close | Escape clears the text; Escape on an empty field, or Close, closes the row and returns focus to the tree |
+| Typing with the tree focused | Type-ahead to the next item whose name starts with the typed text (never search) |
 | Click a column header | Sorts by that column, again to reverse; folders stay first |
 | Drag a header divider / header | Resizes / reorders a column |
-| Right-click the header, View > Columns | Chooses the visible columns; the choice is a per-user setting |
+| Right-click the header, View > Columns | Chooses the visible columns (Name, Type and Dimensions by default); the choice is a per-user setting |
+| View > Show Info | Shows or hides the summary strip; a per-user setting |
 | View > Expand All / Collapse All | Expands or collapses every folder |
 | Add > New Composition…, footer New Composition | Opens the Composition dialog in create mode and adds one composition, filed in the selected folder (see "Composition Dialog" below) |
 | Add > New Folder, footer New Folder | Creates a folder in the selected folder and starts its inline rename |
@@ -246,7 +250,7 @@ search or inline rename field.
 | F2 or Return | Renames the current row in place (asset, composition or folder); Return, Escape and clicking away commit |
 | Delete or Backspace, footer Delete | Deletes the selection; a used item, or a folder that holds items, asks first (see below) |
 | Double-click a composition | Switches the shared `CompositionSession` to that composition, as in After Effects; it opens no dialog. Double-clicking a folder expands it |
-| Click a Tags cell | Filters by the asset's first tag |
+| Click a Tags cell | Opens the search row filtering by the asset's first tag |
 | Drag rows onto a folder, onto a row, or onto empty space | Moves the dragged assets, compositions and folders into that folder, the row's folder, or the root, as one undoable step; a folder never moves into itself or a subfolder |
 | Drag rows to Timeline or Viewer | Makes a layer of every dragged footage item and composition, in the order they were selected (see "Layer drops" under Timeline) |
 | Drag rows to Nodes | Adds the first asset (or composition when no asset is dragged) as a source node |

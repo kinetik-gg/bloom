@@ -117,10 +117,12 @@ void videoAssetRows(TestContext& context) {
     context.expect(item != nullptr, "video asset appears in Assets");
     if (item != nullptr) {
         context.expect(item->text(assets::TypeColumn) == "Video", "Type column names the kind");
-        context.expect(item->text(assets::SizeColumn) == QStringLiteral("64 × 48"),
-                       "Size column shows the frame size");
-        context.expect(item->text(assets::DurationColumn) == "0:00:02:00 (48 frames)",
-                       "Duration column shows timecode at the clip rate with the frame count");
+        context.expect(item->text(assets::DimensionsColumn) == QStringLiteral("64 × 48"),
+                       "Dimensions column shows the frame size");
+        context.expect(item->text(assets::DurationColumn) == "0:00:02:00" &&
+                           item->toolTip(assets::DurationColumn) ==
+                               "0:00:02:00 (48 frames) at 24 fps",
+                       "Duration column shows the timecode; frames and rate are its tooltip");
         context.expect(item->text(assets::FrameRateColumn) == "24", "Frame Rate column");
         context.expect(item->text(assets::LocationColumn) == "Video fixture.mov",
                        "File Location column shows the locator");
@@ -154,8 +156,8 @@ void videoAssetRows(TestContext& context) {
     };
     auto* thumbnail = editor.findChild<ui::kit::KThumbnail*>("assetsSelectionThumbnail");
     context.expect(thumbnail != nullptr && !thumbnail->pixmap().isNull() &&
-                       thumbnail->height() == ui::kit::px(ui::kit::Size::ImageThumbnail),
-                   "selection header thumbnail cell is the 72-pixel cell and never blank");
+                       thumbnail->height() == ui::kit::px(ui::kit::Size::StripThumbnailHeight),
+                   "summary strip thumbnail is the 40-pixel well and never blank");
     context.expect(label("assetsSelectionName") == "Video fixture", "header names the item");
     context.expect(label("assetsSelectionKind") ==
                        QStringLiteral("Video · 64 × 48 · 0:00:02:00 (48 frames), 24 fps"),
@@ -199,14 +201,19 @@ void sortingAndColumns(TestContext& context) {
     tree->sortByColumn(assets::NameColumn, Qt::DescendingOrder);
     context.expect(order() == "Zed,Shot 10,Shot 2,shot 1,Main",
                    "descending order keeps folders first");
-    tree->sortByColumn(assets::SizeColumn, Qt::AscendingOrder);
+    tree->sortByColumn(assets::DimensionsColumn, Qt::AscendingOrder);
     context.expect(order() == "Zed,shot 1,Shot 2,Main,Shot 10",
-                   "Size sorts by pixel count, not text");
+                   "Dimensions sorts by pixel count, not text");
 
     auto* header = tree->header();
-    context.expect(header->isSectionHidden(assets::TagsColumn) &&
-                       !header->isSectionHidden(assets::LocationColumn),
-                   "Tags starts hidden; File Location shows");
+    for (int column = 0; column < assets::ColumnCount; ++column)
+        context.expect(header->isSectionHidden(column) == !assets::defaultColumnVisible(column),
+                       "only Name, Type and Dimensions show by default");
+    context.expect(!header->isSectionHidden(assets::NameColumn) &&
+                       !header->isSectionHidden(assets::TypeColumn) &&
+                       !header->isSectionHidden(assets::DimensionsColumn) &&
+                       header->isSectionHidden(assets::LocationColumn),
+                   "the default columns are Name, Type and Dimensions");
     QStringList actions;
     QTimer::singleShot(0, editor.get(), [&] {
         auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
@@ -226,7 +233,6 @@ void sortingAndColumns(TestContext& context) {
                        !actions.contains(QStringLiteral("assetsColumnAction0")),
                    "the column chooser lists every column but Name");
     context.expect(!header->isSectionHidden(assets::TagsColumn), "choosing Tags shows the column");
-    header->setSectionHidden(assets::LocationColumn, true);
     tree->setColumnWidth(assets::TypeColumn, 140);
     editor.reset();
     ui::AssetsEditor restored(session);
@@ -234,7 +240,7 @@ void sortingAndColumns(TestContext& context) {
     context.expect(restoredTree && !restoredTree->header()->isSectionHidden(assets::TagsColumn) &&
                        restoredTree->header()->isSectionHidden(assets::LocationColumn) &&
                        restoredTree->columnWidth(assets::TypeColumn) == 140 &&
-                       restoredTree->sortColumn() == assets::SizeColumn,
+                       restoredTree->sortColumn() == assets::DimensionsColumn,
                    "column visibility, width and sort persist per user");
     auto* columns = restored.findChild<QMenu*>("assetsColumnMenu");
     context.expect(columns != nullptr && columns->actions().size() == assets::ColumnCount - 1,
@@ -346,10 +352,14 @@ void durationFormat(TestContext& context) {
     auto* sequence = findText(*tree, name);
     auto* composition = findText(*tree, "Main");
     context.expect(sequence != nullptr &&
-                       sequence->text(assets::DurationColumn) == "0:00:01:00 (24 frames)",
+                       sequence->text(assets::DurationColumn) == "0:00:01:00" &&
+                       sequence->toolTip(assets::DurationColumn) ==
+                           "0:00:01:00 (24 frames) at 24 fps",
                    "a 24-frame sequence in a 24 fps composition lasts 0:00:01:00 (24 frames)");
     context.expect(composition != nullptr &&
-                       composition->text(assets::DurationColumn) == "0:00:02:00 (48 frames)",
+                       composition->text(assets::DurationColumn) == "0:00:02:00" &&
+                       composition->toolTip(assets::DurationColumn) ==
+                           "0:00:02:00 (48 frames) at 24 fps",
                    "a composition uses the same duration format");
     const auto label = [&](const char* object) {
         auto* found = editor.findChild<ui::kit::KLabel*>(QString::fromLatin1(object));
@@ -377,8 +387,9 @@ void durationFormat(TestContext& context) {
     context.expect(pal && session.setComposition(*pal), "switch to the 25 fps composition");
     QApplication::processEvents();
     sequence = findText(*tree, name);
-    context.expect(sequence != nullptr &&
-                       sequence->text(assets::DurationColumn) == "0:00:00:24 (24 frames)",
+    context.expect(sequence != nullptr && sequence->text(assets::DurationColumn) == "0:00:00:24" &&
+                       sequence->toolTip(assets::DurationColumn) ==
+                           "0:00:00:24 (24 frames) at 25 fps",
                    "the sequence follows the active composition's rate");
     context.expect(assets::durationText(1, document::FrameRate::framesPerSecond24()) ==
                        "0:00:00:01 (1 frame)",
@@ -449,9 +460,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    context.expect(tree->columnCount() == assets::ColumnCount, "assets tree has seven columns");
-    const QStringList headers{"Name",       "Type", "Size",         "Duration",
-                              "Frame Rate", "Tags", "File Location"};
+    context.expect(tree->columnCount() == assets::ColumnCount, "assets tree has eight columns");
+    const QStringList headers{"Name",       "Type",      "Dimensions", "Duration",
+                              "Frame Rate", "File Size", "Tags",       "File Location"};
     for (int column = 0; column < assets::ColumnCount; ++column)
         context.expect(tree->headerItem()->text(column) == headers[column],
                        "assets tree names its columns");

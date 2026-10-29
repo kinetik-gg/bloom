@@ -418,7 +418,10 @@ target_sources(
         assets_editor_model.cpp
         assets_editor_tree.cpp
         assets_editor_actions.cpp
-        assets_editor_header.cpp
+        assets_editor_summary.cpp
+        assets_editor_columns.cpp
+        assets_editor_delegate.cpp
+        assets_editor_search.cpp
         assets_editor_internal.hpp
         asset_controller.cpp
         asset_data_thumbnail.cpp

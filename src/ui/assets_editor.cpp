@@ -2,8 +2,10 @@
 #include <QAbstractItemDelegate>
 #include <QAction>
 #include <QHeaderView>
+#include <QKeySequence>
 #include <QMenu>
 #include <QSettings>
+#include <QShortcut>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -35,62 +37,52 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     layout->setContentsMargins(gutter, gutter, gutter, gutter);
     layout->setSpacing(kit::px(kit::Spacing::Gutter));
 
-    buildSelectionHeader();
-    layout->addWidget(selectionHeader_);
-
-    search_ = new kit::KSearchField(this);
-    search_->setObjectName(QStringLiteral("assetsSearchField"));
-    search_->setAccessibleName(tr("Search assets"));
-    search_->setPlaceholderText(tr("Search names and tags…"));
-    search_->setToolTip(tr("Matches names and tags; tag:name matches tags only"));
-    layout->addWidget(search_);
-
     auto* tree = new AssetTree(session_, this);
     tree_ = tree;
     tree_->setObjectName(QStringLiteral("assetsTree"));
     tree_->setAccessibleName(tr("Assets"));
-    tree_->setColumnCount(ColumnCount);
-    tree_->setHeaderLabels({tr("Name"), tr("Type"), tr("Size"), tr("Duration"), tr("Frame Rate"),
-                            tr("Tags"), tr("File Location")});
+    columns_ = new ColumnController(*tree_);
     tree_->setRootIsDecorated(true);
-    tree_->setIndentation(kit::px(kit::Size::ToggleCell));
+    // One indent per level, which is also the caret column (ui-grammar.md, Assets).
+    tree_->setIndentation(kit::px(kit::Size::AssetIndent));
     tree_->setUniformRowHeights(true);
     tree_->setIconSize(QSize(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium)));
     tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     tree_->setSelectionBehavior(QAbstractItemView::SelectRows);
     tree_->setAllColumnsShowFocus(true);
-    tree_->setAlternatingRowColors(true);
+    // AssetTree::drawRow alternates the rows across the whole viewport itself.
+    tree_->setAlternatingRowColors(false);
+    tree_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    tree_->viewport()->setMouseTracking(true);
     tree_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     tree_->setContextMenuPolicy(Qt::CustomContextMenu);
     tree_->setSortingEnabled(true);
+    columns_->restore();
+
+    summary_ = new SummaryStrip(session_, *tree_, this);
+    layout->addWidget(summary_);
+    searchBar_ = new SearchBar(this);
+    search_ = searchBar_->field();
+    layout->addWidget(searchBar_);
+    layout->addWidget(tree_, 1);
+    setInfoVisible(QSettings().value(QString::fromLatin1(kShowInfoKey), true).toBool());
+
     auto* header = tree_->header();
-    header->setObjectName(QStringLiteral("assetsTreeHeader"));
-    header->setSectionsMovable(true);
-    header->setFirstSectionMovable(false);
-    header->setStretchLastSection(false);
-    header->setHighlightSections(false);
-    header->setSectionResizeMode(QHeaderView::Interactive);
-    header->setContextMenuPolicy(Qt::CustomContextMenu);
-    header->setToolTip(
-        tr("Click to sort, drag to resize or reorder; right-click to choose columns"));
-    const int column = kit::px(kit::Size::DropdownWidth);
-    tree_->setColumnWidth(NameColumn, column * 2);
-    tree_->setColumnWidth(LocationColumn, column * 2);
-    // Duration carries the frame count beside the timecode (#380).
-    tree_->setColumnWidth(DurationColumn, column * 2);
-    for (const auto index : {TypeColumn, SizeColumn, FrameRateColumn, TagsColumn})
-        tree_->setColumnWidth(index, column);
-    header->setSectionHidden(TagsColumn, true);
-    tree_->sortByColumn(NameColumn, Qt::AscendingOrder);
-    restoreHeaderState();
     connect(
         header, &QHeaderView::customContextMenuRequested, this,
         [this, header](const QPoint position) { showColumnMenu(header->mapToGlobal(position)); });
-    connect(header, &QHeaderView::sortIndicatorChanged, this, [this] { saveHeaderState(); });
-    connect(header, &QHeaderView::sectionMoved, this, [this] { saveHeaderState(); });
-    layout->addWidget(tree_, 1);
-
     connect(search_, &QLineEdit::textChanged, this, &AssetsEditor::applyFilter);
+    searchBar_->closed = [this] { tree_->setFocus(Qt::OtherFocusReason); };
+    searchBar_->visibilityChanged = [this](const bool open) {
+        if (searchButton_ != nullptr)
+            searchButton_->setChecked(open);
+    };
+    // Ctrl+F (Cmd+F on macOS) while the panel has focus opens the search row. Typing in the tree
+    // itself stays the tree's own type-ahead to an item.
+    auto* find = new QShortcut(QKeySequence::Find, this);
+    find->setObjectName(QStringLiteral("assetsFindShortcut"));
+    find->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(find, &QShortcut::activated, this, &AssetsEditor::openSearch);
     // Double-click opens a composition only, as in After Effects; Composition Settings is the
     // context menu, the Composition menu and Ctrl+Alt+K (#376). Folders expand.
     connect(tree_, &QTreeWidget::itemDoubleClicked, this,
@@ -110,6 +102,8 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
             [this] { QTimer::singleShot(0, this, &AssetsEditor::rebuild); });
     tree->deleteRequested = [this] { removeSelected(); };
     const auto expanded = [this](QTreeWidgetItem* item) {
+        // A folder's glyph and the strip's folder glyph follow its open state.
+        refreshSelectionHeader();
         if (!search_->text().trimmed().isEmpty() || rebuilding_)
             return;
         if (const auto folder = folderId(item)) {
@@ -145,48 +139,31 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     rebuild();
 }
 
-AssetsEditor::~AssetsEditor() { saveHeaderState(); }
-
-void AssetsEditor::saveHeaderState() const {
-    if (tree_ != nullptr)
-        QSettings().setValue(QString::fromLatin1(kHeaderStateKey), tree_->header()->saveState());
+AssetsEditor::~AssetsEditor() {
+    if (columns_ != nullptr)
+        columns_->save();
 }
 
-void AssetsEditor::restoreHeaderState() {
-    const auto state = QSettings().value(QString::fromLatin1(kHeaderStateKey)).toByteArray();
-    if (!state.isEmpty() && tree_->header()->restoreState(state)) {
-        // Name is never hidden, whatever an older state says.
-        tree_->header()->setSectionHidden(NameColumn, false);
-        tree_->setSortingEnabled(true);
-    }
+void AssetsEditor::refreshSelectionHeader() {
+    if (summary_ != nullptr && tree_ != nullptr && !summary_->isHidden())
+        summary_->refresh(tree_->selectedItems());
 }
 
-void AssetsEditor::fillColumnMenu(QMenu& menu) {
-    menu.clear();
-    for (int index = TypeColumn; index < ColumnCount; ++index) {
-        auto* action = menu.addAction(tree_->headerItem()->text(index));
-        action->setObjectName(QStringLiteral("assetsColumnAction%1").arg(index));
-        action->setCheckable(true);
-        action->setChecked(!tree_->header()->isSectionHidden(index));
-        connect(action, &QAction::toggled, this,
-                [this, index](const bool visible) { setColumnVisible(index, visible); });
-    }
+void AssetsEditor::setInfoVisible(const bool visible) {
+    summary_->setVisible(visible);
+    QSettings().setValue(QString::fromLatin1(kShowInfoKey), visible);
+    refreshSelectionHeader();
+}
+
+void AssetsEditor::openSearch() {
+    searchBar_->open();
 }
 
 void AssetsEditor::showColumnMenu(const QPoint globalPosition) {
     std::unique_ptr<QMenu> menu(kit::makeMenu(this));
     menu->setObjectName(QStringLiteral("assetsHeaderColumnMenu"));
-    fillColumnMenu(*menu);
+    columns_->fill(*menu);
     menu->exec(globalPosition);
-}
-
-void AssetsEditor::setColumnVisible(const int column, const bool visible) {
-    if (column <= NameColumn || column >= ColumnCount)
-        return;
-    tree_->header()->setSectionHidden(column, !visible);
-    if (visible && tree_->columnWidth(column) == 0)
-        tree_->setColumnWidth(column, kit::px(kit::Size::DropdownWidth));
-    saveHeaderState();
 }
 
 void AssetsEditor::openComposition(const document::CompositionId id) {
@@ -230,7 +207,8 @@ void AssetsEditor::addCommonActions(QMenu& menu) {
     auto* folder = menu.addAction(tr("New Folder"));
     folder->setObjectName(QStringLiteral("assetsContextNewFolderAction"));
     connect(folder, &QAction::triggered, this, &AssetsEditor::createFolder);
-    auto* composition = menu.addAction(tr("New Composition…"));
+    auto* composition = menu.addAction(kit::icon(kit::IconId::Composition, kit::IconRole::Chrome),
+                                       tr("New Composition…"));
     composition->setObjectName(QStringLiteral("assetsContextNewCompositionAction"));
     connect(composition, &QAction::triggered, this, &AssetsEditor::showNewCompositionDialog);
     auto* import = menu.addAction(tr("Import…"));
@@ -353,8 +331,13 @@ void AssetsEditor::buildHeaderMenus() {
     bar->overflowButtonName = "assetsHeaderOverflowButton";
     bar->overflowMenuName = "assetsHeaderOverflowMenu";
 
+    // Narrow, the menus fold one at a time into the overflow, Select first and View last, so the
+    // Search toggle keeps its place at the trailing end beside Maximize.
+    bar->overflowIcon = kit::IconId::ContextMenu;
+    bar->overflowToolTip = tr("More panel menus");
     auto* view = bar->addMenu(tr("View"));
     view->setObjectName(QStringLiteral("assetsViewMenu"));
+    bar->setCollapse(bar->entries.back().control, 3, view->menuAction());
     auto* expand = view->addAction(tr("Expand All"));
     expand->setObjectName(QStringLiteral("assetsExpandAllAction"));
     connect(expand, &QAction::triggered, this, [this] {
@@ -375,12 +358,26 @@ void AssetsEditor::buildHeaderMenus() {
     columnMenu_ = kit::makeMenu(tr("Columns"), view);
     columnMenu_->setObjectName(QStringLiteral("assetsColumnMenu"));
     view->addMenu(columnMenu_);
-    connect(columnMenu_, &QMenu::aboutToShow, this, [this] { fillColumnMenu(*columnMenu_); });
-    fillColumnMenu(*columnMenu_);
+    connect(columnMenu_, &QMenu::aboutToShow, this, [this] { columns_->fill(*columnMenu_); });
+    columns_->fill(*columnMenu_);
+    auto* showInfo = view->addAction(tr("Show Info"));
+    showInfo->setObjectName(QStringLiteral("assetsShowInfoAction"));
+    showInfo->setCheckable(true);
+    showInfo->setChecked(!summary_->isHidden());
+    showInfo->setToolTip(tr("Show the summary of the selection above the list"));
+    connect(showInfo, &QAction::toggled, this, &AssetsEditor::setInfoVisible);
+    auto* findAction = view->addAction(tr("Search"));
+    findAction->setObjectName(QStringLiteral("assetsSearchAction"));
+    findAction->setShortcut(QKeySequence::Find);
+    // The shortcut text is shown; the panel's own QShortcut handles the key, so it is panel-scoped.
+    findAction->setShortcutContext(Qt::WidgetShortcut);
+    connect(findAction, &QAction::triggered, this, &AssetsEditor::openSearch);
 
     auto* add = bar->addMenu(tr("Add"));
     add->setObjectName(QStringLiteral("assetsAddMenu"));
-    auto* newComposition = add->addAction(tr("New Composition…"));
+    bar->setCollapse(bar->entries.back().control, 2, add->menuAction());
+    auto* newComposition = add->addAction(
+        kit::icon(kit::IconId::Composition, kit::IconRole::Chrome), tr("New Composition…"));
     newComposition->setObjectName(QStringLiteral("assetsNewCompositionAction"));
     connect(newComposition, &QAction::triggered, this, &AssetsEditor::showNewCompositionDialog);
     auto* newFolder = add->addAction(tr("New Folder"));
@@ -393,12 +390,33 @@ void AssetsEditor::buildHeaderMenus() {
 
     auto* select = bar->addMenu(tr("Select"));
     select->setObjectName(QStringLiteral("assetsSelectMenu"));
+    bar->setCollapse(bar->entries.back().control, 1, select->menuAction());
     auto* selectAll = select->addAction(tr("All"));
     selectAll->setObjectName(QStringLiteral("assetsSelectAllAction"));
     connect(selectAll, &QAction::triggered, tree_, &QTreeWidget::selectAll);
     auto* selectNone = select->addAction(tr("None"));
     selectNone->setObjectName(QStringLiteral("assetsSelectNoneAction"));
     connect(selectNone, &QAction::triggered, tree_, &QTreeWidget::clearSelection);
+
+    // Search, collapsed to one toggle at the header's trailing end beside Maximize.
+    // A header icon button (one Control height, like Maximize beside it), Selected while open.
+    searchButton_ = new kit::KIconButton(this);
+    searchButton_->setObjectName(QStringLiteral("assetsSearchButton"));
+    searchButton_->setIcon(kit::icon(kit::IconId::Search, kit::IconRole::Chrome));
+    searchButton_->setCheckable(true);
+    searchButton_->setToolTip(
+        tr("Search (%1)").arg(QKeySequence(QKeySequence::Find).toString(QKeySequence::NativeText)));
+    searchButton_->setAccessibleName(tr("Search assets"));
+    connect(searchButton_, &kit::KIconButton::clicked, this, [this] {
+        // A live filter never closes from here: the toggle focuses it instead.
+        if (searchBar_->isHidden() || !search_->text().isEmpty())
+            searchBar_->open();
+        else
+            searchBar_->close();
+        searchButton_->setChecked(!searchBar_->isHidden());
+    });
+    bar->addStretch();
+    bar->addWidget(searchButton_);
 
     headerMenuWidget_ = EditorArea::buildChromeRow(chrome_.header, this);
 }
@@ -415,8 +433,13 @@ void AssetsEditor::buildFooter() {
         layout->addWidget(value);
         return value;
     };
-    auto* newComposition = button(kit::IconId::Composition, tr("New Composition"),
-                                  QStringLiteral("assetsNewCompositionButton"));
+    auto* newComposition =
+        button(kit::IconId::Composition,
+               tr("New Composition (%1)")
+                   .arg(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_N)
+                            .toString(QKeySequence::NativeText)),
+               QStringLiteral("assetsNewCompositionButton"));
+    newComposition->setAccessibleName(tr("New Composition"));
     connect(newComposition, &kit::KIconButton::clicked, this,
             &AssetsEditor::showNewCompositionDialog);
     auto* newFolder =
@@ -425,8 +448,11 @@ void AssetsEditor::buildFooter() {
     auto* import = button(kit::IconId::Import, tr("Import"), QStringLiteral("assetsImportButton"));
     connect(import, &kit::KIconButton::clicked, this, &AssetsEditor::requestImport);
     layout->addStretch(1);
-    auto* remove =
-        button(kit::IconId::DeleteAsset, tr("Delete"), QStringLiteral("assetsDeleteButton"));
+    auto* remove = button(kit::IconId::DeleteAsset,
+                          tr("Delete (%1)").arg(QKeySequence(Qt::Key_Delete)
+                                                    .toString(QKeySequence::NativeText)),
+                          QStringLiteral("assetsDeleteButton"));
+    remove->setAccessibleName(tr("Delete"));
     connect(remove, &kit::KIconButton::clicked, this, &AssetsEditor::removeSelected);
     footerWidget_ = EditorArea::buildChromeRow(chrome_.footer, this, true);
 }
