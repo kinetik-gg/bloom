@@ -66,7 +66,10 @@ the whole application. The owner asked for the same, and for align and distribut
 
 - The workspace keeps one fixed strip of chrome more; it is not a panel and cannot be replaced,
   docked or moved, only hidden.
-- Tool state moves out of `ViewerEditor` into the application-level owner; Viewers read it.
+- Tool state moves out of `ViewerEditor` into the application-level owner, `ui::ToolController`,
+  which the window's `CompositionSession` owns and hands to every Viewer and the bar it is given to
+  (the same explicit reference every editor already receives); Viewers read it. The bar is a row of
+  the window's central column rather than a `QToolBar`, so the native macOS menu bar is untouched.
 - Align and distribute are available to the bar, the menus and scripting
   (`bloom.layer.align-layers`, `bloom.layer.distribute-layers`) with one meaning. They add no
   document schema and no pixel operation, so the GPU coverage contract is unchanged.

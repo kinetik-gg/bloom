@@ -20,6 +20,7 @@
 #include <QEventLoop>
 #include <QFileDialog>
 #include <QLabel>
+#include <QStandardPaths>
 #include <QString>
 #include <QTimer>
 #include <QWidget>
@@ -1079,6 +1080,8 @@ void testDefaultUnsavedPromptNamesTheAction(Expectations& expectations) {
 
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
+    // Qt's widget file dialog saves its state into the user's Qt settings: not from a test.
+    QStandardPaths::setTestModeEnabled(true);
     QApplication application(argc, argv);
     Expectations expectations;
     testNewProjectConstruction(expectations);

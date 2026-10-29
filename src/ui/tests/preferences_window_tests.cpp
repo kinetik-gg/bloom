@@ -5,16 +5,21 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/row.hpp>
+#include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <QAbstractButton>
+#include <QAction>
 #include <QApplication>
 #include <QEventLoop>
 #include <QFile>
 #include <QFontMetrics>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QStackedWidget>
 #include <QString>
 #include <QTemporaryDir>
@@ -203,16 +208,18 @@ void testSetPreferencesRoundTripsControls(Expectations& check) {
 // draft, and nothing is persisted until OK or Apply.
 void testRestoreDefaults(Expectations& check) {
     ui::PreferencesWindow window(owner(), samplePreferences());
-    auto* restore =
-        window.findChild<QAbstractButton*>(QStringLiteral("preferencesRestoreDefaultsButton"));
-    check.expect(restore != nullptr, "the Restore Defaults button exists");
+    // Restore Defaults lives in the sidebar's action menu, as Blender's Load Factory does.
+    auto* restore = window.findChild<QAction*>(QStringLiteral("preferencesRestoreDefaultsAction"));
+    check.expect(restore != nullptr && window.findChild<QAbstractButton*>(QStringLiteral(
+                                           "preferencesRestoreDefaultsButton")) == nullptr,
+                 "Restore Defaults is a sidebar action, not a button-row button");
     if (restore == nullptr)
         return;
     const auto confirmation = [&window] {
         return window.findChild<ui::kit::KDialog*>(
             QStringLiteral("preferencesRestoreDefaultsConfirmation"));
     };
-    restore->click();
+    restore->trigger();
     auto* asked = confirmation();
     check.expect(asked != nullptr && asked->isVisible() &&
                      asked->defaultRole() == ui::kit::KDialog::Role::Reject,
@@ -224,7 +231,7 @@ void testRestoreDefaults(Expectations& check) {
     QApplication::processEvents();
     check.expect(window.preferences() == samplePreferences(),
                  "Return answers the safe default and keeps the preferences");
-    restore->click();
+    restore->trigger();
     asked = confirmation();
     if (auto* confirm =
             asked != nullptr ? asked->button(ui::kit::KDialog::Role::Destructive) : nullptr)
@@ -280,30 +287,59 @@ void testTimelineKeyframesAndGraphAreMutuallyExclusive(Expectations& check) {
 
 void testRestartBadgesAndRail(Expectations& check) {
     ui::PreferencesWindow window(owner(), samplePreferences());
+    // The disk cache section is read at startup: one Restart badge, in its header.
     const auto badges = window.findChildren<QLabel*>(QStringLiteral("preferencesRestartBadge"));
-    check.expect(badges.size() == 3, "only the three disk cache preferences carry Restart badges");
-    for (const auto* fieldName :
-         {"preferencesOperationCacheBytesField", "preferencesRamPreviewBytesField"}) {
-        const auto* field = window.findChild<ui::kit::KValueField*>(QLatin1StringView(fieldName));
-        check.expect(field != nullptr &&
-                         field->parentWidget()
-                             ->findChildren<QLabel*>(QStringLiteral("preferencesRestartBadge"))
-                             .isEmpty(),
-                     "memory budget rows take effect without restarting");
-    }
-    const auto* notice = window.findChild<QLabel*>(QStringLiteral("preferencesRestartNotice"));
-    check.expect(notice != nullptr && notice->text().contains(QStringLiteral("click Apply")) &&
-                     notice->text().contains(QStringLiteral("Disk cache")),
-                 "the memory page explains Apply and the disk-only restart requirement");
+    const auto* disk = window.findChild<QWidget*>(QStringLiteral("preferencesMediaCacheSection"));
+    check.expect(badges.size() == 1 && disk != nullptr && disk->isAncestorOf(badges.front()),
+                 "the disk cache section carries the one Restart badge");
+    check.expect(window.findChild<QLabel*>(QStringLiteral("preferencesRestartNotice")) == nullptr,
+                 "no page intro paragraph");
 
-    auto* rail = window.findChild<ui::kit::KRadioGroup*>(QStringLiteral("preferencesCategoryRail"));
+    auto* rail = window.findChild<QListWidget*>(QStringLiteral("preferencesCategoryRail"));
     auto* pages = window.findChild<QStackedWidget*>(QStringLiteral("preferencesPages"));
-    check.expect(rail != nullptr && rail->count() == 7, "the rail carries the seven categories");
-    check.expect(pages != nullptr && pages->count() == 7, "the stack carries the seven pages");
-
-    rail->setCurrentIndex(2);
-    check.expect(pages != nullptr && pages->currentIndex() == 2,
+    if (rail == nullptr || pages == nullptr) {
+        check.expect(false, "the sidebar and the pages exist");
+        return;
+    }
+    QStringList categories;
+    int gaps = 0;
+    for (int row = 0; row < rail->count(); ++row) {
+        if (rail->item(row)->flags() == Qt::NoItemFlags)
+            ++gaps;
+        else
+            categories << rail->item(row)->text();
+    }
+    check.expect(categories == QStringList{"General", "Sounds", "Viewer", "Timeline",
+                                           "Node Graph", "Memory & Caches", "Performance"} &&
+                     gaps == 2,
+                 "the sidebar lists the seven categories in three groups");
+    check.expect(pages->count() == 7, "the stack carries the seven pages");
+    const auto pageOf = [pages](const char* name) {
+        return pages->indexOf(pages->findChild<QWidget*>(QLatin1StringView(name)));
+    };
+    rail->setCurrentRow(4);
+    check.expect(pages->currentIndex() == pageOf("preferencesTimelinePage"),
                  "selecting a category switches the page");
+    // A sidebar list, not radio dots: the keyboard moves through it like any list, over the gaps.
+    window.show();
+    rail->setFocus();
+    QTest::keyClick(rail, Qt::Key_Down);
+    check.expect(pages->currentIndex() == pageOf("preferencesNodeGraphPage"),
+                 "Down moves to the next category");
+    QTest::keyClick(rail, Qt::Key_Down);
+    check.expect(pages->currentIndex() == pageOf("preferencesMemoryPage"),
+                 "Down steps over a group gap");
+    QTest::keyClick(rail, Qt::Key_Home);
+    check.expect(pages->currentIndex() == pageOf("preferencesGeneralPage"),
+                 "Home moves to the first category");
+    QTest::keyClick(rail, Qt::Key_End);
+    check.expect(pages->currentIndex() == pageOf("preferencesPerformancePage"),
+                 "End moves to the last category");
+    QTest::keyClicks(rail, QStringLiteral("Ti"));
+    check.expect(pages->currentIndex() == pageOf("preferencesTimelinePage"),
+                 "typing a name finds its category");
+    check.expect(rail->item(0)->sizeHint().height() == ui::kit::px(ui::kit::Size::ListRow),
+                 "rail rows are at the list pitch");
 }
 
 void testSoundsPage(Expectations& check) {
@@ -425,20 +461,39 @@ void testLargeBudgetPreferencesRemainExactOnApply(Expectations& check) {
 void testPreferenceLabelsRemainReadable(Expectations& check) {
     ui::PreferencesWindow window(owner(), samplePreferences());
     window.show();
-    window.findChild<ui::kit::KRadioGroup*>(QStringLiteral("preferencesCategoryRail"))
-        ->setCurrentIndex(1);
-    QCoreApplication::processEvents();
-    for (const auto* name :
-         {"preferencesOperationCacheBytesField", "preferencesRamPreviewBytesField",
-          "preferencesMediaDiskCacheBudgetField"}) {
-        const auto* field = window.findChild<ui::kit::KValueField*>(QLatin1StringView(name));
-        const auto* label =
-            field ? field->parentWidget()->findChild<QLabel*>(QStringLiteral("propertiesRowLabel"))
-                  : nullptr;
-        check.expect(label && label->text() == label->toolTip() &&
-                         label->width() >=
-                             QFontMetrics(label->font()).horizontalAdvance(label->text()),
-                     "preference budget labels are readable at the default window size");
+    // Every page: each row label is the Properties row label, right-aligned in the one label
+    // column all pages share, and shows its whole text.
+    auto* rail = window.findChild<QListWidget*>(QStringLiteral("preferencesCategoryRail"));
+    int columnX = -1;
+    for (int row = 0; rail != nullptr && row < rail->count(); ++row) {
+        if (rail->item(row)->flags() == Qt::NoItemFlags)
+            continue;
+        rail->setCurrentRow(row);
+        QCoreApplication::processEvents();
+        for (const auto* propertyRow : window.findChildren<ui::kit::KPropertyRow*>()) {
+            if (!propertyRow->isVisibleTo(&window))
+                continue;
+            if (const auto* label = propertyRow->findChild<QLabel*>(
+                    QStringLiteral("propertiesRowLabel"), Qt::FindDirectChildrenOnly)) {
+                const int x = label->mapTo(&window, QPoint()).x();
+                columnX = columnX < 0 ? x : columnX;
+                check.expect(x == columnX,
+                             "every page's labels start at one x: " + label->text().toStdString());
+            }
+        }
+        for (const auto* propertyRow : window.findChildren<ui::kit::KPropertyRow*>()) {
+            if (!propertyRow->isVisibleTo(&window))
+                continue;
+            const auto* label = propertyRow->findChild<QLabel*>(
+                QStringLiteral("propertiesRowLabel"), Qt::FindDirectChildrenOnly);
+            check.expect(label != nullptr &&
+                             label->width() == ui::kit::px(ui::kit::Size::PreferencesLabelWidth) &&
+                             label->alignment().testFlag(Qt::AlignRight) &&
+                             label->width() >=
+                                 QFontMetrics(label->font()).horizontalAdvance(label->text()),
+                         "preference labels share one readable, right-aligned column: " +
+                             (label != nullptr ? label->text().toStdString() : std::string{}));
+        }
     }
     auto* label = ui::kit::makePropertyRowLabel(QStringLiteral("Default property"), &window);
     ui::kit::KPropertyRow defaultRow(label, nullptr, {}, &window);
@@ -447,6 +502,54 @@ void testPreferenceLabelsRemainReadable(Expectations& check) {
     QCoreApplication::processEvents();
     check.expect(label->width() == ui::kit::px(ui::kit::Size::PropertiesLabelWidth),
                  "ordinary Properties rows retain their existing label width");
+}
+
+void testSectionResetRestoresItsDefaults(Expectations& check) {
+    auto preferences = samplePreferences();
+    preferences.nodeSnap = true;
+    preferences.nodeGridSize = 32.0;
+    preferences.timelineSnapping = false;
+    ui::PreferencesWindow window(owner(), preferences);
+    auto* nodes =
+        window.findChild<ui::kit::KSection*>(QStringLiteral("preferencesNodeGraphSection"));
+    check.expect(nodes != nullptr && nodes->isResetEnabled(), "the Node Graph section has a Reset");
+    if (nodes != nullptr)
+        emit nodes->resetRequested();
+    const auto defaults = ui::defaultApplicationPreferences();
+    check.expect(window.preferences().nodeSnap == defaults.nodeSnap &&
+                     window.preferences().nodeGridSize == defaults.nodeGridSize &&
+                     window.preferences().timelineSnapping == false,
+                 "a section's Reset restores only that section's defaults");
+    auto* performance =
+        window.findChild<ui::kit::KSection*>(QStringLiteral("preferencesPerformanceSection"));
+    check.expect(performance != nullptr && !performance->isResetEnabled(),
+                 "the read-only Performance section offers no Reset");
+}
+
+void testWindowFitsItsContent(Expectations& check) {
+    ui::PreferencesWindow window(owner(), samplePreferences());
+    window.show();
+    QCoreApplication::processEvents();
+    // Opened, no page scrolls and no page is squeezed: the window is as tall as its tallest page.
+    auto* rail = window.findChild<QListWidget*>(QStringLiteral("preferencesCategoryRail"));
+    const auto size = window.size();
+    for (int row = 0; rail != nullptr && row < rail->count(); ++row) {
+        if (rail->item(row)->flags() == Qt::NoItemFlags)
+            continue;
+        rail->setCurrentRow(row);
+        QCoreApplication::processEvents();
+        for (auto* scroll : window.findChildren<QScrollArea*>()) {
+            if (!scroll->isVisibleTo(&window) || scroll->widget() == nullptr)
+                continue;
+            check.expect(scroll->verticalScrollBar()->maximum() == 0 &&
+                             scroll->horizontalScrollBar()->maximum() == 0,
+                         "the opened window shows the whole page: " +
+                             rail->item(row)->text().toStdString());
+        }
+        check.expect(window.size() == size, "switching pages never resizes the window");
+    }
+    check.expect(window.minimumWidth() < window.width(),
+                 "the window can be made narrower than it opens");
 }
 
 void testGridAndAutomaticWidthMatchRuntime(Expectations& check) {
@@ -460,15 +563,24 @@ void testGridAndAutomaticWidthMatchRuntime(Expectations& check) {
         QStringLiteral("preferencesTimelineLayerColumnWidthField"));
     check.expect(grid && grid->value() == 1,
                  "the minimum supported grid size is displayed exactly");
-    check.expect(width && width->value() == 0 &&
-                     width->displayedValue() == QStringLiteral("Automatic"),
-                 "automatic timeline width is not displayed as an authored 80 pixels");
+    auto* widthMode = window.findChild<ui::kit::KDropdown*>(
+        QStringLiteral("preferencesTimelineLayerColumnWidthFieldMode"));
+    check.expect(width && width->value() == 0 && widthMode != nullptr &&
+                     widthMode->currentText() == QStringLiteral("Automatic") && width->isHidden(),
+                 "automatic timeline width reads Automatic, not an authored 80 pixels");
     grid->setValue(4096);
     check.expect(window.preferences().nodeGridSize == 4096,
                  "grid size accepts values above the old arbitrary 200-pixel ceiling");
     width->setValue(4096);
+    check.expect(window.preferences().timelineLayerColumnWidth == 4096 &&
+                     widthMode->currentText() == QStringLiteral("Custom") && !width->isHidden(),
+                 "timeline width preserves the supported integer value, as Custom");
+    widthMode->chooseIndex(0);
+    check.expect(window.preferences().timelineLayerColumnWidth == 0,
+                 "choosing Automatic returns the width to zero");
+    widthMode->chooseIndex(1);
     check.expect(window.preferences().timelineLayerColumnWidth == 4096,
-                 "timeline width preserves the supported integer value");
+                 "choosing Custom again restores the last custom value");
 }
 
 void testPerformancePageReportsCpuOnly(Expectations& check) {
@@ -622,6 +734,8 @@ int main(int argc, char** argv) {
     testAutomaticMemoryBudgetsAreResolved(check);
     testLargeBudgetPreferencesRemainExactOnApply(check);
     testPreferenceLabelsRemainReadable(check);
+    testWindowFitsItsContent(check);
+    testSectionResetRestoresItsDefaults(check);
     testGridAndAutomaticWidthMatchRuntime(check);
     testPerformancePageReportsCpuOnly(check);
     testPerformancePageUsesInjectedProvider(check);

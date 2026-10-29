@@ -36,6 +36,7 @@
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <optional>
 #include <span>
@@ -262,6 +263,37 @@ struct ThumbnailSelection {
     constexpr std::uint64_t kMaximumFontBytes = std::uint64_t{64} * 1024U * 1024U;
     return platform::verifySourceDigest(asset.locator.path, asset.contentDigest, {},
                                         kMaximumFontBytes) == platform::SourceCheck::Matches;
+}
+
+// The bytes an asset's source occupies on disk (a sequence's members summed), for the Assets File
+// Size column. Runs on the thumbnail worker only, beside the probes that already resolve these
+// paths; a member that cannot be stat'ed, a non-file locator or a cancellation leaves it unknown.
+[[nodiscard]] std::optional<std::uint64_t> sourceFileBytes(const document::AssetRecord& asset,
+                                                           const std::filesystem::path& directory,
+                                                           const runtime::TaskContext& context) {
+    const auto bytes = [&](const document::AssetLocator& locator) -> std::optional<std::uint64_t> {
+        if (locator.kind != "file" || locator.path.empty() || locator.portability == "builtin")
+            return std::nullopt;
+        std::error_code error;
+        const auto size = std::filesystem::file_size(
+            asset.kind == document::AssetKind::Font
+                ? std::filesystem::path(locator.path)
+                : media::resolveImagePath(locator.path, locator.relinkHint, directory),
+            error);
+        return error ? std::nullopt : std::optional<std::uint64_t>(size);
+    };
+    if (asset.kind != document::AssetKind::Sequence || asset.manifest.members.empty())
+        return bytes(asset.locator);
+    std::uint64_t total = 0;
+    for (const auto& member : asset.manifest.members) {
+        if (context.isCancellationRequested())
+            return std::nullopt;
+        const auto size = bytes(member.locator);
+        if (!size)
+            return std::nullopt;
+        total += *size;
+    }
+    return total;
 }
 
 [[nodiscard]] document::AssetRecord fontAssetRecord(const platform::FontFace& face) {
@@ -676,6 +708,11 @@ QString AssetController::problem(document::AssetId id) const {
     return found == previews_.end() || found->second.missing
                ? QString{}
                : QString::fromStdString(found->second.problem);
+}
+std::optional<std::uint64_t> AssetController::fileSize(const document::AssetId id) const {
+    const auto found = previews_.find(id);
+    return found == previews_.end() || found->second.missing ? std::nullopt
+                                                             : found->second.fileBytes;
 }
 bool AssetController::dataOnly(document::AssetId id) const {
     const auto found = previews_.find(id);
@@ -1750,6 +1787,9 @@ void AssetController::startThumbnails() {
                                              document::AssetAlphaAssociation::Straight;
                         results->assets.emplace(asset.id, decode(source, core::RationalTime{}));
                     }
+                    if (const auto found = results->assets.find(asset.id);
+                        found != results->assets.end() && !found->second.missing)
+                        found->second.fileBytes = sourceFileBytes(asset, directory, context);
                     results->proxyBytes = trimProxyStorage(results->cache, results->assets,
                                                            results->nodes, proxyLimit());
                     progress();
@@ -1945,7 +1985,8 @@ void AssetController::poll() {
                            left.second.inputColorSpaceAutomatic ==
                                right.second.inputColorSpaceAutomatic &&
                            left.second.inputColorSpaceAssumed ==
-                               right.second.inputColorSpaceAssumed;
+                               right.second.inputColorSpaceAssumed &&
+                           left.second.fileBytes == right.second.fileBytes;
                 };
                 const auto& prepared = **result->value();
                 const bool assetsChanged =

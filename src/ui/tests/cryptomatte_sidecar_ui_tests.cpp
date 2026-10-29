@@ -53,6 +53,7 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/tool_controller.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <filesystem>
@@ -266,7 +267,7 @@ int main(int argc, char** argv) {
                 const auto* item = tree->topLevelItem(index);
                 if (item->text(0).contains("SC_"))
                     rowsOk = rowsOk && item->text(1) == "Sequence" &&
-                             item->text(3).endsWith(QStringLiteral(" (2 frames)")) &&
+                             item->toolTip(3).contains(QStringLiteral(" (2 frames)")) &&
                              item->data(0, Qt::UserRole + 8).toString().isEmpty() &&
                              !item->toolTip(0).contains("Missing") &&
                              !item->toolTip(0).contains("Replace Footage");
@@ -363,11 +364,13 @@ int main(int argc, char** argv) {
                    "the preview shows the sphere in its ID colour");
         }
         auto* pick = properties->findChild<ui::kit::KButton*>("propertiesCryptomattePick");
-        auto* tool = viewer->findChild<QToolButton*>("viewerCryptomatteTool");
+        session.tools().setTool(ui::ViewerTool::Select);
         if (pick != nullptr)
             pick->click();
         QApplication::processEvents();
-        expect(tool && tool->isChecked(), "Pick in Viewer switches the Viewer to the eyedropper");
+        // ADR 0031: the pick chooses the one app-wide eyedropper, for every Viewer.
+        expect(session.tools().tool() == ui::ViewerTool::Cryptomatte,
+               "Pick in Viewer switches the app-wide tool to the eyedropper");
 
         QList<ui::kit::KCheckBox*> names;
         expect(waitUntil([&] {

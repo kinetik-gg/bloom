@@ -171,3 +171,15 @@ were 0.0406176 (DPR 1) and 0.0575914 (DPR 1.5), with changed fractions 0.0004787
 operation-cache hit counter, which varies from run to run independently of this change.
 Comparison tolerances and full-image coverage are unchanged; rendering identity goldens are
 unchanged.
+
+CONTEXT-BAR approval (2026-10-30, ADR 0031): the contextual bar is a new 32 px row directly under
+the menu bar, so every panel moves down by `ContextBarHeight`. With the fixture's Select tool it
+shows the eight tool slots (Select active; the shape slot with its flyout mark), the disabled anchor
+handle-mode strip, the six Align and two Distribute buttons (disabled: one layer is selected) and
+Align To on Selection. The Viewer's tool column is gone, so its canvas and the fitted composition
+widen by the former 32 px column. Both references were regenerated with `--update-goldens` at
+DPR 1 and 1.5 and visually inspected. Before approval the mean channel errors were 12.80 (DPR 1)
+and 12.88 (DPR 1.5), with changed fractions 0.106 and 0.104. Comparison tolerances and full-image
+coverage are unchanged; rendering identity goldens are unchanged.
+After merging the TYPE references the bar's approval was repeated on top of them (mean channel
+errors 12.81 and 12.89 before approval); the change is the same bar row and the same Viewer.

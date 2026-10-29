@@ -28,13 +28,19 @@ namespace bloom::ui {
 QWidget* PreferencesWindow::buildSoundsPage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
-                               kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
-    layout->setSpacing(kit::px(kit::Spacing::S));
+    setPageMargins(*layout);
 
     auto* section = properties::makeSection(
         layout, content, QStringLiteral("preferencesSoundsSection"), tr("Sounds"),
         QStringLiteral("preferences/sections/sounds/collapsed"));
+    section->setBodyPadding(kit::px(kit::Spacing::XS));
+    resetSection(*section, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
+        draft.soundsEnabled = base.soundsEnabled;
+        draft.soundVolumePercent = base.soundVolumePercent;
+        draft.eventSoundsEnabled = base.eventSoundsEnabled;
+        draft.interactionSoundsEnabled = base.interactionSoundsEnabled;
+        draft.renderNotificationsEnabled = base.renderNotificationsEnabled;
+    });
     auto* rows = section->bodyLayout();
 
     const auto addSwitch = [&](const QString& objectName, const QString& label,
@@ -53,15 +59,15 @@ QWidget* PreferencesWindow::buildSoundsPage() {
         return control;
     };
 
-    auto* master = addSwitch(QStringLiteral("preferencesSoundsEnabledSwitch"), tr("Play sounds"),
-                             &ApplicationPreferences::soundsEnabled,
-                             tr("Turns every Bloom sound on or off."));
+    addSwitch(QStringLiteral("preferencesSoundsEnabledSwitch"), tr("Play sounds"),
+              &ApplicationPreferences::soundsEnabled, tr("Turns every Bloom sound on or off."));
 
     auto* volumeSlider = new kit::KSlider(content);
     volumeSlider->setObjectName(QStringLiteral("preferencesSoundVolumeSlider"));
     volumeSlider->setAccessibleName(tr("Volume"));
     volumeSlider->setRange(0.0, 100.0);
     volumeSlider->setValue(draft_.soundVolumePercent);
+    volumeSlider->setMinimumWidth(kit::px(kit::Size::PreferencesLabelWidth));
     auto* volumeLabel = new kit::KLabel(QString{}, content, kit::TypeRole::UiSmall);
     volumeLabel->setObjectName(QStringLiteral("preferencesSoundVolumeValue"));
     volumeLabel->setTone(kit::Color::Muted);
@@ -69,12 +75,7 @@ QWidget* PreferencesWindow::buildSoundsPage() {
         volumeLabel->setText(tr("%1%").arg(draft_.soundVolumePercent));
     };
     showVolume();
-    {
-        auto* row = new kit::KPropertyRow(properties::makeRowLabel(tr("Volume"), content), nullptr,
-                                          {volumeSlider, volumeLabel}, content);
-        row->setLabelWidth(kit::px(kit::Size::PreferencesLabelWidth));
-        rows->addWidget(row);
-    }
+    (void)addPreferencesRow(rows, content, tr("Volume"), {volumeSlider, volumeLabel});
     connect(volumeSlider, &kit::KSlider::valueChanged, this,
             [this, showVolume](const double value) {
                 draft_.soundVolumePercent = static_cast<int>(std::lround(value));
@@ -101,7 +102,8 @@ QWidget* PreferencesWindow::buildSoundsPage() {
               tr("Shows a system notification when a render finishes or fails while Bloom is not "
                  "the active window."));
 
-    // The category and volume rows follow the master switch.
+    // The category and volume rows follow the master switch (a sync callback runs on every
+    // refresh and on a toggle).
     const auto syncEnabled = [this, volumeSlider, events, interaction] {
         const bool on = draft_.soundsEnabled;
         volumeSlider->setEnabled(on);
@@ -109,28 +111,18 @@ QWidget* PreferencesWindow::buildSoundsPage() {
         interaction->setEnabled(on);
     };
     syncEnabled();
-    connect(master, &QAbstractButton::toggled, this, [syncEnabled](bool) { syncEnabled(); });
     refreshCallbacks_.push_back(syncEnabled);
+    if (auto* master = content->findChild<kit::KSwitch*>(
+            QStringLiteral("preferencesSoundsEnabledSwitch")))
+        connect(master, &QAbstractButton::toggled, this, [syncEnabled](bool) { syncEnabled(); });
 
     auto* test = new kit::KButton(tr("Play test sound"), content);
     test->setObjectName(QStringLiteral("preferencesPlayTestSoundButton"));
     connect(test, &QAbstractButton::clicked, this, [this] { emit soundTestRequested(draft_); });
-    {
-        auto* row = new kit::KPropertyRow(properties::makeRowLabel(QString{}, content), nullptr,
-                                          {test}, content);
-        row->setLabelWidth(kit::px(kit::Size::PreferencesLabelWidth));
-        rows->addWidget(row);
-    }
+    (void)addPreferencesRow(rows, content, QString{}, {test});
 
     layout->addStretch(1);
-    auto* scroll = new QScrollArea;
-    scroll->setObjectName(QStringLiteral("preferencesSoundsPage"));
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->viewport()->setAutoFillBackground(false);
-    scroll->setWidget(content);
-    content->setAutoFillBackground(false);
-    return scroll;
+    return wrapPage(content, QStringLiteral("preferencesSoundsPage"));
 }
 
 } // namespace bloom::ui

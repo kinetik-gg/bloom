@@ -26,8 +26,9 @@ Every interactive control is a kit class: `KDropdown`, `KMenuButton`, `KButton`,
 `KTextField` (and its `KLineEdit` and `KSearchField` forms), `KTextArea`, `KFieldFrame`, `KSection`,
 `KRadioGroup`, or `KColorSwatchRow`. Text uses TypeRole-bound `KLabel`.
 Read-only progress uses `KProgressBar` (see "Import Progress Dialog" below). A read-only picture
-uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken`, showing a
-worker-decoded proxy or a glyph fitted without changing its aspect ratio; it never loads anything.
+uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken` (`Cell::Card`), or the Assets
+summary strip's 64 × 40 Field well (`Cell::Strip`), showing a worker-decoded proxy or a glyph fitted
+without changing its aspect ratio; it never loads anything.
 The panel switcher is the icon variant of **KDropdown**, with the same height, styling,
 interaction and popup. Menus are created only through `kit::makeMenu`. A popup is a
 `KPopupWindow` and a list in one is a `KPopupList` (dropdowns, the Add search, the colour picker);
@@ -84,7 +85,6 @@ The exceptions are deliberate and closed:
 | Panel menu titles (`KMenuButton`: View, Select, Add, the Timeline and Nodes menus) | Menus, like a menu bar's titles, not buttons: flat text with the `Accent` hover bar |
 | Text entry (`KValueField`, `KTextField`/`KLineEdit`, `KSearchField`, `KTextArea`, the Viewer frame field) | The one text-entry recipe, `kit::fieldColors()`: a `Field` well, so an editable value never reads as a button. A field standing in a chrome row or on a node card keeps a resting `Border` (`KValueField::setOutlinedAtRest`); a property cell (Properties, Timeline rows) rests borderless. A refused entry wears `Error` over every other state |
 | Timeline layer switches (eye, audio, solo, lock) | The glyph is the state (an eye that is there or not), so a switch never takes the Accent plate; its cell is the Secondary plate |
-| The tool column | Keeps its plate-less (Ghost) choices with the Selected plate until the tools move to the contextual bar |
 | Ghost | Only where a control deliberately has no resting surface: disclosure carets (layer and property disclosure, the RGBA and multiline expanders) and the window title bar buttons |
 
 There is no Recessed recipe and no `ControlSurface` token any more: both existed only for the
@@ -93,12 +93,12 @@ header icon buttons and dropdown fields this look replaced.
 Every control in a row is one `Size::Control` (26) tall at every device pixel ratio and paints
 its body in `kit::controlBody()`: `controlBounds()`, `Spacing::ControlInset` in on every side, so
 every painted body is `ToggleCell` (24) tall and shares its row's vertical centre. Icon buttons
-and toggles are `Control` squares. A dense strip whose geometry is a fixed cell pitch (the
-timeline's layer switches, the tool column) uses `ToggleCell` cells instead, which are already
+and toggles are `Control` squares, the context bar's tools included. A dense strip whose geometry
+is a fixed cell pitch (the timeline's layer switches) uses `ToggleCell` cells instead, which are already
 exactly that body; that is the one compact token, and no call site sizes a control of its own.
 `KButton`'s Compact size is the same height with tighter padding, and `KDropdown::ControlSize::Dense`
 likewise. `control_geometry_tests.cpp` walks every chrome row, panel header and row of the
-main-window fixture (Viewer, Timeline, Nodes, Assets, Properties) and holds both rules, and checks
+main-window fixture (the context bar, Viewer, Timeline, Nodes, Assets, Properties) and holds both rules, and checks
 that every kind's resting colours come from the one recipe.
 
 ## Rasterization and type
@@ -150,7 +150,7 @@ styling at the `ListRow` pitch, with no per-row widgets.
 Painting outside the kit is limited to viewer canvas, node scene items, and timeline
 ruler, lanes, graph editor, work area and navigator. Other surfaces compose kit widgets.
 
-## Status and tool columns
+## Status bar, context bar and tools
 
 The existing native window frame and application menu bar remain unchanged. No branding,
 workspace tabs or custom title bar are part of this grammar revision.
@@ -167,15 +167,52 @@ and reports unavailable colour state when no preview controller exists. Readines
 use muted ink; a colour-state failure remains explicit. `UiSmall` preserves mixed case with
 natural tracking. `KSurface` owns neutral surface backgrounds.
 
-`KToolColumn` owns eleven enabled, exclusive `KIconToggle` choices in four groups separated by
-`Border` hairlines: navigation (Select V, Hand H, Zoom Z), creation (Text T, Rectangle R, Ellipse E,
-Polygon, Star, Line), Pen (P), and the Cryptomatte eyedropper. Each is a `ToggleCell` with an
-`IconMedium` glyph in the Chrome (Bold) weight, Fill on `OnAccent` when chosen; the chosen tool takes
-the one Selected plate (the `Accent` plate every checked control shows), and the rest rest
-plate-less with the Ghost hover step. A tooltip is the tool's name and shortcut, then how to use
-it. A column too short for every tool collapses the trailing ones, last first, into a "More tools"
-button (`toolColumnMoreButton`) whose menu offers them by name and which carries the Selected
-plate while a collapsed tool is active; no tool is ever cut off.
+**The context bar** ([ADR 0031](../decisions/0031-contextual-tool-bar.md)) is the second fixed
+surface: one `ContextBarHeight` (32) row directly under the menu bar, a `Control` row inside
+`ChromePadding`, on `Surface` with one `Border` hairline below it. It is a row of the window's
+central column, not a `QToolBar`, so it cannot be docked, floated or moved and the native macOS
+menu bar is untouched; Window > Context Bar hides it, and that choice persists with the workspace
+UI state (`workspace/context-bar-visible`), never in the project. While the read-only placeholder
+is showing, the bar is disabled. It is a kit priority row (`EditorArea::buildChromeRow`) in three
+regions:
+
+- **Tools**, on the left: eleven tools in eight `KIconToggle` slots in three groups separated by a
+  `ChromeGroupGap`: navigation (Select V, Hand H, Zoom Z), creation (the shape slot, Line, Pen P,
+  Text T) and the Cryptomatte eyedropper. Rectangle R, Ellipse E, Polygon and Star share one slot
+  that shows the last shape chosen and carries a small corner mark; a press and hold or a
+  right-click opens its flyout menu of all four (After Effects' shape slot). Each slot wears the
+  one control look with the Selected plate when its tool is active (the tool-column Ghost
+  exception is gone). A tooltip is the tool's name and shortcut ("Select (V)"), then how to use
+  it; the shape slot adds how to reach the other shapes. The tools never collapse.
+- **Tool options**, after the tools: only options backed by real session or document state, and
+  only for the active tool. Select and the Pen show the anchor handle-mode strip (below); the shape
+  tools, Line and the Pen show Fill (a check box and a square colour chip), Stroke (the same) and
+  the stroke width; Text shows the font, size and alignment. With a shape or text layer selected
+  the options are that layer's, edited with the same parameter commands Properties uses (one undo
+  step per edit, a key at the playhead on an animated value); with none selected they are the style
+  new shapes and new text start with, which is session state in the `ToolController` and authors
+  nothing until something is drawn. Hand, Zoom and the eyedropper have no options. There is no
+  transform-gizmo mode and no snapping in the Viewer, so Select has no slot for them.
+- **Selection actions**, against the right edge: Align (left edges, horizontal centres, right
+  edges; top edges, vertical middles, bottom edges), Distribute (horizontally, vertically) and
+  an "Align To" dropdown (Composition, Selection, Key Object). Key Object is the primary selected
+  layer, named in the dropdown ("Key Object (Title)") and its tooltip. These are the same actions as
+  Composition > Align.
+
+Slots are stable within a tool: an option or action that cannot apply stays where it is, disabled,
+with the reason in its tooltip (no anchors selected, a line has no fill, fewer than three layers to
+distribute, one layer aligned to its own selection, a Viewer frame that is not yet current). A
+narrow window collapses groups right to left into one overflow button (`Overflow`, a double caret)
+at the end of the tool options: Distribute first, then Align To, then Align, then the fill/stroke
+and text options, then the handle modes. The menu offers each collapsed group whole: the action
+groups as submenus, the option groups as the same controls bound to the same state.
+
+Bar buttons, toggles, segmented controls, check boxes, colour chips and the overflow button are
+`Qt::NoFocus`: clicking them never takes keyboard focus from the Viewer. A field (the stroke width,
+the font, the size, Align To) takes focus while it is edited, commits on Enter or Escape like every
+field, and then hands focus back to the Viewer that last had it. Every control has an accessible
+name.
+
 Hand pans; Zoom clicks zoom about the pointer, with Alt-click reversing the direction. Middle-button
 pan and keyboard zoom remain available. Choosing a tool alone never authors a node.
 
@@ -232,8 +269,8 @@ a key at the playhead), and follows the Escape-confirms rule above.
   Alt-drag from an anchor pulls out new Mirrored handles. Alt-drag a handle moves it alone and
   leaves the anchor Free.
 - The anchor mode strip -- a kit segmented control with Corner, Mirrored, Aligned, Free and Auto --
-  appears at the top of the canvas beside the tool column (the Viewer's tool-options position)
-  while anchors are selected. It shows the selection's mode, or no option for a mixed selection,
+  is the Select and Pen tools' option in the context bar (`contextBarAnchorMode`), and acts on the
+  anchors selected in the Viewer that last had focus; with none selected it stays, disabled. It shows the selection's mode, or no option for a mixed selection,
   and choosing one converts every selected anchor. A curved mode on a Corner pulls handles sized
   from its neighbours; Mirrored and Aligned straighten existing handles onto their common tangent.
 - Right-click on an anchor or the selection offers the same five modes, Delete Point(s) and, for a
@@ -248,7 +285,7 @@ a key at the playhead), and follows the Escape-confirms rule above.
 
 There is no separate Convert Point tool: Alt on the Select tool and the Pen does that job (Alt-click
 converts, Alt-drag pulls or breaks handles), the mode strip and the context menu cover explicit
-conversion, and one fewer tool keeps the column at its ten. The anchor mode is document state;
+conversion, and one fewer tool keeps the tool set small. The anchor mode is document state;
 anchor selection is Viewer gesture state, so Properties shows no per-anchor row. Text clicks create a layer and enter canvas text editing
 with the placeholder selected; the typed text folds into that creation, so a new text layer is one
 undo entry. Properties mirrors the live text.
@@ -263,16 +300,17 @@ Phosphor assets; the four added shape glyphs are Bloom-authored SVG paths.
 | Zoom | magnifying-glass | Z |
 | Rectangle | rectangle | R |
 | Ellipse | ellipse | E |
-| Polygon | pentagon | Column only |
-| Star | five-point star | Column only |
-| Line | diagonal line | Column only |
+| Polygon | pentagon | Bar only (the shape slot's flyout) |
+| Star | five-point star | Bar only (the shape slot's flyout) |
+| Line | diagonal line | Bar only |
 | Pen | pen-nib | P |
 | Text | text-t | T |
+| Cryptomatte | eyedropper | Bar only, or Properties' Pick in Viewer |
 
 The viewer surrounds its composition with `Color::Canvas` (`#131313`) and uses
 `Color::CompositionFrame` (`#454545`) at `kCompositionFrameWidth` (1 logical pixel) for the
-frame outline. `ViewerWorkPadding` reserves breathing room around the frame; the left inset
-also includes `ToolColumnWidth`. Image fitting, picking, selection overlays and panning all
+frame outline. `ViewerWorkPadding` reserves breathing room around the frame on every side; the
+canvas has no tool column (ADR 0031). Image fitting, picking, selection overlays and panning all
 use this same padded rectangle. View > Background (the surround) and the Transparency Grid remain
 presentation preferences.
 
@@ -353,7 +391,7 @@ With no composition the canvas shows the surround under the `viewerEmptyState` i
 "No composition", a Muted hint that dropped media files are imported into Assets, and the Primary
 `viewerNewCompositionButton`, which runs the application's New Composition command. A composition
 with no layers shows just its frame and background, with no invitation. The Viewer's own minimum is
-`ViewerMinHeight`, independent of the tool column; hosted, the panel adds its header and footer.
+`ViewerMinHeight`; hosted, the panel adds its header and footer.
 
 ### Viewer menus
 
@@ -490,7 +528,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `TimelineLeftColumn` | 576 | Four 24px toggles + name + two 100px dropdown columns |
 | `GizmoHandle / GizmoRotateZone` | 8 / 16 | Viewer transform handles / outside-corner rotation radius |
 | `ViewerWorkPadding` | 48 | Padded image work area |
-| `ToolColumnWidth` | 32 | Exclusive tool column |
+| `ContextBarHeight` | 32 | The context bar under the menu bar: `Control` + 2 × `ChromePadding` |
 | `ViewerChannelWidth` | 80 | Channel dropdown |
 | `ViewerModeWidth` | 108 | RAM Preview command floor (widened to its widest label) |
 | `ViewerAdjustWidth` | 72 | Exposure and gamma fields |
@@ -519,8 +557,10 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `MultilineHeight` | 78 | Expanded text editors |
 | `PropertyLabelCompact` | 64 | Timeline property label |
 | `DialogTextWidth / DiagnosticHeight` | 520 / 140 | Read-only explanation / job diagnostics |
-| `DialogWideWidth` | 700 | Minimum width of a settings dialog with Basic and Advanced sections (Composition dialog) |
-| `DialogDocumentHeight` | 480 | Minimum height of a dialog whose body is a document or a page stack (Open Source Licenses, Preferences) |
+| `DialogWideWidth` | 700 | Minimum width of a settings dialog with Basic and Advanced tabs (Composition dialog) |
+| `DialogDocumentHeight` | 480 | Minimum height of a dialog whose body is a document (Open Source Licenses) and the opening height of Bloom's file dialog |
+| `PreferencesRailWidth / PreferencesLabelWidth` | 180 / 184 | Preferences sidebar / the one label column every Preferences page shares |
+| `DialogSidebarWidth` | 200 | The places sidebar of Bloom's file dialog |
 | `ProgressTrack` | 6 | `KProgressBar` track height |
 | `SplitHandle` | 6 | Draggable divider hit zone (`KSplitHandle`); paints one snapped hairline centered in it |
 | `ScrollBarTrack / ScrollBarThumb` | 12 / 8 | Constant scrollbar width / resting thumb |
@@ -551,10 +591,19 @@ The [validation map and capture contract](grammar1-validation.md) identify enfor
 
 ## Automation additions
 
-Existing object names remain stable. New names are `viewerToolColumn`, `viewerSelectTool`,
-`viewerHandTool`, `viewerZoomTool`, `viewerTextTool`, `viewerRectangleTool`, `viewerEllipseTool`,
-`viewerPolygonTool`, `viewerStarTool`, `viewerLineTool`, `viewerPenTool`,
-and `nodeReadOnlyValue`. Node row widgets expose `nodeParameterRole` and
+Existing object names remain stable, except that ADR 0031 retired the Viewer's tool column
+(`viewerToolColumn`, `viewer<Tool>Tool`, `viewerAnchorModeSwitcher`, `toolColumnMoreButton`). The
+context bar's names are `contextBar`, `contextBarRow`, `contextBarTools`,
+`contextBarTool<Tool>` (Select, Hand, Zoom, Line, Pen, Text, Cryptomatte; also the shape flyout's
+Rectangle, Ellipse, Polygon and Star actions), `contextBarToolShape`, `contextBarShapeFlyout`,
+`contextBarAnchorOptions`, `contextBarAnchorMode`, `contextBarShapeOptions`, `contextBarShapeFill`,
+`contextBarShapeFillColor`, `contextBarShapeStroke`, `contextBarShapeStrokeColor`,
+`contextBarShapeStrokeWidth`, `contextBarTextOptions`, `contextBarTextFont`, `contextBarTextSize`,
+`contextBarTextAlignment`, `contextBarAlign`, `contextBarDistribute`, `contextBarAlignTarget`,
+`contextBarAlignTo`, `contextBar-alignAction-<arrangement>`, `contextBarOverflowButton` and
+`contextBarOverflowMenu`; the shared actions are `alignAction-<arrangement>` and
+`alignTargetAction-<target>` (the scripting ids), in `alignMenu` / `alignToMenu`, and the window's
+toggle is `windowContextBarAction`. Other new names: `nodeReadOnlyValue`. Node row widgets expose `nodeParameterRole` and
 `nodeParameterRowPitch` for geometry audits; list headings expose `headerRow`.
 
 Dialog automation names (lane C): the Composition dialog's fields are `compositionSettingsName`,
@@ -566,7 +615,10 @@ and `compositionSettingsCancel` (the earlier `assets*` names are retired); its p
 `compositionRenamePrompt`, `assetsDeleteConfirmation`, `assetsTagsDialog`, `assetsInputColorDialog`,
 `viewerSafeAreaDialog`, `projectColorSettingsDialog`, `projectUnsavedChanges`,
 `projectRecoverUnsaved`, `preferencesWindow` (with `preferencesOkButton`,
-`preferencesRestoreDefaultsConfirmation` and `preferencesMediaDiskCacheDirectoryReason`),
+`preferencesCategoryRail`, `preferencesActionsButton`, `preferencesRestoreDefaultsAction`,
+`preferencesRestoreDefaultsConfirmation`, `preferencesMediaDiskCacheDirectoryReason` and
+`preferencesMediaDiskCacheDirectoryClear`; an Automatic/Custom value's mode dropdown is its field's
+name plus `Mode`, a switch's words its name plus `Label`),
 `licensesWindow` (`licensesCloseButton`), `compositionExportDialog` (`compositionExportFirst`,
 `compositionExportLast`, `compositionExportBrowse`, `compositionExportAudio`,
 `compositionExportContinue`, `locateOpenH264Progress`, `cancelLocateOpenH264`,
@@ -577,7 +629,7 @@ and `compositionSettingsCancel` (the earlier `assets*` names are retired); its p
 replaces `timelineLayerLabelColorDialog`). A prompt's heading and detail are `<dialog>Heading` and
 `<dialog>Detail`.
 
-The metric audit covers the status line, eleven enabled viewer tools,
+The metric audit covers the status line, the context bar's eight tool slots,
 card/control containment and socket-row alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
 1600 and 1920 logical-pixel window widths. Whole-window references and final captures run at
 DPR 1 and 1.5. Changed geometry tests use the viewer's real padded mapping.
@@ -597,7 +649,7 @@ EditorArea exposes maximize. New automation names: `viewerAddMenu`, `viewerAddMe
 `viewerImportAndAddAction`, `viewerCanvasContextMenu`, `viewerContextSelectLayerAction`,
 `viewerContextDuplicateLayerAction`, `viewerContextDeleteLayerAction`,
 `viewerContextCompositionSettingsAction`, `viewerEmptyState`, `viewerEmptyStateTitle`,
-`viewerEmptyStateHint`, `viewerNewCompositionButton`, `toolColumnMoreButton`. The retired
+`viewerEmptyStateHint`, `viewerNewCompositionButton`. The retired
 `viewerCompositionMenuButton` and its `viewer*CompositionAction`s stay hidden, each running the
 application's own command when hosted.
 
@@ -701,8 +753,7 @@ string. New names: `timelinePropertyDriven`, `timelinePropertyDriverLink`,
 `propertiesDriverLink` and `propertiesDrivenValue` are unchanged.
 
 `Color::OnAccent` is white (#ffffff). Kit button painters use it for ink on accent fills,
-including transport, loop, snap and keyframe toggles. KToolColumn is sticky at the canvas left
-edge, paints the header Surface, and owns ChromePadding and ChromeGap around bordered ToggleCells.
+including transport, loop, snap and keyframe toggles, and the context bar's active tool.
 KDropdown's preferred width is the measured widest item plus its icon, padding and chevron; its
 minimum is the same chrome around about six average characters, so a layout short of room elides
 the value instead of overflowing. `setWidthFloor()` is a real floor: the field hugs its widest
@@ -758,51 +809,93 @@ row to exact reference numbers with the `reference` suffix.
 ## Image Assets And Source Cards
 
 Assets is one tree after the After Effects Project panel (#378): folders, compositions and
-imported assets together, with a selection header and a search field above it. The columns are
-Name, Type, Size, Duration, Frame Rate, Tags and File Location. Name carries the kind glyph in its
-per-kind label colour (the Timeline bar colours): Composition (`cube`, DataComposition), Folder
-(`folder`, Label 3), Image or EXR (`image`, DataImage), Sequence (`images`, DataSequence), Video
-(`film-slate`, DataImage), Audio (`music-notes`, DataAudio), Font (`text-t`, DataClip) and LUT
-(`sliders-horizontal`, muted). Type names the kind; Size is `W × H`;
-Duration has one format for video, image sequences and compositions (#380): After Effects timecode
-`H:MM:SS:FF` at the item's rate followed by the frame count, `0:00:02:00 (48 frames)` (`(1 frame)`
-in the singular). A sequence plays one member per composition frame, so it is timed at the active
-composition's rate (24 fps with none open) over its whole numbered range. Audio shows seconds.
-Frame Rate is a composition's or video's rate. A missing or unshowable source
-replaces the Name glyph with the warning glyph in Warn ink, and an untagged video whose colour was
-assumed shows the Info glyph in muted ink; the tooltip states the reason, the input colour space and
-the colour note. A data-only image has no mark.
+imported assets together. Above it sit a compact summary strip and, when opened, a search row; the
+panel footer keeps New Composition, New Folder, Import and Delete as fast icon buttons.
+
+**Columns.** Name, Type, Dimensions, Duration, Frame Rate, File Size, Tags and File Location. Name,
+Type and Dimensions show by default; the others are chosen from the header's context menu or
+View > Columns (Name always shows). Name is the header's one `QHeaderView::Stretch` section, so the
+shown columns always span the viewport exactly at any panel width and no dead band is left to the
+right; every other shown column fits its content (never below `ValueCellMin`) until the user drags
+it. Visibility, dragged widths, order and sort are a per-user setting (`assets/header-state-v2`,
+`assets/sized-columns`), never project data. Type names the kind; Dimensions is `W × H` (Size was
+renamed: size reads as bytes on disk). Duration shows the After Effects timecode `H:MM:SS:FF` at
+the item's rate; its tooltip carries the frame count and rate in the one duration format (#380),
+`0:00:02:00 (48 frames) at 24 fps` (`(1 frame)` in the singular). A sequence plays one member per
+composition frame, so it is timed at the active composition's rate (24 fps with none open) over
+its whole numbered range; audio shows seconds. Frame Rate is a composition's or video's rate. File
+Size is the source's bytes on disk in SI units, a sequence's members summed, measured by the asset
+controller's thumbnail worker (cancellable, beside the probes that already resolve those paths;
+nothing is stat'ed on the interface thread) and blank until it has run. File Location elides in the
+middle so the file name stays; the full path is its tooltip.
+
+**Rows.** One `Size::AssetRow` (26, one control height, so the inline rename field fits a row
+exactly) at the kit's Ui type size. Each level indents by `Size::AssetIndent` (20: one 16-pixel
+icon plus an XS gap), which is also the caret column: the Phosphor caret (Muted, monochrome) sits
+in the indent in front of the row, the kind glyph at the Name cell's left and the name one indent
+later, so a child's glyph starts exactly where its parent's name does and a root row has only the
+one caret column in front of its glyph. `AssetRowDelegate` paints every cell: the glyph, the name in
+Foreground (Muted on the Data group's rows) with a folder's muted child count after it
+(`test · 1`), and every other column in Muted. `AssetTree::drawRow` paints the row background across
+the whole viewport before the cells -- the alternating Background/Surface rows, the full-width
+hover step and the one selected-row recipe (selection wash with the 2-pixel Accent edge at the
+row's left, never at its indent) -- so nested rows are never notched.
+
+**Glyphs.** Monochrome, in the row's ink (Foreground; Muted on secondary rows; OnAccent selected):
+Composition (`film-strip`), Folder (`folder`, `folder-open` while expanded), Image or EXR
+(`image`), Sequence (`images`), Video (`film-slate`), Audio (`music-notes`), Font (`text-t`) and LUT
+(`sliders-horizontal`). Colour is kept for state: a missing or unshowable source replaces the glyph
+with the warning glyph in Warn ink; an untagged video whose colour was assumed shows the Info glyph
+in the row's ink. The tooltip states the reason, the input colour space and the colour note. A
+data-only image has no mark.
 
 Every column sorts on a header click; folders stay first and the Data group last in either
 direction, sizes, times and rates sort by value and names in natural, case-insensitive order.
-Columns resize and reorder by dragging; the header's context menu and View > Columns choose which
-columns show (Name always shows; Tags starts hidden). Visibility, widths, order and sort are a
-per-user setting, never project data. Folder rows expand with Qt's own branch and keyboard
+Columns resize and reorder by dragging. Folder rows expand with Qt's own branch and keyboard
 navigation; expansion and selection survive project projections, and filtering temporarily opens
 matching ancestors.
 
-The selection header pairs a `KThumbnail` (the controller's worker thumbnail, including
-Cryptomatte ID colours and the first data channel of a data-only image; for a composition a frame
-rendered by the composition preview pipeline; or the kind glyph when there is no picture yet, never
-a blank cell) with four Control-height `KLabel` lines: the name; kind, size, duration and rate
-(`Video · 1920 × 1080 · 0:00:02:00 (48 frames), 24 fps`); colour; and usage
-(`Used 3 times in 2 compositions`, `Not used`). The colour line names the input colour space by its
-plain name, then the alpha, then the colour note once:
-`Colour: sRGB · Straight alpha · Colour tags missing — assumed Rec.709 with the sRGB transfer. Change
-in Assets → Input Colour`. Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene` is
-**Linear Rec.709**, `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space **Rec.709
-video**); another config's spaces show the names the config gives them. A space Auto read from the
-file's own tags adds `(from the file)`; an assumed one is explained by the note alone.
+**Summary strip.** One fixed `Size::SummaryStrip` (52: two Control-height lines) for every
+selection, so the tree never moves. With one item: a `KThumbnail::Cell::Strip` well
+(`StripThumbnailWidth` × `StripThumbnailHeight`, 64 × 40, on Field) letterboxing the controller's
+worker thumbnail at its own aspect ratio (Cryptomatte ID colours or the first data channel of a
+data-only image; for a composition a frame rendered by the composition preview pipeline; otherwise
+the kind glyph, Muted, never a blank cell); line 1 the name in Ui Foreground, elided, with the usage
+trailing in UiSmall Faint (`Used 3 times in 2 compositions`, `Not used`); line 2 the facts in UiSmall
+Muted as chips separated by thin dots: `Sequence · 2048 × 858 · 0:00:16:02 · 386 f · 24 fps · sRGB ·
+Straight`. Each line's tooltip is its whole sentence (`Sequence · 2048 × 858 · 0:00:16:02 (386
+frames), 24 fps`; `Colour: sRGB (from the file) · Straight alpha`). The colour facts name the input
+colour space by its plain name, then the alpha, then the colour note once; a note, a missing source
+or an unshowable one turns that part Warn, with the detail in its tooltip
+(`Colour: sRGB · Straight alpha · Colour tags missing — assumed Rec.709 with the sRGB transfer.
+Change in Assets → Input Colour`). Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene`
+is **Linear Rec.709**, `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space
+**Rec.709 video**); another config's spaces show the names the config gives them. A space Auto read
+from the file's own tags adds `(from the file)` in the tooltip; an assumed one is explained by the
+note alone. Several items: `3 items selected` and their kinds (`2 sequences · 1 composition`). None:
+one centred Faint line of what the project holds (`7 items · 5 sequences · 2 compositions ·
+1 folder`), never an empty tile -- a fixed strip is chosen over collapsing it, so selecting never
+pushes the tree down. View > Show Info hides the strip (`assets/show-info`, per user).
 
-A composition's header frame is its first frame, prepared on a worker by the same compile,
+A composition's strip frame is its first frame, prepared on a worker by the same compile,
 evaluate and display-transform pipeline the Viewer's analysis uses, at a proxy no larger than
-144 device pixels on its longest edge (twice the cell, for a device pixel ratio of two). The
-`CompositionThumbnailController` keeps the newest frame per composition with the document revision
-it was prepared from (at most 64 compositions), prepares a revision once (a frame that cannot be
-prepared is not retried until an edit), shows the previous frame while an edit is prepared and
-cancels on shutdown. Nothing is evaluated or decoded on the interface thread. The lines keep their height when empty, so the tree
-never moves with the selection. Usage counts nodes whose asset, font, LUT or
-composition reference names the item.
+144 device pixels on its longest edge. The `CompositionThumbnailController` keeps the newest frame
+per composition with the document revision it was prepared from (at most 64 compositions), prepares
+a revision once (a frame that cannot be prepared is not retried until an edit), shows the previous
+frame while an edit is prepared and cancels on shutdown. Nothing is evaluated or decoded on the
+interface thread. Usage counts nodes whose asset, font, LUT or composition reference names the item.
+
+**Search.** Collapsed by default: a Search toggle (`magnifying-glass`, "Search (Ctrl+F)") at the
+panel header's trailing end beside Maximize, and Ctrl+F (Cmd+F on macOS) while the panel has focus,
+open a slim Control-height row directly under the header with a `KSearchField`, a Muted match count
+(`3 of 7`: the assets and compositions the filter keeps, not their folders) and a Close button.
+Opening focuses the field. Escape clears the text; Escape on an empty field (or Close) closes the
+row and returns focus to the tree. While text filters the tree the row stays open even after focus
+leaves, and the toggle stays in its Selected state, so a filter can never silently hide assets.
+Typing while the tree has focus is the tree's own type-ahead to an item, not search. The header is
+a priority row: as the panel narrows its menus fold one at a time into the overflow
+(`dots-three-vertical`) -- Select first, then Add, then View -- and the Search toggle keeps its
+place beside Maximize. Text set by any other route (a Tags cell, automation) opens the row too.
 
 Context menus follow After Effects. An asset: New Composition from Selection, Input Colour…
 (interpret footage), Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…,
@@ -820,8 +913,8 @@ Tags column lists an asset's tags; clicking it filters by the first tag. Edit Ta
 line edit per tag with Add Tag and Remove Tag controls; applying to multiple selected assets
 replaces their sets in one transaction.
 
-Search accepts `tag:` followed by a case-insensitive tag substring; plain text matches names and
-tags. Unmatched ancestors remain visible only when a descendant matches. Internal drags move assets,
+Search accepts `tag:` followed by a case-insensitive tag substring (clicking a Tags cell opens the
+row with `tag:` and its first tag); plain text matches names and tags. Unmatched ancestors remain visible only when a descendant matches. Internal drags move assets,
 compositions and folders together onto a folder row, into the folder of the row under the pointer,
 or to the root on empty space; a folder never moves into itself or a subfolder. Rows are sorted, so
 a drop names a folder, never a position. The internal selection MIME coexists with
@@ -840,8 +933,8 @@ share this machine has not mounted yet is still accepted (the cursor stays hones
 being something to do) but imports nothing, reporting "Connect to `<host>/<share>` in your file
 manager first" through the status bar's transient-message cell rather than dropping it silently.
 Every file dialog (`kit::chooseFile()`: Import, Relink, Open Project, Save Project As, Export Frame,
-Export Frame Range, Export Composition, Locate OpenH264 and the cache folder) lists every mounted
-network share in the sidebar of Qt's own dialog alongside the platform's own entries.
+Export Frame Range, Export Composition, Locate OpenH264 and the cache folder) is Bloom's own file
+dialog and lists every mounted network share in its sidebar beside the standard places.
 Dragging an image/sequence row to Nodes creates an Image source; dragging an Audio row creates an
 Audio source. Dropping media or compositions on the Timeline or the Viewer creates the matching
 wired Layers (interaction-model.md, "Layer drops"). During a Timeline drag the layer stack shows
@@ -903,19 +996,29 @@ file shows the warning glyph and remains relinkable from Assets.
 window frame; there are no frameless or custom-titlebar dialogs. A dialog is constructed with a
 title, an object name and a required owner, resolved to the owner's top-level window, and states
 its modality. It sits on `SurfaceRaised` with `Spacing::M` margins and `Spacing::S` between rows,
-and takes its width only from `DialogTextWidth` or `DialogWideWidth` (a document or page stack also
-takes the `DialogDocumentHeight` minimum height); no dialog calls `resize()` with a literal.
+and takes its width only from `DialogTextWidth` or `DialogWideWidth` (a document also takes the
+`DialogDocumentHeight` minimum height); no dialog calls `resize()` with a literal. A dialog is never
+narrower or shorter than its content: it grows to its layout's minimum width and to the height its
+content needs at that width.
 
 - **Form.** `KForm` lays out two columns: `KLabel` labels, left-aligned on every platform, in one
   label column shared by every form of the dialog (sections included), and fields that grow to the
   right. Rows are added in visual order and the dialog's Tab order follows that order (a section's
   header first), whatever order the widgets were constructed in. A check box row puts its words in
   a `KCheckLabel` that toggles the box when clicked.
+- **Tabs** (`kit/tab_bar.hpp`). `KTabBar` is Ui text tabs over a hairline: the current tab in
+  Foreground over a `SelectionEdge` Accent underline, the others Muted, the kit keyboard-focus
+  border around the current tab, Left/Right/Home/End to move, accessible as a page tab list.
+  `KTabs` puts it over a page stack as tall as its tallest page; Ctrl+Tab and Ctrl+Shift+Tab step
+  the tabs from any field. A refused value on a tab that is not showing puts a small Error dot
+  (`NonDefaultMark`) after that tab's name, and Accept then switches to it and focuses the field.
 - **Reasons.** One validator per dialog returns the first refusal: its field and its plain reason.
   The reason shows directly under that field (the inline field reason below), or above the buttons
   when it belongs to the dialog as a whole (the project changed while the dialog was open); a field
   inside a collapsed section opens it. Accept, Destructive and Alternate stay disabled while any
-  reason exists.
+  reason exists; Enter on a refused dialog switches to the refused field's tab and focuses it. A
+  wait that is not an error (the OpenH264 check still running) is a *pending* refusal: the same
+  place, in `Muted` ink.
 - **Button row.** Kit buttons in a `QDialogButtonBox`, so the platform orders them while the kit
   paints them: Accept is a Primary `KButton`, Destructive a Danger one, Reject, Alternate, Apply
   and Reset Secondary. Buttons are named `<dialog>AcceptButton`, `<dialog>RejectButton` and so on
@@ -926,11 +1029,18 @@ takes the `DialogDocumentHeight` minimum height); no dialog calls `resize()` wit
   Warning, Error, Info); with only an OK it is the error and information notice (`kit::inform()`).
   `kit::promptText()` and `kit::promptRange()` show a refused value's reason inside the prompt and
   keep OK disabled, so a prompt never closes and reopens to refuse.
-- **Files** (`kit/file_chooser.hpp`). Every file dialog is `kit::chooseFile()`: parented to the
-  owner's window, starting in the folder last used for the same kind of file (a user setting,
-  never project data), applying the default suffix to a name typed without one, and listing the
-  mounted network shares in the sidebar of Qt's own dialog. A native platform dialog keeps its own
-  sidebar and ignores that list.
+- **Files** (`kit/file_chooser.hpp`). Every file dialog is `kit::chooseFile()`, and it is always
+  Bloom's own dialog: Qt's widget file dialog (`QFileDialog::DontUseNativeDialog`) on Linux, macOS
+  and Windows alike, never a platform, desktop-portal or Qt platform-theme chooser (owner decision,
+  2026-10-30: a GTK chooser opened through a Qt platform theme landed on another Hyprland workspace
+  and left Bloom looking frozen). It is a window-modal child of the owner's window, starts in the
+  folder last used for the same kind of file (a user setting, never project data), applies the
+  default suffix to a name typed without one, keeps the dialog's filters and lists the mounted
+  network shares in its sidebar. The kit styles all of it, scoped to the dialog: the look-in and
+  file-type combos take the Secondary button recipe, the name field the text-entry recipe, the
+  navigation buttons and every file and place kit glyphs, the file views a `Field` well and the
+  sidebar `Surface` (`DialogSidebarWidth` wide), every control one `Control` tall; it opens
+  `DialogWideWidth` × `DialogDocumentHeight`.
 - **Task dialog** (`kit/task_dialog.hpp`). `KTaskDialog` is the progress-then-summary modal the
   import dialog below is built on: elided heading and detail, a `KProgressBar`, Cancel that only
   asks the work to stop, then a summary with one Close that Return takes. `KTaskTiming` delays it
@@ -946,19 +1056,57 @@ Restore Defaults and every failure notice are asynchronous. The keys are in
 
 The Composition dialog (New Composition and Composition Settings, #376) is one `kit::KDialog` at
 least `DialogWideWidth` wide, titled `New Composition` or `Composition Settings`, built only from kit
-controls: a **Basic** `KSection` and an **Advanced** `KSection` that starts collapsed. Both sections
-are `KForm`s of the one dialog, so they share ONE label column, sized to the widest label of either,
-and every field starts at the same x. Start, Duration and its unit are laid out (and tabbed) in that
-order; Start, Duration and the Custom frame rate are entered in the Value role. Text entry uses `KLineEdit`, pixel and percentage values `KValueField`,
-choices `KDropdown` (frame rate is one dropdown; its exact `KLineEdit` appears only for Custom), the
-aspect lock a `KIconToggle` (`IconId::Link`), and the preset buttons `KIconButton`s with tooltips
-`Save as preset…` (`IconId::Add`), `Rename preset…` (`IconId::Rename`, Phosphor `pencil-simple`) and
-`Delete preset` (`IconId::Delete`). A muted `UiSmall` summary line sits under the preset. Drop-frame
-is a `KCheckBox` with its `KLabel`; Background Colour is a `KColorChip` at its own size with the
-`#RRGGBB` value beside it in the Value role; the resize anchor is the Properties Anchor Point
-`KAnchorGrid` itself. Opening Advanced grows the dialog to fit and closing it returns the height;
-spare height sits below the sections. The interaction contract is in
+controls, with two tabs in a `kit::KTabs` (After Effects style; no collapsible sections). **Basic**
+holds what most compositions change: Name, Preset with its buttons and summary line, Size with the
+link toggle and the frame aspect beside it in muted Value text (`16:9`, `2.39:1`), Frame Rate,
+Duration with its unit, and Background Colour. **Advanced** holds the rarely changed values: Pixel
+Aspect Ratio, Start, the drop-frame Timecode row (shown only at 29.97 and 59.94 fps), Working
+Colour Space, the Resize Anchor (Composition Settings only, shown once the size changes), and
+Action / Title Safe. Both tabs are `KForm`s of the one dialog, so they share ONE label column, sized
+to the widest label of either, and every field starts at the same x; the dialog is as tall as its
+taller tab, so switching tabs never resizes it, and the tab last shown is shown again for the rest
+of the session. Every number is right-aligned: the `KValueField`s and the Start, Duration and Custom
+frame rate fields, which are entered in the Value role. Text entry uses `KLineEdit`, pixel and
+percentage values `KValueField`, choices `KDropdown` (frame rate is one dropdown; its exact
+`KLineEdit` appears only for Custom), the aspect lock a `KIconToggle` (`IconId::Link`), and the
+preset buttons `KIconButton`s with tooltips `Save as preset…` (`IconId::Add`), `Rename preset…`
+(`IconId::Rename`, Phosphor `pencil-simple`) and `Delete preset` (`IconId::Delete`). A muted
+`UiSmall` summary line sits under the preset. Drop-frame is a `KCheckBox` with its clickable
+`KCheckLabel`; Background Colour is a `KColorChip` at its own size with the `#RRGGBB` value beside it
+in the Value role; the resize anchor is the Properties Anchor Point `KAnchorGrid` itself. The
+interaction contract is in
 [interaction-model.md](interaction-model.md#composition-dialog).
+
+**Preferences window.** Preferences is a settings window rather than a dialog form, laid out the
+way Blender lays out its Preferences and built from the Properties panel's own parts, so a
+Preferences page and a Properties section look the same. A `PreferencesRailWidth` sidebar lists the
+categories one per `ListRow`, grouped by an `Spacing::S` gap: General (and Sounds when it lands) |
+Viewer, Timeline, Node Graph | Memory & Caches, Performance; a page that no group names appears in a
+group of its own after them. The sidebar has no radio marks: the current category takes the kit
+selected-row recipe (selection wash and the `SelectionEdge` Accent leading edge), others take the
+hover wash, Up/Down, Home/End and type-ahead move through it, the keyboard-focused row takes the
+Accent focus inset, and it is an accessible list. The category last shown is shown again for the
+rest of the session. A small Menu `KMenuButton` at the foot of the sidebar holds **Restore
+Defaults**, which still asks first; the button row keeps OK, Cancel and Apply.
+
+Each page is a scrolling Properties panel body: `Background`, the Properties content margins and
+section spacing, and `properties::makeSection` sections. Every row is a `KPropertyRow` with the
+Properties row label (`UiSmall`, `Muted`, right-aligned) in ONE `PreferencesLabelWidth` label column
+shared by every page, so every value starts at the same x on every page. Switches sit in the value
+column with their own clickable `UiSmall` words (`KCheckLabel`) and an empty label. Dropdowns and
+value fields take one width (`DropdownWidthWide`); a path field takes the rest of the row. Helper
+text is wrapped `UiSmall` `Muted` under the row it explains, in the value column; `Error` ink is only
+for a real refusal (a cache folder Bloom cannot use). A value whose zero means Automatic (the
+memory and disk budgets, the timeline layer column width) is a mode dropdown, **Automatic** or
+**Custom**, with the value field and its unit beside it only for Custom; choosing Custom brings
+back the last custom value. A section whose values are read at startup says so once, with a
+`Muted` `UiSmall` **Restart** badge in its header (its tooltip says the value takes effect after
+restart). The cache directory is a `kit::KPathField`, the text field that elides a path in the middle at
+rest (the whole path in its tooltip and while editing), with the placeholder `Default location`, a Secondary
+**Browse…** and a Reset `KIconButton` that returns to the default location. The window opens with
+the pages a `DialogTextWidth` column wide and as tall as the tallest page (up to three quarters of
+the screen, beyond which a page scrolls), so switching pages never resizes it; it can be made
+narrower down to the widest page's minimum. Changes apply on OK or Apply, never live.
 
 **Import Progress Dialog.** Every batch import (#377,
 [ADR 0029](../decisions/0029-import-progress-and-cancellation.md)) shows one application-modal

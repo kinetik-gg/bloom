@@ -28,6 +28,17 @@
 #include <tuple>
 
 namespace bloom::ui {
+namespace {
+// The Edit Tags rows. A scroll area's own minimum is two scroll bars' worth, which a layout
+// honours even under a single tag; one tag row is the real minimum.
+class TagRowsArea final : public QScrollArea {
+  public:
+    using QScrollArea::QScrollArea;
+    [[nodiscard]] QSize minimumSizeHint() const override {
+        return {0, kit::px(kit::Size::Control)};
+    }
+};
+} // namespace
 std::optional<document::AssetFolderId> AssetsEditor::selectedFolder() const {
     return assets::targetFolder(tree_->currentItem() && tree_->currentItem()->isSelected()
                                     ? tree_->currentItem()
@@ -87,10 +98,13 @@ void AssetsEditor::editTags(document::AssetId id) {
                                        : tr("One tag per field"),
                         dialog);
     layout->addWidget(label);
-    auto* scroll = new QScrollArea(dialog);
+    auto* scroll = new TagRowsArea(dialog);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setMinimumHeight(kit::px(kit::Size::ListRow) * 4);
+    // The rows' own height, scrolling only past a diagnostic-sized list: no empty band under a
+    // single tag.
+    scroll->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
+    scroll->setMaximumHeight(kit::px(kit::Size::DiagnosticHeight));
     // The tag rows sit on the dialog's own surface, not in a darker well.
     scroll->viewport()->setAutoFillBackground(false);
     auto* fields = new QWidget(scroll);
@@ -100,12 +114,12 @@ void AssetsEditor::editTags(document::AssetId id) {
     rows->addStretch();
     scroll->setWidget(fields);
     fields->setAutoFillBackground(false);
-    layout->addWidget(scroll, 1);
+    layout->addWidget(scroll);
     auto* add = new kit::KButton(tr("Add Tag"), dialog);
     add->setObjectName(QStringLiteral("assetsAddTagButton"));
     layout->addWidget(add, 0, Qt::AlignLeft);
     auto editors = std::make_shared<std::vector<QPointer<kit::KLineEdit>>>();
-    const auto addTag = [dialog, fields, rows, add, editors](const QString& text) {
+    const auto addTag = [dialog, scroll, fields, rows, add, editors](const QString& text) {
         if (editors->size() >= 64)
             return;
         auto* row = new QWidget(fields);
@@ -123,11 +137,13 @@ void AssetsEditor::editTags(document::AssetId id) {
         rowLayout->addWidget(edit, 1);
         rowLayout->addWidget(remove);
         rows->insertWidget(rows->count() - 1, row);
+        scroll->updateGeometry();
         editors->emplace_back(edit);
-        connect(remove, &kit::KIconButton::clicked, dialog, [editors, add, row, edit] {
+        connect(remove, &kit::KIconButton::clicked, dialog, [editors, add, row, edit, scroll] {
             std::erase(*editors, QPointer<kit::KLineEdit>(edit));
             row->hide();
             row->deleteLater();
+            scroll->updateGeometry();
             add->setEnabled(true);
         });
         add->setEnabled(editors->size() < 64);

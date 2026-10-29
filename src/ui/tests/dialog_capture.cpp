@@ -25,25 +25,34 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
-#include <bloom/ui/kit/radio_group.hpp>
+#include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
 
 #include <QAction>
+#include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QGridLayout>
 #include <QImage>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMenu>
+#include <QPainter>
+#include <QPushButton>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <bloom/ui/kit/file_chooser.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -58,6 +67,8 @@ using namespace bloom::ui;
 
 QString gDirectory;
 QString gSuffix;
+// The x of the Preferences label column, shared by every page.
+int gPreferencesLabelX = -1;
 int gFindings = 0;
 
 void settle(const int ms = 150) {
@@ -75,7 +86,15 @@ void audit(const QString& name, QWidget& root) {
         // A value field's own editor and a dropdown's popup parts are inside their control.
         if (qobject_cast<kit::KValueField*>(widget->parentWidget()) != nullptr)
             continue;
-        const bool governed = qobject_cast<kit::KButton*>(widget) != nullptr ||
+        // Bloom's file dialog: Qt's own controls, styled and sized by the kit.
+        const bool fileDialogControl =
+            qobject_cast<QFileDialog*>(&root) != nullptr &&
+            (qobject_cast<QComboBox*>(widget) != nullptr ||
+             (qobject_cast<QLineEdit*>(widget) != nullptr &&
+              qobject_cast<QComboBox*>(widget->parentWidget()) == nullptr) ||
+             qobject_cast<QPushButton*>(widget) != nullptr ||
+             (qobject_cast<QToolButton*>(widget) != nullptr && !widget->objectName().isEmpty()));
+        const bool governed = fileDialogControl || qobject_cast<kit::KButton*>(widget) != nullptr ||
                               qobject_cast<kit::KIconButton*>(widget) != nullptr ||
                               qobject_cast<kit::KDropdown*>(widget) != nullptr ||
                               qobject_cast<kit::KValueField*>(widget) != nullptr ||
@@ -96,8 +115,12 @@ void audit(const QString& name, QWidget& root) {
         for (int row = 0; row < grid->rowCount(); ++row) {
             auto* item = grid->itemAtPosition(row, 0);
             auto* label = item != nullptr ? qobject_cast<kit::KLabel*>(item->widget()) : nullptr;
-            if (label == nullptr || item->widget() != label || grid->itemAtPosition(row, 1) == item)
+            if (label == nullptr || item->widget() != label ||
+                grid->itemAtPosition(row, 1) == item || !label->isVisibleTo(&root))
                 continue;
+            if (label->minimumWidth() != label->maximumWidth())
+                issues << QStringLiteral("label '%1' is not in the fixed label column")
+                              .arg(label->text());
             if (labelWidth < 0)
                 labelWidth = label->width();
             else if (label->width() != labelWidth)
@@ -107,6 +130,25 @@ void audit(const QString& name, QWidget& root) {
                               .arg(labelWidth);
         }
     }
+    // Preferences is a Properties-style settings window: every row's label is the Properties
+    // row label, in the one label column all its pages share.
+    if (root.objectName() == QStringLiteral("preferencesWindow"))
+        for (auto* row : root.findChildren<kit::KPropertyRow*>()) {
+            if (!row->isVisibleTo(&root))
+                continue;
+            auto* label = row->findChild<QLabel*>(QStringLiteral("propertiesRowLabel"),
+                                                  Qt::FindDirectChildrenOnly);
+            if (label == nullptr || label->width() != kit::px(kit::Size::PreferencesLabelWidth)) {
+                issues << QStringLiteral("a Preferences row label is not in the shared column");
+                continue;
+            }
+            // One column on every page: the same x in the window on each of them.
+            const int x = label->mapTo(&root, QPoint()).x();
+            if (gPreferencesLabelX < 0)
+                gPreferencesLabelX = x;
+            else if (x != gPreferencesLabelX)
+                issues << QStringLiteral("a Preferences row label column starts at another x");
+        }
     if (auto* dialog = qobject_cast<kit::KDialog*>(&root); dialog && dialog->layout()) {
         const auto margins = dialog->layout()->contentsMargins();
         const int m = kit::px(kit::Spacing::M);
@@ -196,14 +238,40 @@ void trigger(QWidget& root, const char* action) {
 
 void compositionDialogs(test::WindowFixture& fixture) {
     auto& window = *fixture.window;
-    onModal(QStringLiteral("new-composition"));
-    trigger(window, "compositionNewAction");
-    onModal(QStringLiteral("new-composition-advanced"), [](QDialog& dialog) {
-        child<kit::KSection>(dialog, "compositionSettingsAdvanced")->setCollapsed(false);
+    const auto showTab = [](QDialog& dialog, const int index) {
+        child<kit::KTabs>(dialog, "compositionSettingsTabs")->setCurrentIndex(index);
         settle(200);
+    };
+    onModal(QStringLiteral("new-composition"), [showTab](QDialog& dialog) { showTab(dialog, 0); });
+    trigger(window, "compositionNewAction");
+    onModal(QStringLiteral("new-composition-advanced"),
+            [showTab](QDialog& dialog) { showTab(dialog, 1); });
+    trigger(window, "compositionNewAction");
+    // A refused value on Advanced, seen from Basic: the Error dot on the Advanced tab.
+    onModal(QStringLiteral("new-composition-advanced-error"), [showTab](QDialog& dialog) {
+        showTab(dialog, 0);
+        child<kit::KValueField>(dialog, "compositionSettingsTitleSafe")->setValue(95);
     });
     trigger(window, "compositionNewAction");
-    onModal(QStringLiteral("composition-settings-error"), [](QDialog& dialog) {
+    onModal(QStringLiteral("new-composition-advanced-error-shown"), [showTab](QDialog& dialog) {
+        showTab(dialog, 0);
+        child<kit::KValueField>(dialog, "compositionSettingsTitleSafe")->setValue(95);
+        if (auto* kit = qobject_cast<kit::KDialog*>(&dialog))
+            (void)kit->activate(kit::KDialog::Role::Accept);
+    });
+    trigger(window, "compositionNewAction");
+    onModal(QStringLiteral("composition-settings"),
+            [showTab](QDialog& dialog) { showTab(dialog, 0); });
+    trigger(window, "compositionSettingsAction");
+    onModal(QStringLiteral("composition-settings-advanced"), [showTab](QDialog& dialog) {
+        showTab(dialog, 1);
+        // A size change offers the resize anchor.
+        child<kit::KValueField>(dialog, "compositionSettingsWidth")->setValue(2048);
+        settle(100);
+    });
+    trigger(window, "compositionSettingsAction");
+    onModal(QStringLiteral("composition-settings-error"), [showTab](QDialog& dialog) {
+        showTab(dialog, 0);
         auto* rates = child<kit::KDropdown>(dialog, "compositionSettingsRatePreset");
         rates->setCurrentIndex(rates->count() - 1);
         child<QLineEdit>(dialog, "compositionSettingsRate")->setText(QStringLiteral("0"));
@@ -315,6 +383,41 @@ void exportDialogs(test::WindowFixture& fixture) {
     }
 }
 
+void fileChoosers(test::WindowFixture& fixture, const QString& root) {
+    auto& window = *fixture.window;
+    // Its own folder, so the files shown here never meet the import below.
+    const auto scratch = QDir(root).filePath(QStringLiteral("browse"));
+    QDir().mkpath(scratch);
+    QImage image(16, 9, QImage::Format_RGBA8888);
+    image.fill(QColor(80, 120, 160));
+    for (const char* name : {"plate_010.png", "plate_020.png", "shot_010.bloom"})
+        (void)image.save(QDir(scratch).filePath(QString::fromLatin1(name)), "PNG");
+    QDir(scratch).mkpath(QStringLiteral("renders"));
+    const auto open = kit::buildFileDialog(
+        window, {.mode = kit::KFileRequest::Mode::Open,
+                 .title = QObject::tr("Open Project"),
+                 .kind = QStringLiteral("capture"),
+                 .nameFilters = QObject::tr("Bloom Projects (*.bloom);;All files (*)"),
+                 .defaultSuffix = QStringLiteral("bloom"),
+                 .startPath = scratch});
+    open->show();
+    settle(400);
+    shoot(QStringLiteral("file-chooser-open"), *open);
+    open->reject();
+    const auto save = kit::buildFileDialog(
+        window, {.mode = kit::KFileRequest::Mode::Save,
+                 .title = QObject::tr("Export Frame"),
+                 .kind = QStringLiteral("capture"),
+                 .nameFilters = QObject::tr("OpenEXR (*.exr);;PNG (*.png);;TIFF (*.tif *.tiff)"),
+                 .defaultSuffix = {},
+                 .startPath = scratch});
+    save->selectFile(QStringLiteral("shot_010.exr"));
+    save->show();
+    settle(400);
+    shoot(QStringLiteral("file-chooser-save"), *save);
+    save->reject();
+}
+
 void projectDialogs(test::WindowFixture& fixture) {
     auto& window = *fixture.window;
     {
@@ -337,17 +440,64 @@ void projectDialogs(test::WindowFixture& fixture) {
     trigger(window, "projectColorSettingsAction");
     shootAsync(QStringLiteral("project-colour"), QStringLiteral("projectColorSettingsDialog"));
     // Preferences: every page.
-    onModal(QString{}, {}, [](QDialog& dialog) {
-        auto* rail = child<kit::KRadioGroup>(dialog, "preferencesCategoryRail");
-        for (int page = 0; rail != nullptr && page < rail->count(); ++page) {
-            rail->setCurrentIndex(page);
-            shoot(QStringLiteral("preferences-") + rail->optionText(page)
-                                                       .toLower()
-                                                       .remove(QLatin1Char('&'))
-                                                       .simplified()
-                                                       .replace(QLatin1Char(' '), QLatin1Char('-')),
-                  dialog);
+    onModal(QString{}, {}, [&window](QDialog& dialog) {
+        auto* rail = child<QListWidget>(dialog, "preferencesCategoryRail");
+        if (rail == nullptr) {
+            std::cerr << "preferences: no page rail\n";
+            ++gFindings;
+            return;
         }
+        const auto pageName = [rail](const int row) {
+            return QStringLiteral("preferences-") +
+                   rail->item(row)
+                       ->text()
+                       .toLower()
+                       .remove(QLatin1Char('&'))
+                       .simplified()
+                       .replace(QLatin1Char(' '), QLatin1Char('-'));
+        };
+        for (int row = 0; row < rail->count(); ++row) {
+            if (rail->item(row)->flags() == Qt::NoItemFlags)
+                continue;
+            rail->setCurrentRow(row);
+            shoot(pageName(row), dialog);
+        }
+        // The same window at its narrowest.
+        const auto size = dialog.size();
+        for (int row = 0; row < rail->count(); ++row)
+            if (rail->item(row)->text() == QStringLiteral("Memory & Caches"))
+                rail->setCurrentRow(row);
+        dialog.resize(dialog.minimumSizeHint().width(), dialog.height());
+        shoot(QStringLiteral("preferences-narrow"), dialog);
+        dialog.resize(size);
+        settle(100);
+        // A Properties section beside a Preferences section: one component, one look.
+        auto* properties = window.findChild<QWidget*>(QStringLiteral("propertiesEditor"));
+        auto* propertiesSection =
+            properties != nullptr ? properties->findChild<kit::KSection*>() : nullptr;
+        auto* preferencesSection = child<kit::KSection>(dialog, "preferencesMemorySection");
+        if (propertiesSection == nullptr || preferencesSection == nullptr) {
+            std::cerr << "side by side: a section is missing\n";
+            ++gFindings;
+            return;
+        }
+        // Both at the capture's device pixels, side by side and unscaled.
+        auto left = propertiesSection->grab().toImage();
+        auto right = preferencesSection->grab().toImage();
+        const int gap =
+            static_cast<int>(std::lround(kit::px(kit::Spacing::L) * left.devicePixelRatio()));
+        left.setDevicePixelRatio(1.0);
+        right.setDevicePixelRatio(1.0);
+        QImage combined(left.width() + gap + right.width(), std::max(left.height(), right.height()),
+                        QImage::Format_ARGB32);
+        combined.fill(kit::color(kit::Color::Background));
+        QPainter painter(&combined);
+        painter.drawImage(0, 0, left);
+        painter.drawImage(left.width() + gap, 0, right);
+        painter.end();
+        (void)combined.save(QDir(gDirectory)
+                                .filePath(QStringLiteral("preferences-vs-properties-dpr") +
+                                          gSuffix + QStringLiteral(".png")));
     });
     trigger(window, "preferencesAction");
     trigger(window, "openSourceLicensesAction");
@@ -550,6 +700,9 @@ int main(int argc, char** argv) {
     }
     qputenv("QT_SCALE_FACTOR", argv[2]);
     qputenv("BLOOM_REDUCED_MOTION", "1");
+    // The captured file dialogs save their sidebar and history into the Qt settings: keep them
+    // out of the user's own.
+    QStandardPaths::setTestModeEnabled(true);
     QApplication application(argc, argv);
     kit::installKinetikTheme(application);
     gDirectory = QString::fromLocal8Bit(argv[1]);
@@ -565,6 +718,7 @@ int main(int argc, char** argv) {
     exportDialogs(fixture);
     projectDialogs(fixture);
     importDialogs(fixture);
+    fileChoosers(fixture, scratch.path());
     labelColourPicker(fixture);
     assetDialogs(fixture, scratch.path());
     compositionDeleteAndViewer(fixture);

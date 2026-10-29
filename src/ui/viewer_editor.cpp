@@ -7,6 +7,7 @@
 #include <bloom/ui/viewer_gpu_resident_overlay.hpp>
 #include <memory>
 
+#include "text_font_choices.hpp"
 #include "composition_editor_support.hpp"
 #include "layer_drop.hpp"
 #include "layer_mask_support.hpp"
@@ -285,12 +286,11 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     setAccessibleName(tr("Composition viewer"));
     // Assets items dropped on the Viewer become layers at the playhead, centred (#380).
     installLayerDropTarget(*this, session_);
-    buildToolColumn();
-    buildAnchorModeSwitcher();
+    // ADR 0031: every Viewer follows the one app-wide tool.
+    connect(&session_.tools(), &ToolController::toolChanged, this, &ViewerEditor::toolChanged);
 
-    // An honest floor that does not depend on the tool column, which collapses its trailing
-    // tools into a More button at short heights. Hosted, the panel adds its header and footer to
-    // this (EditorChromeSpec::contentMinimumHeight); unhosted, the footer strip is inside it.
+    // The canvas floor. Hosted, the panel adds its header and footer to this
+    // (EditorChromeSpec::contentMinimumHeight); unhosted, the footer strip is inside it.
     setMinimumSize(kit::px(kit::Size::ViewerMinWidth), kit::px(kit::Size::ViewerMinHeight));
     chrome_.contentMinimumHeight = kit::px(kit::Size::ViewerMinHeight);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -317,22 +317,22 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     connect(&session_, &CompositionSession::selectionChanged, this, [this] {
         cancelAnchorGesture();
         selectedAnchors_.clear();
-        refreshAnchorModeSwitcher();
+        notifyAnchorModeState();
         update();
     });
     connect(&session_, &CompositionSession::maskSelectionChanged, this, [this] {
         cancelAnchorGesture();
         selectedAnchors_.clear();
-        refreshAnchorModeSwitcher();
+        notifyAnchorModeState();
         update();
     });
     // The anchor mode strip follows the edited path: edits, keyed time and late layer bounds.
     connect(&session_, &CompositionSession::snapshotChanged, this,
-            [this] { refreshAnchorModeSwitcher(); });
+            [this] { notifyAnchorModeState(); });
     connect(&session_, &CompositionSession::currentTimeChanged, this,
-            [this] { refreshAnchorModeSwitcher(); });
+            [this] { notifyAnchorModeState(); });
     connect(&previewController_, &CompositionPreviewController::stateChanged, this,
-            [this] { refreshAnchorModeSwitcher(); });
+            [this] { notifyAnchorModeState(); });
     connect(&session_, &CompositionSession::liveValueChanged, this, [this] {
         if (textEdit_ && !session_.isValueEditing(textEdit_->parameter))
             finishTextEditing(false);
@@ -476,7 +476,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         connect(cryptomatte, &CryptomatteController::changed, this,
                 &ViewerEditor::refreshCryptomattePreview);
         connect(cryptomatte, &CryptomatteController::pickRequested, this,
-                [this] { selectTool(Tool::Cryptomatte); });
+                [this] { session_.tools().setTool(ViewerTool::Cryptomatte); });
     }
     refreshCryptomattePreview();
     connect(&session_, &CompositionSession::snapshotChanged, this,
@@ -834,14 +834,13 @@ QRectF ViewerEditor::statusBarRect() const {
 
 QRectF ViewerEditor::contentRect() const {
     const QRectF bar = statusBarRect();
-    return QRectF(rect()).adjusted(kit::px(kit::Size::ToolColumnWidth), 0.0, 0.0, -bar.height());
+    return QRectF(rect()).adjusted(0.0, 0.0, 0.0, -bar.height());
 }
 
 QRectF ViewerEditor::canvasRect() const {
     const QRectF bar = statusBarRect();
     const qreal padding = kit::px(kit::Size::ViewerWorkPadding);
-    return QRectF(rect()).adjusted(padding + kit::px(kit::Size::ToolColumnWidth), padding, -padding,
-                                   -bar.height() - padding);
+    return QRectF(rect()).adjusted(padding, padding, -padding, -bar.height() - padding);
 }
 
 QColor ViewerEditor::frameBackgroundColor() const {
@@ -936,7 +935,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.fillRect(rect(), kit::color(kit::Color::Canvas));
 
-    // The surround fills EVERY pixel of the content area -- right of the tool column, above the
+    // The surround fills EVERY pixel of the content area -- above the
     // footer -- not just the padded fit rectangle (owner, 2026-09-15: "it should be 100% to
     // viewer content width and height, not partial"). canvasRect() stays the fit target only.
     const QRectF surround = contentRect();
@@ -1276,17 +1275,23 @@ void ViewerEditor::beginPan(const Qt::MouseButton button, const QPointF screenPo
     updatePanCursor();
 }
 
-void ViewerEditor::selectTool(const Tool tool) {
+ViewerTool ViewerEditor::tool() const noexcept { return session_.tools().tool(); }
+
+void ViewerEditor::selectTool(const ViewerTool tool) {
+    // This Viewer confirms what it has in flight even when the tool does not change (Escape on
+    // Select); toolChanged() does the same in every Viewer when it does.
+    toolChanged();
+    session_.tools().setTool(tool);
+    setFocus(Qt::ShortcutFocusReason);
+}
+
+void ViewerEditor::toolChanged() {
     finishTextEditing(true);
     cancelCreation();
     if (dragActive_)
         endDrag(false);
-    tool_ = tool;
-    for (auto* button : toolColumn_->findChildren<QToolButton*>())
-        if (button->property("viewerTool").isValid())
-            button->setChecked(button->property("viewerTool").toInt() == static_cast<int>(tool));
     updatePanCursor();
-    setFocus(Qt::ShortcutFocusReason);
+    notifyAnchorModeState();
     update();
 }
 
@@ -1294,9 +1299,9 @@ void ViewerEditor::updatePanCursor() {
     if (panActive_) {
         setCursor(Qt::ClosedHandCursor);
 
-    } else if (tool_ == Tool::Hand) {
+    } else if (tool() == ViewerTool::Hand) {
         setCursor(Qt::OpenHandCursor);
-    } else if (tool_ == Tool::Zoom || tool_ == Tool::Cryptomatte) {
+    } else if (tool() == ViewerTool::Zoom || tool() == ViewerTool::Cryptomatte) {
         setCursor(Qt::CrossCursor);
     } else {
         unsetCursor();
@@ -1328,14 +1333,14 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     if (!dragActive_ && !panActive_) {
         if (const auto geometry = currentDisplayGeometry();
             geometry.has_value() && (event->button() == Qt::MiddleButton ||
-                                     (event->button() == Qt::LeftButton && tool_ == Tool::Hand))) {
+                                     (event->button() == Qt::LeftButton && tool() == ViewerTool::Hand))) {
             beginPan(event->button(), event->position(), *geometry);
             event->accept();
             return;
         }
     }
 
-    if (!dragActive_ && !panActive_ && tool_ == Tool::Zoom && event->button() == Qt::LeftButton) {
+    if (!dragActive_ && !panActive_ && tool() == ViewerTool::Zoom && event->button() == Qt::LeftButton) {
         if (const auto geometry = currentDisplayGeometry()) {
             transform_ =
                 zoomAboutPoint(transform_, canvasRect(), geometry->extent, geometry->pixelAspect,
@@ -1349,7 +1354,7 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
-    if (event->button() != Qt::LeftButton || tool_ != Tool::Select || dragActive_) {
+    if (event->button() != Qt::LeftButton || tool() != ViewerTool::Select || dragActive_) {
         QWidget::mousePressEvent(event);
         return;
     }
@@ -1448,7 +1453,7 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
     if (!dragActive_) {
-        if (tool_ == Tool::Select) {
+        if (tool() == ViewerTool::Select) {
             const auto mapping = currentMapping();
             const auto hit = mapping ? hitAt(*mapping, event->position()) : ViewerHit{};
             switch (hit.region) {
@@ -1559,47 +1564,23 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
     // document edit. A region-of-interest drag keeps the region drawn so far.
     if (roiGesture_ && event->key() == Qt::Key_Escape) {
         commitRoiGesture(roiGesture_->pointer);
-        selectTool(Tool::Select);
+        selectTool(ViewerTool::Select);
         event->accept();
         return;
     }
     if (textEditKey(event))
         return;
     if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
-        tool_ == Tool::Select && beginTextEditing()) {
+        tool() == ViewerTool::Select && beginTextEditing()) {
         event->accept();
         return;
     }
     if (pathKey(event))
         return;
     if (!dragActive_ && !panActive_ && event->modifiers() == Qt::NoModifier) {
-        std::optional<Tool> next;
-        switch (event->key()) {
-        case Qt::Key_V:
-        case Qt::Key_Escape:
-            next = Tool::Select;
-            break;
-        case Qt::Key_H:
-            next = Tool::Hand;
-            break;
-        case Qt::Key_Z:
-            next = Tool::Zoom;
-            break;
-        case Qt::Key_R:
-            next = Tool::Rectangle;
-            break;
-        case Qt::Key_E:
-            next = Tool::Ellipse;
-            break;
-        case Qt::Key_P:
-            next = Tool::Pen;
-            break;
-        case Qt::Key_T:
-            next = Tool::Text;
-            break;
-        default:
-            break;
-        }
+        // The bare letters are the app-wide tool keys (toolForKey); Escape returns to Select.
+        const auto next =
+            event->key() == Qt::Key_Escape ? std::optional(ViewerTool::Select) : toolForKey(event->key());
         if (next) {
             selectTool(*next);
             event->accept();
@@ -1610,7 +1591,7 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
         // A move, rotate, scale or anchor-point gizmo drag keeps its change as one command; a
         // drag whose frozen mapping no longer holds cannot be confirmed and is cancelled.
         endDrag(mappingStillValid());
-        selectTool(Tool::Select);
+        selectTool(ViewerTool::Select);
         event->accept();
         return;
     }
@@ -1690,10 +1671,6 @@ void ViewerEditor::resizeEvent(QResizeEvent* event) {
         updatePanCursor();
     }
     layoutStatusBar();
-    // The tool column runs the content's full height and collapses what does not fit.
-    if (toolColumn_ != nullptr)
-        toolColumn_->setGeometry(0, 0, toolColumn_->width(),
-                                 height() - static_cast<int>(statusBarRect().height()));
     layoutEmptyState();
     updatePreviewResolution();
     updateGpuResidentPresentation();

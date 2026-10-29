@@ -150,7 +150,7 @@ void ViewerEditor::finishTextEditing(const bool commit) {
             (void)session_.withdrawLastChange();
         else if (session_.undo())
             (void)session_.addTextLayer(created.name, edit->text, created.size, created.color,
-                                        created.position);
+                                        created.position, created.style);
     } else if (session_.isValueEditing(edit->parameter)) {
         if (commit) {
             (void)session_.updateValueEdit(edit->text.toStdString());
@@ -266,7 +266,7 @@ void ViewerEditor::moveTextCaret(const QPointF screenPoint, const bool extend) {
     update();
 }
 void ViewerEditor::mouseDoubleClickEvent(QMouseEvent* event) {
-    if (tool_ == Tool::Select && event->button() == Qt::LeftButton) {
+    if (tool() == ViewerTool::Select && event->button() == Qt::LeftButton) {
         endDrag(false);
         if (const auto mapping = currentMapping()) {
             const auto hit = hitAt(*mapping, event->position());

@@ -913,6 +913,17 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+add_executable(bloom_assets_panel_test assets_panel_tests.cpp)
+target_include_directories(bloom_assets_panel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_assets_panel_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_assets_panel_test)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.assets-panel.dpr${scale} COMMAND bloom_assets_panel_test)
+    set_tests_properties(bloom.ui.assets-panel.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;integration;assets" TIMEOUT 60)
+endforeach()
+
 add_executable(bloom_project_host_empty_test project_host_empty_tests.cpp)
 target_link_libraries(bloom_project_host_empty_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_project_host_empty_test)
@@ -1299,6 +1310,19 @@ bloom_enable_warnings(bloom_dialog_capture)
 add_executable(bloom_popup_capture popup_capture.cpp)
 target_link_libraries(bloom_popup_capture PRIVATE bloom_ui_kit)
 bloom_enable_warnings(bloom_popup_capture)
+
+add_executable(bloom_assets_panel_capture assets_panel_capture.cpp)
+target_include_directories(bloom_assets_panel_capture PRIVATE ..)
+target_link_libraries(bloom_assets_panel_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_assets_panel_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_assets_panel_capture)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.assets_panel_capture.dpr${scale} COMMAND bloom_assets_panel_capture)
+    set_tests_properties(bloom.ui.assets_panel_capture.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;grammar" TIMEOUT 120)
+endforeach()
 
 add_executable(bloom_viewer_chrome_capture viewer_chrome_capture.cpp)
 target_link_libraries(bloom_viewer_chrome_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
@@ -2099,7 +2123,7 @@ bloom_add_test(NAME bloom.ui.path-editing COMMAND bloom_path_editing_test LABELS
 # command each mode commits. BLOOM_SCREENSHOT_DIR also writes review screenshots.
 add_executable(bloom_composition_settings_dialog_test composition_settings_dialog_tests.cpp)
 target_include_directories(bloom_composition_settings_dialog_test PRIVATE ..)
-target_link_libraries(bloom_composition_settings_dialog_test PRIVATE bloom_ui)
+target_link_libraries(bloom_composition_settings_dialog_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_composition_settings_dialog_test)
 bloom_add_test(NAME bloom.ui.composition-settings COMMAND bloom_composition_settings_dialog_test
                LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

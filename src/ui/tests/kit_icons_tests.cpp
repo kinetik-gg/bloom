@@ -80,8 +80,9 @@ void testEveryIconIdRendersAtEverySizeInEveryWeight(Expectations& expectations) 
                         "every id was rendered at all three sizes in all three weights");
     // The four media footer/kind glyphs extend the curated vocabulary by four, and #376's preset
     // Rename (pencil-simple) by one, the Viewer's region-of-interest toggle (selection) by one, and
-    // its Transparency Grid toggle (square-half) by one.
-    expectations.expect(kit::iconIds().size() >= 30 && kit::iconIds().size() <= 80,
+    // its Transparency Grid toggle (square-half) by one, the context bar by nine, and the Assets
+    // redesign by two net (FolderOpen, RamPreview and Search in; the film-strip Sequence id out).
+    expectations.expect(kit::iconIds().size() >= 30 && kit::iconIds().size() <= 96,
                         "the curated vocabulary stays a curated vocabulary");
 }
 
@@ -93,11 +94,35 @@ void testIconIdsAreUniqueAndTotal(Expectations& expectations) {
     expectations.expect(seen.size() == static_cast<int>(kit::iconIds().size()),
                         "no icon id is listed twice");
     // Every declared enumerator has a backing asset: walking the numeric range catches an id added
-    // to the enum but never bound to a file. Images is the last declared enumerator.
-    for (int value = 0; value <= static_cast<int>(kit::IconId::Images); ++value) {
+    // to the enum but never bound to a file. Overflow is the last declared enumerator.
+    for (int value = 0; value <= static_cast<int>(kit::IconId::Overflow); ++value) {
         expectations.expect(seen.contains(value),
                             "icon id " + std::to_string(value) + " has a vendored asset");
     }
+}
+
+// The Assets redesign (lane P): a composition is the film strip everywhere, the cube is gone from
+// the vocabulary, RAM Preview has a glyph of its own, and an open folder and Search are named.
+void testCompositionIsTheFilmStrip(Expectations& expectations) {
+    const auto file = [](const kit::IconId id) {
+        return kit::iconResourcePath(id, kit::IconWeight::Bold);
+    };
+    expectations.expect(file(kit::IconId::Composition).endsWith(QStringLiteral("/film-strip-bold.svg")),
+                        "Composition binds the film strip");
+    expectations.expect(file(kit::IconId::RamPreview).endsWith(QStringLiteral("/lightning-bold.svg")),
+                        "RAM Preview binds its own glyph");
+    expectations.expect(file(kit::IconId::RamPreview) != file(kit::IconId::Composition) &&
+                            file(kit::IconId::RamPreview) != file(kit::IconId::Play),
+                        "RAM Preview never reads as a composition or as Play");
+    expectations.expect(file(kit::IconId::FolderOpen) != file(kit::IconId::Folder),
+                        "an open folder has its own glyph");
+    expectations.expect(file(kit::IconId::Search) == file(kit::IconId::Zoom),
+                        "Search shares Zoom's magnifying glass");
+    for (const kit::IconId id : kit::iconIds())
+        for (const auto weight : {kit::IconWeight::Regular, kit::IconWeight::Fill,
+                                  kit::IconWeight::Bold})
+            expectations.expect(!kit::iconResourcePath(id, weight).contains(QStringLiteral("cube")),
+                                "no id binds the retired cube glyph");
 }
 
 void testTintDiffersByRoleAndByState(Expectations& expectations) {
@@ -300,6 +325,7 @@ int main(int argc, char** argv) {
     testEveryIconIdRendersAtEverySizeInEveryWeight(expectations);
     testIconRolesResolveOneWeightAndOneBox(expectations);
     testIconIdsAreUniqueAndTotal(expectations);
+    testCompositionIsTheFilmStrip(expectations);
     testTintDiffersByRoleAndByState(expectations);
     testTheCacheReturnsTheSamePixmapForTheSameIdentity(expectations);
     testTheQIconEngineIsCachedAndMapsOnToFill(expectations);

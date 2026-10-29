@@ -9,9 +9,9 @@
 #include <bloom/ui/kit/dialog_prompts.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
-#include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/surfaces.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/timeline_ruler.hpp>
@@ -22,7 +22,6 @@
 #include <QLineEdit>
 #include <QSettings>
 #include <QSignalBlocker>
-#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -281,6 +280,9 @@ class ResizeAnchorGrid final : public kit::KAnchorGrid {
     int selected_ = 4;
 };
 
+// The tab the last Composition dialog showed, for this session.
+int gLastCompositionTab = 0;
+
 [[nodiscard]] QString trimmedNumber(const double value, const int decimals) {
     auto text = QString::number(value, 'f', decimals);
     if (text.contains(QLatin1Char('.'))) {
@@ -308,32 +310,37 @@ CompositionSettingsDialog::CompositionSettingsDialog(
         userPresets_ = loadUserCompositionPresets(store);
     }
 
-    // Both sections are forms of this one dialog, so they share ONE label column and every field
-    // starts at the same x.
-    auto [basic, basicForm] = addSection(tr("Basic"), QStringLiteral("compositionSettingsBasic"));
-    buildBasic(*basicForm);
-    auto [advanced, advancedForm] =
-        addSection(tr("Advanced"), QStringLiteral("compositionSettingsAdvanced"));
-    advanced_ = advanced;
+    // Two tabs, After Effects style: Basic holds what most compositions change, Advanced the
+    // rarely changed values. Both are forms of this one dialog, so they share ONE label column and
+    // every field starts at the same x; the dialog is as tall as its taller tab, so switching never
+    // resizes it.
+    tabs_ = new kit::KTabs(this);
+    tabs_->setObjectName(QStringLiteral("compositionSettingsTabs"));
+    tabs_->bar()->setObjectName(QStringLiteral("compositionSettingsTabBar"));
+    tabs_->bar()->setAccessibleName(tr("Composition settings"));
+    const auto page = [this](const QString& name) {
+        auto* widget = new QWidget(this);
+        widget->setObjectName(name);
+        auto* column = new QVBoxLayout(widget);
+        column->setContentsMargins(0, 0, 0, 0);
+        column->setSpacing(kit::px(kit::Spacing::S));
+        auto* form = addForm(*column, *widget);
+        // A shorter tab keeps its rows at the top.
+        column->addStretch(1);
+        return std::pair{widget, form};
+    };
+    auto [basicPage, basicForm] = page(QStringLiteral("compositionSettingsBasic"));
+    auto [advancedPage, advancedForm] = page(QStringLiteral("compositionSettingsAdvanced"));
+    advancedForm_ = advancedForm;
+    buildBasic(*basicForm, *advancedForm);
     buildAdvanced(*advancedForm);
-    advanced_->setCollapsed(true);
-    // Spare height sits below the sections, never inside a closed one.
-    contentLayout()->addStretch(1);
-    // Opening Advanced grows the dialog to fit it; closing it gives the height back.
-    connect(advanced_, &kit::KSection::collapsedChanged, this, [this] {
-        QTimer::singleShot(0, this, [this] {
-            auto* own = this->layout();
-            if (own == nullptr)
-                return;
-            own->activate();
-            // Wrapped reasons and notes make the height depend on the width: fit the dialog's
-            // actual width, never less than its minimum, so no row is squeezed below a control.
-            const int fitted =
-                own->hasHeightForWidth() ? own->totalHeightForWidth(width()) : sizeHint().height();
-            resize(width(), std::max(fitted, minimumSizeHint().height()));
-        });
-    });
-    (void)basic;
+    tabs_->addPage(tr("Basic"), basicPage);
+    tabs_->addPage(tr("Advanced"), advancedPage);
+    contentLayout()->addWidget(tabs_);
+    // The last tab is remembered for the session.
+    tabs_->setCurrentIndex(gLastCompositionTab);
+    connect(tabs_, &kit::KTabs::currentChanged, this,
+            [](const int index) { gLastCompositionTab = index; });
 
     if (workingSpace_ != nullptr) {
         for (const auto& choice : workingSpaces)
@@ -379,7 +386,7 @@ QWidget* CompositionSettingsDialog::fieldFor(const Field field) const {
     case Field::Rate:
         return rateRow_;
     case Field::Start:
-        return startField_;
+        return startRow_;
     case Field::Duration:
         return durationRow_;
     case Field::Safe:
@@ -433,7 +440,7 @@ void CompositionSettingsDialog::confirmDeletePreset() {
         showPresetRefusal(deleteSelectedPreset().value_or(QString{}));
 }
 
-void CompositionSettingsDialog::buildBasic(kit::KForm& form) {
+void CompositionSettingsDialog::buildBasic(kit::KForm& form, kit::KForm& advanced) {
     auto* body = &form;
 
     name_ = new kit::KLineEdit(body);
@@ -508,7 +515,12 @@ void CompositionSettingsDialog::buildBasic(kit::KForm& form) {
     lockAspect_->setToolTip(tr("Lock the frame aspect ratio"));
     lockAspect_->setAccessibleName(tr("Lock Aspect Ratio"));
     auto* times = new kit::KLabel(QStringLiteral("×"), body);
-    sizeRow_ = row(body, {width_, times, height_, lockAspect_});
+    // The frame aspect beside the size, as the summary reads it ("16:9", "2.39:1").
+    auto* aspect = new kit::KLabel(QString{}, body, kit::TypeRole::Value);
+    aspect->setObjectName(QStringLiteral("compositionSettingsAspect"));
+    aspect->setTone(kit::Color::Muted);
+    aspect_ = aspect;
+    sizeRow_ = row(body, {width_, times, height_, lockAspect_, aspect_});
     form.addRow(tr("Size"), sizeRow_)
         ->setObjectName(QStringLiteral("compositionSettingsSizeError"));
     connect(lockAspect_, &QAbstractButton::toggled, this, [this](const bool locked) {
@@ -537,7 +549,7 @@ void CompositionSettingsDialog::buildBasic(kit::KForm& form) {
         pixelAspect_->addItem(
             tr(choice.label),
             QStringLiteral("%1:%2").arg(choice.numerator).arg(choice.denominator));
-    form.addRow(tr("Pixel Aspect Ratio"), pixelAspect_);
+    advanced.addRow(tr("Pixel Aspect Ratio"), pixelAspect_);
     connect(pixelAspect_, &kit::KDropdown::currentIndexChanged, this, [this](int) { refresh(); });
 
     // One frame-rate dropdown; the exact N/D field appears only for Custom.
@@ -553,6 +565,7 @@ void CompositionSettingsDialog::buildBasic(kit::KForm& form) {
     frameRate_->setAccessibleName(tr("Custom frame rate"));
     frameRate_->setPlaceholderText(tr("Exact rate: 24, 29.97 or 30000/1001"));
     frameRate_->setFont(kit::font(kit::TypeRole::Value));
+    frameRate_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     frameRate_->hide();
     rateRow_ = row(body, {ratePresets_, frameRate_}, frameRate_);
     form.addRow(tr("Frame Rate"), rateRow_)
@@ -560,9 +573,6 @@ void CompositionSettingsDialog::buildBasic(kit::KForm& form) {
     dropFrame_ = new kit::KCheckBox(body);
     dropFrame_->setObjectName(QStringLiteral("compositionSettingsDropFrame"));
     dropFrame_->setToolTip(tr("Label time with SMPTE drop-frame timecode; frames are unchanged"));
-    auto* dropFrameLabel = form.addCheckRow(tr("Timecode"), *dropFrame_,
-                                            tr("Drop-frame labels (29.97 and 59.94 fps)"));
-    (void)dropFrameLabel;
     connect(frameRate_, &QLineEdit::textChanged, this, [this](const QString&) {
         // Typing in the Custom field stays Custom; a rate set any other way shows its preset.
         if (!frameRate_->hasFocus())
@@ -602,19 +612,29 @@ void CompositionSettingsDialog::buildBasic(kit::KForm& form) {
     startField_->setObjectName(QStringLiteral("compositionSettingsStart"));
     startField_->setAccessibleName(tr("Start timecode"));
     startField_->setFont(kit::font(kit::TypeRole::Value));
-    form.addRow(tr("Start"), startField_)
+    startField_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    // A time is a number: a number-width field beside its label, not a full-width text field.
+    startField_->setFixedWidth(kit::px(kit::Size::DropdownWidthWide));
+    startRow_ = row(body, {startField_});
+    advanced.addRow(tr("Start"), startRow_)
         ->setObjectName(QStringLiteral("compositionSettingsStartError"));
+    // Drop-frame labels exist only at 29.97 and 59.94 fps, so the row is shown only there.
+    (void)advanced.addCheckRow(tr("Timecode"), *dropFrame_,
+                               tr("Drop-frame labels (29.97 and 59.94 fps)"));
     durationField_ = new kit::KLineEdit(body);
     durationField_->setObjectName(QStringLiteral("compositionSettingsDuration"));
     durationField_->setAccessibleName(tr("Duration"));
     durationField_->setFont(kit::font(kit::TypeRole::Value));
+    // Every number in a dialog reads right-aligned, like a value field.
+    durationField_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     unit_ = new kit::KDropdown(body);
     unit_->setObjectName(QStringLiteral("compositionSettingsDurationUnit"));
     unit_->setAccessibleName(tr("Time unit"));
     unit_->addItem(tr("Frames"), QStringLiteral("frames"));
     unit_->addItem(tr("Seconds"), QStringLiteral("seconds"));
     unit_->addItem(tr("Timecode"), QStringLiteral("timecode"));
-    durationRow_ = row(body, {durationField_, unit_}, durationField_);
+    durationField_->setFixedWidth(kit::px(kit::Size::DropdownWidthWide));
+    durationRow_ = row(body, {durationField_, unit_});
     form.addRow(tr("Duration"), durationRow_)
         ->setObjectName(QStringLiteral("compositionSettingsDurationError"));
     connect(unit_, &kit::KDropdown::currentIndexChanged, this, [this](int) {
@@ -673,10 +693,10 @@ void CompositionSettingsDialog::buildAdvanced(kit::KForm& form) {
     anchorGrid_ = new ResizeAnchorGrid(body);
     anchorGrid_->setAccessibleName(tr("Resize Anchor"));
     anchorGrid_->setToolTip(ResizeAnchorGrid::anchorName(4));
-    auto* anchorRow = row(body, {anchorGrid_});
-    form.addRow(tr("Resize Anchor"), anchorRow);
+    anchorRow_ = row(body, {anchorGrid_});
+    form.addRow(tr("Resize Anchor"), anchorRow_);
     // A new composition has no layers to anchor, so the row exists only in settings mode.
-    form.setRowVisible(anchorRow, mode_ == Mode::Edit);
+    form.setRowVisible(anchorRow_, false);
 
     // The same Action / Title Safe control as the Viewer's Custom Safe Areas dialog.
     safe_ = SafeAreaFields::create(*body, QStringLiteral("compositionSettingsActionSafe"),
@@ -886,6 +906,23 @@ CompositionSettingsDialog::Issue CompositionSettingsDialog::currentIssue() const
     return {};
 }
 
+QString CompositionSettingsDialog::frameAspectText() const {
+    const auto width = static_cast<std::uint64_t>(width_->value());
+    const auto height = static_cast<std::uint64_t>(height_->value());
+    const auto aspect = pixelAspect();
+    if (!aspect || width == 0 || height == 0)
+        return {};
+    // The frame aspect as displayed: storage size times the pixel aspect, reduced.
+    const auto across = width * aspect->numerator();
+    const auto down = height * aspect->denominator();
+    const auto divisor = std::gcd(across, down);
+    const auto a = across / divisor;
+    const auto b = down / divisor;
+    return a <= 32 && b <= 32 ? QStringLiteral("%1:%2").arg(a).arg(b)
+                              : QStringLiteral("%1:1").arg(trimmedNumber(
+                                    static_cast<double>(across) / static_cast<double>(down), 2));
+}
+
 QString CompositionSettingsDialog::summary() const {
     QStringList parts;
     const auto width = static_cast<std::uint64_t>(width_->value());
@@ -893,16 +930,7 @@ QString CompositionSettingsDialog::summary() const {
     parts << QStringLiteral("%1 × %2").arg(width).arg(height);
     const auto aspect = pixelAspect();
     if (aspect && width > 0 && height > 0) {
-        // The frame aspect as displayed: storage size times the pixel aspect, reduced.
-        const auto across = width * aspect->numerator();
-        const auto down = height * aspect->denominator();
-        const auto divisor = std::gcd(across, down);
-        const auto a = across / divisor;
-        const auto b = down / divisor;
-        parts << (a <= 32 && b <= 32
-                      ? QStringLiteral("%1:%2").arg(a).arg(b)
-                      : QStringLiteral("%1:1").arg(trimmedNumber(
-                            static_cast<double>(across) / static_cast<double>(down), 2)));
+        parts << frameAspectText();
         parts << (aspect->numerator() == aspect->denominator()
                       ? tr("Square pixels")
                       : tr("%1 pixel aspect")
@@ -935,7 +963,14 @@ void CompositionSettingsDialog::refresh() {
     if (updating_)
         return;
     const auto rateValue = rate();
-    dropFrame_->setEnabled(rateValue && document::hasDropFrameTimecode(*rateValue));
+    advancedForm_->setRowVisible(dropFrame_,
+                                 rateValue && document::hasDropFrameTimecode(*rateValue));
+    // The resize anchor matters only once the size changes, so only then is it offered.
+    advancedForm_->setRowVisible(
+        anchorRow_, mode_ == Mode::Edit &&
+                        (static_cast<std::uint32_t>(width_->value()) != initial_.format.width() ||
+                         static_cast<std::uint32_t>(height_->value()) != initial_.format.height()));
+    aspect_->setText(frameAspectText());
     // The validator shows the first reason under its own field and holds OK until it clears; a
     // reason inside the closed Advanced section opens it.
     revalidate();

@@ -6,12 +6,14 @@
 
 namespace bloom::ui::kit {
 
-KThumbnail::KThumbnail(QWidget* parent) : QWidget(parent) {
+KThumbnail::KThumbnail(QWidget* parent, const Cell cell) : QWidget(parent), cell_(cell) {
     setFixedSize(sizeHint());
     setAttribute(Qt::WA_OpaquePaintEvent);
 }
 
 QSize KThumbnail::sizeHint() const {
+    if (cell_ == Cell::Strip)
+        return {px(Size::StripThumbnailWidth), px(Size::StripThumbnailHeight)};
     return {px(Size::ImageThumbnail), px(Size::ImageThumbnail)};
 }
 
@@ -22,7 +24,7 @@ void KThumbnail::setPixmap(const QPixmap& pixmap) {
 
 void KThumbnail::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    painter.fillRect(rect(), color(Color::SurfaceSunken));
+    painter.fillRect(rect(), color(cell_ == Cell::Strip ? Color::Field : Color::SurfaceSunken));
     if (pixmap_.isNull())
         return;
     // Logical extent of the picture; a glyph rendered for the device ratio keeps its own size.

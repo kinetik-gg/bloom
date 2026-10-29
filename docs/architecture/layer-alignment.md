@@ -36,7 +36,10 @@ the same evaluator semantics:
 
 - **Interactive.** The Viewer has the bounds of the frame it was delivered,
   `CompositionPreviewController::currentLayerBounds()` (translated to the live layer identities).
-  This is metadata on the delivered frame: no evaluation on the UI thread.
+  This is metadata on the delivered frame: no evaluation on the UI thread. `ui::LayerAlignmentActions`
+  (the context bar's buttons and Composition > Align) uses that frame only while its source revision,
+  composition and time are the session's current ones, and is disabled with a reason otherwise; it
+  orders the selected layers top of the stack first and takes the primary selected layer as the key.
 - **Headless.** `runtime::queryLayerBounds` compiles the snapshot and evaluates the frame with the
   CPU reference evaluator (full resolution, look nodes included, media revalidated), then applies
   the same filter. It is heavy and runs on the calling client thread (script, MCP or CLI), never

@@ -3,22 +3,34 @@
 ## The project panel
 
 Assets works like the After Effects Project panel. One tree holds your folders, compositions and
-imported media, with columns for **Name**, **Type**, **Size**, **Duration**, **Frame Rate**,
-**Tags** and **File Location**. Click a column header to sort by it, and click again to reverse;
-folders always stay at the top. Drag a header divider to resize a column or a header to move it.
-Right-click the header, or open **View > Columns**, to choose which columns show. Bloom remembers
-your columns for the next session.
+imported media. It always fills the panel: **Name** takes whatever width the other columns leave.
+**Name**, **Type** and **Dimensions** (the picture's width × height) show by default; right-click
+the header, or open **View > Columns**, to add **Duration**, **Frame Rate**, **File Size** (the
+bytes the media takes on disk; an image sequence adds up its frames), **Tags** and **File
+Location**. Click a column header to sort by it, and click again to reverse; folders always stay at
+the top. Drag a header divider to resize a column or a header to move it. Bloom remembers your
+columns and their widths for the next session.
 
-Select an item to see it at the top of the panel: a thumbnail (for a composition, a small render
-of its first frame; the item's symbol until a picture is ready), its size, duration and frame
-rate, how its colour is interpreted, its alpha, and how often it is used in compositions. The
-colour space has its plain name, such as **sRGB** or **Linear Rec.709**, and when Bloom had to
-assume the colour of an untagged video the note saying so appears once, at the end of the line.
+Compositions show a film strip; every symbol in the list is drawn in the row's own colour, and only
+a warning (missing media) is coloured. An open folder shows an open folder, and a folder's name is
+followed by how many items it holds, such as **test · 1**. Folders nest by one step per level, so an
+item's symbol sits under its folder's name.
 
-Durations of video, image sequences and compositions read the same way: timecode at the item's
-frame rate followed by the number of frames, such as `0:00:02:00 (48 frames)`. An image sequence
-plays one image per composition frame, so it is timed at the frame rate of the composition you have
-open.
+A slim strip at the top of the panel sums up the selection. With one item it shows a thumbnail
+(for a composition, a small render of its first frame; its symbol until a picture is ready), the
+name with how often it is used, and one line of facts to skim, such as
+`Sequence · 2048 × 858 · 0:00:16:02 · 386 f · 24 fps · sRGB · Straight`. Hover over a fact for the
+whole sentence. The colour space has its plain name, such as **sRGB** or **Linear Rec.709**; when
+Bloom had to assume the colour of an untagged video, or a file is missing, that line turns orange
+and its tooltip says why. With several items selected the strip counts them and their kinds; with
+nothing selected it says what the project holds, such as `7 items · 5 sequences · 2 compositions`.
+Turn **View > Show Info** off to hide the strip.
+
+The Duration column shows timecode at the item's frame rate, such as `0:00:02:00`; hover over it
+for the number of frames and the rate (`0:00:02:00 (48 frames) at 24 fps`). An image sequence plays
+one image per composition frame, so it is timed at the frame rate of the composition you have open.
+A long File Location is shortened in the middle so the file name stays readable; hover over it for
+the whole path.
 
 The **Data** group at the bottom lists authored non-media blocks with their kind, provenance
 summary and digest. Missing media shows a warning symbol instead of its type symbol; hover over it
@@ -106,9 +118,15 @@ multiple assets are selected, Apply replaces the tags on all of them. Tags are s
 sorted, unique set, with up to 64 tags per asset. The **Tags** column (choose it from the header
 menu) lists them; click a Tags cell to filter by its first tag.
 
-Type a name or tag in Search to narrow the list. Use **tag:hero** to match only tags containing
-“hero”; names alone will not match that query. Searches ignore letter case. Matching items keep
-their folders visible, and clearing Search restores your previous folder expansion.
+Search is folded away until you want it. Click the magnifying glass at the right of the panel
+header, or press **Ctrl+F** (**Cmd+F** on macOS) while the panel is active, and a search field opens
+under the header. Type a name or tag to narrow the list; the count beside it says how many items
+match, such as **3 of 7**. Use **tag:hero** to match only tags containing “hero”; names alone will
+not match that query. Searches ignore letter case. Matching items keep their folders visible, and
+clearing Search restores your previous folder expansion. Press **Escape** to clear the text and
+**Escape** again to close the field, or click its ×. While text is filtering the list the field stays
+open, so the list never hides items without saying so. Typing while the list itself has focus jumps
+to the first item whose name starts with what you typed.
 
 ## Adding layers by dragging
 

@@ -50,6 +50,7 @@ target_sources(
         kit/thumbnail.cpp
         kit/title_bar.cpp
         kit/tokens.cpp
+        kit/tab_bar.cpp
         kit/task_dialog.cpp
         kit/typography.cpp
         kit/value_field.cpp
@@ -97,6 +98,7 @@ target_sources(
             include/bloom/ui/kit/text_field.hpp
             include/bloom/ui/kit/value_expression.hpp
             include/bloom/ui/kit/switch_control.hpp
+            include/bloom/ui/kit/tab_bar.hpp
             include/bloom/ui/kit/task_dialog.hpp
             include/bloom/ui/kit/theme.hpp
             include/bloom/ui/kit/title_bar.hpp
@@ -170,13 +172,23 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/clock.svg
         kit/third_party/phosphor-icons/regular/corners-in.svg
         kit/third_party/phosphor-icons/regular/corners-out.svg
-        kit/third_party/phosphor-icons/regular/cube.svg
+        kit/third_party/phosphor-icons/regular/folder-open.svg
+        kit/third_party/phosphor-icons/regular/lightning.svg
         kit/third_party/phosphor-icons/regular/cursor.svg
         kit/third_party/phosphor-icons/regular/diamond.svg
         kit/third_party/phosphor-icons/regular/dots-three-vertical.svg
         kit/third_party/phosphor-icons/regular/eyedropper.svg
         kit/third_party/phosphor-icons/regular/selection.svg
         kit/third_party/phosphor-icons/regular/square-half.svg
+        kit/third_party/phosphor-icons/regular/align-left.svg
+        kit/third_party/phosphor-icons/regular/align-center-horizontal.svg
+        kit/third_party/phosphor-icons/regular/align-right.svg
+        kit/third_party/phosphor-icons/regular/align-top.svg
+        kit/third_party/phosphor-icons/regular/align-center-vertical.svg
+        kit/third_party/phosphor-icons/regular/align-bottom.svg
+        kit/third_party/phosphor-icons/regular/columns.svg
+        kit/third_party/phosphor-icons/regular/rows.svg
+        kit/third_party/phosphor-icons/regular/caret-double-right.svg
         kit/third_party/phosphor-icons/regular/pencil-simple.svg
         kit/third_party/phosphor-icons/regular/eye-slash.svg
         kit/third_party/phosphor-icons/regular/eye.svg
@@ -238,7 +250,8 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/clock-bold.svg
         kit/third_party/phosphor-icons/bold/corners-in-bold.svg
         kit/third_party/phosphor-icons/bold/corners-out-bold.svg
-        kit/third_party/phosphor-icons/bold/cube-bold.svg
+        kit/third_party/phosphor-icons/bold/folder-open-bold.svg
+        kit/third_party/phosphor-icons/bold/lightning-bold.svg
         kit/third_party/phosphor-icons/bold/cursor-bold.svg
         kit/third_party/phosphor-icons/bold/diamond-bold.svg
         kit/third_party/phosphor-icons/bold/dots-three-vertical-bold.svg
@@ -246,6 +259,15 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/eyedropper-bold.svg
         kit/third_party/phosphor-icons/bold/selection-bold.svg
         kit/third_party/phosphor-icons/bold/square-half-bold.svg
+        kit/third_party/phosphor-icons/bold/align-left-bold.svg
+        kit/third_party/phosphor-icons/bold/align-center-horizontal-bold.svg
+        kit/third_party/phosphor-icons/bold/align-right-bold.svg
+        kit/third_party/phosphor-icons/bold/align-top-bold.svg
+        kit/third_party/phosphor-icons/bold/align-center-vertical-bold.svg
+        kit/third_party/phosphor-icons/bold/align-bottom-bold.svg
+        kit/third_party/phosphor-icons/bold/columns-bold.svg
+        kit/third_party/phosphor-icons/bold/rows-bold.svg
+        kit/third_party/phosphor-icons/bold/caret-double-right-bold.svg
         kit/third_party/phosphor-icons/bold/pencil-simple-bold.svg
         kit/third_party/phosphor-icons/bold/eye-slash-bold.svg
         kit/third_party/phosphor-icons/bold/film-slate-bold.svg
@@ -294,7 +316,8 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/clock-fill.svg
         kit/third_party/phosphor-icons/fill/corners-in-fill.svg
         kit/third_party/phosphor-icons/fill/corners-out-fill.svg
-        kit/third_party/phosphor-icons/fill/cube-fill.svg
+        kit/third_party/phosphor-icons/fill/folder-open-fill.svg
+        kit/third_party/phosphor-icons/fill/lightning-fill.svg
         kit/third_party/phosphor-icons/fill/cursor-fill.svg
         kit/third_party/phosphor-icons/fill/diamond-fill.svg
         kit/third_party/phosphor-icons/fill/dots-three-vertical-fill.svg
@@ -302,6 +325,15 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/eyedropper-fill.svg
         kit/third_party/phosphor-icons/fill/selection-fill.svg
         kit/third_party/phosphor-icons/fill/square-half-fill.svg
+        kit/third_party/phosphor-icons/fill/align-left-fill.svg
+        kit/third_party/phosphor-icons/fill/align-center-horizontal-fill.svg
+        kit/third_party/phosphor-icons/fill/align-right-fill.svg
+        kit/third_party/phosphor-icons/fill/align-top-fill.svg
+        kit/third_party/phosphor-icons/fill/align-center-vertical-fill.svg
+        kit/third_party/phosphor-icons/fill/align-bottom-fill.svg
+        kit/third_party/phosphor-icons/fill/columns-fill.svg
+        kit/third_party/phosphor-icons/fill/rows-fill.svg
+        kit/third_party/phosphor-icons/fill/caret-double-right-fill.svg
         kit/third_party/phosphor-icons/fill/pencil-simple-fill.svg
         kit/third_party/phosphor-icons/fill/eye-slash-fill.svg
         kit/third_party/phosphor-icons/fill/film-slate-fill.svg
@@ -438,12 +470,22 @@ target_sources(
         assets_editor_model.cpp
         assets_editor_tree.cpp
         assets_editor_actions.cpp
-        assets_editor_header.cpp
+        assets_editor_summary.cpp
+        assets_editor_columns.cpp
+        assets_editor_delegate.cpp
+        assets_editor_search.cpp
         assets_editor_internal.hpp
         asset_controller.cpp
         asset_data_thumbnail.cpp
         asset_data_thumbnail.hpp
         cryptomatte_controller.cpp
+        context_bar.cpp
+        context_bar_options.cpp
+        context_bar_options.hpp
+        layer_alignment_actions.cpp
+        text_font_choices.cpp
+        text_font_choices.hpp
+        tool_controller.cpp
         composition_thumbnail_controller.cpp
         colour_space_names.hpp
         asset_drop.cpp
@@ -593,6 +635,9 @@ target_sources(
             include/bloom/ui/assets_editor.hpp
             include/bloom/ui/asset_controller.hpp
             include/bloom/ui/cryptomatte_controller.hpp
+            include/bloom/ui/context_bar.hpp
+            include/bloom/ui/layer_alignment_actions.hpp
+            include/bloom/ui/tool_controller.hpp
             include/bloom/ui/composition_thumbnail_controller.hpp
             include/bloom/ui/media_disk_cache_settings.hpp
             include/bloom/ui/node_editor.hpp

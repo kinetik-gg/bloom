@@ -30,16 +30,16 @@ bool ViewerEditor::creationIsClick() const {
 }
 
 document::ShapeKind ViewerEditor::creationKind() const {
-    switch (tool_) {
-    case Tool::Ellipse:
+    switch (tool()) {
+    case ViewerTool::Ellipse:
         return document::ShapeKind::Ellipse;
-    case Tool::Polygon:
+    case ViewerTool::Polygon:
         return document::ShapeKind::Polygon;
-    case Tool::Star:
+    case ViewerTool::Star:
         return document::ShapeKind::Star;
-    case Tool::Line:
+    case ViewerTool::Line:
         return document::ShapeKind::Line;
-    case Tool::Pen:
+    case ViewerTool::Pen:
         return document::ShapeKind::Path;
     default:
         return document::ShapeKind::Rectangle;
@@ -52,7 +52,7 @@ commands::ShapeLayerGeometry ViewerEditor::creationGeometry() const {
     const auto& gesture = *creation_;
     const auto start = toolPoint(gesture.mapping.toComposition(gesture.origin));
     auto delta = toolPoint(gesture.mapping.toComposition(gesture.pointer)) - start;
-    const bool line = tool_ == Tool::Line;
+    const bool line = tool() == ViewerTool::Line;
     if (gesture.modifiers.testFlag(Qt::ShiftModifier)) {
         if (line) {
             const double length = std::hypot(delta.x(), delta.y());
@@ -63,7 +63,7 @@ commands::ShapeLayerGeometry ViewerEditor::creationGeometry() const {
             // The five-point families have unequal natural X/Y bounds. Preserve their
             // circumcircle proportions, not a square that would stretch a regular pentagon.
             const double ratio =
-                (tool_ == Tool::Polygon || tool_ == Tool::Star)
+                (tool() == ViewerTool::Polygon || tool() == ViewerTool::Star)
                     ? (2 * std::cos(std::numbers::pi / 10)) / (1 + std::cos(std::numbers::pi / 5))
                     : 1.0;
             const double height = std::max(std::abs(delta.x()) / ratio, std::abs(delta.y()));
@@ -93,7 +93,7 @@ bool ViewerEditor::creationPress(QMouseEvent* event) {
         event->accept();
         return true;
     }
-    if (tool_ < Tool::Rectangle || tool_ > Tool::Line || event->button() != Qt::LeftButton)
+    if (tool() < ViewerTool::Rectangle || tool() > ViewerTool::Line || event->button() != Qt::LeftButton)
         return false;
     const auto mapping = currentMapping();
     if (!mapping || !contentRect().contains(event->position()))
@@ -148,7 +148,8 @@ bool ViewerEditor::commitCreation() {
                                          : masks::rectanglePath(rect));
         return true;
     }
-    return session_.addShapeLayer(kind, geometry);
+    // The context bar's options for new shapes (ADR 0031).
+    return session_.addShapeLayer(kind, geometry, shapeLayerStyle(session_.tools().newShapeStyle()));
 }
 
 bool ViewerEditor::creationRelease(QMouseEvent* event) {
@@ -161,17 +162,17 @@ bool ViewerEditor::creationRelease(QMouseEvent* event) {
     // A committed object returns the Viewer to Select, so the next click selects or deselects
     // instead of drawing another object. A zero-size gesture keeps the tool.
     if (commitCreation())
-        selectTool(Tool::Select);
+        selectTool(ViewerTool::Select);
     event->accept();
     return true;
 }
 
 void ViewerEditor::paintCreation(QPainter& painter) const {
-    if (tool_ == Tool::Pen || !creation_ || !creationValid() || creationIsClick())
+    if (tool() == ViewerTool::Pen || !creation_ || !creationValid() || creationIsClick())
         return;
     const auto geometry = creationGeometry();
     render::Path path;
-    if (tool_ == Tool::Line) {
+    if (tool() == ViewerTool::Line) {
         if (!geometry.lineStart || !geometry.lineEnd)
             return;
         path = render::linePath({geometry.lineStart->x, geometry.lineStart->y},
@@ -180,14 +181,14 @@ void ViewerEditor::paintCreation(QPainter& painter) const {
         if (!geometry.size || !geometry.position)
             return;
         const auto size = *geometry.size;
-        switch (tool_) {
-        case Tool::Ellipse:
+        switch (tool()) {
+        case ViewerTool::Ellipse:
             path = render::ellipsePath(size.x, size.y);
             break;
-        case Tool::Polygon:
+        case ViewerTool::Polygon:
             path = render::polygonPath(size.x, size.y, 5);
             break;
-        case Tool::Star:
+        case ViewerTool::Star:
             path = render::starPath(size.x, size.y, 5, 0.5);
             break;
         default:
@@ -224,18 +225,25 @@ void ViewerEditor::paintCreation(QPainter& painter) const {
 }
 
 bool ViewerEditor::textPress(QMouseEvent* event) {
-    if (tool_ != Tool::Text || event->button() != Qt::LeftButton)
+    if (tool() != ViewerTool::Text || event->button() != Qt::LeftButton)
         return false;
     const auto mapping = currentMapping();
     if (!mapping || !contentRect().contains(event->position()))
         return true;
     playback_->pause();
-    const ViewerTextEdit::Created created{{},           tr("Text"),
-                                          tr("Text"),   document::kDefaultTextSizePixels,
-                                          {1, 1, 1, 1}, mapping->toComposition(event->position())};
+    // The context bar's options for new text (ADR 0031): size, alignment and font.
+    const auto& style = session_.tools().newTextStyle();
+    const ViewerTextEdit::Created created{
+        {},
+        tr("Text"),
+        tr("Text"),
+        style.size > 0.0 ? style.size : document::kDefaultTextSizePixels,
+        {1, 1, 1, 1},
+        mapping->toComposition(event->position()),
+        {fontAssetForReference(style.fontReference), style.alignment}};
     if (session_.addTextLayer(created.name, created.placeholder, created.size, created.color,
-                              created.position)) {
-        selectTool(Tool::Select);
+                              created.position, created.style)) {
+        selectTool(ViewerTool::Select);
         if (beginTextEditing(std::nullopt, true) && textEdit_) {
             textEdit_->created = created;
             textEdit_->created->revision = session_.snapshot().revision();
@@ -259,7 +267,7 @@ bool ViewerEditor::roiPress(QMouseEvent* event) {
         event->accept();
         return true;
     }
-    if (textEdit_ || tool_ != Tool::Select || event->button() != Qt::LeftButton ||
+    if (textEdit_ || tool() != ViewerTool::Select || event->button() != Qt::LeftButton ||
         !event->modifiers().testFlag(Qt::ControlModifier))
         return false;
     const auto mapping = currentMapping();

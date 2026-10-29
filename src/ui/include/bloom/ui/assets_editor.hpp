@@ -18,13 +18,18 @@ class QTreeWidgetItem;
 namespace bloom::ui {
 
 namespace kit {
-class KLabel;
-class KThumbnail;
+class KIconButton;
 } // namespace kit
+namespace assets {
+class ColumnController;
+class SearchBar;
+class SummaryStrip;
+} // namespace assets
 class CompositionSession;
 
-// The project's assets, compositions and folders as one sortable tree with columns, a search
-// field and a selection header, after the After Effects Project panel (#378).
+// The project's assets, compositions and folders as one sortable tree with columns, after the After
+// Effects Project panel (#378): a compact summary strip of the selection above it, and a search row
+// that opens from the header's Search toggle or Ctrl+F.
 class AssetsEditor final : public QWidget, public EditorChromeProvider {
     Q_OBJECT
 
@@ -50,16 +55,13 @@ class AssetsEditor final : public QWidget, public EditorChromeProvider {
     void showContextMenu(QPoint position);
     void addCommonActions(QMenu& menu);
     void showColumnMenu(QPoint globalPosition);
-    void fillColumnMenu(QMenu& menu);
-    void setColumnVisible(int column, bool visible);
-    void saveHeaderState() const;
-    void restoreHeaderState();
+    void openSearch();
+    void setInfoVisible(bool visible);
     void duplicateComposition(document::CompositionId id);
     void showNewCompositionDialog();
     void newCompositionFromSelection();
     void buildHeaderMenus();
     void buildFooter();
-    void buildSelectionHeader();
     void refreshSelectionHeader();
     void createFolder();
     void beginRename(QTreeWidgetItem* item);
@@ -77,10 +79,10 @@ class AssetsEditor final : public QWidget, public EditorChromeProvider {
     QTreeWidget* tree_ = nullptr;
     QWidget* headerMenuWidget_ = nullptr;
     QWidget* footerWidget_ = nullptr;
-    QWidget* selectionHeader_ = nullptr;
-    kit::KThumbnail* thumbnail_ = nullptr;
-    kit::KLabel* selectionName_ = nullptr;
-    std::vector<kit::KLabel*> selectionFacts_;
+    assets::SummaryStrip* summary_ = nullptr;
+    assets::SearchBar* searchBar_ = nullptr;
+    assets::ColumnController* columns_ = nullptr;
+    kit::KIconButton* searchButton_ = nullptr;
     QMenu* columnMenu_ = nullptr;
     bool rebuilding_ = false;
     QString rowSignature_;

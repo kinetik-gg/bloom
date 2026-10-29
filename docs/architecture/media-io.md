@@ -129,7 +129,8 @@ legacy enumerated `gaps` encoding for compatibility with older project readers. 
 cannot open a newly admitted wider-span sequence, which their own validation already rejected.
 The evaluator decodes only on worker execution; UI paint reads cached thumbnails.
 
-The same C++ decoder, filesystem paths and Qt dialogs/drop events serve Linux, macOS and Windows.
+The same C++ decoder, filesystem paths and Qt dialogs/drop events serve Linux, macOS and Windows;
+the file dialog is always Bloom's own (Qt's widget dialog styled by the kit), never a native one.
 The project-relative locator is preferred. When roots differ or a relative component cannot be
 stored portably, import records an explicit absolute file-URI locator. Ordinary relative locators
 first resolve beside the project, then use their absolute file-URI hint; external locators resolve

@@ -1,4 +1,5 @@
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/tool_controller.hpp>
 
 #include "animation_components.hpp"
 #include "timeline_key_time.hpp"
@@ -360,6 +361,7 @@ CompositionSession::CompositionSession(document::Document& document,
       colorSettings_(document::makeBloomNeutralColorSettingsV1(color::kBloomNeutralV1ConfigDigest)),
       document_(&document), commandStack_(&commandStack), snapshot_(document.snapshot()),
       compositionId_(compositionId) {
+    tools_ = new ToolController(this);
     attachCommandObserver();
     if (composition() == nullptr && !snapshot_.project().compositions().empty()) {
         compositionId_ = lowestCompositionId(snapshot_.project());
@@ -1364,14 +1366,16 @@ CompositionSession::constantStringValue(const document::ParameterId parameterId)
 }
 
 bool CompositionSession::addShapeLayer(const document::ShapeKind kind,
-                                       commands::ShapeLayerGeometry geometry) {
+                                       commands::ShapeLayerGeometry geometry,
+                                       commands::ShapeLayerStyle style) {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!composition()) {
         reportUnavailable(tr("No composition is available for the new shape"));
         return false;
     }
     commands::Transaction transaction("Add Shape Layer", snapshot_.revision());
-    transaction.emplace<commands::AddShapeLayer>(compositionId_, kind, std::move(geometry));
+    transaction.emplace<commands::AddShapeLayer>(compositionId_, kind, std::move(geometry),
+                                                 std::move(style));
     const auto result = commandStack_->execute(std::move(transaction));
     if (!handleResult(result))
         return false;
@@ -1403,7 +1407,8 @@ bool CompositionSession::addSolidLayer(const QString& name, const core::Color4d 
 
 bool CompositionSession::addTextLayer(const QString& name, const QString& text, const double size,
                                       const core::Color4d color,
-                                      const std::optional<document::Vec2d> position) {
+                                      const std::optional<document::Vec2d> position,
+                                      commands::TextLayerStyle style) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* current = composition();
     if (current == nullptr) {
@@ -1413,7 +1418,7 @@ bool CompositionSession::addTextLayer(const QString& name, const QString& text, 
     commands::Transaction transaction("Add Text Layer", snapshot_.revision());
     transaction.emplace<commands::AddTextLayer>(
         compositionId_, name.toStdString(), text.toStdString(),
-        position.value_or(compositionCenter(*current)), 1.0, size, color);
+        position.value_or(compositionCenter(*current)), 1.0, size, color, std::move(style));
     const auto result = commandStack_->execute(std::move(transaction));
     const auto layerId = result.outputId<document::LayerId>(commands::kAddTextLayerLayerOutput);
     if (!handleResult(result)) {

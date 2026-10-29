@@ -1,6 +1,7 @@
 #include "assets_editor_internal.hpp"
 #include "properties_registry_row.hpp"
 #include <QHeaderView>
+#include <QLocale>
 #include <QMetaType>
 #include <QSignalBlocker>
 #include <QTreeWidgetItemIterator>
@@ -66,6 +67,14 @@ QString durationText(const std::uint64_t frames, const document::FrameRate rate)
                ? QObject::tr("%1 (1 frame)").arg(timecodeForFrames(frames, rate))
                : QObject::tr("%1 (%2 frames)").arg(timecodeForFrames(frames, rate)).arg(frames);
 }
+QString durationTooltip(const std::uint64_t frames, const document::FrameRate rate) {
+    return QObject::tr("%1 at %2 fps").arg(durationText(frames, rate), frameRateText(rate));
+}
+QString fileSizeText(const std::uint64_t bytes) {
+    return QLocale().formattedDataSize(static_cast<qint64>(std::min<std::uint64_t>(
+                                           bytes, std::numeric_limits<qint64>::max())),
+                                       1, QLocale::DataSizeSIFormat);
+}
 document::FrameRate sequenceRate(const document::Composition* active) {
     return active != nullptr ? active->format().frameRate()
                              : document::CompositionFormat{}.frameRate();
@@ -123,20 +132,6 @@ kit::IconId assetKindIcon(const document::AssetRecord& asset) {
         return kit::IconId::Image;
     }
 }
-kit::Color assetLabelColor(const document::AssetRecord& asset) {
-    switch (asset.kind) {
-    case document::AssetKind::Sequence:
-        return kit::Color::DataSequence;
-    case document::AssetKind::Audio:
-        return kit::Color::DataAudio;
-    case document::AssetKind::Font:
-        return kit::Color::DataClip;
-    case document::AssetKind::Lut:
-        return kit::Color::Muted;
-    default:
-        return kit::Color::DataImage;
-    }
-}
 } // namespace assets
 
 namespace {
@@ -187,11 +182,18 @@ void setColumn(QTreeWidgetItem* item, const int column, const QString& text,
         item->setData(column, kSortRole, sort);
 }
 
-void setSize(QTreeWidgetItem* item, const std::uint64_t width, const std::uint64_t height) {
+void setDimensions(QTreeWidgetItem* item, const std::uint64_t width, const std::uint64_t height) {
     if (width == 0 || height == 0)
         return;
-    setColumn(item, SizeColumn, QStringLiteral("%1 × %2").arg(width).arg(height),
+    setColumn(item, DimensionsColumn, QStringLiteral("%1 × %2").arg(width).arg(height),
               static_cast<double>(width) * static_cast<double>(height));
+}
+
+// The Duration cell is the timecode; the frame count and rate are its tooltip.
+void setDuration(QTreeWidgetItem* item, const std::uint64_t frames, const document::FrameRate rate,
+                 const double seconds) {
+    setColumn(item, DurationColumn, timecodeForFrames(frames, rate), seconds);
+    item->setToolTip(DurationColumn, durationTooltip(frames, rate));
 }
 
 QString audioDuration(const core::RationalTime duration) {
@@ -270,6 +272,7 @@ QString AssetsEditor::rowSignature() const {
             field(controller->audioDiagnostic(asset.id));
             field(controller->inputColorSpaceDisplay(asset.id));
             field(controller->inputColorSpaceWarning(asset.id));
+            number(controller->fileSize(asset.id).value_or(0));
         }
         signature += QChar(0x1e);
     }
@@ -304,11 +307,12 @@ void AssetsEditor::rebuild() {
     // Rows are sorted once, after they are all in place.
     tree_->setSortingEnabled(false);
     tree_->clear();
-    const auto rowHeight = QSize(0, kit::px(kit::Size::ListRow));
-    const auto finish = [rowHeight](QTreeWidgetItem* item, const kit::IconId icon,
-                                    const kit::Color color) {
-        item->setIcon(NameColumn, kit::icon(icon, kit::IconRole::Chrome, color));
-        item->setSizeHint(NameColumn, rowHeight);
+    // The glyph is monochrome in the row's ink; `tone` is for a glyph that carries state.
+    const auto finish = [](QTreeWidgetItem* item, const kit::IconId icon,
+                           const std::optional<kit::Color> tone = std::nullopt) {
+        item->setData(NameColumn, kGlyphRole, static_cast<int>(icon));
+        if (tone)
+            item->setData(NameColumn, kGlyphToneRole, static_cast<int>(*tone));
         item->setToolTip(TypeColumn, item->toolTip(NameColumn));
     };
     const auto& project = session_.snapshot().project();
@@ -328,18 +332,16 @@ void AssetsEditor::rebuild() {
         item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable |
                        Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled);
         item->setToolTip(NameColumn, tr("Folder %1").arg(QString::fromStdString(folder.name)));
-        finish(item, kit::IconId::Folder, kit::Color::Label3);
+        finish(item, kit::IconId::Folder);
     }
     for (const auto& composition : project.compositions()) {
         auto* item = new AssetItem(parentFor(composition.folder()));
         const auto format = composition.format();
         item->setText(NameColumn, QString::fromStdString(composition.name()));
         setColumn(item, TypeColumn, tr("Composition"));
-        setSize(item, format.width(), format.height());
-        setColumn(
-            item, DurationColumn,
-            durationText(framesAt(composition.duration(), format.frameRate()), format.frameRate()),
-            composition.duration().toSeconds());
+        setDimensions(item, format.width(), format.height());
+        setDuration(item, framesAt(composition.duration(), format.frameRate()),
+                    format.frameRate(), composition.duration().toSeconds());
         setColumn(item, FrameRateColumn, frameRateText(format.frameRate()),
                   static_cast<double>(format.frameRate().numerator()) /
                       format.frameRate().denominator());
@@ -348,7 +350,7 @@ void AssetsEditor::rebuild() {
         item->setToolTip(NameColumn, tr("Composition %1").arg(composition.id().value()));
         item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable |
                        Qt::ItemIsDragEnabled);
-        finish(item, kit::IconId::Composition, kit::Color::DataComposition);
+        finish(item, kit::IconId::Composition);
     }
     const auto* controller = session_.assetController();
     for (const auto& asset : project.assets()) {
@@ -361,13 +363,15 @@ void AssetsEditor::rebuild() {
         item->setText(NameColumn, QString::fromStdString(asset.name));
         setColumn(item, TypeColumn, assetKindText(asset));
         if (!lut && !font && !audio)
-            setSize(item, asset.width, asset.height);
+            setDimensions(item, asset.width, asset.height);
         if (video) {
             const auto rate = videoFrameRate(asset);
-            setColumn(item, DurationColumn,
-                      rate ? durationText(framesAt(asset.duration, *rate), *rate)
-                           : audioDuration(asset.duration),
-                      asset.duration.toSeconds());
+            if (rate)
+                setDuration(item, framesAt(asset.duration, *rate), *rate,
+                            asset.duration.toSeconds());
+            else
+                setColumn(item, DurationColumn, audioDuration(asset.duration),
+                          asset.duration.toSeconds());
             if (rate)
                 setColumn(item, FrameRateColumn, frameRateText(*rate),
                           static_cast<double>(rate->numerator()) / rate->denominator());
@@ -377,8 +381,13 @@ void AssetsEditor::rebuild() {
         else if (sequence) {
             const auto rate = sequenceRate(session_.composition());
             const auto frames = sequenceFrames(asset);
-            setColumn(item, DurationColumn, durationText(frames, rate),
-                      static_cast<double>(frames) * rate.denominator() / rate.numerator());
+            setDuration(item, frames, rate,
+                        static_cast<double>(frames) * rate.denominator() / rate.numerator());
+        }
+        if (const auto bytes = controller ? controller->fileSize(asset.id) : std::nullopt) {
+            setColumn(item, FileSizeColumn, fileSizeText(*bytes), static_cast<double>(*bytes));
+            item->setToolTip(FileSizeColumn, tr("%1 bytes on disk").arg(QLocale().toString(
+                                                 static_cast<qulonglong>(*bytes))));
         }
         QStringList tags;
         for (const auto& tag : asset.tags)
@@ -447,10 +456,12 @@ void AssetsEditor::rebuild() {
                flagged      ? kit::IconId::Warning
                : colourNote ? kit::IconId::Info
                             : assetKindIcon(asset),
-               flagged      ? kit::Color::Warn
-               : colourNote ? kit::Color::Muted
-                            : assetLabelColor(asset));
+               flagged ? std::optional(kit::Color::Warn) : std::nullopt);
     }
+    // A folder's name carries how many items it holds, muted.
+    for (const auto& [id, folder] : folders)
+        if (folder->childCount() > 0)
+            folder->setData(NameColumn, kSecondaryTextRole, QString::number(folder->childCount()));
     const bool hasDataBlocks =
         std::ranges::any_of(project.typedDataBlocks(), [](const auto& block) {
             return !document::isMediaDataBlockKind(block.kind);
@@ -461,7 +472,8 @@ void AssetsEditor::rebuild() {
         setColumn(dataRoot, TypeColumn, tr("Inspector"));
         dataRoot->setData(0, kDataBlockRole, true);
         dataRoot->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-        finish(dataRoot, kit::IconId::Stack, kit::Color::Muted);
+        dataRoot->setData(NameColumn, kSecondaryRowRole, true);
+        finish(dataRoot, kit::IconId::Stack);
         for (const auto& block : project.typedDataBlocks()) {
             if (document::isMediaDataBlockKind(block.kind))
                 continue;
@@ -485,11 +497,14 @@ void AssetsEditor::rebuild() {
                          QString::fromStdString(block.provenance.createdAt),
                          QString::fromStdString(std::string(digest.data(), digest.size()))));
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-            finish(item, kit::IconId::Info, kit::Color::Muted);
+            item->setData(NameColumn, kSecondaryRowRole, true);
+            finish(item, kit::IconId::Info);
         }
     }
     tree_->setSortingEnabled(true);
     applyFilter(search_->text());
+    if (columns_ != nullptr)
+        columns_->fit();
     if (selected.empty())
         updateSelection();
     else {
@@ -573,6 +588,8 @@ void AssetsEditor::applyFilter(const QString& text) {
     const QSignalBlocker blocker(tree_);
     const bool wasRebuilding = rebuilding_;
     rebuilding_ = true;
+    int matches = 0;
+    int total = 0;
     // Children before parents, so a folder knows whether anything inside it matched.
     for (auto it = items.rbegin(); it != items.rend(); ++it) {
         auto* item = *it;
@@ -586,6 +603,11 @@ void AssetsEditor::applyFilter(const QString& text) {
         for (int index = 0; index < item->childCount(); ++index)
             childMatches = childMatches || !item->child(index)->isHidden();
         item->setHidden(!(textMatches || tagMatches) && !childMatches);
+        // The count names the items a filter keeps: assets and compositions, not their folders.
+        if (!folderId(item) && !isData(item)) {
+            ++total;
+            matches += textMatches || tagMatches ? 1 : 0;
+        }
         if (item->isHidden())
             item->setSelected(false);
         if (item->childCount() > 0 || folderId(item)) {
@@ -596,5 +618,7 @@ void AssetsEditor::applyFilter(const QString& text) {
         }
     }
     rebuilding_ = wasRebuilding;
+    if (searchBar_ != nullptr)
+        searchBar_->setMatches(matches, total);
 }
 } // namespace bloom::ui

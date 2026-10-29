@@ -41,11 +41,9 @@ struct Control {
     bool cell = false;
 };
 
-// A dense strip's fixed-pitch cell: a timeline layer switch, a tool choice, the tool column's More.
-bool isCell(const QWidget& widget) {
-    return widget.property("layerSwitch").toBool() || widget.property("toolChoice").toBool() ||
-           qobject_cast<const kit::KToolColumn*>(widget.parentWidget()) != nullptr;
-}
+// A dense strip's fixed-pitch cell: a timeline layer switch. The tools are ordinary Control-sized
+// toggles in the context bar (ADR 0031).
+bool isCell(const QWidget& widget) { return widget.property("layerSwitch").toBool(); }
 
 // The kit controls this rule governs, and which recipe each paints. A plate-less glyph (a
 // disclosure caret, a column heading) and a menu title have no body to line up.
@@ -53,9 +51,6 @@ std::optional<Recipe> recipeOf(QWidget& widget) {
     if (qobject_cast<kit::KValueField*>(&widget) || widget.objectName() == "viewerTimeReadout" ||
         (qobject_cast<QLineEdit*>(&widget) && widget.property("kitControl").toBool()))
         return Recipe::Field;
-    // The tool column keeps its plate-less choices (a recorded exception): measured, not sampled.
-    if (widget.property("toolChoice").toBool())
-        return Recipe::None;
     if (auto* button = qobject_cast<kit::KIconButton*>(&widget)) {
         const bool heading =
             button->parentWidget() && button->parentWidget()->property("headerRow").toBool();
@@ -209,6 +204,19 @@ int run(int argc, char** argv) {
         auto* header = panel->findChild<QWidget*>("editorHeader");
         if (header == nullptr || controlsIn(*header).empty())
             fail(label + ": the header has no controls to measure");
+    }
+    // ADR 0031: the context bar under the menu bar holds the same one control look and height.
+    if (auto* bar = fixture.window->findChild<QWidget*>("contextBar"); bar != nullptr) {
+        QImage barImage = image.copy(QRect(
+            (QPointF(bar->mapTo(fixture.window.get(), QPoint())) * image.devicePixelRatio())
+                .toPoint(),
+            bar->size() * image.devicePixelRatio()));
+        barImage.setDevicePixelRatio(image.devicePixelRatio());
+        checkRoot(*bar, QStringLiteral("context bar"), &barImage, counts);
+        if (controlsIn(*bar).empty())
+            fail(QStringLiteral("context bar: no controls to measure"));
+    } else {
+        fail(QStringLiteral("the window has a context bar"));
     }
     // Node cards: every row is its own proxied widget, drawn at the canvas zoom.
     int cardRows = 0;

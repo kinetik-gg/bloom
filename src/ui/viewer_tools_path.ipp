@@ -69,7 +69,7 @@ bool ViewerEditor::beginPenContinuation(const EditablePath& target, const std::s
 }
 
 bool ViewerEditor::pathPress(QMouseEvent* event) {
-    if (event->button() != Qt::LeftButton || tool_ != Tool::Pen)
+    if (event->button() != Qt::LeftButton || tool() != ViewerTool::Pen)
         return false;
     const auto mapping = currentMapping();
     if (!mapping || !contentRect().contains(event->position()))
@@ -87,7 +87,7 @@ bool ViewerEditor::pathPress(QMouseEvent* event) {
         QLineF(screen.map(toolPoint(penPath_.anchors.front().point)), event->position()).length() <=
             kit::px(kit::Size::GizmoHandle)) {
         if (finishPen(true))
-            selectTool(Tool::Select);
+            selectTool(ViewerTool::Select);
     } else if (penPath_.anchors.size() < document::kMaximumPathAnchors) {
         penPath_.anchors.push_back({penPoint(*mapping, event->position()), {}, {}});
         creation_->origin = event->position();
@@ -101,7 +101,7 @@ bool ViewerEditor::pathPress(QMouseEvent* event) {
 }
 
 bool ViewerEditor::pathMove(QMouseEvent* event) {
-    if (tool_ != Tool::Pen || !creation_)
+    if (tool() != ViewerTool::Pen || !creation_)
         return false;
     if (!creationValid()) {
         cancelCreation();
@@ -121,7 +121,7 @@ bool ViewerEditor::pathMove(QMouseEvent* event) {
 }
 
 bool ViewerEditor::pathRelease(QMouseEvent* event) {
-    if (event->button() != Qt::LeftButton || tool_ != Tool::Pen || !creation_)
+    if (event->button() != Qt::LeftButton || tool() != ViewerTool::Pen || !creation_)
         return false;
     (void)pathMove(event);
     penDown_ = false;
@@ -158,7 +158,8 @@ bool ViewerEditor::finishPen(bool closed) {
     geometry.path = penPath_;
     geometry.position = toolValue(toolOutline(toolRenderPath(penPath_)).boundingRect().center());
     cancelCreation();
-    return session_.addShapeLayer(document::ShapeKind::Path, std::move(geometry));
+    return session_.addShapeLayer(document::ShapeKind::Path, std::move(geometry),
+                                  shapeLayerStyle(session_.tools().newShapeStyle()));
 }
 
 bool ViewerEditor::pathKey(QKeyEvent* event) {
@@ -168,19 +169,19 @@ bool ViewerEditor::pathKey(QKeyEvent* event) {
     if (event->key() == Qt::Key_Escape && (creation_ || anchorGesture_)) {
         commitAnchorGesture();
         if (creation_) {
-            if (tool_ == Tool::Pen)
+            if (tool() == ViewerTool::Pen)
                 (void)finishPen(false);
             else
                 (void)commitCreation();
         }
-        selectTool(Tool::Select);
+        selectTool(ViewerTool::Select);
         event->accept();
         return true;
     }
-    if (tool_ == Tool::Pen && creation_ &&
+    if (tool() == ViewerTool::Pen && creation_ &&
         (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
         if (finishPen(false))
-            selectTool(Tool::Select);
+            selectTool(ViewerTool::Select);
         event->accept();
         return true;
     }
@@ -189,7 +190,7 @@ bool ViewerEditor::pathKey(QKeyEvent* event) {
 
 void ViewerEditor::paintPathTools(QPainter& painter) const {
     const auto mapping = currentMapping();
-    if (!mapping || tool_ != Tool::Pen || !creation_ || !creationValid())
+    if (!mapping || tool() != ViewerTool::Pen || !creation_ || !creationValid())
         return;
     const auto transform = penScreenTransform(*mapping);
     painter.save();

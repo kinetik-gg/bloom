@@ -53,6 +53,7 @@ struct Vec2d;
 namespace bloom::ui {
 class AssetController;
 class CryptomatteController;
+class ToolController;
 class CompositionThumbnailController;
 
 // A selected keyframe (issue #84; docs/architecture/animation-and-time.md: "Keyframe selection
@@ -204,6 +205,9 @@ class CompositionSession final : public QObject {
     [[nodiscard]] CryptomatteController* cryptomatteController() const noexcept {
         return cryptomatteController_;
     }
+    // ADR 0031: the one app-wide active tool and the tool options, shared by every Viewer and the
+    // context bar of this session. Session/UI state only; never project truth.
+    [[nodiscard]] ToolController& tools() const noexcept { return *tools_; }
     void setCompositionThumbnails(CompositionThumbnailController* controller) noexcept {
         compositionThumbnails_ = controller;
     }
@@ -318,7 +322,8 @@ class CompositionSession final : public QObject {
     blendModeForLayer(document::LayerId layerId) const noexcept;
 
     [[nodiscard]] bool addShapeLayer(document::ShapeKind kind,
-                                     commands::ShapeLayerGeometry geometry = {});
+                                     commands::ShapeLayerGeometry geometry = {},
+                                     commands::ShapeLayerStyle style = {});
     [[nodiscard]] bool addSolidLayer(const QString& name, core::Color4d color);
     // ADR 0028 authoring. Adds a mask whose path is in the layer's CONTENT space and selects it.
     [[nodiscard]] bool addLayerMask(document::LayerId layerId, document::PathValue path,
@@ -337,7 +342,8 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool addTextLayer(const QString& name, const QString& text,
                                     double size = document::kDefaultTextSizePixels,
                                     core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0},
-                                    std::optional<document::Vec2d> position = {});
+                                    std::optional<document::Vec2d> position = {},
+                                    commands::TextLayerStyle style = {});
     [[nodiscard]] bool setSelectedPosition(double x, double y, AuthoringTarget target = {});
     // The rest of the Layer Output transform. Anchor and scale are authored exactly as position is
     // (full-resolution composition pixels for the anchor, a unitless factor for the scale),
@@ -746,6 +752,7 @@ class CompositionSession final : public QObject {
     AssetController* assetController_ = nullptr;
     CryptomatteController* cryptomatteController_ = nullptr;
     CompositionThumbnailController* compositionThumbnails_ = nullptr;
+    ToolController* tools_ = nullptr;
 
     void attachCommandObserver();
     [[nodiscard]] bool execute(commands::Transaction&& transaction);

@@ -141,7 +141,7 @@ rules only for widgets whose look comes from a `[bloomKeyboardFocus]` sheet rule
 ### Controls, editor surfaces and layout
 
 The [UI grammar](ui-grammar.md) owns the complete control vocabulary, spacing and size grid,
-shared rows, declared headers/footers, viewer tool column, node cards, status line and default
+shared rows, declared headers/footers, the context bar, node cards, status line and default
 workspace proportions. Implement these through the kit rather than duplicating component
 measurements here. The [workspace layout contract](../architecture/workspace-layout.md) owns
 persistence and migration. The existing application menu bar and native window frame remain.
@@ -335,8 +335,9 @@ Phosphor Icons is Bloom's default interface icon family.
   comes from the host control's metrics, so it takes only the role's weight
   (`iconWeight(IconRole::Chrome)`) and keeps that box.
 - Add another upstream weight only when a role needs it. The vendored subset carries `regular`,
-  `fill` and `bold` complete over every Phosphor-backed id (70 `IconId`s: 64 vendored glyphs per
-  weight, two ids sharing one glyph, and four shape-tool glyphs Bloom draws itself), because a role
+  `fill` and `bold` complete over every Phosphor-backed id (82 `IconId`s: 76 vendored glyphs per
+  weight, two ids that reuse another's glyph -- Subtract and Search -- and four shape-tool glyphs
+  Bloom draws itself), because a role
   that asks for a weight must find it for every icon: a missing file renders as a silent blank,
   not an error.
 - Access icons through a typed, semantic C++ API such as `IconId::SplitHorizontal`. Product code
@@ -349,6 +350,16 @@ Phosphor Icons is Bloom's default interface icon family.
 - An icon does not replace an accessible name. Icon-only controls require a tooltip and accessible
   text; destructive or ambiguous actions should include a visible label where space permits.
 - Do not communicate an important state through icon color alone.
+- **Icons are monochrome; colour only for state or user labels.** A type or kind glyph -- an Assets
+  row, a node card, a Properties header, a menu row -- takes its row's or control's own ink
+  (Foreground; Muted where the row is secondary; OnAccent on a selected row), never a per-kind hue.
+  Colour stays where it carries state (Warn for a missing or unshowable source, Error, the Accent of
+  a selection or toggle) and where it is the artist's data (layer and bar label colours, socket
+  kinds). The Timeline clip bars' data-type colours are bar fills, not icons, and keep their table
+  below.
+- A composition is the `film-strip` glyph wherever one is meant (an Assets row, New Composition,
+  the Viewer's composition picker); an image sequence is the `images` stack; RAM Preview has its own
+  `lightning` glyph (the pinned Phosphor release has no memory-chip glyph).
 
 The complete Phosphor catalog is not embedded in Bloom's main executable by default. If a concrete
 workflow later needs the entire catalog, package it as a pinned external Qt `.rcc` resource and load

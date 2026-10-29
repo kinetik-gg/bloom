@@ -1,4 +1,4 @@
-// The Viewer chrome's shared helpers, the footer's state updates, the tool column and the
+// The Viewer chrome's shared helpers, the footer's state updates, and the
 // no-composition invitation. The rows themselves are built in viewer_editor_chrome.cpp.
 #include "composition_editor_support.hpp"
 #include "viewer_editor_internal.hpp"
@@ -366,58 +366,6 @@ void ViewerEditor::refreshZoomDropdown() {
     zoomDropdown_->update();
 }
 
-// ---- Tool column -------------------------------------------------------------------------------
-
-void ViewerEditor::buildToolColumn() {
-    auto* tools = new kit::KToolColumn(this);
-    toolColumn_ = tools;
-    tools->setObjectName("viewerToolColumn");
-    // Each tooltip is the tool's name and shortcut, then how to use it.
-    const auto addTool = [this, tools](Tool tool, kit::IconId icon, const QString& tip,
-                                       const char* name) {
-        auto* button = tools->addTool(icon, tip, name);
-        button->setProperty("viewerTool", static_cast<int>(tool));
-        connect(button, &QToolButton::clicked, this, [this, tool] { selectTool(tool); });
-        button->setChecked(tool == Tool::Select);
-    };
-    // Navigation.
-    addTool(Tool::Select, kit::IconId::Select, tr("Select (V)\nSelect and move layers"),
-            "viewerSelectTool");
-    addTool(Tool::Hand, kit::IconId::Pan, tr("Hand (H)\nDrag to pan"), "viewerHandTool");
-    addTool(Tool::Zoom, kit::IconId::Zoom,
-            tr("Zoom (Z)\nClick to zoom in; Alt-click to zoom out"), "viewerZoomTool");
-    tools->addSeparator();
-    // Creation.
-    addTool(Tool::Text, kit::IconId::Text, tr("Text (T)\nClick to place and type on the canvas"),
-            "viewerTextTool");
-    addTool(Tool::Rectangle, kit::IconId::Rectangle,
-            tr("Rectangle (R)\nDrag; Shift constrains; Alt draws from centre"),
-            "viewerRectangleTool");
-    addTool(Tool::Ellipse, kit::IconId::Ellipse,
-            tr("Ellipse (E)\nDrag; Shift makes a circle; Alt draws from centre"),
-            "viewerEllipseTool");
-    addTool(Tool::Polygon, kit::IconId::Polygon,
-            tr("Polygon\nDrag a five-sided polygon; Shift constrains; Alt draws from centre"),
-            "viewerPolygonTool");
-    addTool(Tool::Star, kit::IconId::Star,
-            tr("Star\nDrag a five-point star; Shift constrains; Alt draws from centre"),
-            "viewerStarTool");
-    addTool(Tool::Line, kit::IconId::Line,
-            tr("Line\nDrag; Shift snaps to 45 degrees; Alt draws from centre"), "viewerLineTool");
-    tools->addSeparator();
-    addTool(Tool::Pen, kit::IconId::Pen,
-            tr("Pen (P)\nClick anchors; drag handles; click first to close; Enter or Escape "
-               "finishes. On a selected path: click a segment to add a point, an anchor to "
-               "remove it, an open end to continue"),
-            "viewerPenTool");
-    tools->addSeparator();
-    addTool(Tool::Cryptomatte, kit::IconId::Eyedropper,
-            tr("Cryptomatte\nOn a selected Cryptomatte, click or Shift-click adds the object "
-               "under the cursor; Alt- or Ctrl-click removes it"),
-            "viewerCryptomatteTool");
-    tools->move(0, 0);
-}
-
 // ---- The no-composition invitation -------------------------------------------------------------
 
 void ViewerEditor::buildEmptyState() {
@@ -437,7 +385,7 @@ void ViewerEditor::buildEmptyState() {
     hint->setTone(kit::Color::Muted);
     hint->setWordWrap(true);
     hint->setAlignment(Qt::AlignHCenter);
-    auto* button = new kit::KButton(tr("New Composition…"), emptyState_);
+    auto* button = new kit::KButton(kit::IconId::Composition, tr("New Composition…"), emptyState_);
     button->setObjectName(QStringLiteral("viewerNewCompositionButton"));
     button->setVariant(kit::KButton::Variant::Primary);
     button->setToolTip(tr("New Composition… (Ctrl+Alt+N)"));
