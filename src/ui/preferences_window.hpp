@@ -5,8 +5,11 @@
 #include <bloom/ui/kit/dialog.hpp>
 
 #include <functional>
+#include <initializer_list>
 #include <vector>
 
+class QListWidget;
+class QScrollArea;
 class QStackedWidget;
 class QVBoxLayout;
 class QWidget;
@@ -22,7 +25,7 @@ class AccelerationStatusProvider;
 namespace kit {
 class KButton;
 class KDropdown;
-class KRadioGroup;
+class KSection;
 class KSwitch;
 class KValueField;
 } // namespace kit
@@ -80,6 +83,15 @@ class PreferencesWindow final : public kit::KDialog {
     QWidget* buildPerformancePage();
     [[nodiscard]] QWidget* makeScrollPage();
 
+    // One Properties row (KPropertyRow) with its label in the label column all pages share.
+    QWidget* addPreferencesRow(QVBoxLayout* layout, QWidget* parent, const QString& label,
+                               std::initializer_list<QWidget*> controls);
+    // A value whose zero means Automatic: an Automatic / Custom mode and the value with its unit.
+    kit::KValueField* addAutomaticRow(QVBoxLayout* layout, QWidget* parent,
+                                      const QString& objectName, const QString& label,
+                                      double maximum, int decimals, const QString& unit,
+                                      double customDefault);
+
     // Row helpers. Each returns the control it built and registers a refresh callback that
     // re-reads the draft with signals blocked.
     kit::KValueField* addValueFieldRow(QVBoxLayout* layout, QWidget* parent,
@@ -93,6 +105,14 @@ class PreferencesWindow final : public kit::KDialog {
 
     void refreshControls();
     void refreshMemorySummary();
+    void fitPagesToContent();
+    // A page is a Properties panel body: its margins and section spacing, on Background, scrolling.
+    static void setPageMargins(QVBoxLayout& layout);
+    [[nodiscard]] static QScrollArea* wrapPage(QWidget* content, const QString& objectName);
+    // Wires a section's Reset to put back the defaults `assign` copies from the second argument.
+    void resetSection(
+        kit::KSection& section,
+        std::function<void(ApplicationPreferences&, const ApplicationPreferences&)> assign);
     void commitPreferences();
     void updateApplyEnabled();
     // Restore Defaults asks first; the answer arrives asynchronously.
@@ -110,11 +130,14 @@ class PreferencesWindow final : public kit::KDialog {
     const runtime::MemoryBudgetLedger& memoryLedger_;
     QLabel* memorySummary_ = nullptr;
     QStackedWidget* pages_ = nullptr;
-    kit::KRadioGroup* categoryRail_ = nullptr;
+    bool fitted_ = false; // the first show sizes the window to its content
+    QListWidget* categoryRail_ = nullptr;
     kit::KButton* applyButton_ = nullptr;
     QWidget* cacheDirectoryField_ = nullptr;
     QString cacheDirectoryIssue_;
     std::vector<std::function<void()>> refreshCallbacks_;
+    // Run after the refresh callbacks: mode controls that follow a refreshed value.
+    std::vector<std::function<void()>> syncCallbacks_;
 
     QLabel* performanceBackendValue_ = nullptr;
     QLabel* performanceStateValue_ = nullptr;

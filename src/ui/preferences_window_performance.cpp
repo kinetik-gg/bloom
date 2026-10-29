@@ -19,22 +19,13 @@
 namespace bloom::ui {
 namespace {
 
-// Local copies of the two tiny page helpers. The performance page is its own owning translation
-// unit so the dialog construction file stays under the size budget; these are presentation-only
-// and duplicate no behavior.
+// A local copy of the tiny value-label helper. The performance page is its own owning translation
+// unit so the dialog construction file stays under the size budget; it is presentation-only
+// and duplicates no behavior.
 [[nodiscard]] QLabel* makeValueLabel(const QString& text, QWidget* parent) {
     auto* label = properties::makeReadOnlyValueLabel(kit::TypeRole::Value, parent);
     label->setText(text);
     return label;
-}
-
-[[nodiscard]] QScrollArea* wrapInScroll(QWidget* content, const QString& objectName) {
-    auto* scroll = new QScrollArea;
-    scroll->setObjectName(objectName);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setWidget(content);
-    return scroll;
 }
 
 constexpr int kPerformanceRefreshIntervalMs = 250;
@@ -44,13 +35,14 @@ constexpr int kPerformanceRefreshIntervalMs = 250;
 QWidget* PreferencesWindow::buildPerformancePage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
-                               kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
-    layout->setSpacing(kit::px(kit::Spacing::S));
+    setPageMargins(*layout);
 
     auto* section = properties::makeSection(
         layout, content, QStringLiteral("preferencesPerformanceSection"), tr("Acceleration"),
         QStringLiteral("preferences/sections/performance/collapsed"));
+    section->setBodyPadding(kit::px(kit::Spacing::XS));
+    // Read-only: nothing to reset.
+    section->setResetEnabled(false);
     auto* rows = section->bodyLayout();
 
     // Each row is built once and updated in place; the Device/Driver rows exist from the start and
@@ -61,8 +53,7 @@ QWidget* PreferencesWindow::buildPerformancePage() {
                                   const QString& label, QWidget** const rowOut) -> QLabel* {
         auto* valueLabel = makeValueLabel(QString{}, content);
         valueLabel->setObjectName(valueObjectName);
-        QWidget* const row = properties::addRow(
-            rows, content, properties::makeRowLabel(label, content), nullptr, valueLabel);
+        QWidget* const row = addPreferencesRow(rows, content, label, {valueLabel});
         row->setObjectName(rowObjectName);
         if (rowOut != nullptr) {
             *rowOut = row;
@@ -96,7 +87,7 @@ QWidget* PreferencesWindow::buildPerformancePage() {
     connect(performanceRefreshTimer_, &QTimer::timeout, this, [this] { refreshPerformancePage(); });
 
     refreshPerformancePage();
-    return wrapInScroll(content, QStringLiteral("preferencesPerformancePage"));
+    return wrapPage(content, QStringLiteral("preferencesPerformancePage"));
 }
 
 void PreferencesWindow::refreshPerformancePage() {
@@ -123,7 +114,8 @@ void PreferencesWindow::refreshPerformancePage() {
 }
 
 void PreferencesWindow::showEvent(QShowEvent* event) {
-    QDialog::showEvent(event);
+    fitPagesToContent();
+    kit::KDialog::showEvent(event);
     if (performanceRefreshTimer_ == nullptr) {
         return;
     }
@@ -135,7 +127,7 @@ void PreferencesWindow::hideEvent(QHideEvent* event) {
     if (performanceRefreshTimer_ != nullptr) {
         performanceRefreshTimer_->stop();
     }
-    QDialog::hideEvent(event);
+    kit::KDialog::hideEvent(event);
 }
 
 } // namespace bloom::ui

@@ -8,29 +8,36 @@ Bloom keeps two kinds of saved choice apart:
   under **File → Project Settings…**.
 
 Open **Edit → Preferences…** (⌘, on macOS, where the operating system moves it into the Bloom
-application menu). The window uses **OK**, **Cancel**, **Apply**, and **Restore Defaults**. Apply
-saves without closing; Cancel discards anything not applied. Restore Defaults asks first (Cancel is
-the default answer) and only resets the window's values; nothing is saved until OK or Apply. A cache
-folder that is a file, or one Bloom cannot write or create, is refused under the field and OK waits.
+application menu). Choose a category in the sidebar on the left (the arrow keys, Home, End and
+typing a category's name move through it); Bloom shows the last category you used again for the
+rest of the session. The window uses **OK**, **Cancel**, and **Apply**. Apply saves without
+closing; Cancel discards anything not applied. **Restore Defaults** is in the menu button at the
+foot of the sidebar: it asks first (Cancel is the default answer) and only resets the window's
+values; nothing is saved until OK or Apply. Each section's reset button returns just that section to
+its defaults, again only in the window. A cache folder that is a file, or one Bloom cannot write
+or create, is refused under the field and OK waits.
 
 ## Pages
 
 | Page | What it controls | When it takes effect |
 | --- | --- | --- |
 | General | Audio playback, loop playback | Immediately |
-| Memory & Caches | Operation-cache and RAM-preview budgets, media disk cache enable/directory/budget | Memory budgets immediately; disk cache after restart |
+| Viewer | Resolution, the background around the composition frame (Solid, Grey, Black, White), the transparency grid inside it, and the safe-areas, centre-cross, thirds, rulers and pixel-grid overlays | Immediately |
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
 | Node Graph | Link style, snap to grid, grid size | Immediately |
-| Viewer | Resolution, the background around the composition frame (Solid, Grey, Black, White), the transparency grid inside it, and the safe-areas, centre-cross, thirds, rulers and pixel-grid overlays | Immediately |
+| Memory & Caches | Operation-cache and RAM-preview budgets, media disk cache enable/directory/budget | Memory budgets immediately; disk cache after restart |
 | Performance | Read-only acceleration status | Not a preference |
 
 Immediate changes reach every open panel: the window hands the committed value to each editor,
 which applies it through the same setters its own menus use. Memory budgets update the running cache owners on Apply. Values marked **Restart** (the disk
-cache enable, location and disk-space budget) are read when Bloom starts.
+cache enable, location and disk-space budget, marked once in the Media disk cache header) are read
+when Bloom starts. Leave the cache directory empty for the default location; **Browse…** picks a
+folder and the reset button beside it returns to the default.
 
 ## Memory and disk budgets
 
-**Automatic** (stored as 0) selects the machine-derived default. See [Memory](memory.md) for how Bloom derives
+Each budget, and the timeline layer column width, has a mode: **Automatic** (stored as 0) selects
+the machine-derived default, and **Custom** shows the value to enter. See [Memory](memory.md) for how Bloom derives
 the defaults, and for the two cache ceilings. The disk cache can be purged at any time from
 **Edit → Purge… → Purge media cache**, which clears the on-disk store and the applicable in-memory
 decoded media off the interface thread; the source files are never changed.

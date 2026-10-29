@@ -4,8 +4,9 @@
 
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
-#include <bloom/ui/kit/radio_group.hpp>
+#include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
@@ -19,10 +20,15 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QPainter>
 #include <QPointer>
+#include <QScreen>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QStyle>
+#include <QStyledItemDelegate>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -52,6 +58,9 @@ constexpr double kMaximumBudgetGiB = static_cast<double>(kMaximumBudgetBytes) / 
 
 constexpr auto kRestartBadgeObjectName = "preferencesRestartBadge";
 
+// The category the last Preferences window showed, for this session.
+int gLastPreferencesPage = 0;
+
 [[nodiscard]] kit::KLabel* makeRestartBadge(QWidget* parent) {
     auto* badge = new kit::KLabel(QObject::tr("Restart"), parent, kit::TypeRole::UiSmall);
     badge->setObjectName(QLatin1StringView(kRestartBadgeObjectName));
@@ -61,27 +70,127 @@ constexpr auto kRestartBadgeObjectName = "preferencesRestartBadge";
     return badge;
 }
 
-[[nodiscard]] QScrollArea* wrapInScroll(QWidget* content, const QString& objectName) {
+// A sidebar category row: the kit selected-row recipe with its leading Accent edge (a list view
+// paints no row panel, so the edge is the delegate's), the style's hover wash and keyboard-focus
+// inset otherwise. A group gap paints nothing.
+class RailDelegate final : public QStyledItemDelegate {
+  public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override {
+        if ((index.flags() & Qt::ItemIsEnabled) == 0)
+            return;
+        QStyleOptionViewItem item(option);
+        if ((option.state & QStyle::State_Selected) != 0) {
+            kit::paintSelectedRow(*painter, QRectF(option.rect), kit::Color::Background, true);
+            item.state &= ~(QStyle::State_Selected | QStyle::State_MouseOver);
+        }
+        QStyledItemDelegate::paint(painter, item, index);
+    }
+};
+
+// A preference value of one width per kind, so a column of rows lines up.
+void setValueWidth(QWidget& control) {
+    control.setFixedWidth(kit::px(kit::Size::DropdownWidthWide));
+}
+
+// Muted helper text under the row it explains, in the value column.
+void addHelperRow(QVBoxLayout* layout, QWidget* parent, kit::KLabel* helper) {
+    auto* holder = new QWidget(parent);
+    auto* row = new QHBoxLayout(holder);
+    row->setContentsMargins(
+        kit::px(kit::Spacing::RowPadding) + kit::px(kit::Size::PreferencesLabelWidth) +
+            kit::px(kit::Spacing::PropertyGutter),
+        0, kit::px(kit::Spacing::RowPadding) + kit::px(kit::Size::PropertiesDiamondColumn),
+        kit::px(kit::Spacing::XXS));
+    helper->setParent(holder);
+    helper->setTypeRole(kit::TypeRole::UiSmall);
+    helper->setTone(kit::Color::Muted);
+    helper->setWordWrap(true);
+    row->addWidget(helper, 1);
+    layout->addWidget(holder);
+}
+
+} // namespace
+
+QScrollArea* PreferencesWindow::wrapPage(QWidget* content, const QString& objectName) {
     auto* scroll = new QScrollArea;
     scroll->setObjectName(objectName);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    // Pages sit on the dialog's own surface, like every other dialog's sections.
-    scroll->viewport()->setAutoFillBackground(false);
     scroll->setWidget(content);
-    content->setAutoFillBackground(false);
+    // A page is a Properties panel body: the panel Background behind Properties sections.
+    content->setAutoFillBackground(true);
+    auto palette = content->palette();
+    palette.setColor(QPalette::Window, kit::color(kit::Color::Background));
+    content->setPalette(palette);
     return scroll;
 }
 
-QWidget* addPreferencesRow(QVBoxLayout* layout, QWidget* parent, QLabel* label,
-                           const std::initializer_list<QWidget*> controls) {
-    auto* row = new kit::KPropertyRow(label, nullptr, controls, parent);
+// The Properties panel's own content margins and section spacing (properties_editor.cpp).
+void PreferencesWindow::setPageMargins(QVBoxLayout& layout) {
+    layout.setContentsMargins(kit::px(kit::Spacing::XS), kit::px(kit::Spacing::Gutter),
+                              kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XS));
+    layout.setSpacing(kit::px(kit::Spacing::Gutter));
+}
+
+QWidget* PreferencesWindow::addPreferencesRow(QVBoxLayout* layout, QWidget* parent,
+                                              const QString& label,
+                                              const std::initializer_list<QWidget*> controls) {
+    // The Properties panel's own row: right-aligned label in the shared label column, values in
+    // the value column.
+    auto* row =
+        new kit::KPropertyRow(properties::makeRowLabel(label, parent), nullptr, controls, parent);
     row->setLabelWidth(kit::px(kit::Size::PreferencesLabelWidth));
+    for (auto* control : controls)
+        if (qobject_cast<kit::KDropdown*>(control) != nullptr)
+            setValueWidth(*control);
     layout->addWidget(row);
     return row;
 }
 
-} // namespace
+kit::KValueField* PreferencesWindow::addAutomaticRow(QVBoxLayout* layout, QWidget* parent,
+                                                     const QString& objectName,
+                                                     const QString& label, const double maximum,
+                                                     const int decimals, const QString& unit,
+                                                     const double customDefault) {
+    // A value whose zero means Automatic: a mode (Automatic / Custom) and, for Custom, the value
+    // with its unit. The field stays the one source of the value.
+    auto* mode = new kit::KDropdown(parent);
+    mode->setObjectName(objectName + QStringLiteral("Mode"));
+    mode->setAccessibleName(label);
+    mode->addItem(tr("Automatic"), QStringLiteral("automatic"));
+    mode->addItem(tr("Custom"), QStringLiteral("custom"));
+    properties::ValueCellSpec spec;
+    spec.objectName = objectName;
+    spec.accessibleName = label;
+    spec.minimum = 0.0;
+    spec.maximum = maximum;
+    spec.decimals = decimals;
+    spec.singleStep = 1.0;
+    spec.unit = unit;
+    auto* field = properties::makeValueCell(spec, parent);
+    field->setCompact(false);
+    field->setSpecialValueText(tr("Automatic"));
+    setValueWidth(*field);
+    (void)addPreferencesRow(layout, parent, label, {mode, field});
+    auto custom = std::make_shared<double>(customDefault);
+    const auto sync = [mode, field, custom] {
+        const bool isCustom = field->value() > 0.0;
+        if (isCustom)
+            *custom = field->value();
+        const QSignalBlocker blocker(mode);
+        mode->setCurrentIndex(isCustom ? 1 : 0);
+        field->setVisible(isCustom);
+    };
+    connect(field, &kit::KValueField::valueChanged, this, sync);
+    connect(mode, &kit::KDropdown::activated, this, [mode, field, custom](int) {
+        field->setValue(mode->currentIndex() == 1 ? *custom : 0.0);
+    });
+    syncCallbacks_.push_back(sync);
+    return field;
+}
 
 PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreferences& current,
                                      const AccelerationStatusProvider* const accelerationStatus,
@@ -90,17 +199,41 @@ PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreference
                    Width::Wide),
       draft_(current), applied_(current), accelerationStatus_(accelerationStatus),
       memoryLedger_(memoryLedger) {
-    // A page stack to read, so it opens at a readable height rather than its smallest layout.
-    setMinimumHeight(kit::px(kit::Size::DialogDocumentHeight));
 
     auto* body = new QHBoxLayout;
     body->setSpacing(kit::px(kit::Spacing::L));
 
-    categoryRail_ = new kit::KRadioGroup(this);
+    // The sidebar, Blender style: one category per row at the list pitch, grouped by small gaps,
+    // the kit's selected-row recipe (wash and Accent edge) on the current one and a hover wash;
+    // Up/Down, Home/End and type-ahead move through it. The page actions sit at its foot.
+    auto* sidebar = new QWidget(this);
+    sidebar->setFixedWidth(kit::px(kit::Size::PreferencesRailWidth));
+    auto* sidebarLayout = new QVBoxLayout(sidebar);
+    sidebarLayout->setContentsMargins(0, 0, 0, 0);
+    sidebarLayout->setSpacing(kit::px(kit::Spacing::S));
+    categoryRail_ = new QListWidget(sidebar);
     categoryRail_->setObjectName(QStringLiteral("preferencesCategoryRail"));
-    categoryRail_->setPresentation(kit::KRadioGroup::Presentation::Discrete);
-    categoryRail_->setFixedWidth(kit::px(kit::Size::PreferencesRailWidth));
-    body->addWidget(categoryRail_, 0);
+    categoryRail_->setAccessibleName(tr("Preferences pages"));
+    categoryRail_->setFrameShape(QFrame::NoFrame);
+    categoryRail_->setMouseTracking(true);
+    categoryRail_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    categoryRail_->setStyleSheet(QStringLiteral("QListView { background: transparent; }"));
+    categoryRail_->viewport()->setAutoFillBackground(false);
+    categoryRail_->setItemDelegate(new RailDelegate(categoryRail_));
+    sidebarLayout->addWidget(categoryRail_, 1);
+    auto* actions = new kit::KMenuButton(sidebar);
+    actions->setObjectName(QStringLiteral("preferencesActionsButton"));
+    actions->setIcon(kit::icon(kit::IconId::Menu, kit::IconRole::Chrome));
+    actions->setToolTip(tr("Restore Defaults"));
+    actions->setAccessibleName(tr("Restore Defaults"));
+    actions->setPopupMode(QToolButton::InstantPopup);
+    auto* actionsMenu = kit::makeMenu(actions);
+    auto* restore = actionsMenu->addAction(tr("Restore Defaults"));
+    restore->setObjectName(QStringLiteral("preferencesRestoreDefaultsAction"));
+    connect(restore, &QAction::triggered, this, &PreferencesWindow::confirmRestoreDefaults);
+    actions->setMenu(actionsMenu);
+    sidebarLayout->addWidget(actions, 0, Qt::AlignLeft);
+    body->addWidget(sidebar, 0);
 
     pages_ = new QStackedWidget(this);
     pages_->setObjectName(QStringLiteral("preferencesPages"));
@@ -110,27 +243,64 @@ PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreference
     const auto pages = buildPages();
     connect(performanceRefreshTimer_, &QTimer::timeout, this,
             &PreferencesWindow::refreshMemorySummary);
-    for (const auto& page : pages) {
-        categoryRail_->addOption(page.title);
+    for (const auto& page : pages)
         pages_->addWidget(page.widget);
+    // Grouped as Blender groups its categories: what everything uses, the editors, the machine.
+    // A page whose id no group names (a later page such as Sounds, until it is listed) still
+    // appears, in a group of its own after these.
+    std::vector<std::vector<QString>> groups{
+        {QStringLiteral("general"), QStringLiteral("sounds")},
+        {QStringLiteral("viewer"), QStringLiteral("timeline"), QStringLiteral("nodes")},
+        {QStringLiteral("memory"), QStringLiteral("performance")}};
+    std::vector<QString> unlisted;
+    for (const auto& page : pages)
+        if (std::ranges::none_of(groups, [&page](const auto& group) {
+                return std::ranges::find(group, page.id) != group.end();
+            }))
+            unlisted.push_back(page.id);
+    if (!unlisted.empty())
+        groups.push_back(std::move(unlisted));
+    bool first = true;
+    for (const auto& group : groups) {
+        std::vector<std::size_t> members;
+        for (const auto& id : group)
+            for (std::size_t index = 0; index < pages.size(); ++index)
+                if (pages[index].id == id)
+                    members.push_back(index);
+        if (members.empty())
+            continue;
+        if (!first) {
+            auto* gap = new QListWidgetItem(categoryRail_);
+            gap->setFlags(Qt::NoItemFlags);
+            gap->setSizeHint(QSize(0, kit::px(kit::Spacing::S)));
+        }
+        first = false;
+        for (const auto index : members) {
+            auto* item = new QListWidgetItem(pages[index].title, categoryRail_);
+            item->setData(Qt::UserRole, static_cast<int>(index));
+            item->setSizeHint(QSize(0, kit::px(kit::Size::ListRow)));
+        }
     }
-    connect(categoryRail_, &kit::KRadioGroup::currentIndexChanged, pages_,
-            [this](const int index) { pages_->setCurrentIndex(index); });
-    if (!pages.empty()) {
-        categoryRail_->setCurrentIndex(0);
-        pages_->setCurrentIndex(0);
-    }
+    connect(categoryRail_, &QListWidget::currentItemChanged, pages_, [this](QListWidgetItem* item) {
+        if (item == nullptr || !item->data(Qt::UserRole).isValid())
+            return;
+        pages_->setCurrentIndex(item->data(Qt::UserRole).toInt());
+        gLastPreferencesPage = pages_->currentIndex();
+    });
+    // The category last shown, for the rest of the session.
+    for (int row = 0; row < categoryRail_->count(); ++row)
+        if (auto* item = categoryRail_->item(row);
+            item->data(Qt::UserRole).isValid() &&
+            item->data(Qt::UserRole).toInt() == gLastPreferencesPage)
+            categoryRail_->setCurrentRow(row);
 
     buttonBox()->setObjectName(QStringLiteral("preferencesButtonBox"));
     addButton(Role::Accept, tr("OK"))->setObjectName(QStringLiteral("preferencesOkButton"));
     addButton(Role::Reject, tr("Cancel"))->setObjectName(QStringLiteral("preferencesCancelButton"));
     applyButton_ = addButton(Role::Apply, tr("Apply"));
     applyButton_->setObjectName(QStringLiteral("preferencesApplyButton"));
-    addButton(Role::Reset, tr("Restore Defaults"))
-        ->setObjectName(QStringLiteral("preferencesRestoreDefaultsButton"));
     connect(this, &QDialog::accepted, this, [this] { commitPreferences(); });
     connect(this, &kit::KDialog::applyRequested, this, [this] { commitPreferences(); });
-    connect(this, &kit::KDialog::resetRequested, this, &PreferencesWindow::confirmRestoreDefaults);
     setValidator([this]() -> std::optional<kit::KRefusal> {
         if (!cacheDirectoryIssue_.isEmpty())
             return kit::KRefusal{cacheDirectoryField_, cacheDirectoryIssue_};
@@ -139,6 +309,40 @@ PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreference
 
     refreshControls();
     updateApplyEnabled();
+}
+
+void PreferencesWindow::fitPagesToContent() {
+    // The window fits its content: it opens with the pages a dialog text column wide and as tall
+    // as the tallest page, up to most of the screen; only a page taller than that scrolls. It can
+    // be made narrower, down to the widest page's minimum. Measured once polished, so the kit
+    // fonts and metrics are the ones measured.
+    const int pageWidth = kit::px(kit::Size::DialogTextWidth);
+    int tallest = 0;
+    int narrowest = 0;
+    for (int index = 0; index < pages_->count(); ++index)
+        if (auto* scroll = qobject_cast<QScrollArea*>(pages_->widget(index));
+            scroll != nullptr && scroll->widget() != nullptr) {
+            auto* content = scroll->widget();
+            content->ensurePolished();
+            for (auto* child : content->findChildren<QWidget*>())
+                child->ensurePolished();
+            if (auto* layout = content->layout())
+                layout->activate();
+            tallest =
+                std::max(tallest, content->hasHeightForWidth() ? content->heightForWidth(pageWidth)
+                                                               : content->sizeHint().height());
+            narrowest = std::max(narrowest, content->minimumSizeHint().width());
+        }
+    const auto* screen = window()->screen();
+    const int ceiling = screen != nullptr ? screen->availableGeometry().height() * 3 / 4 : tallest;
+    pages_->setMinimumSize(std::min(narrowest, pageWidth), std::min(tallest, ceiling));
+    if (!fitted_) {
+        fitted_ = true;
+        layout()->activate();
+        resize(std::max(width(),
+                        layout()->totalMinimumSize().width() - pages_->minimumWidth() + pageWidth),
+               height());
+    }
 }
 
 void PreferencesWindow::confirmRestoreDefaults() {
@@ -184,12 +388,28 @@ ApplicationPreferences PreferencesWindow::preferences() const { return draft_; }
 void PreferencesWindow::setPreferences(const ApplicationPreferences& preferences) {
     draft_ = preferences;
     refreshControls();
+    checkCacheDirectory(QString::fromStdString(draft_.mediaDiskCacheDirectory));
     updateApplyEnabled();
+}
+
+void PreferencesWindow::resetSection(
+    kit::KSection& section,
+    std::function<void(ApplicationPreferences&, const ApplicationPreferences&)> assign) {
+    // A section's Reset, as in Properties: that section's values return to their defaults in the
+    // window; nothing is saved until OK or Apply.
+    connect(&section, &kit::KSection::resetRequested, this, [this, assign = std::move(assign)] {
+        auto next = draft_;
+        assign(next, defaultApplicationPreferences());
+        setPreferences(next);
+    });
 }
 
 void PreferencesWindow::refreshControls() {
     for (const auto& refresh : refreshCallbacks_) {
         refresh();
+    }
+    for (const auto& sync : syncCallbacks_) {
+        sync();
     }
     refreshMemorySummary();
 }
@@ -231,15 +451,16 @@ void PreferencesWindow::updateApplyEnabled() {
 kit::KSwitch* PreferencesWindow::addSwitchRow(QVBoxLayout* layout, QWidget* parent,
                                               const QString& objectName, const QString& label,
                                               const bool restartRequired) {
+    // A switch sits in the value column with its own clickable words, as a check box does.
     auto* control = new kit::KSwitch(parent);
     control->setObjectName(objectName);
-    control->setAccessibleName(label);
-    auto* rowLabel = properties::makeRowLabel(label, parent);
-    if (restartRequired) {
-        addPreferencesRow(layout, parent, rowLabel, {control, makeRestartBadge(parent)});
-    } else {
-        addPreferencesRow(layout, parent, rowLabel, {control});
-    }
+    auto* words = new kit::KCheckLabel(label, *control, parent);
+    words->setObjectName(objectName + QStringLiteral("Label"));
+    // The row's value text size, a little apart from the switch.
+    words->setTypeRole(kit::TypeRole::UiSmall);
+    words->setContentsMargins(kit::px(kit::Spacing::XS), 0, 0, 0);
+    (void)restartRequired;
+    (void)addPreferencesRow(layout, parent, QString{}, {control, words});
     return control;
 }
 
@@ -248,7 +469,7 @@ kit::KDropdown* PreferencesWindow::addDropdownRow(QVBoxLayout* layout, QWidget* 
     auto* control = new kit::KDropdown(parent);
     control->setObjectName(objectName);
     control->setAccessibleName(label);
-    addPreferencesRow(layout, parent, properties::makeRowLabel(label, parent), {control});
+    addPreferencesRow(layout, parent, label, {control});
     return control;
 }
 
@@ -267,12 +488,10 @@ kit::KValueField* PreferencesWindow::addValueFieldRow(QVBoxLayout* layout, QWidg
     spec.singleStep = 1.0;
     spec.unit = unit;
     auto* field = properties::makeValueCell(spec, parent);
-    auto* rowLabel = properties::makeRowLabel(label, parent);
-    if (restartRequired) {
-        addPreferencesRow(layout, parent, rowLabel, {field, makeRestartBadge(parent)});
-    } else {
-        addPreferencesRow(layout, parent, rowLabel, {field});
-    }
+    field->setCompact(false);
+    setValueWidth(*field);
+    (void)restartRequired;
+    addPreferencesRow(layout, parent, label, {field});
     return field;
 }
 
@@ -292,13 +511,16 @@ std::vector<PreferencesWindow::Page> PreferencesWindow::buildPages() {
 QWidget* PreferencesWindow::buildGeneralPage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
-                               kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
-    layout->setSpacing(kit::px(kit::Spacing::S));
+    setPageMargins(*layout);
 
     auto* section = properties::makeSection(
         layout, content, QStringLiteral("preferencesGeneralSection"), tr("Playback"),
         QStringLiteral("preferences/sections/general/collapsed"));
+    section->setBodyPadding(kit::px(kit::Spacing::XS));
+    resetSection(*section, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
+        draft.audioEnabled = base.audioEnabled;
+        draft.loopPlayback = base.loopPlayback;
+    });
     auto* rows = section->bodyLayout();
 
     auto* audio = addSwitchRow(rows, content, QStringLiteral("preferencesAudioEnabledSwitch"),
@@ -326,35 +548,27 @@ QWidget* PreferencesWindow::buildGeneralPage() {
     });
 
     layout->addStretch(1);
-    return wrapInScroll(content, QStringLiteral("preferencesGeneralPage"));
+    return wrapPage(content, QStringLiteral("preferencesGeneralPage"));
 }
 
 QWidget* PreferencesWindow::buildMemoryPage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
-                               kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
-    layout->setSpacing(kit::px(kit::Spacing::S));
-
-    auto* notice = new kit::KLabel(
-        tr("Memory budgets take effect when you click Apply. Disk cache changes take effect "
-           "after restart."),
-        content);
-    notice->setObjectName(QStringLiteral("preferencesRestartNotice"));
-    notice->setWordWrap(true);
-    layout->addWidget(notice);
+    setPageMargins(*layout);
 
     auto* memory = properties::makeSection(layout, content,
                                            QStringLiteral("preferencesMemorySection"), tr("Memory"),
                                            QStringLiteral("preferences/sections/memory/collapsed"));
+    memory->setBodyPadding(kit::px(kit::Spacing::XS));
+    resetSection(*memory, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
+        draft.operationCacheBytes = base.operationCacheBytes;
+        draft.ramPreviewBytes = base.ramPreviewBytes;
+    });
     auto* memoryRows = memory->bodyLayout();
 
-    auto* operation = addValueFieldRow(
+    auto* operation = addAutomaticRow(
         memoryRows, content, QStringLiteral("preferencesOperationCacheBytesField"),
-        tr("Operation cache budget"), 0.0, kMaximumBudgetGiB, 2, QStringLiteral("GiB"), false);
-    operation->setCompact(false);
-    operation->setSpecialValueText(tr("Automatic"));
-    operation->setFixedWidth(operation->sizeHint().width());
+        tr("Operation cache budget"), kMaximumBudgetGiB, 2, QStringLiteral("GiB"), 1.0);
     operation->setValue(static_cast<double>(draft_.operationCacheBytes) / kBytesPerGiB);
     connect(operation, &kit::KValueField::valueChanged, this, [this](const double value) {
         draft_.operationCacheBytes = budgetBytesFromGiB(value);
@@ -366,12 +580,9 @@ QWidget* PreferencesWindow::buildMemoryPage() {
         operation->setValue(static_cast<double>(draft_.operationCacheBytes) / kBytesPerGiB);
     });
 
-    auto* ram = addValueFieldRow(
-        memoryRows, content, QStringLiteral("preferencesRamPreviewBytesField"),
-        tr("RAM preview budget"), 0.0, kMaximumBudgetGiB, 2, QStringLiteral("GiB"), false);
-    ram->setCompact(false);
-    ram->setSpecialValueText(tr("Automatic"));
-    ram->setFixedWidth(ram->sizeHint().width());
+    auto* ram =
+        addAutomaticRow(memoryRows, content, QStringLiteral("preferencesRamPreviewBytesField"),
+                        tr("RAM preview budget"), kMaximumBudgetGiB, 2, QStringLiteral("GiB"), 1.0);
     ram->setValue(static_cast<double>(draft_.ramPreviewBytes) / kBytesPerGiB);
     connect(ram, &kit::KValueField::valueChanged, this, [this](const double value) {
         draft_.ramPreviewBytes = budgetBytesFromGiB(value);
@@ -383,20 +594,26 @@ QWidget* PreferencesWindow::buildMemoryPage() {
         ram->setValue(static_cast<double>(draft_.ramPreviewBytes) / kBytesPerGiB);
     });
 
-    auto* hint = new kit::KLabel(
-        tr("Automatic chooses a budget for this machine. Enter 0 to restore Automatic."), content);
+    // Under the budgets they explain: what Automatic means, and what the budgets come to.
+    auto* hint = new kit::KLabel(tr("Automatic chooses a budget for this machine."), content);
     hint->setObjectName(QStringLiteral("preferencesMemoryHint"));
-    hint->setWordWrap(true);
-    memoryRows->addWidget(hint);
+    addHelperRow(memoryRows, content, hint);
     memorySummary_ = new kit::KLabel(content);
     memorySummary_->setObjectName(QStringLiteral("preferencesMemorySummary"));
-    memorySummary_->setWordWrap(true);
-    memoryRows->addWidget(memorySummary_);
+    addHelperRow(memoryRows, content, static_cast<kit::KLabel*>(memorySummary_));
 
     auto* disk = properties::makeSection(
         layout, content, QStringLiteral("preferencesMediaCacheSection"), tr("Media disk cache"),
         QStringLiteral("preferences/sections/media-cache/collapsed"));
+    disk->setBodyPadding(kit::px(kit::Spacing::XS));
+    resetSection(*disk, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
+        draft.mediaDiskCacheEnabled = base.mediaDiskCacheEnabled;
+        draft.mediaDiskCacheDirectory = base.mediaDiskCacheDirectory;
+        draft.mediaDiskCacheBudgetBytes = base.mediaDiskCacheBudgetBytes;
+    });
     auto* diskRows = disk->bodyLayout();
+    // Every disk cache value is read at startup: the section says so once, in its header.
+    disk->addHeaderAction(makeRestartBadge(content));
 
     auto* enabled =
         addSwitchRow(diskRows, content, QStringLiteral("preferencesMediaDiskCacheEnabledSwitch"),
@@ -411,12 +628,14 @@ QWidget* PreferencesWindow::buildMemoryPage() {
         enabled->setChecked(draft_.mediaDiskCacheEnabled);
     });
 
-    auto* directory = new kit::KLineEdit(content);
+    auto* directory = new kit::KPathField(content);
     directory->setObjectName(QStringLiteral("preferencesMediaDiskCacheDirectoryEdit"));
     directory->setAccessibleName(tr("Cache directory"));
+    directory->setPlaceholderText(tr("Default location"));
     directory->setText(QString::fromStdString(draft_.mediaDiskCacheDirectory));
     auto* browse = new kit::KButton(tr("Browse…"), content);
     browse->setObjectName(QStringLiteral("preferencesMediaDiskCacheBrowseButton"));
+    browse->setFixedWidth(browse->sizeHint().width()); // the path field takes the rest
     connect(browse, &QAbstractButton::clicked, this, [this, directory] {
         const auto picked = kit::chooseFile(*this, {.mode = kit::KFileRequest::Mode::Directory,
                                                     .title = tr("Choose a Cache Folder"),
@@ -442,24 +661,31 @@ QWidget* PreferencesWindow::buildMemoryPage() {
         const QSignalBlocker blocker(directory);
         directory->setText(QString::fromStdString(draft_.mediaDiskCacheDirectory));
     });
-    addPreferencesRow(diskRows, content, properties::makeRowLabel(tr("Cache directory"), content),
-                      {directory, browse, makeRestartBadge(content)});
-    // The directory's inline reason, under its row.
+    // Clearing the field returns to the default location.
+    auto* clear = new kit::KIconButton(content);
+    clear->setObjectName(QStringLiteral("preferencesMediaDiskCacheDirectoryClear"));
+    clear->setIcon(kit::icon(kit::IconId::Reset, kit::IconRole::Chrome));
+    clear->setToolTip(tr("Default location"));
+    clear->setAccessibleName(tr("Default location"));
+    connect(clear, &QAbstractButton::clicked, this, [this, directory] {
+        directory->clear();
+        checkCacheDirectory(QString{});
+    });
+    auto* directoryRow =
+        addPreferencesRow(diskRows, content, tr("Cache directory"), {directory, browse, clear});
+    cacheDirectoryField_ = directory;
+    // The directory's inline reason, under its row in the value column.
     auto* directoryReason = new kit::KLabel(QString{}, content, kit::TypeRole::UiSmall);
     directoryReason->setObjectName(QStringLiteral("preferencesMediaDiskCacheDirectoryReason"));
-    directoryReason->setWordWrap(true);
+    addHelperRow(diskRows, content, directoryReason);
     directoryReason->setTone(kit::Color::Error);
     directoryReason->hide();
-    diskRows->addWidget(directoryReason);
-    cacheDirectoryField_ = directory;
     registerReason(directory, directoryReason);
+    (void)directoryRow;
 
-    auto* budget = addValueFieldRow(
-        diskRows, content, QStringLiteral("preferencesMediaDiskCacheBudgetField"),
-        tr("Disk cache budget"), 0.0, kMaximumBudgetGiB, 2, QStringLiteral("GiB"), true);
-    budget->setCompact(false);
-    budget->setSpecialValueText(tr("Automatic"));
-    budget->setFixedWidth(budget->sizeHint().width());
+    auto* budget =
+        addAutomaticRow(diskRows, content, QStringLiteral("preferencesMediaDiskCacheBudgetField"),
+                        tr("Disk cache budget"), kMaximumBudgetGiB, 2, QStringLiteral("GiB"), 1.0);
     budget->setValue(static_cast<double>(draft_.mediaDiskCacheBudgetBytes) / kBytesPerGiB);
     connect(budget, &kit::KValueField::valueChanged, this, [this](const double value) {
         draft_.mediaDiskCacheBudgetBytes = budgetBytesFromGiB(value);
@@ -471,19 +697,25 @@ QWidget* PreferencesWindow::buildMemoryPage() {
     });
 
     layout->addStretch(1);
-    return wrapInScroll(content, QStringLiteral("preferencesMemoryPage"));
+    return wrapPage(content, QStringLiteral("preferencesMemoryPage"));
 }
 
 QWidget* PreferencesWindow::buildTimelinePage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
-                               kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
-    layout->setSpacing(kit::px(kit::Spacing::S));
+    setPageMargins(*layout);
 
     auto* section = properties::makeSection(
         layout, content, QStringLiteral("preferencesTimelineSection"), tr("Timeline"),
         QStringLiteral("preferences/sections/timeline/collapsed"));
+    section->setBodyPadding(kit::px(kit::Spacing::XS));
+    resetSection(*section, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
+        draft.timelineTimeFormat = base.timelineTimeFormat;
+        draft.timelineSnapping = base.timelineSnapping;
+        draft.timelineKeyframesVisible = base.timelineKeyframesVisible;
+        draft.timelineGraphEditor = base.timelineGraphEditor;
+        draft.timelineLayerColumnWidth = base.timelineLayerColumnWidth;
+    });
     auto* rows = section->bodyLayout();
 
     auto* format = addDropdownRow(
@@ -556,12 +788,9 @@ QWidget* PreferencesWindow::buildTimelinePage() {
     }
 
     auto* width =
-        addValueFieldRow(rows, content, QStringLiteral("preferencesTimelineLayerColumnWidthField"),
-                         tr("Layer column width"), 0.0, std::numeric_limits<int>::max(), 0,
-                         QStringLiteral("px"), false);
-    width->setCompact(false);
-    width->setSpecialValueText(tr("Automatic"));
-    width->setFixedWidth(width->sizeHint().width());
+        addAutomaticRow(rows, content, QStringLiteral("preferencesTimelineLayerColumnWidthField"),
+                        tr("Layer column width"), std::numeric_limits<int>::max(), 0,
+                        QStringLiteral("px"), kit::px(kit::Size::TimelineNameDefault));
     width->setValue(static_cast<double>(draft_.timelineLayerColumnWidth));
     connect(width, &kit::KValueField::valueChanged, this, [this](const double value) {
         draft_.timelineLayerColumnWidth = static_cast<int>(std::llround(value));
@@ -573,19 +802,23 @@ QWidget* PreferencesWindow::buildTimelinePage() {
     });
 
     layout->addStretch(1);
-    return wrapInScroll(content, QStringLiteral("preferencesTimelinePage"));
+    return wrapPage(content, QStringLiteral("preferencesTimelinePage"));
 }
 
 QWidget* PreferencesWindow::buildNodeGraphPage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
-                               kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
-    layout->setSpacing(kit::px(kit::Spacing::S));
+    setPageMargins(*layout);
 
     auto* section = properties::makeSection(
         layout, content, QStringLiteral("preferencesNodeGraphSection"), tr("Node Graph"),
         QStringLiteral("preferences/sections/node-graph/collapsed"));
+    section->setBodyPadding(kit::px(kit::Spacing::XS));
+    resetSection(*section, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
+        draft.nodeLinkStyle = base.nodeLinkStyle;
+        draft.nodeSnap = base.nodeSnap;
+        draft.nodeGridSize = base.nodeGridSize;
+    });
     auto* rows = section->bodyLayout();
 
     auto* linkStyle = addDropdownRow(
@@ -637,19 +870,28 @@ QWidget* PreferencesWindow::buildNodeGraphPage() {
     });
 
     layout->addStretch(1);
-    return wrapInScroll(content, QStringLiteral("preferencesNodeGraphPage"));
+    return wrapPage(content, QStringLiteral("preferencesNodeGraphPage"));
 }
 
 QWidget* PreferencesWindow::buildViewerPage() {
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
-                               kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
-    layout->setSpacing(kit::px(kit::Spacing::S));
+    setPageMargins(*layout);
 
     auto* section = properties::makeSection(
         layout, content, QStringLiteral("preferencesViewerSection"), tr("Viewer"),
         QStringLiteral("preferences/sections/viewer/collapsed"));
+    section->setBodyPadding(kit::px(kit::Spacing::XS));
+    resetSection(*section, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
+        draft.viewerResolution = base.viewerResolution;
+        draft.viewerBackground = base.viewerBackground;
+        draft.viewerTransparencyGrid = base.viewerTransparencyGrid;
+        draft.viewerSafeAreas = base.viewerSafeAreas;
+        draft.viewerCentreCross = base.viewerCentreCross;
+        draft.viewerThirds = base.viewerThirds;
+        draft.viewerRulers = base.viewerRulers;
+        draft.viewerPixelGrid = base.viewerPixelGrid;
+    });
     auto* rows = section->bodyLayout();
 
     auto* resolution = addDropdownRow(
@@ -740,7 +982,7 @@ QWidget* PreferencesWindow::buildViewerPage() {
     }
 
     layout->addStretch(1);
-    return wrapInScroll(content, QStringLiteral("preferencesViewerPage"));
+    return wrapPage(content, QStringLiteral("preferencesViewerPage"));
 }
 
 } // namespace bloom::ui
