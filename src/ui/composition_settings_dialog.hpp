@@ -6,18 +6,17 @@
 // and a start timecode are rational times, and a unit switch only re-displays them.
 
 #include "composition_editor_support.hpp"
+#include "safe_area_fields.hpp"
 
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/ui/composition_presets.hpp>
+#include <bloom/ui/kit/dialog.hpp>
 
-#include <QDialog>
 #include <QString>
 
 #include <optional>
 #include <vector>
 
-class QDialogButtonBox;
-class QFormLayout;
 class QLabel;
 class QLineEdit;
 
@@ -27,21 +26,23 @@ class KAnchorGrid;
 class KCheckBox;
 class KColorChip;
 class KDropdown;
+class KForm;
 class KIconButton;
 class KIconToggle;
 class KSection;
 class KValueField;
 } // namespace kit
 
-class CompositionSettingsDialog final : public QDialog {
+// A kit::KDialog, DialogWideWidth wide, shown with exec() by showNewCompositionDialog() and
+// showCompositionSettingsDialog(): both hand the committed composition back to their caller.
+class CompositionSettingsDialog final : public kit::KDialog {
   public:
     enum class Mode : std::uint8_t { Create, Edit };
     // The unit the Start and Duration fields are entered in. Indices are the unit dropdown's.
     enum class TimeUnit : std::uint8_t { Frames = 0, Seconds = 1, Timecode = 2 };
 
     CompositionSettingsDialog(Mode mode, commands::CompositionSettings initial,
-                              std::vector<WorkingColorSpaceChoice> workingSpaces,
-                              QWidget* parent = nullptr);
+                              std::vector<WorkingColorSpaceChoice> workingSpaces, QWidget& owner);
 
     [[nodiscard]] Mode mode() const noexcept { return mode_; }
     // The settings the fields describe, or nullopt while any of them is invalid.
@@ -70,12 +71,13 @@ class CompositionSettingsDialog final : public QDialog {
         QString reason;
     };
     [[nodiscard]] Issue currentIssue() const;
-    [[nodiscard]] QLabel* formLabel(const QString& text, QWidget* parent);
-    [[nodiscard]] QWidget* withError(QWidget* field, QLabel*& error, const QString& objectName);
+    [[nodiscard]] QWidget* fieldFor(Field field) const;
     void syncRatePreset();
     void showPresetRefusal(const QString& reason);
-    void buildBasic(kit::KSection& section);
-    void buildAdvanced(kit::KSection& section);
+    void promptPresetName(bool rename);
+    void confirmDeletePreset();
+    void buildBasic(kit::KForm& form);
+    void buildAdvanced(kit::KForm& form);
     void rebuildPresetItems();
     void selectMatchingPreset();
     void applySelectedPreset();
@@ -118,19 +120,15 @@ class CompositionSettingsDialog final : public QDialog {
     kit::KSection* advanced_ = nullptr;
     kit::KDropdown* workingSpace_ = nullptr;
     kit::KAnchorGrid* anchorGrid_ = nullptr;
-    kit::KValueField* actionSafe_ = nullptr;
-    kit::KValueField* titleSafe_ = nullptr;
+    SafeAreaFields safe_;
     QLabel* summary_ = nullptr;
     QLabel* backgroundHex_ = nullptr;
-    std::vector<QLabel*> formLabels_;
-    QLabel* nameError_ = nullptr;
     QLabel* presetError_ = nullptr;
-    QLabel* sizeError_ = nullptr;
-    QLabel* rateError_ = nullptr;
-    QLabel* startError_ = nullptr;
-    QLabel* durationError_ = nullptr;
-    QLabel* safeError_ = nullptr;
-    QDialogButtonBox* buttons_ = nullptr;
+    // The rows an inline reason belongs under (Field -> the row's field widget).
+    QWidget* sizeRow_ = nullptr;
+    QWidget* rateRow_ = nullptr;
+    QWidget* durationRow_ = nullptr;
+    QWidget* safeRow_ = nullptr;
 };
 
 } // namespace bloom::ui

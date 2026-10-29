@@ -11,6 +11,7 @@
 
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <QColor>
 #include <QPoint>
 #include <QPointer>
 #include <QRect>
@@ -34,6 +35,7 @@ class QToolButton;
 namespace bloom::ui {
 
 namespace kit {
+class KColorPicker;
 class KSplitHandle;
 } // namespace kit
 
@@ -272,7 +274,18 @@ class TimelineLayerStack final : public kit::KListSurface {
     void relayoutRows();
     void renameLayer(document::LayerId layer);
     void updateRenameGeometry();
+    // Label Color > Custom…: the kit colour picker popup under the row, committing one "Set Layer
+    // Label Color" step when it closes with a different colour (Escape keeps the old one).
+    void openLabelColorPicker(int row, document::LayerId layer);
+    void commitLabelColor();
     QPointer<QLineEdit> renameEditor_;
+    kit::KColorPicker* labelPicker_ = nullptr;
+    QWidget* labelPickerAnchor_ = nullptr;
+    document::CompositionId labelPickerComposition_{};
+    document::LayerId labelPickerLayer_{};
+    QColor labelPickerInitial_;
+    bool labelPickerOpen_ = false;
+    bool labelPickerCancelled_ = false;
     document::LayerId renamingLayer_{};
     int anchorRow_ = -1;
     int dragRow_ = -1;

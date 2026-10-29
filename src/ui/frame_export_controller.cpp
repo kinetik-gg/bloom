@@ -2,7 +2,6 @@
 
 #include "composition_editor_support.hpp"
 #include "composition_export_dialog.hpp"
-#include "network_share_paths.hpp"
 
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -13,17 +12,17 @@
 #include <bloom/document/project.hpp>
 #include <bloom/render/image.hpp>
 
+#include <bloom/ui/kit/dialog.hpp>
+
 #include <QCoreApplication>
 #include <QDir>
-#include <QFileDialog>
-#include <QInputDialog>
-#include <QMessageBox>
-#include <QPushButton>
+#include <QPointer>
 #include <QStandardPaths>
 
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -212,6 +211,26 @@ exportFailureOutcome(const host::FrameExportPublicationFailureV1* failure) {
 
 } // namespace
 
+QString outputPresetLabel(const output::OutputPresetV1 preset) {
+    switch (preset) {
+    case output::OutputPresetV1::PngRgba8SrgbV1:
+        return QObject::tr("PNG (8-bit sRGB)");
+    case output::OutputPresetV1::TiffRgba16SrgbV1:
+        return QObject::tr("TIFF (16-bit sRGB)");
+    case output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1:
+        return QObject::tr("OpenEXR (32-bit float, linear Rec.709)");
+    case output::OutputPresetV1::ProResMovV1:
+        return QObject::tr("ProRes MOV");
+    case output::OutputPresetV1::DnxhrMxfV1:
+        return QObject::tr("DNxHR MXF");
+    case output::OutputPresetV1::PcmWavV1:
+        return QObject::tr("WAV / BWF audio");
+    case output::OutputPresetV1::H264MovV1:
+        return QObject::tr("H.264 MOV (review)");
+    }
+    return presetDisplayName(preset);
+}
+
 output::OutputPresetV1
 FrameExportController::presetForDestination(const std::filesystem::path& destination) {
     auto extension = destination.extension().string();
@@ -254,91 +273,7 @@ FrameExportController::FrameExportController(
     connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
             &FrameExportController::pollOnce);
 
-    // All frame presets are listed; TIFF uses the supervised worker. The chosen extension -- not
-    // the selected filter entry -- is what actually selects the preset (presetForDestination()
-    // above), so a path typed by hand behaves identically to one picked through a filter. OpenEXR
-    // stays first so the dialog's default selection, and therefore every existing artist habit, is
-    // unchanged. A real QFileDialog instance rather than the static getSaveFileName() convenience:
-    // still native when the platform theme provides one (unchanged behaviour), but constructing it
-    // lets configureFileDialogSidebar() add the mounted network shares before exec(), which the
-    // static function gives no opportunity to do.
-    destinationProvider_ = []() -> std::optional<std::filesystem::path> {
-        QFileDialog dialog(nullptr, tr("Export Frame"), {},
-                           tr("OpenEXR (*.exr);;PNG (*.png);;TIFF (*.tif *.tiff)"));
-        dialog.setAcceptMode(QFileDialog::AcceptSave);
-        configureFileDialogSidebar(dialog);
-        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
-            return std::nullopt;
-        }
-        return std::filesystem::path(dialog.selectedFiles().front().toStdString());
-    };
-
-    // The range seam: one save dialog for the sequence's base name, then two spin prompts for the
-    // inclusive first/last frame. PNG-only, because a frame range is a PNG sequence (task S5, item
-    // 3a) -- and the extension, not the filter, is still what selects the preset through the one
-    // closed mapping presetForDestination() owns, so a ".png" base name behaves exactly as a
-    // single-frame PNG export does.
-    rangeProvider_ = [this]() -> std::optional<FrameExportRangeRequest> {
-        QFileDialog dialog(nullptr, tr("Export Frame Range"), {}, tr("PNG sequence (*.png)"));
-        dialog.setAcceptMode(QFileDialog::AcceptSave);
-        configureFileDialogSidebar(dialog);
-        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
-            return std::nullopt;
-        }
-        std::filesystem::path destination(dialog.selectedFiles().front().toStdString());
-        if (presetForDestination(destination) != output::OutputPresetV1::PngRgba8SrgbV1) {
-            destination.replace_extension(".png");
-        }
-        const auto context = frameContextFor(session_);
-        if (!context.has_value()) {
-            return std::nullopt;
-        }
-        const auto maximum = static_cast<int>(
-            std::min<std::uint64_t>(context->maxFrameIndexValue,
-                                    static_cast<std::uint64_t>(std::numeric_limits<int>::max())));
-        bool accepted = false;
-        const int first = QInputDialog::getInt(nullptr, tr("Export Frame Range"), tr("First frame"),
-                                               0, 0, maximum, 1, &accepted);
-        if (!accepted) {
-            return std::nullopt;
-        }
-        const int last = QInputDialog::getInt(nullptr, tr("Export Frame Range"), tr("Last frame"),
-                                              maximum, first, maximum, 1, &accepted);
-        if (!accepted) {
-            return std::nullopt;
-        }
-        return FrameExportRangeRequest{.destination = std::move(destination),
-                                       .firstFrame = static_cast<std::uint64_t>(first),
-                                       .lastFrame = static_cast<std::uint64_t>(last)};
-    };
-
-    approvalDecisionProvider_ = [](const FrameExportApprovalPrompt& prompt) {
-        QMessageBox box;
-        box.setWindowTitle(tr("Approve Export"));
-        box.setText(tr("Export to %1?")
-                        .arg(QString::fromStdString(prompt.destination.filename().string())));
-        QStringList lines;
-        lines << tr("Destination: %1").arg(QString::fromStdString(prompt.destination.string()));
-        lines << tr("Resolution: %1 x %2").arg(prompt.width).arg(prompt.height);
-        lines << tr("Preset: %1").arg(prompt.presetName);
-        if (!prompt.profile.isEmpty())
-            lines << tr("Profile: %1").arg(prompt.profile);
-        if (!prompt.implementationNote.isEmpty())
-            lines << prompt.implementationNote;
-        lines << tr("Preserved exactly: %1 of %2 facets")
-                     .arg(prompt.facets.exactFacetCount)
-                     .arg(prompt.facets.exactFacetCount + prompt.facets.nonExactFacetCount);
-        if (!prompt.facets.nonExactFacetNames.isEmpty()) {
-            lines << tr("Not exact: %1").arg(prompt.facets.nonExactFacetNames.join(", "));
-        }
-        lines << tr("Digest: %1…").arg(prompt.digestShortForm);
-        box.setInformativeText(lines.join("\n"));
-        box.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
-        box.button(QMessageBox::Yes)->setText(tr("Export"));
-        box.setDefaultButton(QMessageBox::Yes);
-        return box.exec() == QMessageBox::Yes ? FrameExportApprovalDecision::Export
-                                              : FrameExportApprovalDecision::Cancel;
-    };
+    installDefaultDialogs();
 }
 
 FrameExportController::~FrameExportController() {
@@ -394,7 +329,21 @@ void FrameExportController::setAttemptRequestAdjusterForTesting(
 }
 void FrameExportController::setApprovalDecisionProvider(
     FrameExportApprovalDecisionProvider provider) {
-    approvalDecisionProvider_ = std::move(provider);
+    approvalRequester_ = [provider = std::move(provider)](
+                             const FrameExportApprovalPrompt& prompt,
+                             const std::function<void(FrameExportApprovalDecision)>& reply) {
+        reply(provider ? provider(prompt) : FrameExportApprovalDecision::Cancel);
+    };
+}
+
+void FrameExportController::setApprovalRequester(FrameExportApprovalRequester requester) {
+    approvalRequester_ = std::move(requester);
+}
+
+void FrameExportController::setDialogOwner(QWidget* owner) { dialogOwner_ = owner; }
+
+void FrameExportController::setH264EncoderService(H264EncoderService* service) {
+    h264Encoder_ = service;
 }
 
 void FrameExportController::setSequenceExportRetirementOwner(
@@ -525,6 +474,13 @@ void FrameExportController::beginRangeExport(FrameExportRangeRequest request) {
 }
 
 void FrameExportController::requestCancellation() {
+    // A question still open is withdrawn (its dialog closes) and answered Cancel here.
+    withdrawApproval();
+    if (auto held = std::exchange(pendingApprovalAttempt_, nullptr)) {
+        if (sequence_.has_value())
+            sequence_->cancelled = true;
+        resolveFrameApproval(held, FrameExportApprovalDecision::Cancel);
+    }
     if (mediaExport_)
         mediaExport_->cancel();
     if (sequence_.has_value()) {
@@ -917,6 +873,7 @@ void FrameExportController::presentApproval(
     // the one that was actually analyzed.
     prompt.preset = attempt->preset();
     prompt.presetName = presetDisplayName(prompt.preset);
+    prompt.presetLabel = outputPresetLabel(prompt.preset);
     prompt.facets = summarizeFacets(attempt->report()->view());
     prompt.implementationNote =
         QString::fromStdString(output::outputLookDescriptionV1(attempt->frame()->identity()));
@@ -935,11 +892,31 @@ void FrameExportController::presentApproval(
     // The artist is asked once per export: for a single frame that is this frame, and for a range
     // it is the FIRST frame only (sequence_->approved). Every frame still runs
     // approveFrameExportV1() with its own attempt and its own digest below -- the byte-equality
-    // guard and the per-frame publication intent are never skipped; only the modal question is.
-    const bool alreadyApproved = sequence_.has_value() && sequence_->approved;
-    const auto decision = alreadyApproved             ? FrameExportApprovalDecision::Export
-                          : approvalDecisionProvider_ ? approvalDecisionProvider_(prompt)
-                                                      : FrameExportApprovalDecision::Cancel;
+    // guard and the per-frame publication intent are never skipped; only the question is.
+    if (sequence_.has_value() && sequence_->approved) {
+        resolveFrameApproval(attempt, FrameExportApprovalDecision::Export);
+        return;
+    }
+    // The question is asynchronous; the attempt (and its reservation) is held until the answer.
+    pendingApprovalAttempt_ = attempt;
+    askApproval(prompt, [this](const FrameExportApprovalDecision decision) {
+        auto held = std::exchange(pendingApprovalAttempt_, nullptr);
+        if (held)
+            resolveFrameApproval(held, decision);
+    });
+}
+
+void FrameExportController::resolveFrameApproval(
+    const std::shared_ptr<const output::OutputAnalysisAttemptV1>& attempt,
+    FrameExportApprovalDecision decision) {
+    const auto digest = attempt->digest();
+    if (!digest.has_value()) {
+        setActivity(FrameExportActivity::Idle);
+        finish(FrameExportOutcome::Failed, tr("The export analysis lost its approval digest."));
+        return;
+    }
+    if (shuttingDown_ || (sequence_.has_value() && sequence_->cancelled))
+        decision = FrameExportApprovalDecision::Cancel;
     if (sequence_.has_value() && decision == FrameExportApprovalDecision::Export) {
         sequence_->approved = true;
     }
@@ -950,13 +927,12 @@ void FrameExportController::presentApproval(
             return;
         }
         setActivity(FrameExportActivity::Idle);
-        // Discards cleanly: `attempt` (this function's own const& parameter) never held its own
-        // strong reference; the ONLY strong reference is handleAttemptResult()'s local `attempt`
-        // variable, which unwinds the instant that function returns (right after this call), so its
-        // retained ExportResourceReservationV1 drops to zero references and releases the charged
-        // bytes then -- no explicit release call exists or is needed (docs/architecture/frame-
-        // output.md: "Dismissal ... releases the completed attempt and its reservations"). Verified
-        // by this task's cancel-at-approval test via chargedResourceBytes().
+        // Discards cleanly: the attempt's only strong references are this call's caller's (the
+        // held pending attempt, or handleAttemptResult()'s local), which unwind right after this
+        // returns, so its retained ExportResourceReservationV1 drops to zero references and
+        // releases the charged bytes then -- no explicit release call exists or is needed
+        // (docs/architecture/frame-output.md: "Dismissal ... releases the completed attempt and
+        // its reservations"). Verified by the cancel-at-approval test via chargedResourceBytes().
         finish(FrameExportOutcome::Cancelled, tr("The export was cancelled."));
         return;
     }

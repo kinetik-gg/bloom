@@ -12,8 +12,13 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFileDialog>
+#include <QLabel>
 #include <QString>
 #include <QTimer>
+#include <QWidget>
+#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/dialog.hpp>
 
 #include <algorithm>
 #include <array>
@@ -870,6 +875,73 @@ void testSaveCopyUnavailableOnEditableContent(Expectations& expectations) {
 
 } // namespace
 
+// ---------------------------------------------------------------------------------------------
+// Lane C: the DEFAULT dialogs. Save As goes through kit::chooseFile(), which adds `.bloom` to a
+// name typed without it, and the unsaved-change prompt names the project and the action, with
+// Save as its default.
+// ---------------------------------------------------------------------------------------------
+
+void testDefaultSaveAsAddsBloomSuffix(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "default Save As: temp directory is available");
+        return;
+    }
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost host(scheduler);
+    QWidget window;
+    host.setDialogOwner(&window);
+    OutcomeCapture saveCapture;
+    connectSaveCapture(host, saveCapture);
+    const auto typed = QString::fromStdString((directory.path() / "shot").string());
+    bool dialogSeen = false;
+    QTimer::singleShot(0, [&] {
+        for (auto* widget : QApplication::topLevelWidgets())
+            if (auto* dialog = qobject_cast<QFileDialog*>(widget); dialog && dialog->isVisible()) {
+                dialogSeen = dialog->parentWidget() == &window;
+                dialog->selectFile(typed);
+                QMetaObject::invokeMethod(dialog, "accept");
+                return;
+            }
+    });
+    host.requestSaveAs();
+    expectations.expect(waitUntilIdle(host), "default Save As: the save completes");
+    expectations.expect(dialogSeen, "default Save As: the file dialog is owned by the window");
+    expectations.expect(host.displayPath() == std::optional(directory.path() / "shot.bloom") &&
+                            std::filesystem::exists(directory.path() / "shot.bloom"),
+                        "default Save As: a name typed without .bloom is saved with it");
+}
+
+void testDefaultUnsavedPromptNamesTheAction(Expectations& expectations) {
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost host(scheduler);
+    QWidget window;
+    host.setDialogOwner(&window);
+    expectations.expect(executeRename(host, "Dirty"), "unsaved prompt: the project is dirty");
+    QString heading;
+    bool saveIsDefault = false;
+    QTimer::singleShot(0, [&] {
+        for (auto* widget : QApplication::topLevelWidgets())
+            if (auto* dialog = qobject_cast<bloom::ui::kit::KDialog*>(widget);
+                dialog && dialog->isVisible() &&
+                dialog->objectName() == QStringLiteral("projectUnsavedChanges")) {
+                if (auto* label = dialog->findChild<QLabel*>("projectUnsavedChangesHeading"))
+                    heading = label->text();
+                saveIsDefault = dialog->defaultRole() == bloom::ui::kit::KDialog::Role::Accept &&
+                                dialog->button(bloom::ui::kit::KDialog::Role::Accept)->text() ==
+                                    QStringLiteral("Save");
+                dialog->reject();
+                return;
+            }
+    });
+    host.requestOpen();
+    expectations.expect(heading.contains(QStringLiteral("Untitled")) &&
+                            heading.contains(QStringLiteral("before opening another project")),
+                        "unsaved prompt: it names the project and the action");
+    expectations.expect(saveIsDefault, "unsaved prompt: Save is the visible default");
+    expectations.expect(host.isDirty() && !host.isBusy(), "unsaved prompt: Cancel keeps the edit");
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
@@ -889,5 +961,7 @@ int main(int argc, char** argv) {
     testUnsavedChangeDecisionSeamForOpen(expectations);
     testPathlessSaveRoutesToSaveAsDecision(expectations);
     testSaveCopyUnavailableOnEditableContent(expectations);
+    testDefaultSaveAsAddsBloomSuffix(expectations);
+    testDefaultUnsavedPromptNamesTheAction(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

@@ -2,13 +2,11 @@
 
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/ui/application_preferences.hpp>
-
-#include <QDialog>
+#include <bloom/ui/kit/dialog.hpp>
 
 #include <functional>
 #include <vector>
 
-class QPushButton;
 class QStackedWidget;
 class QVBoxLayout;
 class QWidget;
@@ -22,6 +20,7 @@ namespace bloom::ui {
 class AccelerationStatusProvider;
 
 namespace kit {
+class KButton;
 class KDropdown;
 class KRadioGroup;
 class KSwitch;
@@ -34,17 +33,18 @@ class KValueField;
 // The window is a pure editor of an ApplicationPreferences value. It never reads or writes
 // QSettings itself; the caller supplies the current value and persists what preferences() returns.
 // That keeps the dialog testable without a preferences file and keeps persistence ownership in one
-// place (MainWindow, which broadcasts the result to live panels).
-class PreferencesWindow final : public QDialog {
+// place (MainWindow, which broadcasts the result to live panels). A kit::KDialog shown with exec()
+// by MainWindow (the commit path is its preferencesApplied signal).
+class PreferencesWindow final : public kit::KDialog {
     Q_OBJECT
 
   public:
     // `accelerationStatus` may be null, in which case the Performance page reports the CPU-only
     // truth. Both injected providers are borrowed and must outlive the dialog. Memory reads use
     // only cached ledger state; the dialog never samples the operating system.
-    explicit PreferencesWindow(
-        const ApplicationPreferences& current,
-        const AccelerationStatusProvider* accelerationStatus = nullptr, QWidget* parent = nullptr,
+    PreferencesWindow(
+        QWidget& owner, const ApplicationPreferences& current,
+        const AccelerationStatusProvider* accelerationStatus = nullptr,
         const runtime::MemoryBudgetLedger& memoryLedger = runtime::processMemoryBudgetLedger());
 
     [[nodiscard]] ApplicationPreferences preferences() const;
@@ -95,6 +95,11 @@ class PreferencesWindow final : public QDialog {
     void refreshMemorySummary();
     void commitPreferences();
     void updateApplyEnabled();
+    // Restore Defaults asks first; the answer arrives asynchronously.
+    void confirmRestoreDefaults();
+    // Checks a chosen or typed cache directory once (never per keystroke): a file, a folder Bloom
+    // cannot write, or one it cannot create is refused under the field.
+    void checkCacheDirectory(const QString& directory);
 
     // Performance page (defined in preferences_window_performance.cpp).
     void refreshPerformancePage();
@@ -106,7 +111,9 @@ class PreferencesWindow final : public QDialog {
     QLabel* memorySummary_ = nullptr;
     QStackedWidget* pages_ = nullptr;
     kit::KRadioGroup* categoryRail_ = nullptr;
-    QPushButton* applyButton_ = nullptr;
+    kit::KButton* applyButton_ = nullptr;
+    QWidget* cacheDirectoryField_ = nullptr;
+    QString cacheDirectoryIssue_;
     std::vector<std::function<void()>> refreshCallbacks_;
 
     QLabel* performanceBackendValue_ = nullptr;

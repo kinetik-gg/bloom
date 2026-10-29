@@ -1,9 +1,11 @@
 #include "import_progress_dialog.hpp"
 #include "preferences_window.hpp"
+#include "project_color_settings_dialog.hpp"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dialog_prompts.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/preferences_aware.hpp>
 #include <memory>
@@ -37,14 +39,11 @@
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDialog>
-#include <QDialogButtonBox>
-#include <QFormLayout>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLatin1StringView>
 #include <QMenu>
 #include <QMenuBar>
-#include <QMessageBox>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStackedWidget>
@@ -155,7 +154,9 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                     statusStrip_->showTransientMessage(message);
                     return;
                 }
-                QMessageBox::warning(this, tr("Save Project"), message);
+                kit::inform(*this, kit::KPromptTone::Error, tr("Save Project"),
+                            tr("The project could not be saved."), message,
+                            QStringLiteral("projectSaveFailed"));
             });
     connect(&projectHost_, &ProjectHost::openFinished, this,
             [this](const ProjectHostOperationOutcome outcome, const QString& message) {
@@ -167,7 +168,9 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                     statusStrip_->clearTransientMessage();
                     return;
                 }
-                QMessageBox::warning(this, tr("Open Project"), message);
+                kit::inform(*this, kit::KPromptTone::Error, tr("Open Project"),
+                            tr("The project could not be opened."), message,
+                            QStringLiteral("projectOpenFailed"));
             });
     connect(&projectHost_, &ProjectHost::copyFinished, this,
             [this](const ProjectHostOperationOutcome outcome, const QString& message) {
@@ -179,7 +182,9 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                     statusStrip_->clearTransientMessage();
                     return;
                 }
-                QMessageBox::warning(this, tr("Save a Copy"), message);
+                kit::inform(*this, kit::KPromptTone::Error, tr("Save a Copy"),
+                            tr("The copy could not be saved."), message,
+                            QStringLiteral("projectCopyFailed"));
             });
 
     // "File -> Export Frame..." gating (task F3, issue #103): a composition exists and no export
@@ -213,7 +218,9 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                     }
                     return;
                 }
-                QMessageBox::warning(this, tr("Export Frame"), message);
+                kit::inform(*this, kit::KPromptTone::Error, tr("Export Frame"),
+                            tr("The export did not finish."), message,
+                            QStringLiteral("exportFailed"));
             });
     connect(statusStrip_, &WindowStatusBar::cancelExportRequested, &frameExportController_,
             &FrameExportController::requestCancellation);
@@ -314,7 +321,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
             shutdownRequested_ = true;
             emit shutdownRequested();
         },
-        true);
+        true, UnsavedChangeAction::Close);
 }
 
 void MainWindow::createChrome() {
@@ -395,7 +402,7 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     newCompositionAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_N));
     newCompositionAction_->setShortcutContext(Qt::WindowShortcut);
     connect(newCompositionAction_, &QAction::triggered, this, [this] {
-        if (const auto id = showNewCompositionDialog(compositionSession_, this); id.has_value()) {
+        if (const auto id = showNewCompositionDialog(compositionSession_, *this); id.has_value()) {
             (void)compositionSession_.setComposition(*id);
         }
     });
@@ -407,7 +414,7 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     compositionSettingsAction_->setShortcutContext(Qt::WindowShortcut);
     connect(compositionSettingsAction_, &QAction::triggered, this, [this] {
         (void)showCompositionSettingsDialog(compositionSession_,
-                                            compositionSession_.compositionId(), this);
+                                            compositionSession_.compositionId(), *this);
     });
     duplicateCompositionAction_ = compositionMenu.addAction("Duplicate Composition");
     duplicateCompositionAction_->setObjectName("compositionDuplicateAction");
@@ -421,12 +428,13 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     renameCompositionAction_ = compositionMenu.addAction("Rename Composition…");
     renameCompositionAction_->setObjectName("compositionRenameAction");
     connect(renameCompositionAction_, &QAction::triggered, this, [this] {
-        (void)renameComposition(compositionSession_, compositionSession_.compositionId(), this);
+        renameComposition(compositionSession_, compositionSession_.compositionId(), *this);
     });
     deleteCompositionAction_ = compositionMenu.addAction("Delete Composition");
     deleteCompositionAction_->setObjectName("compositionDeleteAction");
     connect(deleteCompositionAction_, &QAction::triggered, this, [this] {
-        (void)deleteComposition(compositionSession_, compositionSession_.compositionId());
+        // The Assets delete path and its in-use warning.
+        requestDeleteComposition(compositionSession_, compositionSession_.compositionId(), *this);
     });
     compositionMenu.addSeparator();
 
@@ -593,12 +601,17 @@ void MainWindow::createHelpMenu(QMenu& helpMenu) {
 
     // "Open Source Licenses…" (decision 3): a non-modal LicensesWindow, so triggering the action
     // never blocks the event loop (or an automated test that fires it synchronously).
-    openSourceLicensesAction_ = helpMenu.addAction("Open Source Licenses…");
+    openSourceLicensesAction_ = helpMenu.addAction(tr("Open Source Licenses…"));
     openSourceLicensesAction_->setObjectName("openSourceLicensesAction");
     connect(openSourceLicensesAction_, &QAction::triggered, this, [this] {
-        auto* dialog = new LicensesWindow(this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        dialog->show();
+        // One window: asking again raises the open one.
+        if (!licensesWindow_) {
+            licensesWindow_ = new LicensesWindow(*this);
+            licensesWindow_->setAttribute(Qt::WA_DeleteOnClose);
+        }
+        licensesWindow_->show();
+        licensesWindow_->raise();
+        licensesWindow_->activateWindow();
     });
 }
 
@@ -697,144 +710,15 @@ void MainWindow::createFileMenu(QMenu& fileMenu) {
     connect(quitAction_, &QAction::triggered, this, &QWidget::close);
 }
 
-void MainWindow::showProjectColorSettings() {
-    const auto* current = projectHost_.colorSettings();
-    if (current == nullptr)
-        return;
-    const auto original = *current;
-
-    QDialog dialog(this);
-    dialog.setWindowTitle(tr("Project Settings — Colour"));
-    auto* layout = new QVBoxLayout(&dialog);
-    auto* form = new QFormLayout;
-    layout->addLayout(form);
-    auto* config = new kit::KDropdown(&dialog);
-    config->setObjectName(QStringLiteral("projectColorConfigPicker"));
-    config->addItem(tr("Bloom Neutral v1"), QStringLiteral("neutral"));
-    config->addItem(tr("ACES 1.3 CG (OCIO built-in)"), QStringLiteral("aces"));
-    const auto* const currentBuiltin =
-        std::get_if<document::BuiltInOcioConfigLocator>(&original.ocioConfig.locator);
-    const auto currentUri = currentBuiltin == nullptr ? std::string_view{} : currentBuiltin->uri;
-    const auto currentKey = currentUri == color::kAcesCgV1ConfigUri ? QStringLiteral("aces")
-                            : currentUri == color::kBloomNeutralV1ConfigUri
-                                ? QStringLiteral("neutral")
-                                : QStringLiteral("current");
-    if (currentKey == QStringLiteral("current"))
-        config->addItem(tr("Current configuration (editing unavailable)"), currentKey);
-    config->setCurrentIndex(config->findData(currentKey));
-    form->addRow(tr("OCIO config"), config);
-
-    auto* working = new kit::KDropdown(&dialog);
-    working->setObjectName(QStringLiteral("projectWorkingColorSpacePicker"));
-    form->addRow(tr("Working colour space"), working);
-    auto* summary = new kit::KLabel(&dialog);
-    summary->setObjectName(QStringLiteral("projectColorSummary"));
-    summary->setWordWrap(true);
-    form->addRow(tr("Summary"), summary);
-    auto* hint = new kit::KLabel(
-        tr("Existing external OCIO configurations are preserved. Editing or selecting an "
-           "external configuration is not yet available here."),
-        &dialog);
-    hint->setWordWrap(true);
-    layout->addWidget(hint);
-
-    const auto populate = [config, working, summary, original, currentKey] {
-        const auto digestText = [](const core::Sha256Digest& digest) {
-            const auto hex = digest.toLowercaseHex();
-            return QString::fromUtf8(hex.data(), static_cast<qsizetype>(hex.size()));
-        };
-        const auto selected = config->currentData().toString();
-        const bool aces = selected == QStringLiteral("aces");
-        const std::array<std::string_view, 5> acesSpaces{
-            "ACEScg", "ACES2065-1", "Linear Rec.709 (sRGB)", "Linear P3-D65", "Linear Rec.2020"};
-        working->clearItems();
-        if (selected == QStringLiteral("current")) {
-            working->addItem(QString::fromStdString(original.processColorSpaceId),
-                             QString::fromStdString(original.processColorSpaceId));
-            summary->setText(QObject::tr("Current configuration retained\nRevision: %1")
-                                 .arg(digestText(original.ocioConfig.expectedRevision.digest)));
-        } else if (aces) {
-            for (const auto id : acesSpaces)
-                working->addItem(QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())),
-                                 QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())));
-            const auto revision = color::ocioBuiltInContentRevision(
-                color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
-            summary->setText(
-                QObject::tr("Config: cg-config-v1.0.0_aces-v1.3_ocio-v2.1\n"
-                            "Revision: %1\nDisplays: sRGB - Display (ACES 1.0 - SDR Video, "
-                            "Un-tone-mapped, Raw)")
-                    .arg(selected == currentKey
-                             ? digestText(original.ocioConfig.expectedRevision.digest)
-                         : revision.has_value() ? digestText(*revision)
-                                                : QObject::tr("unavailable")));
-        } else {
-            working->addItem(QStringLiteral("lin_rec709_scene"),
-                             QStringLiteral("lin_rec709_scene"));
-            summary->setText(QObject::tr("Config: Bloom Neutral v1\nRevision: %1\nDisplays: "
-                                         "sRGB - Display")
-                                 .arg(digestText(selected == currentKey
-                                                     ? original.ocioConfig.expectedRevision.digest
-                                                     : color::kBloomNeutralV1ConfigDigest)));
-        }
-        if (selected == currentKey) {
-            const auto previous = QString::fromStdString(original.processColorSpaceId);
-            if (working->findData(previous) < 0)
-                working->addItem(previous, previous);
-            working->setCurrentIndex(working->findData(previous));
-        } else {
-            working->setCurrentIndex(0);
-        }
-    };
-    connect(config, &kit::KDropdown::currentIndexChanged, &dialog, [populate] { populate(); });
-    populate();
-
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    if (dialog.exec() != QDialog::Accepted)
-        return;
-
-    const auto selected = config->currentData().toString();
-    const auto workingId = working->currentData().toString().toStdString();
-    if (selected == currentKey && workingId == original.processColorSpaceId)
-        return;
-    if (selected == QStringLiteral("current"))
-        return;
-    document::ColorSettings settings;
-    if (selected == currentKey) {
-        settings = original;
-        settings.processColorSpaceId = workingId;
-    } else if (selected == QStringLiteral("aces")) {
-        const auto revision = color::ocioBuiltInContentRevision(
-            color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
-        if (!revision.has_value())
-            return;
-        settings = {.schemaVersion = document::kColorSettingsSchemaVersionV1,
-                    .processColorSpaceId = workingId,
-                    .ocioConfig = {
-                        .schemaVersion = document::kOcioConfigReferenceSchemaVersionV1,
-                        .locator = document::BuiltInOcioConfigLocator{std::string(
-                            color::kAcesCgV1ConfigUri)},
-                        .expectedRevision = {.algorithm = document::OcioRevisionAlgorithm::Sha256,
-                                             .digest = *revision},
-                        .portability = document::OcioConfigPortability::BuiltIn,
-                        .contextVariables = {}}};
-    } else {
-        settings = document::makeBloomNeutralColorSettingsV1(color::kBloomNeutralV1ConfigDigest);
-    }
-    const auto status = projectHost_.setColorSettings(std::move(settings));
-    if (status == host::ProjectSessionColorSettingsStatus::InvalidSettings)
-        QMessageBox::warning(this, tr("Project Settings"),
-                             tr("The selected colour configuration could not be resolved."));
-}
+void MainWindow::showProjectColorSettings() { showProjectColorSettingsDialog(projectHost_, *this); }
 
 void MainWindow::showPreferences() {
     // The window edits a value, not QSettings; the commit path here is the only writer, so a
     // cancelled dialog leaves the stored preferences untouched.
     const QSettings currentSettings;
-    PreferencesWindow dialog(loadApplicationPreferences(currentSettings), accelerationStatus_,
-                             this);
+    // Modal and synchronous (exec): the commit path is the preferencesApplied connection below.
+    PreferencesWindow dialog(*this, loadApplicationPreferences(currentSettings),
+                             accelerationStatus_);
     connect(&dialog, &PreferencesWindow::preferencesApplied, this,
             [this](const ApplicationPreferences& preferences) {
                 QSettings settings;

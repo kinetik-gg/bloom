@@ -5,6 +5,7 @@
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QString>
+#include <QWidget>
 
 #include <cstdlib>
 #include <filesystem>
@@ -88,7 +89,8 @@ void testCatalogCoversEveryLicensedComponentDirectory(Expectations& expectations
 }
 
 void testLicensesWindowListsEveryCatalogEntryWithText(Expectations& expectations) {
-    LicensesWindow window;
+    QWidget owner;
+    LicensesWindow window(owner);
     auto* list = window.findChild<QListWidget*>(QStringLiteral("licensesComponentList"));
     auto* text = window.findChild<QPlainTextEdit*>(QStringLiteral("licensesTextView"));
     expectations.expect(list != nullptr && text != nullptr,

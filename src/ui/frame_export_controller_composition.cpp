@@ -2,6 +2,7 @@
 #include "composition_export_capability.hpp"
 #include "composition_export_dialog.hpp"
 #include <QCryptographicHash>
+#include <QWidget>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -33,8 +34,14 @@ void FrameExportController::requestCompositionExport() {
                     QCryptographicHash::Sha256)
                     .toHex());
     }
-    const auto request = compositionExportDialog(mapping.value()->maximumFrameIndex(), rate,
-                                                 projectKey, &session_.colorSettings());
+    if (!dialogOwner_)
+        return;
+    const auto request = compositionExportDialog(
+        *dialogOwner_, {.maximumFrame = mapping.value()->maximumFrameIndex(),
+                        .sampleRate = rate,
+                        .projectKey = projectKey,
+                        .colorSettings = &session_.colorSettings(),
+                        .encoder = h264Encoder_});
     if (request)
         beginCompositionExport(*request);
 }
@@ -94,6 +101,7 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
         captured.displayName = "Rec.1886 Rec.709 - Display";
         captured.viewName = "ACES 1.0 - SDR Video";
     }
+    compositionApprovalAsked_ = false;
     mediaExport_ = std::make_unique<host::SequenceExportRunnerV1>(
         scheduler_, compiler_, publicationCoordinator_, artifactCoordinator_, *ledger_,
         std::move(captured), *sequenceExportRetirement_, ledger_);
@@ -104,9 +112,8 @@ void FrameExportController::beginCompositionExport(CompositionExportRequest requ
     taskUiBridge_.wake();
 }
 void FrameExportController::pollCompositionExport() {
-    // The approval prompt runs a nested Qt event loop, during which the task-bridge timer can fire
-    // this poll re-entrantly. A nested completion resets mediaExport_, and the outer frame would
-    // then dereference null; the guard makes the poll non-reentrant and tolerates a cleared export.
+    // Non-reentrant, and tolerant of an export cleared while a poll was on the stack (an approval
+    // answered synchronously by a test seam can finish the export inside this poll).
     if (pollingComposition_ || !mediaExport_)
         return;
     pollingComposition_ = true;
@@ -118,7 +125,8 @@ void FrameExportController::pollCompositionExport() {
     mediaExport_->poll();
     if (mediaExport_->encodedFrames() != previous)
         emit rangeProgressChanged();
-    if (mediaExport_->stage() == host::SequenceExportStageV1::AwaitingApproval) {
+    if (mediaExport_->stage() == host::SequenceExportStageV1::AwaitingApproval &&
+        !compositionApprovalAsked_) {
         const auto* analysis = mediaExport_->analysis();
         const auto frameDigest = mediaExport_->frameApprovalDigest();
         if (!analysis || !frameDigest) {
@@ -134,6 +142,7 @@ void FrameExportController::pollCompositionExport() {
             prompt.presetName =
                 QString::fromUtf8(identity->serializedId.data(),
                                   static_cast<qsizetype>(identity->serializedId.size()));
+        prompt.presetLabel = outputPresetLabel(pendingPreset_);
         prompt.profile = QString::fromStdString(analysis->settings.profile);
         prompt.implementationNote = QString::fromStdString(analysis->implementationNote);
         const auto hex = analysis->digest.toLowercaseHex();
@@ -147,16 +156,21 @@ void FrameExportController::pollCompositionExport() {
             }
         }
         setActivity(FrameExportActivity::AwaitingApproval);
-        const bool approved = approvalDecisionProvider_ && approvalDecisionProvider_(prompt) ==
-                                                               FrameExportApprovalDecision::Export;
-        if (shuttingDown_) {
-            mediaExport_.reset();
+        // Asked once, asynchronously: later polls keep the export alive while the artist decides,
+        // and the answer approves (or cancels) it.
+        compositionApprovalAsked_ = true;
+        askApproval(prompt, [this, digest = analysis->digest,
+                             frame = *frameDigest](const FrameExportApprovalDecision decision) {
+            if (!mediaExport_)
+                return;
+            if (shuttingDown_ || decision != FrameExportApprovalDecision::Export ||
+                !mediaExport_->approve(digest, frame))
+                mediaExport_->cancel();
+            setActivity(FrameExportActivity::Publishing);
+            taskUiBridge_.wake();
+        });
+        if (!mediaExport_)
             return;
-        }
-        if (!approved || !mediaExport_->approve(analysis->digest, *frameDigest))
-            mediaExport_->cancel();
-        setActivity(FrameExportActivity::Publishing);
-        taskUiBridge_.wake();
     }
     if (const auto& result = mediaExport_->result(); result) {
         FrameExportOutcome outcome = FrameExportOutcome::Failed;
@@ -177,6 +191,7 @@ void FrameExportController::pollCompositionExport() {
         } else
             message = tr("Composition export was superseded or could not be published.");
         mediaExport_.reset();
+        compositionApprovalAsked_ = false;
         setActivity(FrameExportActivity::Idle);
         emit rangeProgressChanged();
         finish(outcome, std::move(message));

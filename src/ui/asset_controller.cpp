@@ -3,7 +3,6 @@
 #include "colour_space_names.hpp"
 #include "network_share_paths.hpp"
 #include <QDir>
-#include <QFileDialog>
 #include <QTimer>
 #include <QUrl>
 #include <QUuid>
@@ -32,6 +31,7 @@
 #include <bloom/runtime/video_asset.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/file_chooser.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <cmath>
@@ -42,6 +42,14 @@
 
 namespace bloom::ui {
 namespace {
+
+// The media formats Import and Relink offer.
+[[nodiscard]] QString mediaFileFilter() {
+    return QObject::tr(
+        "Media (*.cube *.clf *.spi1d *.spi3d *.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 "
+        "*.mp4 *.mov *.mkv *.mxf *.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR *.TIF *.TIFF "
+        "*.WAV *.MP3 *.MP4 *.MOV *.MKV *.MXF)");
+}
 // CACHEFIX-1 proxy/audio caps. The proxy cache keeps its historic 512-entry bound and adds the
 // byte bound that bound only ever implied; the audio cache gets the aggregate bound it never had.
 constexpr std::size_t kProxyCacheEntryLimit = 512;
@@ -780,24 +788,17 @@ void AssetController::requestImport(QWidget* parent) { requestImport(parent, {})
 void AssetController::requestImport(QWidget* parent, ImportFollowUp followUp) {
     if (!host_.canSave())
         return;
-    // A real QFileDialog instance rather than the static getOpenFileNames() convenience: it is
-    // still native when the platform theme provides one (unchanged behaviour), but constructing
-    // it lets configureFileDialogSidebar() add the mounted network shares before exec(), which
-    // the static function gives no opportunity to do.
-    QFileDialog dialog(
-        parent, tr("Import Media"), {},
-        tr("Media (*.cube *.clf *.spi1d *.spi3d *.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 "
-           "*.mp4 *.mov *.mkv *.mxf "
-           "*.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR *.TIF *.TIFF *.WAV *.MP3 "
-           "*.MP4 *.MOV *.MKV *.MXF)"));
-    dialog.setAcceptMode(QFileDialog::AcceptOpen);
-    dialog.setFileMode(QFileDialog::ExistingFiles);
-    configureFileDialogSidebar(dialog);
-    if (dialog.exec() == QDialog::Accepted) {
-        const auto paths = dialog.selectedFiles();
-        if (!paths.empty())
-            importFiles(paths, importFolder_, std::move(followUp));
-    }
+    // Every file dialog has an owner; a request without one opens nothing.
+    if (parent == nullptr)
+        return;
+    const auto paths = kit::chooseFiles(*parent, {.mode = kit::KFileRequest::Mode::OpenMany,
+                                                  .title = tr("Import Media"),
+                                                  .kind = QStringLiteral("media"),
+                                                  .nameFilters = mediaFileFilter(),
+                                                  .defaultSuffix = {},
+                                                  .startPath = {}});
+    if (!paths.empty())
+        importFiles(paths, importFolder_, std::move(followUp));
 }
 void AssetController::importFiles(const QStringList& paths) { importFiles(paths, importFolder_); }
 void AssetController::importFiles(const QStringList& paths,
@@ -814,18 +815,19 @@ void AssetController::relink(document::AssetId id, QWidget* parent) {
         return;
     const auto* asset = session_.snapshot().project().findAsset(id);
     const bool font = asset != nullptr && asset->kind == document::AssetKind::Font;
-    QFileDialog dialog(
-        parent, font ? tr("Relink Font") : tr("Relink Media"), {},
-        font ? tr("Fonts (*.ttf *.otf *.ttc *.TTF *.OTF *.TTC)")
-             : tr("Media (*.cube *.clf *.spi1d *.spi3d *.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav "
-                  "*.mp3 *.mp4 *.mov *.mkv *.mxf "
-                  "*.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR *.TIF *.TIFF *.WAV *.MP3 "
-                  "*.MP4 *.MOV *.MKV *.MXF)"));
-    dialog.setAcceptMode(QFileDialog::AcceptOpen);
-    dialog.setFileMode(QFileDialog::ExistingFile);
-    configureFileDialogSidebar(dialog);
-    if (dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty())
-        prepare({dialog.selectedFiles().front()}, id);
+    if (parent == nullptr)
+        return;
+    const auto chosen =
+        kit::chooseFile(*parent, {.mode = kit::KFileRequest::Mode::Open,
+                                  .title = font ? tr("Relink Font") : tr("Relink Media"),
+                                  .kind = font ? QStringLiteral("font") : QStringLiteral("media"),
+                                  .nameFilters = font ? tr("Fonts (*.ttf *.otf *.ttc *.TTF *.OTF "
+                                                           "*.TTC)")
+                                                      : mediaFileFilter(),
+                                  .defaultSuffix = {},
+                                  .startPath = {}});
+    if (chosen)
+        prepare({*chosen}, id);
 }
 std::filesystem::path AssetController::sourcePath(const document::AssetId id) const {
     const auto* asset = session_.snapshot().project().findAsset(id);

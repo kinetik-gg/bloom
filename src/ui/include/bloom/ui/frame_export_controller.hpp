@@ -17,8 +17,11 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
+
+class QWidget;
 
 #include <cstdint>
 #include <filesystem>
@@ -30,7 +33,15 @@
 namespace bloom::ui {
 
 class CompositionSession;
+class H264EncoderService;
 class TaskUiBridge;
+namespace kit {
+class KDialog;
+} // namespace kit
+
+// The artist-facing name of an output preset ("PNG (8-bit sRGB)", "ProRes MOV"); the serialized
+// id stays the trace value.
+[[nodiscard]] QString outputPresetLabel(output::OutputPresetV1 preset);
 
 // What the artist is offered to approve before FrameExportController calls
 // bloom::host::approveFrameExportV1() (task F3, issue #103, design decision 3). Every field is read
@@ -56,6 +67,8 @@ struct FrameExportApprovalPrompt final {
     // The exact serialized preset ID (docs/architecture/frame-output.md's typed-preset table) --
     // "PngRgba8SrgbV1" or "FlatExrRgba32fLinRec709SceneV1", never a paraphrase.
     QString presetName;
+    // What the prompt shows for it: outputPresetLabel().
+    QString presetLabel;
     FrameExportFacetSummary facets;
     // The first 16 lowercase hex characters of attempt->digest()->toLowercaseHex() -- "the digest's
     // short form" (design decision 3).
@@ -118,6 +131,10 @@ using FrameExportDestinationProvider = std::function<std::optional<std::filesyst
 using FrameExportRangeProvider = std::function<std::optional<FrameExportRangeRequest>()>;
 using FrameExportApprovalDecisionProvider =
     std::function<FrameExportApprovalDecision(const FrameExportApprovalPrompt&)>;
+// The asynchronous approval seam: ask, and answer later through `reply` (at most once). The
+// export never waits inside a poll for the answer.
+using FrameExportApprovalRequester = std::function<void(
+    const FrameExportApprovalPrompt&, std::function<void(FrameExportApprovalDecision)> reply)>;
 
 // Composition root for "File -> Export Frame..." (task F3, issue #103). Drives the ACTIVE
 // composition at CompositionSession::currentTime() -- the same one-truth "current frame" source
@@ -189,14 +206,22 @@ class FrameExportController final : public QObject {
     [[nodiscard]] std::uint64_t chargedResourceBytes() const noexcept;
 
     // Seam setters (ProjectHost's decision-4 precedent). Defaults are installed at construction (a
-    // real QFileDialog::getSaveFileName offering the closed ".exr"/".png"/".tiff" filters; TIFF is
-    // backed by the supervised worker when available; a real
-    // QMessageBox Export/Cancel prompt naming the selected preset), so
-    // offscreen tests can drive the whole flow without a real dialog appearing.
+    // kit::chooseFile() save dialog offering the closed ".exr"/".png"/".tiff" filters; TIFF is
+    // backed by the supervised worker when available; one Export Frame Range dialog with the
+    // destination and the first/last frame; an asynchronous, window-modal Export/Cancel prompt
+    // naming the preset), so offscreen tests can drive the whole flow without a real dialog.
     void setDestinationProvider(FrameExportDestinationProvider provider);
     void setProjectPathProvider(FrameExportDestinationProvider provider);
     void setRangeProvider(FrameExportRangeProvider provider);
+    // A synchronous decision, answered at once (tests); production asks asynchronously.
     void setApprovalDecisionProvider(FrameExportApprovalDecisionProvider provider);
+    void setApprovalRequester(FrameExportApprovalRequester requester);
+    // The window the default dialogs open over. Until it is set, the default dialogs decline (no
+    // destination, no range, Cancel) rather than open unowned.
+    void setDialogOwner(QWidget* owner);
+    // Where the Export dialog reads which H.264 encoder this platform uses and whether OpenH264 is
+    // verified (refreshed on a worker). Optional; not owned.
+    void setH264EncoderService(H264EncoderService* service);
     // Test seam: adjusts each still-frame attempt request just before submission, so a test can
     // force a genuine attempt failure (for example an impossible pixel allowance) and prove the UI
     // failure path. Production never installs one.
@@ -297,6 +322,8 @@ class FrameExportController final : public QObject {
         bool cancelled = false;
     };
 
+    // The default destination, range and approval dialogs (frame_export_controller_dialogs.cpp).
+    void installDefaultDialogs();
     void pollOnce();
     void pollCompositionExport();
     void beginDeliverablePreparation(std::shared_ptr<const output::OutputAnalysisAttemptV1>);
@@ -305,6 +332,13 @@ class FrameExportController final : public QObject {
     void handleAttemptResult(host::OutputAnalysisAttemptRunnerV1& runner);
     void handleExportJobResult(ExportJobHandle& job);
     void presentApproval(const std::shared_ptr<const output::OutputAnalysisAttemptV1>& attempt);
+    void resolveFrameApproval(const std::shared_ptr<const output::OutputAnalysisAttemptV1>& attempt,
+                              FrameExportApprovalDecision decision);
+    // Asks through the requester; `onDecision` runs at most once, and never after
+    // withdrawApproval() or this controller's destruction.
+    void askApproval(const FrameExportApprovalPrompt& prompt,
+                     std::function<void(FrameExportApprovalDecision)> onDecision);
+    void withdrawApproval();
     void beginExportJob(std::unique_ptr<host::FrameExportRequestV1> request);
     // Starts the attempt for `sequence_`'s next frame, or finishes the range when none is left.
     void advanceSequence();
@@ -343,12 +377,19 @@ class FrameExportController final : public QObject {
     FrameExportDestinationProvider destinationProvider_;
     FrameExportDestinationProvider projectPathProvider_;
     FrameExportRangeProvider rangeProvider_;
-    FrameExportApprovalDecisionProvider approvalDecisionProvider_;
+    FrameExportApprovalRequester approvalRequester_;
+    // The still-frame attempt awaiting the artist's answer; it keeps its reservation until then.
+    std::shared_ptr<const output::OutputAnalysisAttemptV1> pendingApprovalAttempt_;
+    std::uint64_t approvalTicket_ = 0;
+    bool compositionApprovalAsked_ = false;
+    QPointer<QWidget> dialogOwner_;
+    QPointer<kit::KDialog> approvalDialog_;
+    H264EncoderService* h264Encoder_ = nullptr;
     std::function<void(host::OutputAnalysisAttemptRequestV1&)> attemptRequestAdjuster_;
     std::optional<SequenceState> sequence_;
     std::unique_ptr<host::SequenceExportRunnerV1> mediaExport_;
-    // Guards pollCompositionExport against re-entrancy from the approval prompt's nested event
-    // loop.
+    // Keeps pollCompositionExport non-reentrant; the approval prompt itself no longer nests an
+    // event loop (it answers asynchronously).
     bool pollingComposition_ = false;
     bool shuttingDown_ = false;
     bool cachePurgeGate_ = false;

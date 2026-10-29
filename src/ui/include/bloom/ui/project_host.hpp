@@ -14,8 +14,10 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QTimer>
+class QWidget;
 
 #include <cstddef>
 #include <cstdint>
@@ -40,11 +42,21 @@ struct RecoveryScanState;
 // The artist's Save/Discard/Cancel answer to an unsaved-change prompt (docs/architecture/
 // project-session.md, "Unsaved-Change State Machine"). Returned by an injected
 // UnsavedChangeDecisionProvider so offscreen tests can drive all three answers without a real
-// QMessageBox.
+// prompt.
 enum class UnsavedChangeDecision : std::uint8_t {
     Save,
     Discard,
     Cancel,
+};
+
+// What the unsaved-change prompt is protecting the edit from, so it can name the action: "Save
+// changes to “Shot 12” before opening another project?".
+enum class UnsavedChangeAction : std::uint8_t {
+    Continue,
+    NewProject,
+    OpenProject,
+    RecoverProject,
+    Close,
 };
 
 using UnsavedChangeDecisionProvider = std::function<UnsavedChangeDecision()>;
@@ -101,8 +113,8 @@ enum class ProjectHostActivity : std::uint8_t {
 // finished signal.
 //
 // Dialogs are behind small injectable seams (UnsavedChangeDecisionProvider/ProjectPathProvider)
-// defaulting to real QMessageBox/QFileDialog implementations, so offscreen tests can drive New,
-// Open, and Save entirely without a real dialog appearing.
+// defaulting to kit prompts and kit::chooseFile() over the dialog owner, so offscreen tests can
+// drive New, Open, and Save entirely without a real dialog appearing.
 class ProjectHost final : public QObject {
     Q_OBJECT
 
@@ -154,8 +166,8 @@ class ProjectHost final : public QObject {
     // (invalid) CompositionId when there is no decoded content or no composition at all.
     [[nodiscard]] document::CompositionId lowestCompositionId() const;
 
-    // Seam setters (decision 4). Defaults are installed at construction (QMessageBox/QFileDialog);
-    // tests replace them before driving New/Open/Save.
+    // Seam setters (decision 4). Defaults are installed at construction (kit prompts,
+    // kit::chooseFile()); tests replace them before driving New/Open/Save.
     void setUnsavedChangeDecisionProvider(UnsavedChangeDecisionProvider provider);
     void setOpenPathProvider(ProjectPathProvider provider);
     void setSaveAsPathProvider(ProjectPathProvider provider);
@@ -179,7 +191,16 @@ class ProjectHost final : public QObject {
     // close can share the exact same composed logic per decision 4 ("before New, Open, and window
     // close ... prompt") instead of duplicating it.
     void confirmUnsavedChanges(std::function<void()> onProceed,
-                               bool retireRecoveryOnProceed = false);
+                               bool retireRecoveryOnProceed = false,
+                               UnsavedChangeAction action = UnsavedChangeAction::Continue);
+    // The action the unsaved-change prompt currently being answered protects.
+    [[nodiscard]] UnsavedChangeAction pendingUnsavedAction() const noexcept {
+        return pendingUnsavedAction_;
+    }
+    // The window the default prompts and file dialogs open over (kit dialogs always have an
+    // owner). The composition root sets it once the main window exists; until then the default
+    // prompts decline (Cancel, no path, no recovery) rather than open unowned.
+    void setDialogOwner(QWidget* owner);
 
   public slots:
     // Composes the unsaved-change flow, then REPLACES the session in-place with a fresh
@@ -313,6 +334,9 @@ class ProjectHost final : public QObject {
     std::optional<std::filesystem::path> protectedRecoveryOfferPath_;
 
     UnsavedChangeDecisionProvider decisionProvider_;
+    UnsavedChangeAction pendingUnsavedAction_ = UnsavedChangeAction::Continue;
+    UnsavedChangeAction pendingUnsavedContinuationAction_ = UnsavedChangeAction::Continue;
+    QPointer<QWidget> dialogOwner_;
     ProjectPathProvider openPathProvider_;
     ProjectPathProvider saveAsPathProvider_;
     RecoveryDecisionProvider recoveryDecisionProvider_;

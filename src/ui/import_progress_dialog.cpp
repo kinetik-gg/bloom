@@ -3,15 +3,9 @@
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/progress_bar.hpp>
-#include <bloom/ui/kit/tokens.hpp>
 
 #include <QApplication>
-#include <QCloseEvent>
 #include <QEvent>
-#include <QHBoxLayout>
-#include <QKeyEvent>
-#include <QScrollArea>
-#include <QVBoxLayout>
 
 #include <algorithm>
 
@@ -68,69 +62,23 @@ class InputHold final : public QObject {
 
 } // namespace
 
-ImportProgressDialog::ImportProgressDialog(QWidget* parent) : QDialog(parent) {
-    setObjectName(QStringLiteral("importProgressDialog"));
-    setWindowTitle(tr("Import"));
-    setMinimumWidth(kit::px(kit::Size::DialogTextWidth));
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(kit::px(kit::Spacing::M), kit::px(kit::Spacing::M),
-                               kit::px(kit::Spacing::M), kit::px(kit::Spacing::M));
-    layout->setSpacing(kit::px(kit::Spacing::S));
-
-    heading_ = new kit::KLabel(tr("Importing"), this);
-    heading_->setObjectName(QStringLiteral("importProgressHeading"));
-    layout->addWidget(heading_);
-    detail_ = new kit::KLabel(QString{}, this, kit::TypeRole::UiSmall);
-    detail_->setObjectName(QStringLiteral("importProgressFile"));
-    detail_->setTone(kit::Color::Muted);
-    layout->addWidget(detail_);
-    bar_ = new kit::KProgressBar(this);
-    bar_->setObjectName(QStringLiteral("importProgressBar"));
-    bar_->setAccessibleName(tr("Import progress"));
-    layout->addWidget(bar_);
-
-    counts_ = new kit::KLabel(QString{}, this);
-    counts_->setObjectName(QStringLiteral("importSummaryCounts"));
-    counts_->hide();
-    layout->addWidget(counts_);
-    note_ = new kit::KLabel(QString{}, this, kit::TypeRole::UiSmall);
-    note_->setObjectName(QStringLiteral("importSummaryNote"));
-    note_->setWordWrap(true);
-    note_->setTone(kit::Color::Muted);
-    note_->hide();
-    layout->addWidget(note_);
-
-    auto* scroll = new QScrollArea(this);
-    scroll->setObjectName(QStringLiteral("importSkippedList"));
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setMaximumHeight(kit::px(kit::Size::DiagnosticHeight));
-    auto* rows = new QWidget(scroll);
-    skippedRows_ = new QVBoxLayout(rows);
-    skippedRows_->setContentsMargins(0, 0, 0, 0);
-    skippedRows_->setSpacing(kit::px(kit::Spacing::S));
-    scroll->setWidget(rows);
-    skippedPanel_ = scroll;
-    skippedPanel_->hide();
-    layout->addWidget(skippedPanel_);
-
-    auto* buttons = new QHBoxLayout;
-    buttons->addStretch();
-    cancel_ = new kit::KButton(tr("Cancel"), this);
-    cancel_->setObjectName(QStringLiteral("importCancelButton"));
-    close_ = new kit::KButton(tr("Close"), this);
-    close_->setObjectName(QStringLiteral("importCloseButton"));
-    close_->setVariant(kit::KButton::Variant::Primary);
-    close_->hide();
-    buttons->addWidget(cancel_);
-    buttons->addWidget(close_);
-    layout->addLayout(buttons);
-    connect(cancel_, &kit::KButton::clicked, this, &ImportProgressDialog::requestStop);
-    connect(close_, &kit::KButton::clicked, this, &QDialog::accept);
+ImportProgressDialog::ImportProgressDialog(QWidget& owner)
+    : kit::KTaskDialog(tr("Import"), QStringLiteral("importProgressDialog"), owner) {
+    heading()->setObjectName(QStringLiteral("importProgressHeading"));
+    heading()->setText(tr("Importing"));
+    detail()->setObjectName(QStringLiteral("importProgressFile"));
+    progressBar()->setObjectName(QStringLiteral("importProgressBar"));
+    progressBar()->setAccessibleName(tr("Import progress"));
+    counts()->setObjectName(QStringLiteral("importSummaryCounts"));
+    note()->setObjectName(QStringLiteral("importSummaryNote"));
+    summaryList()->setObjectName(QStringLiteral("importSkippedList"));
+    setSummaryItemNames(QStringLiteral("importSkippedFile"), QStringLiteral("importSkippedReason"));
+    cancelButton()->setObjectName(QStringLiteral("importCancelButton"));
+    closeButton()->setObjectName(QStringLiteral("importCloseButton"));
 }
 
 void ImportProgressDialog::showProgress(const AssetController::ImportProgressState& state) {
-    if (summarizing_)
+    if (summarizing())
         return;
     QString heading;
     QString detail;
@@ -145,7 +93,7 @@ void ImportProgressDialog::showProgress(const AssetController::ImportProgressSta
                          ? tr("Looking in %1 · %2 found").arg(state.current).arg(state.found)
                          : tr("Looking in %1").arg(state.current);
         }
-        bar_->setBusy();
+        progressBar()->setBusy();
     } else if (!state.current.isEmpty()) {
         const auto item =
             state.frames > 0 ? tr("%1 · sequence").arg(sequenceName(state.current)) : state.current;
@@ -167,37 +115,32 @@ void ImportProgressDialog::showProgress(const AssetController::ImportProgressSta
             state.frames == 0 &&
             (state.workDone == 0 || readingSince_.elapsed() >= kItemBusyAfter.count());
         if (unmeasured)
-            bar_->setBusy();
+            progressBar()->setBusy();
         else
-            bar_->setProgress(state.workDone, state.workTotal);
+            progressBar()->setProgress(state.workDone, state.workTotal);
     } else {
-        bar_->setProgress(state.workDone, state.workTotal);
+        progressBar()->setProgress(state.workDone, state.workTotal);
         return;
     }
-    if (state.stopping) {
-        heading = tr("Cancelling…");
-        cancel_->setEnabled(false);
-    }
-    heading_->setElidedText(heading);
-    detailFull_ = detail;
-    detail_->setElidedText(detail);
+    kit::KTaskDialog::showProgress(heading, detail);
+    if (state.stopping)
+        showStopping(tr("Cancelling…"));
 }
 
 void ImportProgressDialog::showSummary(const AssetController::ImportReport& report) {
-    summarizing_ = true;
     const bool refused = !report.failure.isEmpty();
+    QString heading;
     if (refused || report.imported == 0)
-        heading_->setElidedText(report.cancelled && !refused ? tr("Import cancelled")
-                                                             : tr("Nothing was imported"));
+        heading =
+            report.cancelled && !refused ? tr("Import cancelled") : tr("Nothing was imported");
     else
-        heading_->setElidedText(report.cancelled ? tr("Import cancelled") : tr("Import finished"));
+        heading = report.cancelled ? tr("Import cancelled") : tr("Import finished");
     QStringList parts;
     parts << tr("Imported %1").arg(refused ? 0 : report.imported);
     if (!report.skipped.empty())
         parts << tr("Skipped %1").arg(report.skipped.size());
     if (report.cancelled && report.notImported > 0)
         parts << tr("Not imported %1").arg(report.notImported);
-    counts_->setText(parts.join(QStringLiteral(" · ")));
     QString note;
     if (refused)
         note = report.failure;
@@ -209,94 +152,18 @@ void ImportProgressDialog::showSummary(const AssetController::ImportReport& repo
     if (!report.followUp.isEmpty())
         note = note.isEmpty() ? report.followUp + QLatin1Char('.')
                               : note + QLatin1Char(' ') + report.followUp + QLatin1Char('.');
-    note_->setText(note);
-    note_->setVisible(!note.isEmpty());
-
-    while (auto* item = skippedRows_->takeAt(0)) {
-        delete item->widget();
-        delete item;
-    }
-    for (const auto& skipped : report.skipped) {
-        auto* row = new QWidget(skippedRows_->parentWidget());
-        auto* column = new QVBoxLayout(row);
-        column->setContentsMargins(0, 0, 0, 0);
-        column->setSpacing(kit::px(kit::Spacing::XXS));
-        auto* name = new kit::KLabel(skipped.file, row);
-        name->setObjectName(QStringLiteral("importSkippedFile"));
-        auto* reason = new kit::KLabel(skipped.reason, row, kit::TypeRole::UiSmall);
-        reason->setObjectName(QStringLiteral("importSkippedReason"));
-        reason->setWordWrap(true);
-        reason->setTone(kit::Color::Muted);
-        column->addWidget(name);
-        column->addWidget(reason);
-        skippedRows_->addWidget(row);
-    }
-    skippedRows_->addStretch();
-    skippedPanel_->setVisible(!report.skipped.empty());
-
-    detail_->hide();
-    bar_->hide();
-    counts_->show();
-    cancel_->hide();
-    close_->show();
-    close_->setFocus();
-    adjustSize();
-}
-
-QString ImportProgressDialog::headingText() const {
-    return heading_->toolTip().isEmpty() ? heading_->text() : heading_->toolTip();
-}
-
-QString ImportProgressDialog::detailText() const {
-    return summarizing_ ? counts_->text() : detailFull_;
-}
-
-void ImportProgressDialog::dismiss() {
-    dismissing_ = true;
-    close();
-}
-
-void ImportProgressDialog::requestStop() {
-    if (summarizing_)
-        return;
-    cancel_->setEnabled(false);
-    heading_->setElidedText(tr("Cancelling…"));
-    emit stopRequested();
-}
-
-void ImportProgressDialog::reject() {
-    // QDialog::closeEvent() closes through reject(), so a dismissal passes straight through.
-    if (summarizing_ || dismissing_)
-        QDialog::reject();
-    else
-        requestStop();
-}
-
-void ImportProgressDialog::keyPressEvent(QKeyEvent* event) {
-    // Return and Enter take the summary's one action, Close; while importing they do nothing.
-    if (summarizing_ && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
-        accept();
-        return;
-    }
-    QDialog::keyPressEvent(event);
-}
-
-void ImportProgressDialog::closeEvent(QCloseEvent* event) {
-    if (summarizing_ || dismissing_) {
-        QDialog::closeEvent(event);
-        return;
-    }
-    event->ignore();
-    requestStop();
+    std::vector<SummaryItem> items;
+    items.reserve(report.skipped.size());
+    for (const auto& skipped : report.skipped)
+        items.push_back({skipped.file, skipped.reason});
+    kit::KTaskDialog::showSummary(heading, parts.join(QStringLiteral(" · ")), note, items);
 }
 
 ImportProgressPresenter::ImportProgressPresenter(AssetController& controller, QWidget& window)
-    : QObject(&window), controller_(&controller), window_(window) {
-    showTimer_.setSingleShot(true);
-    showTimer_.setInterval(kShowDelay);
-    refreshTimer_.setInterval(kRefreshInterval);
-    connect(&showTimer_, &QTimer::timeout, this, &ImportProgressPresenter::showDialog);
-    connect(&refreshTimer_, &QTimer::timeout, this, &ImportProgressPresenter::refresh);
+    : QObject(&window), controller_(&controller), window_(window),
+      timing_(kShowDelay, kRefreshInterval) {
+    connect(&timing_, &kit::KTaskTiming::showDue, this, &ImportProgressPresenter::showDialog);
+    connect(&timing_, &kit::KTaskTiming::refreshDue, this, &ImportProgressPresenter::refresh);
     connect(&controller, &AssetController::importStarted, this, &ImportProgressPresenter::started);
     connect(&controller, &AssetController::importFinished, this,
             &ImportProgressPresenter::finished);
@@ -320,9 +187,8 @@ ImportProgressDialog* ImportProgressPresenter::ensureDialog() {
         dialog_.clear();
     }
     if (!dialog_) {
-        dialog_ = new ImportProgressDialog(&window_);
+        dialog_ = new ImportProgressDialog(window_);
         dialog_->setAttribute(Qt::WA_DeleteOnClose);
-        dialog_->setWindowModality(Qt::ApplicationModal);
         connect(dialog_, &ImportProgressDialog::stopRequested, this, [this] {
             if (controller_)
                 controller_->stopImport();
@@ -334,17 +200,18 @@ ImportProgressDialog* ImportProgressPresenter::ensureDialog() {
 void ImportProgressPresenter::started() {
     ensureDialog();
     holdInput(true);
-    showTimer_.start();
+    timing_.begin();
 }
 
 void ImportProgressPresenter::showDialog() {
-    if (!controller_ || !controller_->importing())
+    if (!controller_ || !controller_->importing()) {
+        timing_.finish();
         return;
+    }
     holdInput(false);
     refresh();
     dialog_->show();
     dialog_->raise();
-    refreshTimer_.start();
 }
 
 void ImportProgressPresenter::refresh() {
@@ -353,8 +220,7 @@ void ImportProgressPresenter::refresh() {
 }
 
 void ImportProgressPresenter::finished(const AssetController::ImportReport& report) {
-    showTimer_.stop();
-    refreshTimer_.stop();
+    timing_.finish();
     holdInput(false);
     const bool summary = !report.discarded && (report.cancelled || !report.failure.isEmpty() ||
                                                !report.skipped.empty() || report.imported == 0);

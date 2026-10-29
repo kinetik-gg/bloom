@@ -340,7 +340,7 @@ target_link_libraries(bloom_composition_session_rebind_test PRIVATE bloom_ui)
 target_link_libraries(bloom_application_shutdown_test PRIVATE bloom_ui)
 target_link_libraries(bloom_project_host_test PRIVATE bloom_ui)
 target_link_libraries(bloom_task_monitor_test PRIVATE bloom_ui)
-target_link_libraries(bloom_viewer_editor_test PRIVATE bloom_ui)
+target_link_libraries(bloom_viewer_editor_test PRIVATE bloom_ui Qt6::Test)
 target_include_directories(bloom_viewer_editor_test PRIVATE ..)
 target_link_libraries(bloom_timeline_frame_math_test PRIVATE bloom_ui)
 target_link_libraries(bloom_timeline_ruler_test PRIVATE bloom_ui)
@@ -1139,7 +1139,7 @@ bloom_add_test(
 # The Settings window: control/preference binding, dirty-state gating, Apply emission, restore
 # defaults, restart badges, category navigation, and the read-only Performance page.
 add_executable(bloom_preferences_window_test preferences_window_tests.cpp)
-target_link_libraries(bloom_preferences_window_test PRIVATE bloom_ui)
+target_link_libraries(bloom_preferences_window_test PRIVATE bloom_ui Qt6::Test)
 target_include_directories(bloom_preferences_window_test PRIVATE ..)
 bloom_enable_warnings(bloom_preferences_window_test)
 bloom_add_test(
@@ -1369,6 +1369,31 @@ bloom_add_test(
     LABELS ui media integration
     TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1"
+)
+
+# Lane C: the kit dialog primitive (KDialog, form, prompts, chooseFile, task dialog).
+add_executable(bloom_kit_dialog_test kit_dialog_tests.cpp)
+target_link_libraries(bloom_kit_dialog_test PRIVATE bloom_ui_kit Qt6::Test)
+bloom_enable_warnings(bloom_kit_dialog_test)
+bloom_add_test(
+    NAME bloom.ui.kit_dialog
+    COMMAND bloom_kit_dialog_test
+    LABELS ui unit kit
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+)
+
+# Lane C: Export Composition's H.264 encoder gate and its worker-only verify/Locate.
+add_executable(bloom_composition_export_dialog_test composition_export_dialog_tests.cpp)
+target_include_directories(bloom_composition_export_dialog_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_composition_export_dialog_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_composition_export_dialog_test)
+bloom_add_test(
+    NAME bloom.ui.composition-export-dialog
+    COMMAND bloom_composition_export_dialog_test
+    LABELS ui unit media
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
 )
 
 add_executable(bloom_network_share_paths_test network_share_paths_tests.cpp)

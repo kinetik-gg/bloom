@@ -1,4 +1,4 @@
-#include "network_share_paths.hpp"
+#include <bloom/ui/kit/network_shares.hpp>
 
 #include <QDir>
 #include <QFileDialog>
@@ -10,7 +10,7 @@
 #include <unistd.h>
 #endif
 
-namespace bloom::ui {
+namespace bloom::ui::kit {
 namespace {
 
 constexpr auto kSmbSharePrefix = QLatin1String("smb-share:");
@@ -148,4 +148,4 @@ void configureFileDialogSidebar(QFileDialog& dialog, const QString& gvfsRoot) {
     dialog.setSidebarUrls(urls);
 }
 
-} // namespace bloom::ui
+} // namespace bloom::ui::kit

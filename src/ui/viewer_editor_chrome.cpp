@@ -103,7 +103,7 @@ void ViewerEditor::buildHeader() {
     viewerCompositionNewAction_ = addCompositionAction(
         tr("New Composition…"), QStringLiteral("viewerNewCompositionAction"),
         QStringLiteral("compositionNewAction"), [this] {
-            if (const auto id = showNewCompositionDialog(session_, this); id.has_value())
+            if (const auto id = showNewCompositionDialog(session_, *this); id.has_value())
                 (void)session_.setComposition(*id);
         });
     viewerCompositionDuplicateAction_ = addCompositionAction(
@@ -115,15 +115,15 @@ void ViewerEditor::buildHeader() {
     viewerCompositionSettingsAction_ = addCompositionAction(
         tr("Composition Settings…"), QStringLiteral("viewerCompositionSettingsAction"),
         QStringLiteral("compositionSettingsAction"),
-        [this] { (void)showCompositionSettingsDialog(session_, session_.compositionId(), this); });
+        [this] { (void)showCompositionSettingsDialog(session_, session_.compositionId(), *this); });
     viewerCompositionRenameAction_ = addCompositionAction(
         tr("Rename Composition…"), QStringLiteral("viewerRenameCompositionAction"),
         QStringLiteral("compositionRenameAction"),
-        [this] { (void)renameComposition(session_, session_.compositionId(), this); });
+        [this] { renameComposition(session_, session_.compositionId(), *this); });
     viewerCompositionDeleteAction_ = addCompositionAction(
         tr("Delete Composition"), QStringLiteral("viewerDeleteCompositionAction"),
         QStringLiteral("compositionDeleteAction"),
-        [this] { (void)deleteComposition(session_, session_.compositionId()); });
+        [this] { requestDeleteComposition(session_, session_.compositionId(), *this); });
 
     objectSelector_ = new kit::KDropdown(this);
     objectSelector_->setObjectName(QStringLiteral("viewerObjectSelector"));
