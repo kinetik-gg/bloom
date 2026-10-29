@@ -5,6 +5,8 @@
 #include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/media/video/colour.hpp>
 
+#include <array>
+#include <cmath>
 #include <iostream>
 #include <string_view>
 
@@ -148,8 +150,9 @@ void testImageRules(Expectations& expectations) {
         ap0.id == "ACES2065-1" && ap1.id == "ACEScg" &&
             rec709.id == "Linear Rec.709 (sRGB)" && other.id.empty(),
         "EXR AP0/AP1/Rec.709 map to the pinned config ids and other chromaticities refuse");
-    // The ACES CG config has no Rec.709 camera space: Bloom synthesizes one so tagged and assumed
-    // Rec.709 video resolves in Auto, and linear Rec.709 EXR data never uses it.
+    // The ACES CG config has no Rec.709 camera space: Bloom synthesizes one as the explicit camera
+    // interpretation, and linear Rec.709 EXR data never uses it. Untagged SDR video resolves in
+    // Auto to the config's sRGB texture space (ADR 0032), never refused.
     expectations.expect(aces->rec709VideoColorSpaceId() ==
                                 bloom::color::kBloomRec709CameraColorSpaceId &&
                             !bloom::color::synthesizedColorSpaceIdentity(
@@ -160,11 +163,21 @@ void testImageRules(Expectations& expectations) {
         *aces, bloom::media::provider::ColourTags{2, 2, 2, 0}, 0, {}, {1280, 720, 24.0});
     std::string acesDiagnostic;
     expectations.expect(
-        acesVideo.id == bloom::color::kBloomRec709CameraColorSpaceId &&
-            acesVideo.warning.find("assumed Rec.709") != std::string::npos &&
+        !aces->sRgbTextureColorSpaceId().empty() &&
+            acesVideo.id == aces->sRgbTextureColorSpaceId() &&
+            acesVideo.warning.find("assumed Rec.709 with the sRGB transfer") != std::string::npos &&
             static_cast<bool>(bloom::runtime::detail::prepareInputColorProcessor(
                 *aces, {acesVideo.id, acesVideo.name, {}, false, true}, acesDiagnostic)),
-        "untagged HD under ACES CG resolves to the synthesized Rec.709 camera input");
+        "untagged HD under ACES CG resolves to the config's sRGB texture space");
+    const auto acesCamera = bloom::media::video::resolveVideoInputColorSpace(
+        *aces, bloom::media::provider::ColourTags{1, 1, 1, 1}, 0,
+        bloom::color::kBloomRec709CameraColorSpaceId);
+    expectations.expect(acesCamera.id == bloom::color::kBloomRec709CameraColorSpaceId &&
+                            !acesCamera.automatic &&
+                            static_cast<bool>(bloom::runtime::detail::prepareInputColorProcessor(
+                                *aces, {acesCamera.id, acesCamera.name, {}, false, false},
+                                acesDiagnostic)),
+                        "the Rec.709 camera interpretation stays an explicit ACES CG choice");
 }
 
 void testVideoRules(Expectations& expectations) {
@@ -179,8 +192,24 @@ void testVideoRules(Expectations& expectations) {
         bloom::media::video::resolveVideoInputColorSpace(*config, ColourTags{1, 8, 1, 1}, 0, {});
     const auto hdr =
         bloom::media::video::resolveVideoInputColorSpace(*config, ColourTags{9, 16, 9, 1}, 0, {});
-    expectations.expect(rec709.automatic && rec709.id == config->rec709VideoColorSpaceId(),
-                        "BT.709 container tags map to the config video space");
+    // ADR 0032: ordinary Rec.709 video is shown as players show it, through the sRGB texture
+    // space; the Rec.709 camera inverse OETF is an explicit choice, available under Neutral too.
+    expectations.expect(rec709.automatic && rec709.id == config->sRgbTextureColorSpaceId() &&
+                            rec709.id == "srgb_rec709_display",
+                        "BT.709 container tags map to the config sRGB texture space");
+    const auto camera = bloom::media::video::resolveVideoInputColorSpace(
+        *config, ColourTags{1, 1, 1, 1}, 0, bloom::color::kBloomRec709CameraColorSpaceId);
+    std::string cameraDiagnostic;
+    const auto cameraProcessor = bloom::runtime::detail::prepareInputColorProcessor(
+        *config, {camera.id, camera.name, {}, false, false}, cameraDiagnostic);
+    std::array<std::array<float, 4>, 1> cameraSample{{{0.5F, 0.5F, 0.5F, 1.0F}}};
+    expectations.expect(
+        config->rec709VideoColorSpaceId() == bloom::color::kBloomRec709CameraColorSpaceId &&
+            camera.id == bloom::color::kBloomRec709CameraColorSpaceId && !camera.automatic &&
+            cameraProcessor && cameraProcessor->apply(cameraSample) &&
+            std::abs(cameraSample[0][0] - std::pow((0.5F + 0.099F) / 1.099F, 1.0F / 0.45F)) <
+                1e-4F,
+        "Neutral offers the synthesized Rec.709 camera inverse OETF as an explicit choice");
     expectations.expect(srgb.id == config->sRgbTextureColorSpaceId() &&
                             linear.id == config->processColorSpaceId(),
                         "sRGB and linear container tags map to config spaces");
@@ -207,16 +236,18 @@ void testVideoRules(Expectations& expectations) {
         *config, ColourTags{2, 2, 2, 0}, 0, {}, {1280, 720, 24.0});
     const auto assumedSd = bloom::media::video::resolveVideoInputColorSpace(
         *config, ColourTags{-1, -1, -1, -1}, 0, {}, {720, 576, 25.0});
-    expectations.expect(assumedHd.automatic && assumedHd.id == config->rec709VideoColorSpaceId() &&
-                            assumedHd.warning == "Colour tags missing — assumed Rec.709. Change "
-                                                 "in Assets → Input Colour",
-                        "untagged HD resolves to the Rec.709 video space with the note");
-    expectations.expect(assumedSd.automatic && assumedSd.id == config->rec709VideoColorSpaceId() &&
-                            assumedSd.warning.find("assumed Rec.601") != std::string::npos,
+    expectations.expect(assumedHd.automatic && assumedHd.id == config->sRgbTextureColorSpaceId() &&
+                            assumedHd.warning ==
+                                "Colour tags missing — assumed Rec.709 with the sRGB transfer. "
+                                "Change in Assets → Input Colour",
+                        "untagged HD resolves to the sRGB texture space with the note");
+    expectations.expect(assumedSd.automatic && assumedSd.id == config->sRgbTextureColorSpaceId() &&
+                            assumedSd.warning.find("assumed Rec.601 with the sRGB transfer") !=
+                                std::string::npos,
                         "untagged SD resolves through the Rec.601 assumption with the note");
     const auto taggedSd = bloom::media::video::resolveVideoInputColorSpace(
         *config, ColourTags{6, 6, 6, 1}, 0, {}, {720, 480, 29.97});
-    expectations.expect(taggedSd.automatic && taggedSd.id == config->rec709VideoColorSpaceId() &&
+    expectations.expect(taggedSd.automatic && taggedSd.id == config->sRgbTextureColorSpaceId() &&
                             taggedSd.warning.empty(),
                         "a tagged SMPTE 170M stream resolves without a note");
     const auto explicitAssumed = bloom::media::video::resolveVideoInputColorSpace(

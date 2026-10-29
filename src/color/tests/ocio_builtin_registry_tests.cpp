@@ -103,9 +103,9 @@ void testReadyExactDigest(Expectations& expectations) {
                         "the resolved config retains the caller's expected revision");
     expectations.expect(
         resolved->sRgbTextureColorSpaceId() == "srgb_rec709_display" &&
-            resolved->rec709VideoColorSpaceId() == "lin_rec709_scene" &&
+            resolved->rec709VideoColorSpaceId() == bloom::color::kBloomRec709CameraColorSpaceId &&
             !resolved->colorSpaces().empty(),
-        "the resolved config exposes its sRGB, video, and non-data space inventory");
+        "the resolved config exposes its sRGB, Rec.709 camera, and non-data space inventory");
 }
 
 void testChangedPerturbedRevision(Expectations& expectations) {

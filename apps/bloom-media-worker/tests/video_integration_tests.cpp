@@ -129,9 +129,10 @@ void hlgInterpretationRoundTrip(const std::filesystem::path& directory) {
     check(render(*restored.document) == before, "reopened HLG project renders identically");
 }
 // Owner decision (2026-10-24): an untagged video renders in Auto under the assumed size
-// convention, with no evaluation diagnostic (so the frame stays RAM-cacheable), and an explicit
-// Rec.709 choice of an untagged HD stream renders identically to the Rec.709 assumption. The same
-// import-and-render path proves an 8K UHD source (issue #352).
+// convention, with no evaluation diagnostic (so the frame stays RAM-cacheable). ADR 0032: Auto
+// shows the assumed SDR stream through the sRGB texture space, so an explicit sRGB choice renders
+// identically and the explicit Rec.709 camera choice does not. The same import-and-render path
+// proves an 8K UHD source (issue #352).
 void untaggedAssumedRender(const std::filesystem::path& directory, const std::filesystem::path& clip,
                            const std::uint32_t width, const std::uint32_t height,
                            const bool expectExplicitMatch) {
@@ -186,8 +187,10 @@ void untaggedAssumedRender(const std::filesystem::path& directory, const std::fi
     const auto assumed = render({});
     if (expectExplicitMatch) {
         const auto config = runtime::detail::resolveInputColorConfig({});
-        check(config && render(std::string(config->rec709VideoColorSpaceId())) == assumed,
-              "the Rec.709 assumption renders exactly as the explicit Rec.709 choice");
+        check(config && render(std::string(config->sRgbTextureColorSpaceId())) == assumed,
+              "the SDR assumption renders exactly as the explicit sRGB texture choice");
+        check(render(std::string(config->rec709VideoColorSpaceId())) != assumed,
+              "the Rec.709 camera interpretation stays a distinct explicit choice");
     }
 }
 void run(const std::filesystem::path& directory) {

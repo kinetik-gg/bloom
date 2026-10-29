@@ -45,6 +45,12 @@ struct AssumedVideoColour final {
 };
 [[nodiscard]] AssumedVideoColour assumeMissingVideoColour(const media::provider::ColourTags& tags,
                                                           const VideoGeometry& geometry);
+// ADR 0032: true when Auto interprets a stream with these tags (missing ones filled as above) as
+// ordinary SDR video -- a Rec.709 or Rec.601 matrix with the BT.709/SMPTE 170M transfer tag -- and
+// therefore shows it through the config's sRGB texture space. Before document 1.28 Auto read the
+// same streams through the config's Rec.709 video space; the open path's one-time note uses this.
+[[nodiscard]] bool sdrVideoColourDefaultApplies(const media::provider::ColourTags& tags,
+                                                const VideoGeometry& geometry);
 // Resolution with the assumption applied first; a successful assumed resolution carries the note
 // as its warning so Assets and the Viewer show it.
 [[nodiscard]] VideoInputColorSpaceResolution
