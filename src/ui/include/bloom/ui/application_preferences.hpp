@@ -99,6 +99,16 @@ struct ApplicationPreferences final {
     bool viewerRulers = false;
     bool viewerPixelGrid = false;
 
+    // Sounds and notifications (docs/ux/sound.md). Event sounds (render and import results,
+    // warnings, refusals) are on by default; interaction sounds are opt-in.
+    bool soundsEnabled = true;
+    // 0 to 100.
+    int soundVolumePercent = 40;
+    bool eventSoundsEnabled = true;
+    bool interactionSoundsEnabled = false;
+    // An operating-system notification for a render result while Bloom is not the active window.
+    bool renderNotificationsEnabled = true;
+
     friend bool operator==(const ApplicationPreferences&, const ApplicationPreferences&) = default;
 };
 

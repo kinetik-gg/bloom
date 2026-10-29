@@ -88,6 +88,27 @@ void testCatalogCoversEveryLicensedComponentDirectory(Expectations& expectations
                         "the catalog also carries the Qt/ADR-0014 notice");
 }
 
+// The owner's credit for the bundled UI sounds travels with every build: the catalog entry carries
+// the exact credit line and the snd.dev terms summary.
+void testSoundCreditIsInTheCatalog(Expectations& expectations) {
+    const ThirdPartyLicenseEntry* sound = nullptr;
+    for (const auto& entry : thirdPartyLicenseCatalog()) {
+        if (std::string_view{entry.component} == "snd01-sine")
+            sound = &entry;
+    }
+    expectations.expect(sound != nullptr, "the catalog lists the SND01 sine UI sounds");
+    if (sound == nullptr)
+        return;
+    const std::string_view text{sound->licenseText};
+    expectations.expect(
+        text.find("UI sounds: SND01 \"sine\" by Yasuhiro Tsuchiya, from SND (snd.dev) by Dentsu "
+                  "Inc. CX Creative Center.") != std::string_view::npos,
+        "the sound credit line is present verbatim");
+    expectations.expect(text.find("unprocessed materials") != std::string_view::npos &&
+                            text.find("trademark sound logo") != std::string_view::npos,
+                        "the snd.dev terms summary is present");
+}
+
 void testLicensesWindowListsEveryCatalogEntryWithText(Expectations& expectations) {
     QWidget owner;
     LicensesWindow window(owner);
@@ -128,6 +149,7 @@ int main(int argumentCount, char** arguments) {
     QApplication application(argumentCount, arguments);
     Expectations expectations;
     testCatalogCoversEveryLicensedComponentDirectory(expectations, repositoryRoot);
+    testSoundCreditIsInTheCatalog(expectations);
     testLicensesWindowListsEveryCatalogEntryWithText(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

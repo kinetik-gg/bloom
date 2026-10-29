@@ -285,6 +285,7 @@ std::vector<PreferencesWindow::Page> PreferencesWindow::buildPages() {
     pages.push_back({QStringLiteral("timeline"), tr("Timeline"), buildTimelinePage()});
     pages.push_back({QStringLiteral("nodes"), tr("Node Graph"), buildNodeGraphPage()});
     pages.push_back({QStringLiteral("viewer"), tr("Viewer"), buildViewerPage()});
+    pages.push_back({QStringLiteral("sounds"), tr("Sounds"), buildSoundsPage()});
     pages.push_back({QStringLiteral("performance"), tr("Performance"), buildPerformancePage()});
     return pages;
 }

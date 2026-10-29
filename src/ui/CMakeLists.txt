@@ -366,6 +366,28 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/generate_third_party_license_catalog.cmake"
 
 add_library(bloom_ui STATIC)
 
+# The processed SND01 "sine" UI sounds (docs/ux/sound.md): mono 16-bit 48 kHz WAV, enumerated
+# explicitly like every other bundled asset and decoded once at startup by UiSoundEngine. The
+# unprocessed pack is never part of the repository or the build.
+qt_add_resources(bloom_ui "ui_sounds"
+    PREFIX "/bloom/sound"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/sound/assets"
+    FILES
+        sound/assets/render_succeeded.wav
+        sound/assets/render_failed.wav
+        sound/assets/import_finished.wav
+        sound/assets/refused.wav
+        sound/assets/button.wav
+        sound/assets/select.wav
+        sound/assets/toggle_on.wav
+        sound/assets/toggle_off.wav
+        sound/assets/modal_open.wav
+        sound/assets/modal_close.wav
+        sound/assets/tool_switch.wav
+        sound/assets/drag_start.wav
+        sound/assets/drop.wav
+)
+
 target_sources(
     bloom_ui
     PRIVATE
@@ -407,6 +429,7 @@ target_sources(
         preferences_window.cpp
         preferences_window.hpp
         preferences_window_performance.cpp
+        preferences_window_sounds.cpp
         frameless_window_support.cpp
         jobs_editor.cpp
         licenses_window.cpp
@@ -427,6 +450,10 @@ target_sources(
         asset_drop.hpp
         layer_drop.cpp
         layer_drop.hpp
+        interaction_sounds.cpp
+        system_notifier.cpp
+        ui_feedback.cpp
+        ui_sound_engine.cpp
         reveal_in_file_manager.cpp
         reveal_in_file_manager.hpp
         import_progress_dialog.cpp
@@ -557,7 +584,11 @@ target_sources(
             include/bloom/ui/h264_encoder_service.hpp
             include/bloom/ui/frameless_window_support.hpp
             include/bloom/ui/jobs_editor.hpp
+            include/bloom/ui/interaction_sounds.hpp
             include/bloom/ui/licenses_window.hpp
+            include/bloom/ui/system_notifier.hpp
+            include/bloom/ui/ui_feedback.hpp
+            include/bloom/ui/ui_sound_engine.hpp
             include/bloom/ui/main_window.hpp
             include/bloom/ui/assets_editor.hpp
             include/bloom/ui/asset_controller.hpp
@@ -623,6 +654,13 @@ target_link_libraries(
 )
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache)
 bloom_enable_warnings(bloom_ui)
+
+# macOS notifications go through UNUserNotificationCenter (system_notifier_macos.mm); every other
+# platform uses QtDBus or the tray message in system_notifier.cpp.
+if(APPLE)
+    target_sources(bloom_ui PRIVATE system_notifier_macos.mm)
+    target_link_libraries(bloom_ui PRIVATE "-framework UserNotifications" "-framework Foundation")
+endif()
 
 # Reveal in File Manager selects the file through the freedesktop.org FileManager1 D-Bus interface
 # on Linux. Without Qt D-Bus the same source opens the containing folder, its supported fallback.

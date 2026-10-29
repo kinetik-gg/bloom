@@ -114,6 +114,8 @@ class MainWindow final : public QMainWindow {
     // Emitted after the Preferences window commits and persists a new value, so the composition
     // root can re-apply the preferences it owns (for example the audio engine).
     void preferencesChanged();
+    // The Preferences Sounds page asked to hear a sample at its unsaved volume.
+    void soundTestRequested(const bloom::ui::ApplicationPreferences& draft);
 
   protected:
     void closeEvent(QCloseEvent* event) override;

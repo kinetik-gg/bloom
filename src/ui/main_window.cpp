@@ -732,6 +732,7 @@ void MainWindow::showPreferences() {
                 applyPreferencesToOpenEditors(preferences);
                 emit preferencesChanged();
             });
+    connect(&dialog, &PreferencesWindow::soundTestRequested, this, &MainWindow::soundTestRequested);
     dialog.exec();
 }
 

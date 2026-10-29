@@ -60,6 +60,8 @@ constexpr const char* kLastField = "kRangeLast";
 
 KDialog* buildConfirm(QWidget& owner, const KConfirmSpec& spec) {
     auto* dialog = new KDialog(spec.title, spec.objectName, owner);
+    // Read by the application's interaction-sound observer: an Error prompt is heard as a warning.
+    dialog->setProperty("kitPromptTone", static_cast<int>(spec.tone));
     auto* row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(px(Spacing::M));

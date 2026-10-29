@@ -3,6 +3,7 @@
 #include <QSettings>
 #include <QString>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -33,6 +34,11 @@ constexpr auto kViewerCentreCrossKey = "viewer/overlay/centre-cross";
 constexpr auto kViewerThirdsKey = "viewer/overlay/thirds";
 constexpr auto kViewerRulersKey = "viewer/overlay/rulers";
 constexpr auto kViewerPixelGridKey = "viewer/overlay/pixel-grid";
+constexpr auto kSoundsEnabledKey = "sound/enabled";
+constexpr auto kSoundVolumeKey = "sound/volume-percent";
+constexpr auto kEventSoundsKey = "sound/events";
+constexpr auto kInteractionSoundsKey = "sound/interaction";
+constexpr auto kRenderNotificationsKey = "sound/render-notifications";
 
 // The byte-budget readers (preview_frame_cache.cpp, media_disk_cache_settings.cpp) parse the value
 // through toString().toULongLong() and treat a missing, zero, or unparseable value as "default".
@@ -185,6 +191,16 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
     preferences.viewerRulers = settings.value(QLatin1String(kViewerRulersKey), false).toBool();
     preferences.viewerPixelGrid =
         settings.value(QLatin1String(kViewerPixelGridKey), false).toBool();
+    preferences.soundsEnabled = settings.value(QLatin1String(kSoundsEnabledKey), true).toBool();
+    bool volumeParsed = false;
+    const auto volume = settings.value(QLatin1String(kSoundVolumeKey)).toInt(&volumeParsed);
+    if (volumeParsed && volume >= 0 && volume <= 100)
+        preferences.soundVolumePercent = volume;
+    preferences.eventSoundsEnabled = settings.value(QLatin1String(kEventSoundsKey), true).toBool();
+    preferences.interactionSoundsEnabled =
+        settings.value(QLatin1String(kInteractionSoundsKey), false).toBool();
+    preferences.renderNotificationsEnabled =
+        settings.value(QLatin1String(kRenderNotificationsKey), true).toBool();
     return preferences;
 }
 
@@ -226,6 +242,13 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
     settings.setValue(QLatin1String(kViewerThirdsKey), preferences.viewerThirds);
     settings.setValue(QLatin1String(kViewerRulersKey), preferences.viewerRulers);
     settings.setValue(QLatin1String(kViewerPixelGridKey), preferences.viewerPixelGrid);
+    settings.setValue(QLatin1String(kSoundsEnabledKey), preferences.soundsEnabled);
+    settings.setValue(QLatin1String(kSoundVolumeKey),
+                      std::clamp(preferences.soundVolumePercent, 0, 100));
+    settings.setValue(QLatin1String(kEventSoundsKey), preferences.eventSoundsEnabled);
+    settings.setValue(QLatin1String(kInteractionSoundsKey), preferences.interactionSoundsEnabled);
+    settings.setValue(QLatin1String(kRenderNotificationsKey),
+                      preferences.renderNotificationsEnabled);
 }
 
 const char* timelineTimeFormatValue(const TimelineTimeFormat format) noexcept {

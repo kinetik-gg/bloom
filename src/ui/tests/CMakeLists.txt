@@ -1180,6 +1180,21 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# UI sound feedback: the event/interaction mapping, the Preferences switches, the rate limit, the
+# notification-when-inactive rule, the sound engine over a recording backend (no audio device), and
+# the kit control cues.
+add_executable(bloom_ui_feedback_test ui_feedback_tests.cpp)
+target_link_libraries(bloom_ui_feedback_test PRIVATE bloom_ui Qt6::Test)
+target_include_directories(bloom_ui_feedback_test PRIVATE ..)
+bloom_enable_warnings(bloom_ui_feedback_test)
+bloom_add_test(
+    NAME bloom.ui.ui-feedback
+    COMMAND bloom_ui_feedback_test
+    LABELS ui unit
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_background_preview_test background_preview_tests.cpp)
 target_link_libraries(bloom_background_preview_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_background_preview_test)

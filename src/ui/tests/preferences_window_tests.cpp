@@ -22,8 +22,11 @@
 #include <QTimer>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/dialog.hpp>
+#include <bloom/ui/kit/slider.hpp>
+#include <bloom/ui/kit/switch_control.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <limits>
 #include <source_location>
@@ -295,12 +298,54 @@ void testRestartBadgesAndRail(Expectations& check) {
 
     auto* rail = window.findChild<ui::kit::KRadioGroup*>(QStringLiteral("preferencesCategoryRail"));
     auto* pages = window.findChild<QStackedWidget*>(QStringLiteral("preferencesPages"));
-    check.expect(rail != nullptr && rail->count() == 6, "the rail carries the six categories");
-    check.expect(pages != nullptr && pages->count() == 6, "the stack carries the six pages");
+    check.expect(rail != nullptr && rail->count() == 7, "the rail carries the seven categories");
+    check.expect(pages != nullptr && pages->count() == 7, "the stack carries the seven pages");
 
     rail->setCurrentIndex(2);
     check.expect(pages != nullptr && pages->currentIndex() == 2,
                  "selecting a category switches the page");
+}
+
+void testSoundsPage(Expectations& check) {
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{});
+    const auto find = [&](const char* name) {
+        return window.findChild<QWidget*>(QLatin1StringView(name));
+    };
+    auto* master = qobject_cast<ui::kit::KSwitch*>(find("preferencesSoundsEnabledSwitch"));
+    auto* events = qobject_cast<ui::kit::KSwitch*>(find("preferencesEventSoundsSwitch"));
+    auto* interaction = qobject_cast<ui::kit::KSwitch*>(find("preferencesInteractionSoundsSwitch"));
+    auto* notify = qobject_cast<ui::kit::KSwitch*>(find("preferencesRenderNotificationsSwitch"));
+    auto* volume = qobject_cast<ui::kit::KSlider*>(find("preferencesSoundVolumeSlider"));
+    auto* test = qobject_cast<ui::kit::KButton*>(find("preferencesPlayTestSoundButton"));
+    check.expect(master && events && interaction && notify && volume && test,
+                 "the Sounds page has its master, category, notification, volume and test controls");
+    if (!(master && events && interaction && notify && volume && test))
+        return;
+    check.expect(master->isChecked() && events->isChecked() && !interaction->isChecked() &&
+                     notify->isChecked() && std::lround(volume->value()) == 40,
+                 "the page shows the defaults: events on, interaction off, volume 40");
+
+    interaction->setChecked(true);
+    volume->setValue(65.0);
+    check.expect(window.preferences().interactionSoundsEnabled &&
+                     window.preferences().soundVolumePercent == 65,
+                 "editing the page updates the draft");
+
+    int testRequests = 0;
+    int requestedVolume = 0;
+    QObject::connect(&window, &ui::PreferencesWindow::soundTestRequested, &window,
+                     [&](const ui::ApplicationPreferences& draft) {
+                         ++testRequests;
+                         requestedVolume = draft.soundVolumePercent;
+                     });
+    test->click();
+    check.expect(testRequests == 1 && requestedVolume == 65,
+                 "Play test sound hands the unsaved draft to the caller");
+
+    master->setChecked(false);
+    check.expect(!volume->isEnabled() && !events->isEnabled() && !interaction->isEnabled(),
+                 "turning sounds off disables the volume and category rows");
+    check.expect(!window.preferences().soundsEnabled, "the master switch edits the draft");
 }
 
 void testAutomaticMemoryBudgetsAreResolved(Expectations& check) {
@@ -573,6 +618,7 @@ int main(int argc, char** argv) {
     testCacheDirectoryIsValidated(check);
     testTimelineKeyframesAndGraphAreMutuallyExclusive(check);
     testRestartBadgesAndRail(check);
+    testSoundsPage(check);
     testAutomaticMemoryBudgetsAreResolved(check);
     testLargeBudgetPreferencesRemainExactOnApply(check);
     testPreferenceLabelsRemainReadable(check);

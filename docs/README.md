@@ -19,7 +19,8 @@ provide research or rationale, but they are not binding until adopted here.
 4. [`ux/compositing-workspace.md`](ux/compositing-workspace.md) — the UI sketch as an interaction
    contract; [`ux/visual-language.md`](ux/visual-language.md) — iconography and typography;
    [`ux/interaction-model.md`](ux/interaction-model.md) — the keyboard and pointer bindings,
-   including blank-project startup and the New Composition duration units.
+   including blank-project startup and the New Composition duration units;
+   [`ux/sound.md`](ux/sound.md) — UI sound feedback, render notifications, and the event audit.
 5. [`architecture/overview.md`](architecture/overview.md) — boundaries, state ownership, and
    dependency direction.
 6. [`architecture/module-system.md`](architecture/module-system.md),
@@ -37,8 +38,9 @@ provide research or rationale, but they are not binding until adopted here.
    [`architecture/media-io.md`](architecture/media-io.md),
    [`architecture/dependency-intake.md`](architecture/dependency-intake.md),
    [`architecture/scripting-and-addons.md`](architecture/scripting-and-addons.md),
-   [`architecture/gpu-backend.md`](architecture/gpu-backend.md), and
-   [`architecture/platform-support.md`](architecture/platform-support.md) — execution and platform
+   [`architecture/gpu-backend.md`](architecture/gpu-backend.md),
+   [`architecture/platform-support.md`](architecture/platform-support.md), and
+   [`architecture/ui-feedback.md`](architecture/ui-feedback.md) — execution and platform
    contracts and extension boundaries.
 7. [`roadmap.md`](roadmap.md) — proof-oriented implementation sequence.
 8. [`decisions/`](decisions/) — accepted architecture decision records.

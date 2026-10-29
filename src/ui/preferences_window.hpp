@@ -56,6 +56,9 @@ class PreferencesWindow final : public kit::KDialog {
     // Emitted when Apply or OK commits the edited value. Apply keeps the window open; OK accepts
     // after emitting.
     void preferencesApplied(const ApplicationPreferences& preferences);
+    // The Sounds page's "Play test sound": carries the edited (unsaved) values so the volume the
+    // artist hears is the one they are choosing.
+    void soundTestRequested(const ApplicationPreferences& draft);
 
   protected:
     // The Performance page follows the cached acceleration status only while the dialog is
@@ -77,6 +80,7 @@ class PreferencesWindow final : public kit::KDialog {
     QWidget* buildTimelinePage();
     QWidget* buildNodeGraphPage();
     QWidget* buildViewerPage();
+    QWidget* buildSoundsPage();
     QWidget* buildPerformancePage();
     [[nodiscard]] QWidget* makeScrollPage();
 

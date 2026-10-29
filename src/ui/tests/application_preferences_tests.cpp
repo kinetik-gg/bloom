@@ -77,10 +77,34 @@ void testFullRoundTrip(Expectations& check) {
     prefs.viewerThirds = true;
     prefs.viewerRulers = true;
     prefs.viewerPixelGrid = true;
+    prefs.soundsEnabled = false;
+    prefs.soundVolumePercent = 73;
+    prefs.eventSoundsEnabled = false;
+    prefs.interactionSoundsEnabled = true;
+    prefs.renderNotificationsEnabled = false;
 
     ui::saveApplicationPreferences(settings, prefs);
     const auto reloaded = ui::loadApplicationPreferences(settings);
     check.expect(reloaded == prefs, "every global preference round-trips through QSettings");
+}
+
+void testSoundDefaultsAndBounds(Expectations& check) {
+    QTemporaryDir directory;
+    auto settings = openSettings(directory);
+    const auto defaults = ui::loadApplicationPreferences(settings);
+    check.expect(defaults.soundsEnabled && defaults.eventSoundsEnabled &&
+                     defaults.renderNotificationsEnabled,
+                 "sounds, event sounds and render notifications default on");
+    check.expect(!defaults.interactionSoundsEnabled, "interaction sounds default off");
+    check.expect(defaults.soundVolumePercent == 40, "the default volume is 40 percent");
+    settings.setValue(QStringLiteral("sound/volume-percent"), 400);
+    check.expect(ui::loadApplicationPreferences(settings).soundVolumePercent == 40,
+                 "an out-of-range stored volume falls back to the default");
+    auto prefs = defaults;
+    prefs.soundVolumePercent = 250;
+    ui::saveApplicationPreferences(settings, prefs);
+    check.expect(ui::loadApplicationPreferences(settings).soundVolumePercent == 100,
+                 "saving clamps the volume");
 }
 
 void testInvalidValuesFallBack(Expectations& check) {
@@ -248,6 +272,7 @@ int main(int argc, char** argv) {
     Expectations check;
     testDefaultsRoundTrip(check);
     testFullRoundTrip(check);
+    testSoundDefaultsAndBounds(check);
     testInvalidValuesFallBack(check);
     testLegacyCheckerboardMigrates(check);
     testNonFiniteGridSizeFallsBack(check);

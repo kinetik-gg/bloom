@@ -49,6 +49,11 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
+#include <bloom/ui/interaction_sounds.hpp>
+#include <bloom/ui/system_notifier.hpp>
+#include <bloom/ui/ui_feedback.hpp>
+#include <bloom/ui/ui_sound_engine.hpp>
+#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
@@ -637,6 +642,59 @@ int main(int argc, char* argv[]) try {
     // Every default dialog of the project host and the export controller opens over the window.
     projectHost.setDialogOwner(&window);
     frameExportController.setDialogOwner(&window);
+    // UI sound feedback and render notifications (docs/architecture/ui-feedback.md). The sound
+    // engine decodes and opens its own output device on a worker thread; nothing here blocks.
+    auto uiSoundEngine = std::make_unique<bloom::ui::UiSoundEngine>(
+        bloom::media::audio::playback::makeMiniaudioBackend(),
+        bloom::ui::bundledFeedbackSoundBytes, [](const std::string& message) {
+            std::cerr << "Bloom: " << message << '\n';
+        });
+    uiSoundEngine->start();
+    bloom::ui::UiFeedback uiFeedback(std::move(uiSoundEngine),
+                                     bloom::ui::makeSystemNotifier(&application));
+    const auto applyFeedbackPreferences = [&uiFeedback] {
+        const QSettings feedbackSettings;
+        uiFeedback.setSettings(bloom::ui::feedbackSettingsFrom(
+            bloom::ui::loadApplicationPreferences(feedbackSettings)));
+    };
+    applyFeedbackPreferences();
+    uiFeedback.setNotificationActivationHandler([&window] {
+        window.setWindowState(window.windowState() & ~Qt::WindowMinimized);
+        window.show();
+        window.raise();
+        window.activateWindow();
+    });
+    bloom::ui::InteractionSounds interactionSounds(uiFeedback, &application);
+    application.installEventFilter(&interactionSounds);
+    QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window,
+                     applyFeedbackPreferences);
+    QObject::connect(&window, &bloom::ui::MainWindow::soundTestRequested, &window,
+                     [&uiFeedback](const bloom::ui::ApplicationPreferences& draft) {
+                         uiFeedback.playTest(bloom::ui::feedbackSettingsFrom(draft));
+                     });
+    QObject::connect(&frameExportController, &bloom::ui::FrameExportController::exportFinished,
+                     &window, [&uiFeedback](const bloom::ui::FrameExportOutcome outcome,
+                                            const QString& message) {
+                         uiFeedback.announceExport(outcome, message);
+                     });
+    QObject::connect(&assetController, &bloom::ui::AssetController::importFinished, &window,
+                     [&uiFeedback](const bloom::ui::AssetController::ImportReport& report) {
+                         if (const auto event = bloom::ui::importFeedbackEvent(
+                                 report.cancelled, report.discarded, report.imported,
+                                 report.skipped.size(), !report.failure.isEmpty())) {
+                             uiFeedback.play(*event);
+                         }
+                     });
+    QObject::connect(&compositionSession, &bloom::ui::CompositionSession::commandRejected, &window,
+                     [&uiFeedback](const QString&) {
+                         uiFeedback.play(bloom::ui::FeedbackEvent::Refused);
+                     });
+    QObject::connect(&playback, &bloom::ui::PlaybackController::stateChanged, &window,
+                     [&uiFeedback](const bloom::ui::PlaybackState state) {
+                         uiFeedback.setInteractionSuppressed(
+                             bloom::ui::UiFeedback::Suppression::Playback,
+                             state == bloom::ui::PlaybackState::Playing);
+                     });
     // Apply memory preferences to their owning caches now. Disk cache configuration alone
     // remains restart-required; live processing admission is independent of retention targets.
     QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &playback, [&] {
@@ -689,6 +747,10 @@ int main(int argc, char* argv[]) try {
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted, &window,
                      [&window, &settings] { window.saveApplicationState(settings); });
+    // UI sounds stop with shutdown; the destructor then joins the sound worker.
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted, &window,
+                     [&uiFeedback] { uiFeedback.shutdown(); });
     QObject::connect(&window, &bloom::ui::MainWindow::shutdownRequested, &shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::beginShutdown);
     // QApplication::quit() asks visible top-level windows to close. Release MainWindow's
