@@ -95,9 +95,12 @@ int run(int argc, char** argv) {
                        widget, "kit control token");
                 ++controls;
             }
-            if (qobject_cast<kit::KThumbnail*>(widget)) {
-                expect(widget->height() == kit::px(kit::Size::ImageThumbnail) &&
-                           widget->width() == kit::px(kit::Size::ImageThumbnail),
+            if (const auto* thumbnail = qobject_cast<kit::KThumbnail*>(widget)) {
+                const bool strip = thumbnail->cell() == kit::KThumbnail::Cell::Strip;
+                expect(widget->height() == kit::px(strip ? kit::Size::StripThumbnailHeight
+                                                         : kit::Size::ImageThumbnail) &&
+                           widget->width() == kit::px(strip ? kit::Size::StripThumbnailWidth
+                                                            : kit::Size::ImageThumbnail),
                        widget, "thumbnail cell token");
                 ++controls;
             }

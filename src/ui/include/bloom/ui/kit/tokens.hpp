@@ -224,9 +224,20 @@ enum class Size : int {
     // changing the pitch of every list in the application.
     HeaderRow = 32,
     FooterRow = 32,
-    // The one list pitch: timeline layer and property rows, Assets, Jobs and every kit list.
+    // The one list pitch: timeline layer and property rows, Jobs and every kit list.
     ListRow = 32,
     PropertyRow = 28,
+    // The Assets tree is a dense browser: one control height a row, so the inline rename field
+    // (a Control-height KLineEdit) fits a row exactly and the Ui role keeps its kit size. Each
+    // level indents by one 16-pixel icon plus an XS gap, so a child's kind glyph starts exactly
+    // where its parent's name does.
+    AssetRow = 26,
+    AssetIndent = 20,
+    // The Assets summary strip: two Control-height lines beside a 40-pixel thumbnail well that
+    // letterboxes the media at its own aspect ratio (KThumbnail::Cell::Strip).
+    SummaryStrip = 52,
+    StripThumbnailWidth = 64,
+    StripThumbnailHeight = 40,
     ToggleCell = 24,
     DropdownWidth = 100,
     DropdownWidthWide = 120,
@@ -330,6 +341,9 @@ enum class Size : int {
 // The control inset rule in one line: a control's painted box is exactly a toggle cell tall, so a
 // row mixing toggles, buttons, dropdowns and value fields shows one box height.
 static_assert(px(Size::ToggleCell) == px(Size::Control) - 2 * px(Spacing::ControlInset));
+static_assert(px(Size::AssetRow) == px(Size::Control));
+static_assert(px(Size::AssetIndent) == px(Size::IconMedium) + px(Spacing::XS));
+static_assert(px(Size::SummaryStrip) == 2 * px(Size::Control));
 
 // Default Compositing split fractions, independent of physical DPI.
 namespace Layout {
