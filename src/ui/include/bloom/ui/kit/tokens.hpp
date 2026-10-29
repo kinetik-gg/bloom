@@ -193,7 +193,6 @@ enum class Size : int {
     MajorTick = 8,
     ViewerChecker = 22,
     ViewerWorkPadding = 48,
-    ToolColumnWidth = 32,
     ViewerChannelWidth = 80,
     ViewerModeWidth = 108,
     ViewerZoomWidth = 64,
@@ -224,6 +223,9 @@ enum class Size : int {
     // changing the pitch of every list in the application.
     HeaderRow = 32,
     FooterRow = 32,
+    // ADR 0031's contextual bar under the menu bar: one control row plus ChromePadding above and
+    // below (static_assert below).
+    ContextBarHeight = 32,
     // The one list pitch: timeline layer and property rows, Jobs and every kit list.
     ListRow = 32,
     PropertyRow = 28,
@@ -344,6 +346,7 @@ static_assert(px(Size::ToggleCell) == px(Size::Control) - 2 * px(Spacing::Contro
 static_assert(px(Size::AssetRow) == px(Size::Control));
 static_assert(px(Size::AssetIndent) == px(Size::IconMedium) + px(Spacing::XS));
 static_assert(px(Size::SummaryStrip) == 2 * px(Size::Control));
+static_assert(px(Size::ContextBarHeight) == px(Size::Control) + 2 * px(Spacing::ChromePadding));
 
 // Default Compositing split fractions, independent of physical DPI.
 namespace Layout {

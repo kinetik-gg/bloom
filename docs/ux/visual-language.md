@@ -141,7 +141,7 @@ rules only for widgets whose look comes from a `[bloomKeyboardFocus]` sheet rule
 ### Controls, editor surfaces and layout
 
 The [UI grammar](ui-grammar.md) owns the complete control vocabulary, spacing and size grid,
-shared rows, declared headers/footers, viewer tool column, node cards, status line and default
+shared rows, declared headers/footers, the context bar, node cards, status line and default
 workspace proportions. Implement these through the kit rather than duplicating component
 measurements here. The [workspace layout contract](../architecture/workspace-layout.md) owns
 persistence and migration. The existing application menu bar and native window frame remain.
@@ -335,7 +335,7 @@ Phosphor Icons is Bloom's default interface icon family.
   comes from the host control's metrics, so it takes only the role's weight
   (`iconWeight(IconRole::Chrome)`) and keeps that box.
 - Add another upstream weight only when a role needs it. The vendored subset carries `regular`,
-  `fill` and `bold` complete over every Phosphor-backed id (73 `IconId`s: 67 vendored glyphs per
+  `fill` and `bold` complete over every Phosphor-backed id (82 `IconId`s: 76 vendored glyphs per
   weight, two ids that reuse another's glyph -- Subtract and Search -- and four shape-tool glyphs
   Bloom draws itself), because a role
   that asks for a weight must find it for every icon: a missing file renders as a silent blank,

@@ -10,7 +10,6 @@
 #include <bloom/ui/kit/tokens.hpp>
 
 class QVBoxLayout;
-class QButtonGroup;
 namespace bloom::ui::kit {
 class KMenuButton : public QToolButton {
     Q_OBJECT
@@ -84,6 +83,8 @@ class KIconButton : public QToolButton {
   private:
     bool hovered_ = false;
 };
+// A checkable icon button. Its "flyoutMark" property draws a small corner mark: the slot holds more
+// choices behind a press and hold or a right-click (the context bar's shape slot).
 class KIconToggle final : public KIconButton {
     Q_OBJECT
   public:
@@ -98,37 +99,6 @@ class KIconToggle final : public KIconButton {
 
   private:
     IconId glyph_;
-};
-// A vertical column of exclusive tool choices, grouped by hairline separators. A tool's tooltip is
-// its name (with its shortcut) on the first line and how to use it below; the first line also
-// names it in the overflow menu. A column too short for every tool collapses the trailing ones,
-// last first, into a "More tools" button whose menu offers them by name, so no tool is ever cut
-// off or unreachable at any panel height.
-class KToolColumn final : public QWidget {
-    Q_OBJECT
-  public:
-    explicit KToolColumn(QWidget* parent = nullptr);
-    KIconToggle* addTool(IconId id, const QString& label, const QString& objectName,
-                         bool enabled = true);
-    void addSeparator();
-    [[nodiscard]] KIconButton* moreButton() const noexcept { return more_; }
-    QSize sizeHint() const override;
-    QSize minimumSizeHint() const override;
-
-  protected:
-    void resizeEvent(QResizeEvent* event) override;
-    void paintEvent(QPaintEvent* event) override;
-
-  private:
-    struct Item {
-        KIconToggle* tool = nullptr;
-        QRectF separator;
-    };
-    void arrange();
-    void rebuildMoreMenu();
-    std::vector<Item> items_;
-    QButtonGroup* group_;
-    KIconButton* more_ = nullptr;
 };
 // TypeRole-bound text. A single-line label is exactly one control tall, so it lines up with the
 // controls beside it; a word-wrapped label grows to its wrapped height (never below one control)

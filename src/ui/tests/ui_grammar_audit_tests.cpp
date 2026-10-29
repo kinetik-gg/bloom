@@ -239,24 +239,31 @@ int run(int argc, char** argv) {
         expect(cell->height() == kit::px(kit::Size::Control), cell, "status row height");
     }
     expect(!status->colorChipTextForTest().isEmpty(), status, "color state is always explicit");
-    auto* tools = fixture.window->findChild<kit::KToolColumn*>("viewerToolColumn");
-    expect(tools && tools->isVisible() && tools->width() == kit::px(kit::Size::ToolColumnWidth),
-           fixture.window.get(), "tool column token");
-    expect(tools->pos() == QPoint(0, 0), tools, "E20 tool strip sticks to canvas left");
-    expect(kit::color(kit::Color::OnAccent) == QColor(Qt::white), tools, "E19 white accent ink");
+    // ADR 0031: the tools are in the context bar under the menu bar, not in a Viewer column.
+    auto* bar = fixture.window->findChild<QWidget*>("contextBar");
+    expect(bar && bar->isVisible() && bar->height() == kit::px(kit::Size::ContextBarHeight) &&
+               fixture.window->findChild<QWidget*>("viewerToolColumn") == nullptr,
+           fixture.window.get(), "the context bar holds the tools; the Viewer has no tool column");
+    auto* tools = bar ? bar->findChild<QWidget*>("contextBarTools") : nullptr;
+    expect(kit::color(kit::Color::OnAccent) == QColor(Qt::white), fixture.window.get(),
+           "E19 white accent ink");
     auto* zoomDropdown = fixture.window->findChild<kit::KDropdown*>("viewerZoomDropdown");
     expect(zoomDropdown->width() >= zoomDropdown->minimumSizeHint().width(), zoomDropdown,
            "E21 zoom fits widest item plus chevron");
-    const auto choices = tools->findChildren<kit::KIconToggle*>();
-    expect(choices.size() == 11, tools, "eleven enabled tool choices");
+    const auto choices =
+        tools ? tools->findChildren<kit::KIconToggle*>() : QList<kit::KIconToggle*>{};
+    // Eleven tools in eight slots: the four shapes share one.
+    expect(choices.size() == 8, fixture.window.get(), "eight tool slots for the eleven tools");
     for (auto* choice : choices) {
-        expect(choice->isEnabled(), choice, "viewer tools enabled");
-        expect(choice->height() == kit::px(kit::Size::ToggleCell) && !choice->toolTip().isEmpty(),
+        expect(choice->isEnabled() && choice->focusPolicy() == Qt::NoFocus, choice,
+               "tools are enabled and never take focus");
+        expect(choice->height() == kit::px(kit::Size::Control) && !choice->toolTip().isEmpty(),
                choice, "tool extent and help");
-        expect(!choice->isVisible() || tools->rect().contains(choice->geometry()), choice,
-               "tool stays inside column");
+        expect(choice->isVisible() && bar->rect().contains(choice->geometry().translated(
+                                          choice->parentWidget()->mapTo(bar, QPoint()))),
+               choice, "tool stays inside the bar");
     }
-    auto* propertiesFilter = fixture.window->findChild<kit::KToolColumn*>("propertiesFilterStrip");
+    auto* propertiesFilter = fixture.window->findChild<QWidget*>("propertiesFilterStrip");
     expect(propertiesFilter == nullptr, fixture.window.get(), "Properties filter strip removed");
     int cards = 0, fields = 0, alignedSockets = 0;
     for (auto* view : fixture.window->findChildren<QGraphicsView*>()) {

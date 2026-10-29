@@ -99,6 +99,15 @@ const auto& iconAssets() {
         {IconId::TransparencyGrid, QLatin1StringView("square-half")},
         {IconId::RamPreview, QLatin1StringView("lightning")},
         {IconId::Search, QLatin1StringView("magnifying-glass")},
+        {IconId::AlignLayersLeft, QLatin1StringView("align-left")},
+        {IconId::AlignLayersHorizontalCentre, QLatin1StringView("align-center-horizontal")},
+        {IconId::AlignLayersRight, QLatin1StringView("align-right")},
+        {IconId::AlignLayersTop, QLatin1StringView("align-top")},
+        {IconId::AlignLayersVerticalMiddle, QLatin1StringView("align-center-vertical")},
+        {IconId::AlignLayersBottom, QLatin1StringView("align-bottom")},
+        {IconId::DistributeHorizontal, QLatin1StringView("columns")},
+        {IconId::DistributeVertical, QLatin1StringView("rows")},
+        {IconId::Overflow, QLatin1StringView("caret-double-right")},
     });
     return entries;
 }

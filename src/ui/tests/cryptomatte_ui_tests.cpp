@@ -31,6 +31,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/tool_controller.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <QApplication>
@@ -282,10 +283,8 @@ void testPropertiesAndViewer() {
     }
 
     // The eyedropper: click adds the dominant object, Shift-click adds, Alt-click removes.
-    auto* tool = viewer->findChild<QToolButton*>("viewerCryptomatteTool");
-    expect(tool != nullptr, "the Viewer has a Cryptomatte eyedropper");
-    if (tool != nullptr)
-        tool->click();
+    // ADR 0031: the eyedropper is one of the app-wide tools.
+    scene.session.tools().setTool(ui::ViewerTool::Cryptomatte);
     std::optional<ui::ViewerMapping> mapping;
     expect(waitUntil([&] {
                mapping = viewer->mappingForTest();
@@ -412,8 +411,7 @@ void testLayerMapping() {
     // frame, is off here).
     controller.setPreview(scene.cryptomatte, false);
     scene.session.selectNode(scene.cryptomatte);
-    if (auto* tool = viewer->findChild<QToolButton*>("viewerCryptomatteTool"))
-        tool->click();
+    scene.session.tools().setTool(ui::ViewerTool::Cryptomatte);
     const auto pickAt = [&](const runtime::detail::LayerMatrix& world, const int pixel,
                             const Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
         const auto& mapping = lastMapping;

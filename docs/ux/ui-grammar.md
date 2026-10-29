@@ -85,7 +85,6 @@ The exceptions are deliberate and closed:
 | Panel menu titles (`KMenuButton`: View, Select, Add, the Timeline and Nodes menus) | Menus, like a menu bar's titles, not buttons: flat text with the `Accent` hover bar |
 | Text entry (`KValueField`, `KTextField`/`KLineEdit`, `KSearchField`, `KTextArea`, the Viewer frame field) | The one text-entry recipe, `kit::fieldColors()`: a `Field` well, so an editable value never reads as a button. A field standing in a chrome row or on a node card keeps a resting `Border` (`KValueField::setOutlinedAtRest`); a property cell (Properties, Timeline rows) rests borderless. A refused entry wears `Error` over every other state |
 | Timeline layer switches (eye, audio, solo, lock) | The glyph is the state (an eye that is there or not), so a switch never takes the Accent plate; its cell is the Secondary plate |
-| The tool column | Keeps its plate-less (Ghost) choices with the Selected plate until the tools move to the contextual bar |
 | Ghost | Only where a control deliberately has no resting surface: disclosure carets (layer and property disclosure, the RGBA and multiline expanders) and the window title bar buttons |
 
 There is no Recessed recipe and no `ControlSurface` token any more: both existed only for the
@@ -94,12 +93,12 @@ header icon buttons and dropdown fields this look replaced.
 Every control in a row is one `Size::Control` (26) tall at every device pixel ratio and paints
 its body in `kit::controlBody()`: `controlBounds()`, `Spacing::ControlInset` in on every side, so
 every painted body is `ToggleCell` (24) tall and shares its row's vertical centre. Icon buttons
-and toggles are `Control` squares. A dense strip whose geometry is a fixed cell pitch (the
-timeline's layer switches, the tool column) uses `ToggleCell` cells instead, which are already
+and toggles are `Control` squares, the context bar's tools included. A dense strip whose geometry
+is a fixed cell pitch (the timeline's layer switches) uses `ToggleCell` cells instead, which are already
 exactly that body; that is the one compact token, and no call site sizes a control of its own.
 `KButton`'s Compact size is the same height with tighter padding, and `KDropdown::ControlSize::Dense`
 likewise. `control_geometry_tests.cpp` walks every chrome row, panel header and row of the
-main-window fixture (Viewer, Timeline, Nodes, Assets, Properties) and holds both rules, and checks
+main-window fixture (the context bar, Viewer, Timeline, Nodes, Assets, Properties) and holds both rules, and checks
 that every kind's resting colours come from the one recipe.
 
 ## Rasterization and type
@@ -151,7 +150,7 @@ styling at the `ListRow` pitch, with no per-row widgets.
 Painting outside the kit is limited to viewer canvas, node scene items, and timeline
 ruler, lanes, graph editor, work area and navigator. Other surfaces compose kit widgets.
 
-## Status and tool columns
+## Status bar, context bar and tools
 
 The existing native window frame and application menu bar remain unchanged. No branding,
 workspace tabs or custom title bar are part of this grammar revision.
@@ -168,15 +167,52 @@ and reports unavailable colour state when no preview controller exists. Readines
 use muted ink; a colour-state failure remains explicit. `UiSmall` preserves mixed case with
 natural tracking. `KSurface` owns neutral surface backgrounds.
 
-`KToolColumn` owns eleven enabled, exclusive `KIconToggle` choices in four groups separated by
-`Border` hairlines: navigation (Select V, Hand H, Zoom Z), creation (Text T, Rectangle R, Ellipse E,
-Polygon, Star, Line), Pen (P), and the Cryptomatte eyedropper. Each is a `ToggleCell` with an
-`IconMedium` glyph in the Chrome (Bold) weight, Fill on `OnAccent` when chosen; the chosen tool takes
-the one Selected plate (the `Accent` plate every checked control shows), and the rest rest
-plate-less with the Ghost hover step. A tooltip is the tool's name and shortcut, then how to use
-it. A column too short for every tool collapses the trailing ones, last first, into a "More tools"
-button (`toolColumnMoreButton`) whose menu offers them by name and which carries the Selected
-plate while a collapsed tool is active; no tool is ever cut off.
+**The context bar** ([ADR 0031](../decisions/0031-contextual-tool-bar.md)) is the second fixed
+surface: one `ContextBarHeight` (32) row directly under the menu bar, a `Control` row inside
+`ChromePadding`, on `Surface` with one `Border` hairline below it. It is a row of the window's
+central column, not a `QToolBar`, so it cannot be docked, floated or moved and the native macOS
+menu bar is untouched; Window > Context Bar hides it, and that choice persists with the workspace
+UI state (`workspace/context-bar-visible`), never in the project. While the read-only placeholder
+is showing, the bar is disabled. It is a kit priority row (`EditorArea::buildChromeRow`) in three
+regions:
+
+- **Tools**, on the left: eleven tools in eight `KIconToggle` slots in three groups separated by a
+  `ChromeGroupGap`: navigation (Select V, Hand H, Zoom Z), creation (the shape slot, Line, Pen P,
+  Text T) and the Cryptomatte eyedropper. Rectangle R, Ellipse E, Polygon and Star share one slot
+  that shows the last shape chosen and carries a small corner mark; a press and hold or a
+  right-click opens its flyout menu of all four (After Effects' shape slot). Each slot wears the
+  one control look with the Selected plate when its tool is active (the tool-column Ghost
+  exception is gone). A tooltip is the tool's name and shortcut ("Select (V)"), then how to use
+  it; the shape slot adds how to reach the other shapes. The tools never collapse.
+- **Tool options**, after the tools: only options backed by real session or document state, and
+  only for the active tool. Select and the Pen show the anchor handle-mode strip (below); the shape
+  tools, Line and the Pen show Fill (a check box and a square colour chip), Stroke (the same) and
+  the stroke width; Text shows the font, size and alignment. With a shape or text layer selected
+  the options are that layer's, edited with the same parameter commands Properties uses (one undo
+  step per edit, a key at the playhead on an animated value); with none selected they are the style
+  new shapes and new text start with, which is session state in the `ToolController` and authors
+  nothing until something is drawn. Hand, Zoom and the eyedropper have no options. There is no
+  transform-gizmo mode and no snapping in the Viewer, so Select has no slot for them.
+- **Selection actions**, against the right edge: Align (left edges, horizontal centres, right
+  edges; top edges, vertical middles, bottom edges), Distribute (horizontally, vertically) and
+  an "Align To" dropdown (Composition, Selection, Key Object). Key Object is the primary selected
+  layer, named in the dropdown ("Key Object (Title)") and its tooltip. These are the same actions as
+  Composition > Align.
+
+Slots are stable within a tool: an option or action that cannot apply stays where it is, disabled,
+with the reason in its tooltip (no anchors selected, a line has no fill, fewer than three layers to
+distribute, one layer aligned to its own selection, a Viewer frame that is not yet current). A
+narrow window collapses groups right to left into one overflow button (`Overflow`, a double caret)
+at the end of the tool options: Distribute first, then Align To, then Align, then the fill/stroke
+and text options, then the handle modes. The menu offers each collapsed group whole: the action
+groups as submenus, the option groups as the same controls bound to the same state.
+
+Bar buttons, toggles, segmented controls, check boxes, colour chips and the overflow button are
+`Qt::NoFocus`: clicking them never takes keyboard focus from the Viewer. A field (the stroke width,
+the font, the size, Align To) takes focus while it is edited, commits on Enter or Escape like every
+field, and then hands focus back to the Viewer that last had it. Every control has an accessible
+name.
+
 Hand pans; Zoom clicks zoom about the pointer, with Alt-click reversing the direction. Middle-button
 pan and keyboard zoom remain available. Choosing a tool alone never authors a node.
 
@@ -233,8 +269,8 @@ a key at the playhead), and follows the Escape-confirms rule above.
   Alt-drag from an anchor pulls out new Mirrored handles. Alt-drag a handle moves it alone and
   leaves the anchor Free.
 - The anchor mode strip -- a kit segmented control with Corner, Mirrored, Aligned, Free and Auto --
-  appears at the top of the canvas beside the tool column (the Viewer's tool-options position)
-  while anchors are selected. It shows the selection's mode, or no option for a mixed selection,
+  is the Select and Pen tools' option in the context bar (`contextBarAnchorMode`), and acts on the
+  anchors selected in the Viewer that last had focus; with none selected it stays, disabled. It shows the selection's mode, or no option for a mixed selection,
   and choosing one converts every selected anchor. A curved mode on a Corner pulls handles sized
   from its neighbours; Mirrored and Aligned straighten existing handles onto their common tangent.
 - Right-click on an anchor or the selection offers the same five modes, Delete Point(s) and, for a
@@ -249,7 +285,7 @@ a key at the playhead), and follows the Escape-confirms rule above.
 
 There is no separate Convert Point tool: Alt on the Select tool and the Pen does that job (Alt-click
 converts, Alt-drag pulls or breaks handles), the mode strip and the context menu cover explicit
-conversion, and one fewer tool keeps the column at its ten. The anchor mode is document state;
+conversion, and one fewer tool keeps the tool set small. The anchor mode is document state;
 anchor selection is Viewer gesture state, so Properties shows no per-anchor row. Text clicks create a layer and enter canvas text editing
 with the placeholder selected; the typed text folds into that creation, so a new text layer is one
 undo entry. Properties mirrors the live text.
@@ -264,16 +300,17 @@ Phosphor assets; the four added shape glyphs are Bloom-authored SVG paths.
 | Zoom | magnifying-glass | Z |
 | Rectangle | rectangle | R |
 | Ellipse | ellipse | E |
-| Polygon | pentagon | Column only |
-| Star | five-point star | Column only |
-| Line | diagonal line | Column only |
+| Polygon | pentagon | Bar only (the shape slot's flyout) |
+| Star | five-point star | Bar only (the shape slot's flyout) |
+| Line | diagonal line | Bar only |
 | Pen | pen-nib | P |
 | Text | text-t | T |
+| Cryptomatte | eyedropper | Bar only, or Properties' Pick in Viewer |
 
 The viewer surrounds its composition with `Color::Canvas` (`#131313`) and uses
 `Color::CompositionFrame` (`#454545`) at `kCompositionFrameWidth` (1 logical pixel) for the
-frame outline. `ViewerWorkPadding` reserves breathing room around the frame; the left inset
-also includes `ToolColumnWidth`. Image fitting, picking, selection overlays and panning all
+frame outline. `ViewerWorkPadding` reserves breathing room around the frame on every side; the
+canvas has no tool column (ADR 0031). Image fitting, picking, selection overlays and panning all
 use this same padded rectangle. View > Background (the surround) and the Transparency Grid remain
 presentation preferences.
 
@@ -354,7 +391,7 @@ With no composition the canvas shows the surround under the `viewerEmptyState` i
 "No composition", a Muted hint that dropped media files are imported into Assets, and the Primary
 `viewerNewCompositionButton`, which runs the application's New Composition command. A composition
 with no layers shows just its frame and background, with no invitation. The Viewer's own minimum is
-`ViewerMinHeight`, independent of the tool column; hosted, the panel adds its header and footer.
+`ViewerMinHeight`; hosted, the panel adds its header and footer.
 
 ### Viewer menus
 
@@ -491,7 +528,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `TimelineLeftColumn` | 576 | Four 24px toggles + name + two 100px dropdown columns |
 | `GizmoHandle / GizmoRotateZone` | 8 / 16 | Viewer transform handles / outside-corner rotation radius |
 | `ViewerWorkPadding` | 48 | Padded image work area |
-| `ToolColumnWidth` | 32 | Exclusive tool column |
+| `ContextBarHeight` | 32 | The context bar under the menu bar: `Control` + 2 × `ChromePadding` |
 | `ViewerChannelWidth` | 80 | Channel dropdown |
 | `ViewerModeWidth` | 108 | RAM Preview command floor (widened to its widest label) |
 | `ViewerAdjustWidth` | 72 | Exposure and gamma fields |
@@ -552,10 +589,19 @@ The [validation map and capture contract](grammar1-validation.md) identify enfor
 
 ## Automation additions
 
-Existing object names remain stable. New names are `viewerToolColumn`, `viewerSelectTool`,
-`viewerHandTool`, `viewerZoomTool`, `viewerTextTool`, `viewerRectangleTool`, `viewerEllipseTool`,
-`viewerPolygonTool`, `viewerStarTool`, `viewerLineTool`, `viewerPenTool`,
-and `nodeReadOnlyValue`. Node row widgets expose `nodeParameterRole` and
+Existing object names remain stable, except that ADR 0031 retired the Viewer's tool column
+(`viewerToolColumn`, `viewer<Tool>Tool`, `viewerAnchorModeSwitcher`, `toolColumnMoreButton`). The
+context bar's names are `contextBar`, `contextBarRow`, `contextBarTools`,
+`contextBarTool<Tool>` (Select, Hand, Zoom, Line, Pen, Text, Cryptomatte; also the shape flyout's
+Rectangle, Ellipse, Polygon and Star actions), `contextBarToolShape`, `contextBarShapeFlyout`,
+`contextBarAnchorOptions`, `contextBarAnchorMode`, `contextBarShapeOptions`, `contextBarShapeFill`,
+`contextBarShapeFillColor`, `contextBarShapeStroke`, `contextBarShapeStrokeColor`,
+`contextBarShapeStrokeWidth`, `contextBarTextOptions`, `contextBarTextFont`, `contextBarTextSize`,
+`contextBarTextAlignment`, `contextBarAlign`, `contextBarDistribute`, `contextBarAlignTarget`,
+`contextBarAlignTo`, `contextBar-alignAction-<arrangement>`, `contextBarOverflowButton` and
+`contextBarOverflowMenu`; the shared actions are `alignAction-<arrangement>` and
+`alignTargetAction-<target>` (the scripting ids), in `alignMenu` / `alignToMenu`, and the window's
+toggle is `windowContextBarAction`. Other new names: `nodeReadOnlyValue`. Node row widgets expose `nodeParameterRole` and
 `nodeParameterRowPitch` for geometry audits; list headings expose `headerRow`.
 
 Dialog automation names (lane C): the Composition dialog's fields are `compositionSettingsName`,
@@ -578,7 +624,7 @@ and `compositionSettingsCancel` (the earlier `assets*` names are retired); its p
 replaces `timelineLayerLabelColorDialog`). A prompt's heading and detail are `<dialog>Heading` and
 `<dialog>Detail`.
 
-The metric audit covers the status line, eleven enabled viewer tools,
+The metric audit covers the status line, the context bar's eight tool slots,
 card/control containment and socket-row alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
 1600 and 1920 logical-pixel window widths. Whole-window references and final captures run at
 DPR 1 and 1.5. Changed geometry tests use the viewer's real padded mapping.
@@ -598,7 +644,7 @@ EditorArea exposes maximize. New automation names: `viewerAddMenu`, `viewerAddMe
 `viewerImportAndAddAction`, `viewerCanvasContextMenu`, `viewerContextSelectLayerAction`,
 `viewerContextDuplicateLayerAction`, `viewerContextDeleteLayerAction`,
 `viewerContextCompositionSettingsAction`, `viewerEmptyState`, `viewerEmptyStateTitle`,
-`viewerEmptyStateHint`, `viewerNewCompositionButton`, `toolColumnMoreButton`. The retired
+`viewerEmptyStateHint`, `viewerNewCompositionButton`. The retired
 `viewerCompositionMenuButton` and its `viewer*CompositionAction`s stay hidden, each running the
 application's own command when hosted.
 
@@ -702,8 +748,7 @@ string. New names: `timelinePropertyDriven`, `timelinePropertyDriverLink`,
 `propertiesDriverLink` and `propertiesDrivenValue` are unchanged.
 
 `Color::OnAccent` is white (#ffffff). Kit button painters use it for ink on accent fills,
-including transport, loop, snap and keyframe toggles. KToolColumn is sticky at the canvas left
-edge, paints the header Surface, and owns ChromePadding and ChromeGap around bordered ToggleCells.
+including transport, loop, snap and keyframe toggles, and the context bar's active tool.
 KDropdown's preferred width is the measured widest item plus its icon, padding and chevron; its
 minimum is the same chrome around about six average characters, so a layout short of room elides
 the value instead of overflowing. `setWidthFloor()` is a real floor: the field hugs its widest

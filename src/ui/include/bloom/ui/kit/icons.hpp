@@ -110,6 +110,16 @@ enum class IconId : std::uint8_t {
     RamPreview,
     // A panel's search toggle. Shares the magnifying glass with Zoom: one glyph, two meanings.
     Search,
+    // ADR 0031's context bar: the six layer alignments, the two distributions and its overflow.
+    AlignLayersLeft,
+    AlignLayersHorizontalCentre,
+    AlignLayersRight,
+    AlignLayersTop,
+    AlignLayersVerticalMiddle,
+    AlignLayersBottom,
+    DistributeHorizontal,
+    DistributeVertical,
+    Overflow,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add

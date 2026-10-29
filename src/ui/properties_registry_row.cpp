@@ -3,8 +3,9 @@
 #include "numeric_field_projection.hpp"
 #include "properties_sections.hpp"
 #include "properties_value_edits.hpp"
-#include "value_presentation.hpp"
 #include "properties_text_edit.hpp"
+#include "text_font_choices.hpp"
+#include "value_presentation.hpp"
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -114,43 +115,6 @@ inputColorConfig(const CompositionSession& session) {
         return value ? *value : 0;
     }
     return 0;
-}
-
-[[nodiscard]] QString fontReference(const platform::FontFace& face) {
-    const auto digest = face.contentDigest.toLowercaseHex();
-    return QString::fromStdString(face.family) + QLatin1Char('|') +
-           QString::fromStdString(face.style) + QLatin1Char('|') +
-           QString::fromLatin1(digest.data(), static_cast<qsizetype>(digest.size()));
-}
-
-[[nodiscard]] document::AssetRecord fontAssetRecord(const platform::FontFace& face) {
-    document::AssetRecord asset;
-    asset.kind = document::AssetKind::Font;
-    asset.contentDigest = face.contentDigest;
-    asset.fontFamily = face.family;
-    asset.fontStyle = face.style;
-    asset.fontIndex = face.faceIndex;
-    if (face.source == platform::FontSource::Embedded) {
-        asset.locator = {"font", "builtin", "embedded/" + std::to_string(face.faceIndex),
-                         "font:embedded:" + face.family + "|" + face.style};
-    } else {
-        const auto absolute = std::filesystem::absolute(face.path).lexically_normal();
-        const auto path = absolute.generic_string();
-        asset.locator = {
-            "font", "system", path,
-            QUrl::fromLocalFile(QString::fromStdString(path)).toEncoded().toStdString()};
-    }
-    return asset;
-}
-
-host::FontCatalogueCache& fontCatalogueCache() {
-    static host::FontCatalogueCache cache;
-    static bool requested = false;
-    if (!requested) {
-        cache.refresh();
-        requested = true;
-    }
-    return cache;
 }
 
 } // namespace
@@ -451,19 +415,8 @@ void PropertiesRegistryRow::populateFontSelector() {
     const auto snapshot = cache.snapshot();
     if (!snapshot)
         return;
-    auto current = session_.constantStringValue(parameter_).value_or(QString{});
-    bool numeric = false;
-    const auto assetNumber = current.toULongLong(&numeric);
-    if (numeric) {
-        if (const auto* asset =
-                session_.snapshot().project().findAsset(document::AssetId::fromRaw(assetNumber));
-            asset != nullptr && asset->kind == document::AssetKind::Font) {
-            const auto digest = asset->contentDigest.toLowercaseHex();
-            current = QString::fromStdString(asset->fontFamily) + QLatin1Char('|') +
-                      QString::fromStdString(asset->fontStyle) + QLatin1Char('|') +
-                      QString::fromLatin1(digest.data(), static_cast<qsizetype>(digest.size()));
-        }
-    }
+    const auto current = storedFontReference(
+        session_, session_.constantStringValue(parameter_).value_or(QString{}));
     // A catalogue refresh rebuilds the list and re-selects the stored face. Neither is the artist's
     // choice, so neither may reach commit(): commit listens to activated() alone, and the blocker
     // keeps even the value notification quiet while the list is half built.

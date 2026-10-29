@@ -59,8 +59,8 @@ gate, so production service-backed RAM fill defaults to width one. See the
   which need a restart, and what is project or session state instead.
 - [Memory](user-guide/memory.md) — the cache budgets Bloom chooses, the two override keys, and what
   actual OS limits affect selected targets.
-- [The Context Bar](user-guide/context-bar.md) — aligning and distributing layers (stub; the bar's
-  tools and options are documented with the bar).
+- [The Context Bar](user-guide/context-bar.md) — the tools, the active tool's options, and aligning
+  and distributing layers.
 - [Scripting Bloom with Python](user-guide/python.md) — Python package, transactions and embedding.
 - [Using Bloom from an agent](user-guide/mcp.md) — stdio MCP tools and request limits.
 - [Headless scripting](user-guide/scripting.md) — `bloom-cli`, JSON transactions, and headless

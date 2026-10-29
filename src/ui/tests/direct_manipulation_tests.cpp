@@ -31,6 +31,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/tool_controller.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/viewer_overlays.hpp>
 
@@ -1122,7 +1123,7 @@ void testEscapeConfirmsMidDrag(Expectations& expectations) {
         expectations.expect(fixture.session.undo(), label + ": the confirmed drag undoes");
         expectations.expect(values() != kept && fixture.session.liveValue(parameter->id) == before,
                             label + ": one undo discards the confirmed drag");
-        expectations.expect(fixture.viewer.findChild<QToolButton*>("viewerSelectTool")->isChecked(),
+        expectations.expect(fixture.session.tools().tool() == ui::ViewerTool::Select,
                             label + ": Escape returns to Select");
 
         fixture.controller.beginShutdown();

@@ -75,7 +75,7 @@ bool ViewerEditor::addMaskFromPath(const MaskCreationTarget& target,
 
 // Clicking a mask outline of the selected layer with the Select tool selects that mask.
 bool ViewerEditor::maskOutlinePress(QMouseEvent* event, const ViewerMapping& mapping) {
-    if (tool_ != Tool::Select)
+    if (tool() != ViewerTool::Select)
         return false;
     const auto layerId = maskContextLayer(session_);
     const auto* composition = session_.composition();

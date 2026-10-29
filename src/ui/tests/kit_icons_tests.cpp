@@ -80,8 +80,9 @@ void testEveryIconIdRendersAtEverySizeInEveryWeight(Expectations& expectations) 
                         "every id was rendered at all three sizes in all three weights");
     // The four media footer/kind glyphs extend the curated vocabulary by four, and #376's preset
     // Rename (pencil-simple) by one, the Viewer's region-of-interest toggle (selection) by one, and
-    // its Transparency Grid toggle (square-half) by one.
-    expectations.expect(kit::iconIds().size() >= 30 && kit::iconIds().size() <= 80,
+    // its Transparency Grid toggle (square-half) by one, the context bar by nine, and the Assets
+    // redesign by two net (FolderOpen, RamPreview and Search in; the film-strip Sequence id out).
+    expectations.expect(kit::iconIds().size() >= 30 && kit::iconIds().size() <= 96,
                         "the curated vocabulary stays a curated vocabulary");
 }
 
@@ -93,8 +94,8 @@ void testIconIdsAreUniqueAndTotal(Expectations& expectations) {
     expectations.expect(seen.size() == static_cast<int>(kit::iconIds().size()),
                         "no icon id is listed twice");
     // Every declared enumerator has a backing asset: walking the numeric range catches an id added
-    // to the enum but never bound to a file. Search is the last declared enumerator.
-    for (int value = 0; value <= static_cast<int>(kit::IconId::Search); ++value) {
+    // to the enum but never bound to a file. Overflow is the last declared enumerator.
+    for (int value = 0; value <= static_cast<int>(kit::IconId::Overflow); ++value) {
         expectations.expect(seen.contains(value),
                             "icon id " + std::to_string(value) + " has a vendored asset");
     }

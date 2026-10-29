@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-10-25
+Updated: 2026-10-30
 
 ## Purpose
 
@@ -56,6 +56,40 @@ every editor shows its empty state and the composition-dependent commands (Dupli
 Delete, Export Frame) are disabled. New Composition is the way to author the first one; creating it
 activates it. Deleting the final composition returns to that same blank project as one undoable
 command, and undo restores and reactivates the composition.
+
+## Tools And The Context Bar
+
+There is ONE active tool for the whole application ([ADR 0031](../decisions/0031-contextual-tool-bar.md),
+the After Effects model). `ToolController`, owned by the window's `CompositionSession` and handed to
+every Viewer and the context bar through it, holds the tool as session/UI state; it is never project
+truth and is not saved. A tool chosen anywhere is the tool in every Viewer, and it acts in whichever
+Viewer receives the gesture; a gesture in flight in one Viewer is confirmed when the tool changes.
+
+| Binding | Action |
+| --- | --- |
+| `V` / `H` / `Z` | Select / Hand / Zoom |
+| `R` / `E` | Rectangle / Ellipse (Polygon, Star and Line are chosen in the bar) |
+| `P` / `T` | Pen / Text |
+| `Esc` (in a Viewer) | Confirm what is in flight and return to Select |
+| Click a tool in the context bar | Choose it; it never takes keyboard focus from the Viewer |
+| Press and hold, or right-click, the shape slot | Choose Rectangle, Ellipse, Polygon or Star from its flyout |
+| Context bar Align / Distribute buttons, Composition > Align | Align or distribute the selected layers to the Align To target, as one undoable command |
+
+The tool letters are defined once (`toolForKey`) and work while a Viewer or the context bar has
+keyboard focus; they are not window shortcuts, so a focused text field, value field, the Timeline's
+B/N or the Nodes canvas keep their own keys. There is no temporary tool override such as a held
+Space for Hand: Space is play/pause. Middle-drag pans and the wheel zooms with any tool.
+
+Creation tools stay one-shot in every Viewer: committing a shape, mask, Pen path or text returns the
+application to Select, a zero-size press keeps the tool, and choosing a tool alone never authors
+anything. Properties' Cryptomatte "Pick in Viewer" chooses the Cryptomatte tool for the whole
+application; it stays chosen for further picks, as it did, until another tool is chosen.
+
+The bar's buttons, toggles and segmented controls never take keyboard focus. A field in the bar
+(stroke width, font, size, Align To) commits on Enter or Escape like every field and then returns
+keyboard focus to the Viewer that last had it. Align and Distribute read the layer bounds of the
+frame the Viewer was delivered, so they are disabled, with the reason, until that frame shows the
+current revision and time; layers they skip are named in the status line.
 
 ## Dropdowns, Lists And Menus
 

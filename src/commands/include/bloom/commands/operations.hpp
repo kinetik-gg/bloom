@@ -68,11 +68,23 @@ struct ShapeLayerGeometry {
     std::optional<document::PathValue> path;
 };
 
+// The fill and stroke a new shape starts with (the context bar's options for new shapes). An empty
+// field keeps the shape schema's default. A Line and an open Pen path always draw a stroke and no
+// fill, whatever this asks; their colour and width still come from here.
+struct ShapeLayerStyle {
+    std::optional<bool> fillEnabled;
+    std::optional<core::Color4d> fillColor;
+    std::optional<bool> strokeEnabled;
+    std::optional<core::Color4d> strokeColor;
+    std::optional<double> strokeWidth;
+};
+
 class AddShapeLayer final : public Operation {
   public:
     AddShapeLayer(document::CompositionId composition, document::ShapeKind kind,
-                  ShapeLayerGeometry geometry = {})
-        : composition_(composition), kind_(kind), geometry_(std::move(geometry)) {}
+                  ShapeLayerGeometry geometry = {}, ShapeLayerStyle style = {})
+        : composition_(composition), kind_(kind), geometry_(std::move(geometry)),
+          style_(std::move(style)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
 
@@ -80,6 +92,7 @@ class AddShapeLayer final : public Operation {
     document::CompositionId composition_;
     document::ShapeKind kind_;
     ShapeLayerGeometry geometry_;
+    ShapeLayerStyle style_;
 };
 
 class AddSolidLayer final : public Operation {
@@ -114,6 +127,13 @@ class AddSolidLayer final : public Operation {
 // The font is a non-animatable Font-asset reference whose default is the embedded DejaVu Sans
 // face. Box layout controls are created as ordinary source parameters so every authoring surface
 // can project the same registry rows.
+// The font and alignment new text starts with (the context bar's options for new text). An empty
+// font is the bundled default face; an empty alignment is left-aligned.
+struct TextLayerStyle {
+    std::optional<document::AssetRecord> font;
+    std::optional<std::int64_t> alignment;
+};
+
 class AddTextLayer final : public Operation {
   public:
     AddTextLayer(document::CompositionId compositionId, std::string name, std::string text)
@@ -123,9 +143,11 @@ class AddTextLayer final : public Operation {
     AddTextLayer(document::CompositionId compositionId, std::string name, std::string text,
                  document::Vec2d position, double opacity = 1.0,
                  double size = document::kDefaultTextSizePixels,
-                 core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0})
+                 core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0},
+                 TextLayerStyle style = {})
         : compositionId_(compositionId), name_(std::move(name)), text_(std::move(text)),
-          position_(position), opacity_(opacity), size_(size), color_(color) {}
+          position_(position), opacity_(opacity), size_(size), color_(color),
+          style_(std::move(style)) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -139,6 +161,7 @@ class AddTextLayer final : public Operation {
     double opacity_ = 1.0;
     double size_ = document::kDefaultTextSizePixels;
     core::Color4d color_{1.0, 1.0, 1.0, 1.0};
+    TextLayerStyle style_;
 };
 
 class SetProjectName final : public Operation {

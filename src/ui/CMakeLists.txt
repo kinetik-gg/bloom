@@ -178,6 +178,15 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/eyedropper.svg
         kit/third_party/phosphor-icons/regular/selection.svg
         kit/third_party/phosphor-icons/regular/square-half.svg
+        kit/third_party/phosphor-icons/regular/align-left.svg
+        kit/third_party/phosphor-icons/regular/align-center-horizontal.svg
+        kit/third_party/phosphor-icons/regular/align-right.svg
+        kit/third_party/phosphor-icons/regular/align-top.svg
+        kit/third_party/phosphor-icons/regular/align-center-vertical.svg
+        kit/third_party/phosphor-icons/regular/align-bottom.svg
+        kit/third_party/phosphor-icons/regular/columns.svg
+        kit/third_party/phosphor-icons/regular/rows.svg
+        kit/third_party/phosphor-icons/regular/caret-double-right.svg
         kit/third_party/phosphor-icons/regular/pencil-simple.svg
         kit/third_party/phosphor-icons/regular/eye-slash.svg
         kit/third_party/phosphor-icons/regular/eye.svg
@@ -248,6 +257,15 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/eyedropper-bold.svg
         kit/third_party/phosphor-icons/bold/selection-bold.svg
         kit/third_party/phosphor-icons/bold/square-half-bold.svg
+        kit/third_party/phosphor-icons/bold/align-left-bold.svg
+        kit/third_party/phosphor-icons/bold/align-center-horizontal-bold.svg
+        kit/third_party/phosphor-icons/bold/align-right-bold.svg
+        kit/third_party/phosphor-icons/bold/align-top-bold.svg
+        kit/third_party/phosphor-icons/bold/align-center-vertical-bold.svg
+        kit/third_party/phosphor-icons/bold/align-bottom-bold.svg
+        kit/third_party/phosphor-icons/bold/columns-bold.svg
+        kit/third_party/phosphor-icons/bold/rows-bold.svg
+        kit/third_party/phosphor-icons/bold/caret-double-right-bold.svg
         kit/third_party/phosphor-icons/bold/pencil-simple-bold.svg
         kit/third_party/phosphor-icons/bold/eye-slash-bold.svg
         kit/third_party/phosphor-icons/bold/film-slate-bold.svg
@@ -305,6 +323,15 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/eyedropper-fill.svg
         kit/third_party/phosphor-icons/fill/selection-fill.svg
         kit/third_party/phosphor-icons/fill/square-half-fill.svg
+        kit/third_party/phosphor-icons/fill/align-left-fill.svg
+        kit/third_party/phosphor-icons/fill/align-center-horizontal-fill.svg
+        kit/third_party/phosphor-icons/fill/align-right-fill.svg
+        kit/third_party/phosphor-icons/fill/align-top-fill.svg
+        kit/third_party/phosphor-icons/fill/align-center-vertical-fill.svg
+        kit/third_party/phosphor-icons/fill/align-bottom-fill.svg
+        kit/third_party/phosphor-icons/fill/columns-fill.svg
+        kit/third_party/phosphor-icons/fill/rows-fill.svg
+        kit/third_party/phosphor-icons/fill/caret-double-right-fill.svg
         kit/third_party/phosphor-icons/fill/pencil-simple-fill.svg
         kit/third_party/phosphor-icons/fill/eye-slash-fill.svg
         kit/third_party/phosphor-icons/fill/film-slate-fill.svg
@@ -427,6 +454,13 @@ target_sources(
         asset_data_thumbnail.cpp
         asset_data_thumbnail.hpp
         cryptomatte_controller.cpp
+        context_bar.cpp
+        context_bar_options.cpp
+        context_bar_options.hpp
+        layer_alignment_actions.cpp
+        text_font_choices.cpp
+        text_font_choices.hpp
+        tool_controller.cpp
         composition_thumbnail_controller.cpp
         colour_space_names.hpp
         asset_drop.cpp
@@ -568,6 +602,9 @@ target_sources(
             include/bloom/ui/assets_editor.hpp
             include/bloom/ui/asset_controller.hpp
             include/bloom/ui/cryptomatte_controller.hpp
+            include/bloom/ui/context_bar.hpp
+            include/bloom/ui/layer_alignment_actions.hpp
+            include/bloom/ui/tool_controller.hpp
             include/bloom/ui/composition_thumbnail_controller.hpp
             include/bloom/ui/media_disk_cache_settings.hpp
             include/bloom/ui/node_editor.hpp
