@@ -24,6 +24,13 @@ int main() {
     check("new\nQPushButton\n(parent);", "raw-control", 1);
     check("QFont tickFont() { return kit::font(role); }", "font", 0);
     check("QFont(\"foo\");\nQFont face{\"foo\"};", "font", 2);
+    check("font.setPointSizeF(15);\nlabel->font().setBold(true);\nf.setFamilies({});\n"
+          "f.setVariableAxis(tag, 1);\nQFontDatabase::systemFont(QFontDatabase::FixedFont);",
+          "font", 5);
+    check("layout->setStretch(0, 1);\nsetWeightedSizes(splitter, weights);", "font", 0);
+    if (uiGrammarViolations("src/ui/example.ipp", "font.setPixelSize(9);\nsetFixedHeight(26);")
+            .size() != 1)
+        ++failures;
     check("setFixedHeight(26);\nQSize(16, 20);\nconst int kRowWidth = 42;\nheight() - 8;",
           "dimension", 4);
     check("setFixedHeight(kit::px(kit::Size::Control));\nsetContentsMargins(0, 0, 0, 0);",

@@ -202,6 +202,9 @@ target_link_libraries(bloom_kit_dropdown_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_popup_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_focus_border_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_fonts_test PRIVATE bloom_ui_kit)
+# The manifest check also reads the vendored files that are not interface resources.
+target_compile_definitions(bloom_kit_fonts_test PRIVATE
+    BLOOM_KIT_THIRD_PARTY_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../kit/third_party")
 target_link_libraries(bloom_kit_panel_switcher_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_icons_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_title_bar_test PRIVATE bloom_ui_kit Qt6::Test)
@@ -1206,6 +1209,20 @@ foreach(scale IN ITEMS 1 1.5 2)
     set_tests_properties(bloom.ui.control_geometry.dpr${scale} PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
         LABELS "ui;grammar" TIMEOUT 60)
+endforeach()
+
+# Bloom's type roles win over the platform theme: the main-window fixture and every offscreen
+# surface under a hostile theme resolve and paint only the bundled faces.
+add_executable(bloom_kit_typography_test kit_typography_tests.cpp)
+target_include_directories(bloom_kit_typography_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_kit_typography_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_kit_typography_test PRIVATE BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_kit_typography_test)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.kit_typography.dpr${scale} COMMAND bloom_kit_typography_test)
+    set_tests_properties(bloom.ui.kit_typography.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;kit;grammar" TIMEOUT 120)
 endforeach()
 
 add_executable(bloom_window_golden_test window_golden_tests.cpp)

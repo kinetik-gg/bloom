@@ -4,6 +4,7 @@
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/kit/typography.hpp>
 
 #include <QApplication>
 #include <QColor>
@@ -134,21 +135,23 @@ const auto& numberPlaceholders() {
 }
 
 // The generated rules for the kit line edits (KLineEdit, KSearchField), from the one text-entry
-// recipe (kit::fieldColors), so a typed name reads exactly like a typed number. The well is drawn in
-// the control body: a ControlInset margin inside the Control-tall widget, like every kit control.
+// recipe (kit::fieldColors), so a typed name reads exactly like a typed number. The well is drawn
+// in the control body: a ControlInset margin inside the Control-tall widget, like every kit
+// control.
 [[nodiscard]] QString lineEditRules() {
     const QString selector = QStringLiteral("QLineEdit[kitControl=\"true\"]");
     const auto rule = [&selector](const QString& pseudo, const ButtonColors& colors) {
         return selector + pseudo + QStringLiteral(" {\n") + buttonDeclarations(colors) +
                QStringLiteral("}\n");
     };
-    return selector + QStringLiteral(" {\n    border: %1px solid transparent;\n"
-                                     "    border-radius: %2px;\n    margin: %3px;\n"
-                                     "    padding: 0px %4px;\n}\n")
-                          .arg(static_cast<int>(kHairlineWidth))
-                          .arg(radiusPx(Radius::Small, 0))
-                          .arg(px(Spacing::ControlInset))
-                          .arg(px(Spacing::XS)) +
+    return selector +
+           QStringLiteral(" {\n    border: %1px solid transparent;\n"
+                          "    border-radius: %2px;\n    margin: %3px;\n"
+                          "    padding: 0px %4px;\n}\n")
+               .arg(static_cast<int>(kHairlineWidth))
+               .arg(radiusPx(Radius::Small, 0))
+               .arg(px(Spacing::ControlInset))
+               .arg(px(Spacing::XS)) +
            rule({}, fieldColors(true, false, false, false)) +
            rule(QStringLiteral(":hover"), fieldColors(true, false, true, false)) +
            rule(QStringLiteral(":focus"), fieldColors(true, true, false, false)) +
@@ -430,18 +433,13 @@ void installKinetikTheme(QApplication& application) {
     // will not load produces a diagnostic and a platform fallback, never a failure to open.
     (void)registerBundledFonts();
     QApplication::setPalette(kinetikPalette());
-    QApplication::setFont(font(TypeRole::Ui));
-    // Menus need the role named explicitly (task F1, item F5). Qt resolves a widget's default font
-    // from the platform theme's per-CLASS font (QPlatformTheme::MenuFont) before the
-    // application-wide default -- which is exactly the "menu font size is too big" the interface
-    // showed. Setting it here is not enough on its own: changing the application style re-applies
-    // the platform theme's class fonts, so kit::AltUnderlineProxyStyle::polish() also sets it on
-    // every menu, menu bar, header and tooltip; these lines cover a widget built before any style
-    // change.
-    QApplication::setFont(font(TypeRole::Ui), "QMenu");
-    QApplication::setFont(font(TypeRole::Ui), "QMenuBar");
-    QApplication::setFont(font(TypeRole::Ui), "QHeaderView");
-    QApplication::setFont(font(TypeRole::Ui), "QTipLabel");
+    // The application font AND every per-class font Qt takes from the platform theme become type
+    // roles (kit/typography.hpp): a platform class font outranks the application default, so
+    // setting only the latter left item views, labels and stock buttons in the desktop's face.
+    // Qt refills the class fonts on every style change, and platform themes re-set the
+    // application font after start-up, so the roles are re-applied on each of those events too.
+    applyTypeRoleFonts();
+    installTypeRoleEnforcement(application);
     application.setStyleSheet(kinetikStyleSheet());
 }
 

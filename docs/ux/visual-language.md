@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-10-29
+Updated: 2026-10-30
 
 ## Purpose
 
@@ -200,21 +200,45 @@ row text starts exactly where the closed field's text does, and is at least as w
 
 | Role | Family | Size | Weight | Use |
 | --- | --- | --- | --- | --- |
-| `Ui` | Inter | `12` | 500 | The default interface text |
-| `UiSmall` | Inter | `10.5` | 500 | Small labels and chrome: mixed case, natural tracking |
-| `UiSmallStrong` | Inter | `10.5` | 600 | Small emphasis: `KSection` titles |
-| `Value` | Geist Mono | `11.5` | 500 | Every numeric, unit, hex, and timecode surface |
-| `Title` | Inter | `13` | 600 | Dialog titles and page headings (the read-only project placeholder) |
+| `Ui` | Inter Variable | `12` | 500 | The default interface text |
+| `UiSmall` | Inter Variable | `10.5` | 500 | Small labels and chrome: mixed case, natural tracking |
+| `UiSmallStrong` | Inter Variable | `10.5` | 600 | Small emphasis: `KSection` titles |
+| `Value` | Geist Mono | `11.5` | 500 | Every numeric, unit, hex, timecode and code surface |
+| `Title` | Inter Variable | `13` | 600 | Dialog titles and page headings (the read-only project placeholder) |
 
 Sizes are in design pixels. `Value` is monospaced so a column of numbers stays aligned and a
 changing digit does not reflow the text beside it.
 
-Pinned static Inter faces provide Medium for Ui/UiSmall and SemiBold for UiSmallStrong and Title;
-the value role names Geist Mono Medium. TypeRole selects these families and platform fallbacks.
-Weight is a role, never a call-site `setWeight()` or a stylesheet `font-weight`: a weight set on
-the Medium family cannot reach the SemiBold file. `KLabel` takes a role, and `KLabel::setTone()`
-is the one way to colour interface text by palette role. A single-line `KLabel` is one `Control`
-tall; a word-wrapped one grows to its wrapped height.
+**Inter Variable for UI, Geist Mono for values and code, on every platform.** Bloom bundles one
+upright variable face per family (`InterVariable.ttf` and Geist Mono's variable face) and a role's
+weight is a named point on the face's own `wght` axis (`QFont::setWeight()` plus
+`QFont::setVariableAxis()`; Inter's `opsz` is pinned to its text size, 14). FreeType, CoreText
+and DirectWrite therefore draw the same outlines from the same file. Weight is a role, never a
+call-site `setWeight()` or a stylesheet `font-weight`. `KLabel` takes a role, and
+`KLabel::setTone()` is the one way to colour interface text by palette role. A single-line
+`KLabel` is one `Control` tall; a word-wrapped one grows to its wrapped height.
+
+**Bloom's type roles always win over platform and theme fonts; the platform font never leaks into
+Bloom chrome.** A platform theme supplies an application font and a font per widget class (qt6ct
+gives every class its "general" font and re-sets the application font after start-up; CoreText
+and Windows give item views, labels and buttons their own sizes), and Qt lets those outrank the
+application default. `kit::installKinetikTheme()` therefore overrides every class entry Qt takes
+from the platform theme, the kit proxy style gives any widget that never named a font its role,
+and both are re-applied on every application font, theme and style change (`kit/typography.hpp`).
+A widget that names its own font keeps it. The only time a platform family may appear in chrome is
+when a bundled face failed to load: the failure is reported and the role degrades to the
+platform's sans-serif or monospaced family.
+
+Sizes are fixed design pixels, never the user's system font size. The kit converts each role's
+size to points through the screen's logical DPI (96 on Linux and Windows, 72 on macOS), so a role
+is the same number of logical pixels at every device pixel ratio and on every platform, and the
+desktop's own font size setting has no effect on Bloom chrome.
+
+**Text-layer fonts are the user's.** The font a text layer uses (the Type tool, the text font
+parameter and its catalogue, the embedded DejaVu Sans default and the embedded static Inter faces
+the render module rasterizes) is document content, rendered by the Qt-free text path; none of the
+rules above apply to it. The chrome that chooses it (the font dropdown and its rows) is ordinary
+chrome in `Ui`.
 
 ### State
 

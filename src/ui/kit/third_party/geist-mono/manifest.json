@@ -1,0 +1,22 @@
+{
+  "upstream": "https://github.com/vercel/geist-font",
+  "release": "v1.7.2",
+  "archive_url": "https://github.com/vercel/geist-font/releases/download/v1.7.2/geist-font-v1.7.2.zip",
+  "archive_sha256": "7fc800d2ac6b92844895196e5041aca55d814c15db70c44f79b3b83ab82b04e2",
+  "license": "SIL Open Font License 1.1",
+  "modified": false,
+  "files": {
+    "LICENSE": {
+      "archive_member": "geist-font/OFL.txt",
+      "consumer": "ui",
+      "sha256": "c683bfbcc7e087f5d37a54ef628f10387c451a83ddc459b151403a164ac46c90",
+      "bytes": 4383
+    },
+    "GeistMono-Variable.ttf": {
+      "archive_member": "geist-font/GeistMono/variable/GeistMono[wght].ttf",
+      "consumer": "ui",
+      "sha256": "0e1af3f507a1c8dfbb03d13ffad585834cd45ed7ccb78c756c7ce7873d180d30",
+      "bytes": 171200
+    }
+  }
+}

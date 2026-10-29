@@ -1,6 +1,6 @@
 # Geist Mono Provenance
 
-Reviewed: 2026-09-02
+Reviewed: 2026-10-30 (first intake 2026-09-02)
 
 ## Component
 
@@ -15,8 +15,9 @@ Reviewed: 2026-09-02
 | License file | `LICENSE` (upstream `geist-font/OFL.txt`, byte-identical) |
 | Modified | No. Every file below is byte-identical to its file in the pinned archive. |
 
-The archive SHA-256 above was computed over the exact bytes downloaded from that URL on
-2026-09-02 with `sha256sum`, not copied from an upstream publication.
+The archive SHA-256 above was computed over the exact bytes downloaded from that URL with
+`sha256sum`, not copied from an upstream publication: first on 2026-09-02, and again on
+2026-10-30 when the variable face was taken from the same archive.
 
 The upstream license file is named `OFL.txt`. It is stored here as `LICENSE`, byte for byte, so
 that the repository hygiene checker's vendored-attribution rule
@@ -33,23 +34,30 @@ same check rather than assuming the highest number is the newest.
 
 ## Vendored files
 
-Only the Geist Mono family is vendored. The archive also carries Geist (sans) and Geist Pixel;
-Bloom's interface sans is DejaVu Sans, so those are not vendored.
+Only the upright Geist Mono variable face is vendored. The archive also carries Geist (sans),
+Geist Pixel, the italic variable face, the static faces and web fonts; none of those are vendored.
 
-| Path | SHA-256 | Registers as |
-| --- | --- | --- |
-| `LICENSE` | `c683bfbcc7e087f5d37a54ef628f10387c451a83ddc459b151403a164ac46c90` | -- |
-| `GeistMono-Regular.ttf` | `42d8ad2e610238e64e8abfcde3037c63f7850a73928742b7ab7229d897bcb155` | `Geist Mono` |
-| `GeistMono-Medium.ttf` | `90b15711dc3779b2e64e8aff5228154dd019a90bce4947549c4a8a8a43f2ac25` | `Geist Mono Medium` (typographic family `Geist Mono`) |
+| Path | Archive member | SHA-256 | Registers as |
+| --- | --- | --- | --- |
+| `LICENSE` | `geist-font/OFL.txt` | `c683bfbcc7e087f5d37a54ef628f10387c451a83ddc459b151403a164ac46c90` | -- |
+| `GeistMono-Variable.ttf` | `geist-font/GeistMono/variable/GeistMono[wght].ttf` | `0e1af3f507a1c8dfbb03d13ffad585834cd45ed7ccb78c756c7ce7873d180d30` | `Geist Mono` |
 
-## Static faces, not the variable font
+`manifest.json` records the same members, byte sizes and digests; `bloom.ui.kit_fonts` verifies
+them against the embedded bytes. The face is stored under a bracket-free name (the upstream name
+`GeistMono[wght].ttf` is awkward in CMake lists and Qt resource paths); its bytes are unchanged.
 
-The same reasoning as the interface family applies: the shipped monospaced weight set is Regular
-400 and Medium 500, and the static faces resolve identically on every Qt 6.8 platform without
-depending on the platform font engine's named-instance handling. `variable/GeistMono[wght].ttf` is
-not vendored.
+## The variable face, not the static faces
+
+The interface family is Inter Variable, so the monospaced family is variable too: one file per
+family, and every role weight is a named point on the face's `wght` axis (100-900, default 400).
+The value role uses Medium 500, set with `QFont::setWeight()` and `QFont::setVariableAxis()`, so
+FreeType, CoreText and DirectWrite draw the same outlines. The static `GeistMono-Regular.ttf` and
+`GeistMono-Medium.ttf` of the 2026-09-02 intake (SHA-256
+`42d8ad2e610238e64e8abfcde3037c63f7850a73928742b7ab7229d897bcb155` and
+`90b15711dc3779b2e64e8aff5228154dd019a90bce4947549c4a8a8a43f2ac25`) are removed; nothing else in
+Bloom consumed them.
 
 ## Status
 
-Pinned and reviewed. Adding a weight, changing a face, or moving to a new upstream release
-replaces this record wholesale.
+Pinned and reviewed. Adding a face, changing a face, or moving to a new upstream release replaces
+this record wholesale.
