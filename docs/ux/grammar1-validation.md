@@ -21,7 +21,7 @@ allowlist itself fails the scanner; every live violation is reported. Bare defau
 controls and literal extent arguments following nested token expressions are covered.
 
 The common metrics are Control 26, HeaderRow/FooterRow/ListRow 32, PropertyRow 28,
-IconChrome 16, IconControl 20 and ToggleCell 24. Dropdown widths are 100, 108, 120 and a
+IconMedium 16, IconLarge 20 and ToggleCell 24. Dropdown widths are 100, 108, 120 and a
 240 maximum for expanded header selectors. Compact density changes width, not control height.
 KMenuButton, KIconButton, KIconToggle, KLabel, KSearchField, KRow and KPropertyRow belong to
 the kit, as does `makeMenu`. KPanelSwitcher is a compatibility alias of KDropdown, sharing its

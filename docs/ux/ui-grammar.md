@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-10-25
+Updated: 2026-10-29
 
 Bloom's mechanical interface contract is owned here and implemented by `src/ui/kit`.
 [ADR 0021](../decisions/0021-ui-grammar.md) records its rationale and extension procedure.
@@ -23,7 +23,7 @@ This contract supersedes conflicting component metrics in [Visual Language](visu
 
 Every interactive control is a kit class: `KDropdown`, `KMenuButton`, `KButton`,
 `KIconButton`, `KIconToggle`, `KCheckBox`, `KSwitch`, `KValueField`, `KSlider`,
-`KSearchField`, `KLineEdit`, `KSection`, or `KColorSwatch`. Text uses TypeRole-bound `KLabel`.
+`KSearchField`, `KLineEdit`, `KSection`, `KRadioGroup`, or `KColorSwatchRow`. Text uses TypeRole-bound `KLabel`.
 Read-only progress uses `KProgressBar` (see "Import Progress Dialog" below). A read-only picture
 uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken`, showing a
 worker-decoded proxy or a glyph fitted without changing its aspect ratio; it never loads anything.
@@ -39,15 +39,16 @@ All dimensions resolve through tokens. One design pixel is one Qt logical pixel.
 | Token | Logical pixels | Contract |
 | --- | --- | --- |
 | `Size::Control` | 26 | All header, footer and row controls |
+| `Spacing::ControlInset` | 1 | The air between a control's widget and its painted box on every side: every control paints a `ToggleCell`-tall (24) box |
 | `Size::HeaderRow` | 32 | Panel header |
 | `Size::FooterRow` | 32 | Optional panel footer |
-| `Size::ListRow` | 32 | List and timeline pitch |
+| `Size::ListRow` | 32 | The one list pitch: timeline, Assets, Jobs and kit lists |
 | `Size::PropertyRow` | 28 | Property pitch |
-| `Size::IconChrome` | 16 | Chrome glyph box |
-| `Size::IconControl` | 20 | Control and toggle glyph box |
+| `Size::IconMedium` | 16 | Chrome glyph box |
+| `Size::IconLarge` | 20 | Control and toggle glyph box |
 | `Size::ToggleCell` | 24 | Toggle column pitch |
 | `Size::DropdownWidth` | 100 | List dropdown column |
-| `Size::DropdownWidthCompact` | 108 | Property dropdown |
+| `Size::PropertiesDropdownWidth` | 108 | Property dropdown |
 | `Size::DropdownWidthWide` | 120 | Header selectors |
 | `Size::DropdownWidthExpanded` | 240 | Header selector cap |
 | `Spacing::XXS / XS / S / M / L / XL / XXL` | 2 / 4 / 8 / 12 / 16 / 24 / 32 | Gutters |
@@ -346,7 +347,9 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `ViewerTimecodeWidth` | 104 | Stable time readout |
 | `ViewerZoomWidth` | 64 | Fit/zoom dropdown |
 | `ViewerResolutionWidth` | 96 | Resolution dropdown |
-| `NodeCardWidth / NodeCardMin` | 240 / 128 | Normal card floor / legacy minimum vocabulary |
+| `NodeCardWidth` | 240 | Normal card floor |
+| `NodeGroupTitle` | 30 | Node group frame title band |
+| `NodeLinkHit` | 12 | Node link hit stroke |
 | `NodeTitleBand` | 32 | Node name and category on one row |
 | `NodeSocketDot / NodeRerouteDot` | 8 / 10 | Scene port geometry |
 | `NodeLinkHandleMin` | 32 | Minimum spline tangent |
@@ -356,7 +359,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `Hairline / SelectionEdge` | 1 / 2 | Pixel-edge arithmetic / scene selection outline |
 | `NodeGrid` | 16 | Node snap grid |
 | `PlayheadHalfWidth / PlayheadHeight` | 5 / 6 | Timeline playhead head |
-| `RulerLabelGap / RulerLabelInset` | 10 / 3 | Timeline ruler labels |
+| `RulerLabelGap` | 10 | Timeline ruler labels |
 | `MinorTick / MajorTick` | 4 / 8 | Timeline tick extents |
 | `ViewerChecker` | 22 | Checkerboard cell |
 | `ViewerMinWidth / ViewerMinHeight` | 220 / 176 | Viewer fallback minimum |
@@ -365,7 +368,14 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `DialogTextWidth / DiagnosticHeight` | 520 / 140 | Read-only explanation / job diagnostics |
 | `DialogWideWidth` | 700 | Minimum width of a settings dialog with Basic and Advanced sections (Composition dialog) |
 | `ProgressTrack` | 6 | `KProgressBar` track height |
-| `SplitHandle` | 6 | Draggable divider hit zone (`KSplitHandle`); paints a `TimelineSeparator`-width hairline centered in it |
+| `SplitHandle` | 6 | Draggable divider hit zone (`KSplitHandle`); paints one snapped hairline centered in it |
+| `ScrollBarTrack / ScrollBarThumb` | 12 / 8 | Constant scrollbar width / resting thumb |
+| `TooltipMaxWidth` | 320 | Tooltip wrap width |
+| `SliderTrack / SliderHandle` | 4 / 12 | `KSlider` |
+| `RangeTrack / RangeHandle` | 6 / 8 | `KRangeSelector` |
+| `SwitchTrackWidth / SwitchTrackHeight` | 30 / 16 | `KSwitch` |
+| `RadioMark / RadioDot` | 14 / 6 | `KRadioGroup` discrete mark and its selected dot (even, so it centres on the pixel grid) |
+| `PickerSquare / PickerMarker / CheckerCell` | 160 / 8 / 8 | `KColorPicker` square, marker, and every alpha checkerboard cell |
 
 `kKeyDiamondRadius` is 4.5 and `kNodeCanvasHalfExtent` is 262144 logical pixels. Ratios,
 centering divisors and wheel detents are unitless computations, not pixel dimensions.
@@ -398,12 +408,14 @@ card/control containment and socket-row alignment at DPR 1, 1.5 and 2. It also v
 1600 and 1920 logical-pixel window widths. Whole-window references and final captures run at
 DPR 1 and 1.5. Changed geometry tests use the viewer's real padded mapping.
 
-Panel children are clipped by `KSurface::clipPanelChildren` to `Radius::Panel`; corner overlays
-provide the antialiased boundary. Header and footer share ChromePadding. Viewer declares
+Every panel's single border is painted by `KPanelFrame`, an overlay raised above the panel's
+children (Accent while the panel is active); the stylesheet gives the panel only its background.
+Panels are square (`Radius::Panel` is 0); a non-zero radius would also have the frame fill the
+corner wedges outside the curve. Header and footer share ChromePadding. Viewer declares
 View, Select, Add; Composition commands live under View. Only EditorArea exposes maximize.
 New automation names: `viewerAddMenu`, `viewerAddMenuButton`.
 
-Rows own `Spacing::RowPadding` (1 on all edges); KValueField owns `FieldMargin` (1)
+Rows own `Spacing::RowPadding` (1 on all edges); every control owns `ControlInset` (1)
 inside its allocation, including scene proxies. `PropertyGutter` (8) separates labels and
 controls independently of component gaps. KSection owns `SectionPadding` (8 on every edge),
 overridable per section via `setBodyPadding`; Properties uses `Spacing::XS` (4) for its outer
@@ -414,7 +426,7 @@ accounted for: 1+1+4 on the sides, 0+6 on top, 1+4+1 inside sections.
 A switch is never a row's flexible field: it keeps its own size at the value column's leading
 edge instead of stretching centered. Expanded RGBA rows use a blank-label KPropertyRow so controls align beneath the swatch.
 
-Timeline switches retain ToggleCell squares (24), with IconChrome (16) glyphs: unchecked is an
+Timeline switches retain ToggleCell squares (24), with IconMedium (16) glyphs: unchecked is an
 empty neutral bordered box, checked uses the same Regular glyph as the column heading. Hidden
 audio retains its cell; Spacing::XS separates switch boxes in both header and layer rows.
 Headers and rows share the ChromePadding left inset,
@@ -453,19 +465,21 @@ Keys off hides both key lanes and collapsed summary
 glyphs. Empty key-lane labels paint no chip. Lane snapping is `snapping && !Shift`.
 
 Timeline lanes use `LanePadding` (12) on both sides of their time axis. The layer column/lanes split
-is a draggable `KSplitHandle` (`Size::SplitHandle`, 6, its hit zone; it paints a `TimelineSeparator`
-(2) Background hairline centered in that zone), used identically for the header split so the ruler
+is a draggable `KSplitHandle` (`Size::SplitHandle`, 6, its hit zone; it paints one snapped
+Background hairline centered in that zone, BorderHover while hovered or dragged, and ends a drag
+when it loses the pointer grab), used identically for the header split so the ruler
 and lane region always move together with the column headings and rows below them. It is clamped
 between the layer table's own minimum (name, Blending and Parent columns all still visible) and a
 maximum that leaves `PanelMinWidth` for the lanes. A fresh Timeline defaults to 37% of its live
 width; an existing `timeline/layer-column-width` pixel value wins, and a double-click or Reset
-Workspace returns to the 37% ratio. All timeline rows share TimelineRow pitch and a zero origin;
+Workspace returns to the 37% ratio. All timeline rows share the ListRow pitch and a zero origin;
 the 28px KPropertyRow is centered within that pitch.
-Selected rows use SurfaceRaised with no edge stripe. Every populated and empty row uses a
-Background hairline separator (the window color, never a lighter border), without alternating fills.
+Selected rows use the kit selected-row recipe: the Accent wash over the row in both halves, with
+the SelectionEdge Accent edge at the layer row's leading side. Every populated and empty row uses
+one snapped Background hairline separator (`kit::paintRowSeparator`, the window color, never a
+lighter border), without alternating fills.
 The work-area slider occupies the lane half
-of the layer-column header row, directly below the ruler. Its active range uses SurfaceRaised,
-matching selected layer rows; outside the range stays Surface, with accent endpoint handles.
+of the layer-column header row, directly below the ruler. Its active range uses SurfaceRaised; outside the range stays Surface, with accent endpoint handles.
 Cached-frame strips use green Ok. Ruler tick labels and the current-frame readout are centered on
 their needles. The Accent playhead has a solid tab with a downward-pointing tip below its readout,
 joining the single-pixel line through the work area and lanes; the readout never paints over it.
@@ -475,7 +489,7 @@ painted background or track; hover/drag uses BorderActive. Its ends advertise re
 body advertises panning.
 Clip trim edges show SizeHorCursor using the same
 hit tolerance as trimming; locked layers do not advertise trimming. The vertical scrollbar appears
-only when the expanded row content exceeds the viewport. Only then does a ScrollBarHover-width
+only when the expanded row content exceeds the viewport. Only then does a ScrollBarTrack-width
 gutter reserve its space in the ruler, work-area and body rows together. Otherwise lanes extend
 to the panel's right edge, with no fullscreen or scrollbar gutter.
 Object, Transform, Source groups are collapsible Title Case rows, joined by one group per upstream

@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-09-15
+Updated: 2026-10-29
 
 ## Purpose
 
@@ -39,25 +39,33 @@ snapped to a whole number of physical pixels at the device pixel ratio in use
 | --- | --- | --- |
 | `Canvas` | `#131313` | Viewer work area |
 | `CompositionFrame` | `#454545` | Viewer frame outline |
+| `SurfaceSunken` | `#0B0B0B` | Recessed wells: thumbnails, the timeline lane backdrop |
 | `Background` | `#111111` | The window, the workspace, and the visible gutters between panels |
-| `Surface` | `#141414` | Panel chrome: headers, status bar, toolbars |
-| `SurfaceRaised` | `#1B1B1B` | Menus, popups, dialogs, and raised controls |
-| `Field` | `#202020` | Input cells: value fields, slider tracks |
+| `Surface` | `#181818` | Panel chrome: headers, status bar, toolbars, list rows |
+| `SurfaceRaised` | `#222222` | Menus, popups, dialogs, raised controls, and the hover step on Surface |
+| `Field` | `#2B2B2B` | Input cells: value fields, slider tracks |
 | `ControlSurface` | `#0E0E0E` | Header-variant icon buttons and every dropdown closed field -- darker than `Background` itself, by design |
 | `Foreground` | `#FFFFFF` | Primary text and active icons |
+| `OnAccent` | `#FFFFFF` | Text and glyphs on an `Accent` surface |
 | `Muted` | `#999999` | Secondary text, resting icons, units |
 | `Faint` | `#666666` | Placeholder text, tertiary labels, ruler ticks and separators |
-| `Border` | `#222222` | Resting hairlines |
-| `BorderHover` | `#454545` | Hovered hairlines, scrollbar thumbs |
-| `BorderActive` | `#444444` | A neutral hover/drag border on navigator-style controls |
-| `Accent` | `#0C8CE9` | Selection, focus, the active-panel border, the playhead, and the primary action |
-| `AccentHover` | `#3AA5F0` | An accent surface under the pointer |
-| `AccentPressed` | `#0A73C2` | An accent surface being pressed |
+| `Border` | `#2E2E2E` | Resting hairlines -- one clear step above `SurfaceRaised`, so a raised plate keeps its edge |
+| `BorderHover` | `#4A4A4A` | Hovered hairlines, resting scrollbar thumbs |
+| `BorderActive` | `#626262` | A neutral drag border on navigator-style controls and a hovered scrollbar thumb -- one clear step above `BorderHover` |
+| `Accent` | `#0A78C8` | Selection, focus, the active-panel border, the playhead, and the primary action |
+| `AccentHover` | `#3F96D5` | An accent surface under the pointer |
+| `AccentPressed` | `#0863A6` | An accent surface being pressed |
 | `Keyframe` | `#F5C542` | Keyframes and animation markers |
 | `Ok` | `#3FBF6B` | Success and ready states |
 | `Warn` | `#E6A23C` | Warnings and unsupported states |
 | `Error` | `#E0554E` | Failures and destructive actions |
-| `Brand` | `#E879AB` | The Bloom logo only, never interface chrome |
+| `CheckerLight` / `CheckerDark` | `#999999` / `#666666` | The alpha checkerboard: every colour widget and the Viewer's Checkerboard background |
+| `CanvasBlack` / `CanvasWhite` | `#000000` / `#FFFFFF` | The Viewer's exact Black and White backgrounds |
+
+`OnAccent` on `Accent` measures 4.6:1, which meets WCAG AA for 12 px interface text; the previous
+`#0C8CE9` measured 3.5:1. A heavier weight does not change a contrast ratio, so the accent itself
+was deepened. The checker tones are mid-grey -- the compositing convention -- because a pair of
+dark interface surfaces vanishes under any dark image.
 
 Data-type palette, for identifying what a thing *is*:
 
@@ -70,7 +78,10 @@ Data-type palette, for identifying what a thing *is*:
 | `DataAudio` | `#7C5CFF` | Audio |
 
 `Background`, `Surface`, `SurfaceRaised`, and `Field` form the surface ladder, darkest first. The
-state recipes below step along exactly this ladder and nothing else.
+state recipes below step along exactly this ladder and nothing else. The rungs are spaced so each
+step reads on its own (about 1.06:1, 1.12:1 and 1.12:1 relative luminance): hover, selection,
+alternating rows and the Secondary button each move one rung, and `kit_tokens_tests.cpp` pins the
+spacing so two rungs cannot collapse back into one value.
 
 ### Radius
 
@@ -78,7 +89,7 @@ state recipes below step along exactly this ladder and nothing else.
 | --- | --- | --- |
 | `Small` | `3` | Controls, chips, and a dropdown or menu popup's own frame -- the frame rounds, never the rows inside it |
 | `Medium` | `6` | Cards |
-| `Panel` | `4` | Panel bodies and their rounded-corner mask -- its own step, not a reuse of `Small` |
+| `Panel` | `0` | Panel bodies: square, drawn by `KPanelFrame` -- its own step, not a reuse of `Small` |
 | `Large` | `12` | Dialogs |
 | `XLarge` | `16` | Full-screen surfaces |
 | `Full` | pill | Resolved as half the shape's own extent: switches, scrollbar thumbs, slider handles |
@@ -87,7 +98,8 @@ state recipes below step along exactly this ladder and nothing else.
 
 | Token | Value | Rule |
 | --- | --- | --- |
-| Hairline | `1` | Snapped to whole physical pixels at any device pixel ratio -- no blur at 125% or 150% |
+| Hairline | `1` | Snapped to whole physical pixels at any device pixel ratio -- no blur at 125% or 150%. `kit::fillRoundedSurface` also rounds the box itself to device pixels, so the stroke never straddles two rows |
+| Control inset | `Spacing::ControlInset` (`1`) | Every button, dropdown, value field and icon button paints its box this far inside its widget, so each is exactly one `ToggleCell` (24) tall in a `Control` (26) slot |
 | Focus | `1`, `Accent` | The control's **own single** hairline turns `Accent`. There is no second outline outside it, and Qt's own focus rectangle is suppressed |
 | Window | `1`, `Border` | The application window's own edge |
 
@@ -101,11 +113,25 @@ you are editing never takes the focus indication away. A control that is borderl
 keyboard focus. `kit::borderForInteraction()` is the one implementation;
 `src/ui/tests/kit_focus_border_tests.cpp` pins every control at all four points.
 
-The color widgets are the documented exception: `KColorChip` and `KRangeSelector` (through
-`kit::drawFocusRing()`) and `KColorSwatches` and `KColorPicker` (through accent pens of their own)
-still draw a `1.5` accent ring outside the keyboard-focused element, because their focusable target is a
-color field, a swatch, or a handle whose own border color is the artist's data rather than a state
-channel -- a border-color change there could not carry focus at all.
+The color widgets are the documented exception: `KColorChip`, `KRangeSelector` and the
+`KColorPicker` canvases (saturation/value square, hue bar, alpha bar) draw a `1.5` accent ring
+outside the keyboard-focused element through `kit::drawFocusRing()`, because their focusable
+target is a color field or a handle whose own edge is the artist's data rather than a state
+channel -- a border-color change there could not carry focus at all. `KColorSwatchRow` slots do
+carry a state border, so the focused slot's own border turns `Accent`.
+
+Every focusable primitive follows the rule: `KButton`, `KIconButton` (keyboard focus only, never a
+click), `KDropdown`, `KValueField`, `KSlider`, `KSwitch`, `KRadioGroup` (the segmented bar's
+border, or the current mark's border in the discrete list), the `KSection` header (Tab reaches
+it, Space or Enter toggles it), `KMenuButton`, stock `QPushButton` and `QHeaderView`, the picker
+canvases (arrow keys step them, Shift for a coarse step) and the swatch row (arrow keys walk its
+slots, Space or Enter applies one). An item view (Assets, Jobs) shows keyboard focus as one
+`Accent` hairline inset around its current row. `kit_focus_border_tests.cpp` pins each.
+
+The keyboard-focus tracker repaints a widget when its focus changes; it re-resolves stylesheet
+rules only for widgets whose look comes from a `[bloomKeyboardFocus]` sheet rule (stock
+`QPushButton`, `QComboBox`, `QLineEdit`, `QHeaderView`, and widgets that opt in through
+`kit::restyleOnKeyboardFocus()`, such as `KMenuButton`).
 
 ### Controls, editor surfaces and layout
 
@@ -121,17 +147,28 @@ placement resolves immutable local bounds asynchronously. UI typography is indep
 rendered text face. Viewer guides, backgrounds, channel inspection and zoom remain presentation
 state; they never change cached composition pixels or export semantics.
 
+The colour picker's Sample affordance samples inside Bloom only, one pixel under the pointer per
+move (never a whole-widget grab). Over the Viewer it takes the pixel probe's working-space value --
+the authored colour itself, HDR range included -- rather than the display-referred 8-bit pixel on
+screen; until the probe has resolved that value, and over anything else, it takes the rendered
+pixel. A surface that knows a truer colour than its pixels answers through
+`kit::KColorSampleSource`.
+
 ### Elevation
 
 | Token | Shadow |
 | --- | --- |
 | `Flat` | none |
-| `Popup` | `0 4 16 rgba(0,0,0,.5)` |
+| `TimelineBar` | `0 1 2 rgba(0,0,0,.25)` -- a clip bar on its lane |
+| `Popup` | `0 4 16 rgba(0,0,0,.5)` -- menus and dropdown popups |
 | `Dialog` | `0 12 40 rgba(0,0,0,.6)` |
 | `Drag` | `0 18 48 rgba(0,0,0,.55)` |
 
 A raised surface also steps up one level on the surface ladder and keeps its hairline. Elevation is
-never the only thing separating a surface from what is behind it.
+never the only thing separating a surface from what is behind it. `kit::drawElevationShadow()`
+paints a token's shadow from a cached nine-patch (one blur per token, radius and device pixel
+ratio). A menu casts the Popup shadow into a transparent gutter on its right and bottom edges, so
+its top-left corner still opens exactly at its anchor.
 
 ### Type Roles
 
@@ -139,14 +176,19 @@ never the only thing separating a surface from what is behind it.
 | --- | --- | --- | --- | --- |
 | `Ui` | Inter | `12` | 500 | The default interface text |
 | `UiSmall` | Inter | `10.5` | 500 | Small labels and chrome: mixed case, natural tracking |
+| `UiSmallStrong` | Inter | `10.5` | 600 | Small emphasis: `KSection` titles |
 | `Value` | Geist Mono | `11.5` | 500 | Every numeric, unit, hex, and timecode surface |
-| `Title` | Inter | `13` | 600 | Dialog and section titles |
+| `Title` | Inter | `13` | 600 | Dialog titles and page headings (the read-only project placeholder) |
 
 Sizes are in design pixels. `Value` is monospaced so a column of numbers stays aligned and a
 changing digit does not reflow the text beside it.
 
-Pinned static Inter faces provide Medium for Ui/UiSmall and SemiBold for Title; the value
-role names Geist Mono Medium. TypeRole selects these families and platform fallbacks.
+Pinned static Inter faces provide Medium for Ui/UiSmall and SemiBold for UiSmallStrong and Title;
+the value role names Geist Mono Medium. TypeRole selects these families and platform fallbacks.
+Weight is a role, never a call-site `setWeight()` or a stylesheet `font-weight`: a weight set on
+the Medium family cannot reach the SemiBold file. `KLabel` takes a role, and `KLabel::setTone()`
+is the one way to colour interface text by palette role. A single-line `KLabel` is one `Control`
+tall; a word-wrapped one grows to its wrapped height.
 
 ### State
 
@@ -154,16 +196,31 @@ role names Geist Mono Medium. TypeRole selects these families and platform fallb
 | --- | --- |
 | Hover | One surface step up, plus `BorderHover`. At the top of the ladder the step clamps and the border change carries the state alone |
 | Accent-item hover | A full-width `Accent` bar with `Foreground` text -- menu and list rows, never a rounded pill. The row is rectangular and spans the popup frame edge to edge; the frame's own rounded corners clip the bar, so only the frame is ever rounded |
-| Menu row | A reserved icon column so text aligns with or without an icon, the shortcut in `Faint`, and the submenu caret as the Phosphor `CaretRight` glyph. Painted by `kit::AltUnderlineProxyStyle`, not by the stylesheet: QSS has no selector for a shortcut column, and any `QMenu` rule with a box makes `QStyleSheetStyle` draw the whole row itself |
+| Menu row | A reserved `IconMedium` (16) icon column so text aligns with or without an icon, the shortcut in `Faint` (on the Accent hover bar, `OnAccent` at 72%), and the submenu caret as the Phosphor `CaretRight` glyph. A checked action with its own icon draws the icon in its Fill weight inside a hairline frame; one without an icon shows the check glyph in the icon column. Painted by `kit::AltUnderlineProxyStyle` at the painter's device pixel ratio, not by the stylesheet: QSS has no selector for a shortcut column, and any `QMenu` rule with a box makes `QStyleSheetStyle` draw the whole row itself |
 | Pressed | `AccentPressed` for an accent surface; one surface step down otherwise |
-| Selected | An `Accent` fill, or a 2px inset accent edge where a fill would hide content |
-| Focus | The control's own single border turns `Accent`, and stays `Accent` while hovered -- see Border above. Never a second outline |
-| Disabled | Ink at 40% opacity, and no hover response at all |
+| Selected row | The one list-row recipe (`kit::paintSelectedRow`): an opaque wash of `Accent` at 24% over the row's own surface, under a `SelectionEdge` (2) `Accent` edge at the row's leading side. Timeline layer rows and lanes, `KRow`, Assets and Jobs share it; the wash keeps content drawn over the row -- clip bars in their own colours -- readable |
+| Selected control | A checked button, toggle or segment: the `Accent` plate with `OnAccent` ink |
+| Focus | The control's own single border turns `Accent`, and stays `Accent` while hovered -- see Border above. Never a second outline. On an `Accent` plate the focus border is `Foreground` |
+| Disabled | The control's own resting ink at 40% opacity (`kit::disabledInk`, used by the kit painters and the application palette alike), no hover response, and no pointing-hand cursor |
 
 A filled control that is not accent-colored -- a destructive action, for instance -- reproduces the
 relation the accent triple already states rather than inventing its own pair of colors: hover
 blends toward `Foreground` by the same amount `AccentHover` does, and press scales the channels by
 the same factor `AccentPressed` does.
+
+Buttons share one recipe, `kit::buttonColors()`: `KButton`'s Primary, Secondary, Ghost and Danger,
+the recessed `KIconButton`, and the `KMenuButton` menu-strip title -- whose stylesheet rules, like
+the stock `QPushButton` ones, are generated from the same function. Danger rests outlined in
+`Error` and fills only once the pointer commits. A dialog's default `QPushButton` wears the
+Primary plate.
+
+| Surface | Recipe |
+| --- | --- |
+| Item view | Rows alternate `Background` and `Surface`; the hover step is one rung up; selection is the selected-row recipe above, painted for the tree's branch area and every cell alike (no notch at the indentation); trees disclose with the Phosphor `CaretRight`/`CaretDown` the Timeline uses. Painted by the kit proxy style; Assets and Jobs rows are `ListRow` (32) |
+| Tooltip | `SurfaceRaised`, `Border` hairline, `Radius::Small`, `Spacing::XS`/`S` padding, Inter `Ui`, wrapping at `TooltipMaxWidth` (320) |
+| Scrollbar | One constant `ScrollBarTrack` (12) width, so hovering never relayouts a view; the thumb rests `ScrollBarThumb` (8) wide in `BorderHover`, fills the track in `BorderActive` under the pointer and `Muted` while pressed |
+| Splitter | A workspace gutter rests in `Background` and lightens to `SurfaceRaised` under the pointer; `KSplitHandle` paints one snapped hairline in its hit zone |
+| Anchor grid | Round dots (`Radius::Full`); the selected one in `Keyframe`, ringed in `Accent` under keyboard focus |
 
 Color is never the only carrier of a state. A disabled control also stops responding; a selected
 one also changes its fill or its edge; a toggle also moves its thumb.
@@ -214,13 +271,17 @@ Phosphor Icons is Bloom's default interface icon family.
   comes from the host control's metrics, so it takes only the role's weight
   (`iconWeight(IconRole::Chrome)`) and keeps that box.
 - Add another upstream weight only when a role needs it. The vendored subset carries `regular`,
-  `fill` and `bold` complete over all 48 ids, because a role that asks for a weight must find it for
-  every icon: a missing file renders as a silent blank, not an error.
+  `fill` and `bold` complete over every Phosphor-backed id (70 `IconId`s: 64 vendored glyphs per
+  weight, two ids sharing one glyph, and four shape-tool glyphs Bloom draws itself), because a role
+  that asks for a weight must find it for every icon: a missing file renders as a silent blank,
+  not an error.
 - Access icons through a typed, semantic C++ API such as `IconId::SplitHorizontal`. Product code
   must not spread upstream filenames or resource paths through widgets.
 - Render and tint SVGs through Qt, with caching that accounts for icon identity, size, state,
   palette color, and device-pixel ratio. Resolve Phosphor's `currentColor` from the applicable Qt
-  palette role; do not assume the raw SVG automatically follows the application palette.
+  palette role; do not assume the raw SVG automatically follows the application palette. A
+  `kit::icon()` `QIcon` renders through the same cache, so a menu, list or header repaint never
+  re-reads SVG on the UI thread, and its `QIcon::On` state takes the Fill weight.
 - An icon does not replace an accessible name. Icon-only controls require a tooltip and accessible
   text; destructive or ambiguous actions should include a visible label where space permits.
 - Do not communicate an important state through icon color alone.
@@ -354,7 +415,7 @@ the row's own tooltip, so the color is a second channel rather than the only one
 
 Neither kind references media, and the data-type palette's five roles all name kinds of referenced
 media, so these two are the least-wrong available choices rather than literal matches. The rejections
-are on record: `DataImage` (`#3AA5F0`) is byte-identical to `AccentHover` and would make a clip read
+are on record: `DataImage` (`#3AA5F0`) sits right beside the accent blues and would make a clip read
 as a selected surface while swallowing the 1px `Accent` playhead crossing it; `DataSequence`
 (`#E0554E`) is byte-identical to `Error` and would make a clip read as failed; `DataAudio`
 (`#7C5CFF`) is a neighbouring purple to `DataComposition` and would not be told apart from a solid.
@@ -388,9 +449,9 @@ the socket's own name and tooltip -- which is the rule below, not an exception t
 The same token inks the socket and every link leaving it. Socket labels must still identify the kind:
 color is never the only carrier.
 
-This retires the collision the previous mapping carried -- `DataImage` and `AccentHover` are both
-`#3AA5F0`, so an Image socket was indistinguishable from a hovered accent surface. `DataImage` and
-`AccentHover` still share that value; nothing in the node editor reads it any more.
+This retires the collision the previous mapping carried -- `DataImage` and `AccentHover` were both
+`#3AA5F0`, so an Image socket was indistinguishable from a hovered accent surface. The deepened
+accent triple has since separated the two values as well.
 
 While a link drag is in flight every socket states whether the link could land on it: a compatible
 socket brightens toward `Foreground` by the filled-hover blend, an incompatible one fades to the
