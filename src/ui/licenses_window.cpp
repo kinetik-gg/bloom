@@ -1,5 +1,6 @@
 #include <bloom/ui/licenses_window.hpp>
 
+#include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/third_party_license_catalog.hpp>
 
@@ -29,7 +30,7 @@ LicensesWindow::LicensesWindow(QWidget* parent) : QDialog(parent) {
     componentList_ = new QListWidget(this);
     componentList_->setObjectName(QStringLiteral("licensesComponentList"));
 
-    licenseText_ = new QPlainTextEdit(this);
+    licenseText_ = new kit::KTextArea(this);
     licenseText_->setObjectName(QStringLiteral("licensesTextView"));
     licenseText_->setReadOnly(true);
     licenseText_->setFont(kit::font(kit::TypeRole::Value));

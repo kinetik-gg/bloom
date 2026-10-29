@@ -1612,11 +1612,29 @@ void testInlineRenameGeometryAndCommit(Expectations& expectations) {
     const auto afterUndoCommands = fixture.commands.size();
     field = start();
     if (field) {
-        field->setText("Cancelled");
+        // Escape confirms everywhere (owner, 2026-10-29): it commits the changed name once.
+        field->setText("Escaped");
         QTest::keyClick(field, Qt::Key_Escape);
+        // The new edit replaces the undone rename at the redo tail.
         expectations.expect(!field->isVisible() && fixture.commands.size() == afterUndoCommands &&
-                                fixture.session.snapshot().revision() == afterUndo,
-                            "Escape cancels despite the resulting focus loss");
+                                !fixture.commands.canRedo() &&
+                                fixture.session.composition()->graph().findLayer(id)->name ==
+                                    "Escaped",
+                            "Escape commits the changed name exactly once");
+        (void)fixture.session.undo();
+        (void)afterUndo;
+    }
+    field = start();
+    if (field) {
+        field->setText("");
+        QTest::keyClick(field, Qt::Key_Return);
+        expectations.expect(field->isVisible() && field->property("kitError").toBool(),
+                            "an empty name is refused and the field stays open with the reason");
+        QTest::keyClick(field, Qt::Key_Escape);
+        expectations.expect(!field->isVisible() &&
+                                fixture.session.composition()->graph().findLayer(id)->name ==
+                                    "Original",
+                            "Escape on a refused name closes it on the current name");
     }
     field = start();
     if (field) {

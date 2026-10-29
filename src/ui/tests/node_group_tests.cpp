@@ -214,7 +214,10 @@ void testTheTitleIsRenamedInline() {
     f.release(title);
     const auto before = f.stack.size();
     editor->setText(QStringLiteral("Key Light"));
-    Q_EMIT editor->editingFinished();
+    {
+        QKeyEvent ret(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QCoreApplication::sendEvent(editor, &ret);
+    }
     QCoreApplication::processEvents();
     expect(f.stack.size() == before + 1 && groupsOf(f).at(id).name == "Key Light",
            "committing the editor publishes one RenameGroup");

@@ -96,13 +96,23 @@ class ViewerTimecodeReadout final : public kit::KFieldFrame {
         editor_->setAccessibleName(ViewerEditor::tr("Go to frame"));
         editor_->setFont(kit::font(kit::TypeRole::Value));
         editor_->setToolTip(ViewerEditor::tr("Enter a frame number or HH:MM:SS:FF timecode"));
-        editor_->installEventFilter(this);
+        // The kit inline-edit policy: Return, Escape, Tab and focus loss all commit (Escape
+        // confirms everywhere). Text that is not a frame or a timecode keeps the editor open on
+        // Return with the reason, and closes on the current frame for Escape or a click away.
+        auto& policy = editor_->useInlineEdit([this](const QString& text) {
+            const auto context = frameContextFor(session_);
+            if (!context.has_value() ||
+                parseTimelineFrameLabel(text, context->frameRate, timecodeFormat_, context->labels))
+                return QString{};
+            return timecodeFormat_ ? ViewerEditor::tr("Not a timecode (HH:MM:SS:FF)")
+                                   : ViewerEditor::tr("Not a frame number");
+        });
+        connect(&policy, &kit::KInlineEdit::accepted, this, [this] { commitEdit(); });
+        connect(&policy, &kit::KInlineEdit::refused, this, [this] { endEdit(); });
 
         stack_->addWidget(page_);
         stack_->addWidget(editor_);
         stack_->setCurrentWidget(page_);
-
-        connect(editor_, &QLineEdit::returnPressed, this, [this] { commitEdit(); });
 
         // Built once and added to this widget's own action list rather than created inside
         // contextMenuEvent(): the menu is then assembled from actions that exist whether or not it
@@ -238,21 +248,6 @@ class ViewerTimecodeReadout final : public kit::KFieldFrame {
         menu.exec(event->globalPos());
     }
 
-    bool eventFilter(QObject* watched, QEvent* event) override {
-        if (watched == editor_) {
-            // Escape confirms, like Return and clicking away (owner decision, 2026-10-29): the
-            // typed frame is taken, and an unparseable entry reverts in silence.
-            if (event->type() == QEvent::FocusOut) {
-                commitEdit();
-            } else if (event->type() == QEvent::KeyPress &&
-                       static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
-                commitEdit();
-                return true;
-            }
-        }
-        return QWidget::eventFilter(watched, event);
-    }
-
   private:
     [[nodiscard]] static int padding() { return kit::KFieldFrame::textInset(); }
     [[nodiscard]] static int advance(const QString& text) {
@@ -308,8 +303,7 @@ class ViewerTimecodeReadout final : public kit::KFieldFrame {
         const auto context = frameContextFor(session_);
         endEdit();
         // A frame number or timecode in the composition's own numbering (start timecode,
-        // drop-frame); an unparseable entry reverts in silence: there is nothing to report that
-        // the unchanged readout does not already say.
+        // drop-frame). The policy has already refused anything that does not parse.
         const auto typed = context ? parseTimelineFrameLabel(editor_->text(), context->frameRate,
                                                              timecodeFormat_, context->labels)
                                    : std::nullopt;
@@ -324,7 +318,7 @@ class ViewerTimecodeReadout final : public kit::KFieldFrame {
     QWidget* page_ = nullptr;
     kit::KLabel* label_ = nullptr;
     kit::KLabel* duration_ = nullptr;
-    QLineEdit* editor_ = nullptr;
+    kit::KLineEdit* editor_ = nullptr;
     QAction* framesAction_ = nullptr;
     QAction* timecodeAction_ = nullptr;
     int width_ = 0;

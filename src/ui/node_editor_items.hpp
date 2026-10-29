@@ -3,6 +3,7 @@
 #include "properties_registry_row.hpp"
 #include <bloom/document/channel_nodes.hpp>
 #include "properties_sections.hpp"
+#include "properties_text_edit.hpp"
 #include "properties_value_edits.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
@@ -176,8 +177,11 @@ const document::ParameterRecord* parameterForRole(const document::NodeRecord& no
                                                   std::string_view role);
 QString parameterText(const document::ParameterRecord& parameter);
 document::NodeId destinationNodeId(const document::InputPortRef& input);
+// A node card's numeric cell, configured from the parameter's presentation (the same one its
+// Properties and Timeline fields use) and outlined at rest, as a field on a card is.
 kit::KValueField* makeCardField(const QString& objectName, const QString& accessibleName,
-                                double minimum, double maximum, int decimals, const QString& unit);
+                                std::string_view schemaKey, document::ParameterValueKind kind,
+                                std::size_t component = 0, std::string_view role = {});
 NodeItem* nodeItemAncestor(QGraphicsItem* item);
 NodeItem* firstNodeItem(const QList<QGraphicsItem*>& items);
 NodeGroupItem* groupItemAncestor(QGraphicsItem* item);
@@ -546,7 +550,7 @@ class NodeItem final : public QGraphicsObject {
         // Vec3d all three.
         std::array<kit::KValueField*, 3> numeric{};
         kit::KColorChip* color = nullptr;
-        QLineEdit* text = nullptr;
+        kit::KLineEdit* text = nullptr;
         kit::KSwitch* toggle = nullptr;
         // The closed enumeration a selector offers, or null for an ordinary operand. A selector's
         // stored value is its item data, so reading one back never depends on a spelling.
@@ -644,7 +648,7 @@ class NodeItem final : public QGraphicsObject {
             (void)session_->setParameterComponentValue(parameter->id,
                                                        fromX ? document::AnimationComponent::X
                                                              : document::AnimationComponent::Y,
-                                                       numericFieldValue(*field, 100.0));
+                                                       numericFieldValue(*field));
     }
 
     void commitRotation() {
@@ -654,15 +658,9 @@ class NodeItem final : public QGraphicsObject {
         (void)session_->setSelectedRotation(rotation_->value(), target());
     }
 
-    // Task S3's three text writes, each through exactly the session method PropertiesEditor's own
-    // Text Source row calls, so the two surfaces cannot drift.
-    void commitTextContent() {
-        if (refreshing_ || textContent_ == nullptr || session_ == nullptr) {
-            return;
-        }
-        (void)session_->setSelectedTextContent(textContent_->text(), target());
-    }
-
+    // Task S3's text writes, each through exactly the session method PropertiesEditor's own Text
+    // Source row calls, so the two surfaces cannot drift. (Text content edits go through
+    // properties::bindTextEdit, the one text-parameter editor.)
     void commitTextSize() {
         if (refreshing_ || textSize_ == nullptr || session_ == nullptr) {
             return;
@@ -848,12 +846,12 @@ class NodeItem final : public QGraphicsObject {
                 // the same gesture in either surface produces the same value.
                 positionX_ =
                     makeCardField(QStringLiteral("nodePositionXEditor"), tr("Position X"),
-                                  std::numeric_limits<double>::lowest(),
-                                  std::numeric_limits<double>::max(), 2, QStringLiteral("px"));
+                                  document::kPositionParameterSchemaKey,
+                                  document::ParameterValueKind::Vec2d);
                 positionY_ =
                     makeCardField(QStringLiteral("nodePositionYEditor"), tr("Position Y"),
-                                  std::numeric_limits<double>::lowest(),
-                                  std::numeric_limits<double>::max(), 2, QStringLiteral("px"));
+                                  document::kPositionParameterSchemaKey,
+                                  document::ParameterValueKind::Vec2d);
                 prepareField(positionX_);
                 prepareField(positionY_);
                 registerControlRole(positionX_, document::kPositionParameterRole);
@@ -871,12 +869,12 @@ class NodeItem final : public QGraphicsObject {
                 // Range/decimals/step/unit mirror PropertiesEditor's Anchor editors verbatim.
                 anchorX_ =
                     makeCardField(QStringLiteral("nodeAnchorXEditor"), tr("Anchor X"),
-                                  std::numeric_limits<double>::lowest(),
-                                  std::numeric_limits<double>::max(), 2, QStringLiteral("px"));
+                                  document::kAnchorParameterSchemaKey,
+                                  document::ParameterValueKind::Vec2d);
                 anchorY_ =
                     makeCardField(QStringLiteral("nodeAnchorYEditor"), tr("Anchor Y"),
-                                  std::numeric_limits<double>::lowest(),
-                                  std::numeric_limits<double>::max(), 2, QStringLiteral("px"));
+                                  document::kAnchorParameterSchemaKey,
+                                  document::ParameterValueKind::Vec2d);
                 prepareField(anchorX_);
                 prepareField(anchorY_);
                 registerControlRole(anchorX_, document::kAnchorParameterRole);
@@ -891,11 +889,11 @@ class NodeItem final : public QGraphicsObject {
                                       document::AnimationComponent::Y});
             } else if (role == document::kScaleParameterRole) {
                 scaleX_ = makeCardField(QStringLiteral("nodeScaleXEditor"), tr("Scale X"),
-                                        std::numeric_limits<double>::lowest(),
-                                        std::numeric_limits<double>::max(), 2, QStringLiteral("%"));
+                                        document::kScaleParameterSchemaKey,
+                                        document::ParameterValueKind::Vec2d);
                 scaleY_ = makeCardField(QStringLiteral("nodeScaleYEditor"), tr("Scale Y"),
-                                        std::numeric_limits<double>::lowest(),
-                                        std::numeric_limits<double>::max(), 2, QStringLiteral("%"));
+                                        document::kScaleParameterSchemaKey,
+                                        document::ParameterValueKind::Vec2d);
                 prepareField(scaleX_);
                 prepareField(scaleY_);
                 registerControlRole(scaleX_, document::kScaleParameterRole);
@@ -910,9 +908,8 @@ class NodeItem final : public QGraphicsObject {
                                       document::AnimationComponent::Y});
             } else if (role == document::kRotationParameterRole) {
                 rotation_ = makeCardField(QStringLiteral("nodeRotationEditor"), tr("Rotation"),
-                                          std::numeric_limits<double>::lowest(),
-                                          std::numeric_limits<double>::max(), 2,
-                                          QString::fromUtf8("\u00b0"));
+                                          document::kRotationParameterSchemaKey,
+                                          document::ParameterValueKind::Float64);
                 prepareField(rotation_);
                 registerControlRole(rotation_, document::kRotationParameterRole);
                 bindCell(rotation_, [this] { commitRotation(); });
@@ -920,8 +917,9 @@ class NodeItem final : public QGraphicsObject {
                                       makeCardDiamond(document::kRotationParameterRole),
                                       document::kRotationParameterRole});
             } else if (role == document::kOpacityParameterRole) {
-                opacity_ = makeCardField(QStringLiteral("nodeOpacityEditor"), tr("Opacity"), 0.0,
-                                         100.0, 1, QStringLiteral("%"));
+                opacity_ = makeCardField(QStringLiteral("nodeOpacityEditor"), tr("Opacity"),
+                                         document::kOpacityParameterSchemaKey,
+                                         document::ParameterValueKind::Float64);
                 prepareField(opacity_);
                 registerControlRole(opacity_, document::kOpacityParameterRole);
                 bindCell(opacity_, [this] { commitOpacity(); });
@@ -967,20 +965,28 @@ class NodeItem final : public QGraphicsObject {
                 textContent_ = new kit::KLineEdit;
                 textContent_->setObjectName(QStringLiteral("nodeTextContentEditor"));
                 textContent_->setAccessibleName(tr("Text content"));
-                textContent_->setFont(kit::font(kit::TypeRole::Ui));
                 textContent_->resize(textContent_->sizeHint());
                 prepareField(textContent_);
                 registerControlRole(textContent_, document::kTextParameterRole);
-                connect(textContent_, &QLineEdit::editingFinished, this,
-                        [this] { commitTextContent(); });
+                if (session_ != nullptr)
+                    properties::bindTextEdit(*session_, *textContent_, [this] {
+                        const auto* composition = session_->composition();
+                        const auto* card = composition ? composition->graph().findNode(id_)
+                                                       : nullptr;
+                        const auto* parameter =
+                            card ? parameterForRole(*card, *composition,
+                                                    document::kTextParameterRole)
+                                 : nullptr;
+                        return parameter && !refreshing_ ? parameter->id : document::ParameterId{};
+                    });
                 valueRows_.push_back({tr("Text"), textContent_, nullptr, {}});
             } else if (!shapeSource_ && role == document::kTextSizeParameterRole) {
                 // Range/decimals/step/unit mirror PropertiesEditor's Size editor verbatim, so the
                 // same gesture in either surface produces the same value.
                 textSize_ =
                     makeCardField(QStringLiteral("nodeTextSizeEditor"), tr("Text size"),
-                                  std::numeric_limits<double>::denorm_min(),
-                                  document::kMaximumTextSizePixels, 1, QStringLiteral("px"));
+                                  document::kTextSizeParameterSchemaKey,
+                                  document::ParameterValueKind::Float64);
                 prepareField(textSize_);
                 registerControlRole(textSize_, document::kTextSizeParameterRole);
                 bindCell(textSize_, [this] { commitTextSize(); });
@@ -1137,11 +1143,14 @@ class NodeItem final : public QGraphicsObject {
             row.text = new kit::KLineEdit;
             row.text->setObjectName(QStringLiteral("nodeOperandTextEditor"));
             row.text->setAccessibleName(label);
-            row.text->setFont(kit::font(kit::TypeRole::Ui));
             row.text->resize(row.text->sizeHint());
             prepareField(row.text);
             registerControlRole(row.text, role);
-            connect(row.text, &QLineEdit::editingFinished, this, [commit] { commit(); });
+            // The one text-parameter editor, as in Properties: live while typing, one commit when
+            // the edit ends -- on Escape too.
+            if (session_ != nullptr)
+                properties::bindTextEdit(*session_, *row.text,
+                                         [id = row.parameterId] { return id; });
             valueRows_.push_back({label, row.text, nullptr, {}});
             break;
         }
@@ -1163,15 +1172,19 @@ class NodeItem final : public QGraphicsObject {
             break;
         }
         case document::ParameterValueKind::Integer: {
-            row.text = new kit::KLineEdit;
-            row.text->setObjectName(QStringLiteral("nodeOperandIntegerEditor"));
-            row.text->setAccessibleName(label);
-            row.text->setFont(kit::font(kit::TypeRole::Value));
-            row.text->resize(row.text->sizeHint());
-            prepareField(row.text);
-            registerControlRole(row.text, role);
-            connect(row.text, &QLineEdit::editingFinished, this, [commit] { commit(); });
-            valueRows_.push_back({label, row.text, nullptr, {}});
+            // A whole number edits as a value field in integer mode: it scrubs and steps in whole
+            // units and parses exactly across the int64 range.
+            auto* field = makeCardField(QStringLiteral("nodeOperandIntegerEditor"), label,
+                                        declared->schemaKey, declared->valueKind, 0,
+                                        declared->role);
+            if (!field->isIntegerMode())
+                field->setIntegerRange(std::numeric_limits<std::int64_t>::min(),
+                                       std::numeric_limits<std::int64_t>::max());
+            prepareField(field);
+            registerControlRole(field, role);
+            bindCell(field, [commit] { commit(); });
+            row.numeric[0] = field;
+            valueRows_.push_back({label, field, nullptr, {}});
             break;
         }
         case document::ParameterValueKind::Float64:
@@ -1188,22 +1201,11 @@ class NodeItem final : public QGraphicsObject {
                         ? label
                         : label + QString::fromUtf8(
                                       kComponentSuffixes[static_cast<std::size_t>(component)]);
-                // Numeric operands preserve every finite value their schema accepts. Semantic
-                // lower bounds still apply to dimensions and line height.
-                const bool dimension =
-                    declared->schemaKey == document::kSolidWidthParameterSchemaKey ||
-                    declared->schemaKey == document::kSolidHeightParameterSchemaKey;
-                const bool lineHeight =
-                    declared->schemaKey == document::kTextLineHeightParameterSchemaKey;
-                const bool spacing =
-                    declared->schemaKey == document::kTextLetterSpacingParameterSchemaKey;
-                auto* field =
-                    makeCardField(QStringLiteral("nodeOperandEditor"), componentLabel,
-                                  dimension    ? 1.0
-                                  : lineHeight ? std::numeric_limits<double>::denorm_min()
-                                               : std::numeric_limits<double>::lowest(),
-                                  std::numeric_limits<double>::max(), 4,
-                                  dimension || spacing ? QStringLiteral("px") : QString{});
+                // Numeric operands preserve every finite value their schema accepts: the
+                // presentation's hard range is the schema domain, never an editor cap.
+                auto* field = makeCardField(QStringLiteral("nodeOperandEditor"), componentLabel,
+                                            declared->schemaKey, declared->valueKind,
+                                            static_cast<std::size_t>(component), declared->role);
                 prepareField(field);
                 registerControlRole(field, role);
                 bindCell(field, [this, index, component] { commitOperand(index, component); });
@@ -1320,13 +1322,10 @@ class NodeItem final : public QGraphicsObject {
                     core::Color4d{static_cast<double>(chip.red), static_cast<double>(chip.green),
                                   static_cast<double>(chip.blue), static_cast<double>(chip.alpha)}};
             }
-            case document::ParameterValueKind::Integer: {
-                bool valid = false;
-                const auto integer = row.text ? row.text->text().toLongLong(&valid) : 0;
-                return valid ? std::optional(
-                                   document::ParameterValue{static_cast<std::int64_t>(integer)})
-                             : std::nullopt;
-            }
+            case document::ParameterValueKind::Integer:
+                return row.numeric[0] == nullptr
+                           ? std::nullopt
+                           : std::optional(document::ParameterValue{row.numeric[0]->integerValue()});
             case document::ParameterValueKind::Float64:
                 return row.numeric[0] == nullptr
                            ? std::nullopt
@@ -1500,9 +1499,9 @@ class NodeItem final : public QGraphicsObject {
                             row.toggle->setChecked(held);
                         }
                     } else if constexpr (std::is_same_v<Held, std::int64_t>) {
-                        if (row.text) {
-                            const QSignalBlocker blocker(row.text);
-                            row.text->setText(QString::number(static_cast<qlonglong>(held)));
+                        if (row.numeric[0] != nullptr) {
+                            const QSignalBlocker blocker(row.numeric[0]);
+                            row.numeric[0]->setIntegerValue(held);
                         }
                     } else if constexpr (std::is_same_v<Held, double>) {
                         setComponent(0, held);
@@ -1649,9 +1648,11 @@ class NodeItem final : public QGraphicsObject {
         if (textContent_ != nullptr) {
             const auto* parameter =
                 parameterForRole(node, composition, document::kTextParameterRole);
+            // The live value while a text edit is staged, so the refresh each keystroke causes
+            // shows what is being typed instead of putting the committed text back under it.
             const auto value = parameter == nullptr || session_ == nullptr
                                    ? std::nullopt
-                                   : session_->constantStringValue(parameter->id);
+                                   : session_->effectiveStringValue(parameter->id);
             textContent_->setEnabled(value.has_value());
             textContent_->setToolTip(describe(parameter, tr("Text is not exposed by this node")));
             if (value.has_value() && textContent_->text() != *value) {
@@ -1785,8 +1786,9 @@ class NodeItem final : public QGraphicsObject {
         for (std::size_t index = 0; index < names.size(); ++index) {
             const auto label = QStringLiteral("RGBA").mid(static_cast<qsizetype>(index), 1);
             auto* field = makeCardField(QStringLiteral("nodeColorComponentEditor"), label,
-                                        index == 3 ? 0.0 : -1'000'000.0,
-                                        index == 3 ? 1.0 : 1'000'000.0, 4, QString{});
+                                        // Every colour schema presents its channels alike.
+                                        document::kSolidColorParameterSchemaKey,
+                                        document::ParameterValueKind::Color4d, index);
             prepareField(field);
             registerControlRole(field, role);
             bindCell(field, [this, field, role, index] {
@@ -2069,7 +2071,7 @@ class NodeItem final : public QGraphicsObject {
     kit::KDropdown* blendMode_ = nullptr;
     kit::KColorChip* colorChip_ = nullptr;
     KeyframeDiamond* colorDiamond_ = nullptr;
-    QLineEdit* textContent_ = nullptr;
+    kit::KLineEdit* textContent_ = nullptr;
     kit::KValueField* textSize_ = nullptr;
     // Only to choose the honest undo label and accessible name for the shared "color" role; the
     // control and its write path are identical for a solid and a text source.

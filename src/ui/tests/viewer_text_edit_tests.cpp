@@ -322,13 +322,15 @@ void testFocusAndProperties() {
     QMetaObject::invokeMethod(field, "textEdited", Q_ARG(QString, QString("Property")));
     expect(f.live() == "Property" && f.stored() == "Abc!",
            "Properties also previews a String edit");
+    // Escape confirms everywhere (owner, 2026-10-29): Properties commits the typed text.
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QCoreApplication::sendEvent(field, &escape);
-    expect(f.live() == "Abc!" && field->text() == "Abc!", "Properties Escape restores mirror");
+    expect(f.stored() == "Property" && f.history.size() == before + 2,
+           "Properties Escape commits the typed text as one edit");
     field->setText("Cancelled externally");
     QMetaObject::invokeMethod(field, "textEdited", Q_ARG(QString, QString("Cancelled externally")));
     f.session.cancelValueEdit();
-    expect(field->text() == "Abc!", "session cancellation restores the Properties mirror");
+    expect(field->text() == "Property", "session cancellation restores the Properties mirror");
     f.key(Qt::Key_Return);
     QCoreApplication::processEvents();
     expect(f.viewer.textEditing(), "cancelled Properties edit cannot finish a new canvas edit");
@@ -336,8 +338,11 @@ void testFocusAndProperties() {
     field->setFocus();
     field->setText("Accepted");
     QMetaObject::invokeMethod(field, "textEdited", Q_ARG(QString, QString("Accepted")));
-    QMetaObject::invokeMethod(field, "editingFinished");
-    expect(f.history.size() == before + 2 && f.session.undoLabel() == "Edit Text",
+    {
+        QKeyEvent ret(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QCoreApplication::sendEvent(field, &ret);
+    }
+    expect(f.history.size() == before + 3 && f.session.undoLabel() == "Edit Text",
            "Properties commits with same label and gesture");
 }
 void testReversedAdvances() {

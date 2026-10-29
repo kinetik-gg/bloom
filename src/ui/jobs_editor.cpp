@@ -1,4 +1,5 @@
 #include <bloom/ui/jobs_editor.hpp>
+#include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <memory>
@@ -153,7 +154,8 @@ JobsEditor::JobsEditor(TaskMonitorModel& model, QWidget* parent) : QWidget(paren
         table_->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
     }
 
-    details_ = new QPlainTextEdit(this);
+    // The kit multi-line field, read-only: the same Field well and border every text entry has.
+    details_ = new kit::KTextArea(this);
     details_->setObjectName("jobDetails");
     details_->setAccessibleName(tr("Selected job details and diagnostics"));
     details_->setAccessibleDescription(
