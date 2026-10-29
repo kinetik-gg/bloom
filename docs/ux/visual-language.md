@@ -160,7 +160,7 @@ pixel. A surface that knows a truer colour than its pixels answers through
 | --- | --- |
 | `Flat` | none |
 | `TimelineBar` | `0 1 2 rgba(0,0,0,.25)` -- a clip bar on its lane |
-| `Popup` | `0 4 16 rgba(0,0,0,.5)` -- menus and dropdown popups |
+| `Popup` | `0 0 8 rgba(0,0,0,.45)` -- menus, dropdown lists, the Add search and the colour picker. Small and symmetric: an offset, bottom-heavy shadow read as a chin under the last row |
 | `Dialog` | `0 12 40 rgba(0,0,0,.6)` |
 | `Drag` | `0 18 48 rgba(0,0,0,.55)` |
 
@@ -168,7 +168,28 @@ A raised surface also steps up one level on the surface ladder and keeps its hai
 never the only thing separating a surface from what is behind it. `kit::drawElevationShadow()`
 paints a token's shadow from a cached nine-patch (one blur per token, radius and device pixel
 ratio). A menu casts the Popup shadow into a transparent gutter on its right and bottom edges, so
-its top-left corner still opens exactly at its anchor.
+its top-left corner still opens exactly at its anchor; a `KPopupWindow` casts it into a gutter on
+every side. A shadow exists only where the platform guarantees per-pixel transparency (Wayland,
+Windows, macOS; not X11, where a compositing manager is optional): elsewhere a popup or menu has no
+gutter and square corners -- a flat, hairline-bordered plate -- because an opaque gutter is a dark
+band under the last row.
+
+### Popups
+
+`KPopupWindow` is the one popup window: a top-level popup that paints its `SurfaceRaised` frame
+(one `Border` hairline, `Radius::Small`) and the shadow, opens against its anchor's visual
+rectangle (through a node card's proxy and the canvas zoom) on that anchor's screen, flips above
+when there is more room there, and clamps onto the screen. Its Pop entrance moves the frame inside
+the gutter, never the window, and is skipped under reduced motion. `KPopupList` is the one list in
+a popup: rows at the menu row's height and insets, edge to edge, with nothing above the first row
+or below the last -- the frame is exactly the rows plus its hairlines, twelve rows at most before
+it scrolls, and a menu's rows meet its frame the same way. A reserved check column marks the
+committed value (or frames a row's own icon, as a checked menu action does), and one `Accent` bar
+with `OnAccent` text marks the current row, which is the pointer's or the keyboard's. The bar is
+clipped to the frame's rounded inner edge by an antialiased path. Headings are `UiSmall` in
+`Faint`; separators are the menu's `Border` hairline; an elided row's tooltip is its whole label
+unless the row carries its own. A dropdown's list hangs its check column left of the field so the
+row text starts exactly where the closed field's text does, and is at least as wide as the field.
 
 ### Type Roles
 
@@ -195,7 +216,7 @@ tall; a word-wrapped one grows to its wrapped height.
 | State | Recipe |
 | --- | --- |
 | Hover | One surface step up, plus `BorderHover`. At the top of the ladder the step clamps and the border change carries the state alone |
-| Accent-item hover | A full-width `Accent` bar with `Foreground` text -- menu and list rows, never a rounded pill. The row is rectangular and spans the popup frame edge to edge; the frame's own rounded corners clip the bar, so only the frame is ever rounded |
+| Accent-item hover | A full-width `Accent` bar with `OnAccent` text -- menu and list rows, never a rounded pill. The row is rectangular and spans the popup frame edge to edge; an antialiased clip to the frame's rounded inner edge shapes the first and last bars, so only the frame is ever rounded |
 | Menu row | A reserved `IconMedium` (16) icon column so text aligns with or without an icon, the shortcut in `Faint` (on the Accent hover bar, `OnAccent` at 72%), and the submenu caret as the Phosphor `CaretRight` glyph. A checked action with its own icon draws the icon in its Fill weight inside a hairline frame; one without an icon shows the check glyph in the icon column. Painted by `kit::AltUnderlineProxyStyle` at the painter's device pixel ratio, not by the stylesheet: QSS has no selector for a shortcut column, and any `QMenu` rule with a box makes `QStyleSheetStyle` draw the whole row itself |
 | Pressed | `AccentPressed` for an accent surface; one surface step down otherwise |
 | Selected row | The one list-row recipe (`kit::paintSelectedRow`): an opaque wash of `Accent` at 24% over the row's own surface, under a `SelectionEdge` (2) `Accent` edge at the row's leading side. Timeline layer rows and lanes, `KRow`, Assets and Jobs share it; the wash keeps content drawn over the row -- clip bars in their own colours -- readable |
@@ -477,11 +498,11 @@ These use design pixels in graph space at 100% zoom. They scale with the canvas 
 | Incompatible drag | Error link ink; release publishes nothing. Compatible sockets brighten and incompatible ones dim for the duration of the drag |
 | Structural socket/link | Explanatory tooltip and forbidden drag cursor; cut/rewire/insertion unavailable |
 | Resize | Right-edge 6px grab zone with horizontal resize cursor; preview is local and release commits width |
-| Add search | `KSearchPopup` composes the existing dropdown SurfaceRaised, Border hairline, Small radius, Popup elevation and Accent result states with a Surface filter field. Results are grouped under `UiSmall`/`Faint` section headings that are neither selectable nor choosable; the list is exactly as tall as its rows and headings. A refused result is a disabled row carrying its reason in its tooltip alone -- never in its label. The popup rounds once, at the shared dropdown surface: the list's own mask rounds only the edges it shares with that surface, so the edge beneath the filter field stays square |
+| Add search | `KSearchPopup` is a `KPopupWindow` holding a `KPopupList` with its `KSearchField` filter shown: the same frame, shadow, rows and Accent bar as every dropdown. Results are grouped under `UiSmall`/`Faint` section headings that are neither selectable nor choosable; the list is exactly as tall as its rows and headings, up to twelve rows, and re-fits as the filter narrows it. A refused result is a disabled row carrying its reason in its tooltip alone -- never in its label. The popup rounds once, at its frame; the list carries no mask |
 | Unavailable command adapter | Cards have an arrow cursor and sockets a forbidden cursor with explanation; application offers only its existing working authoring paths |
 
-`KSearchPopup` object names are `kSearchPopup` and `kSearchFilter`; its reused dropdown subtree
-retains `kDropdownPopup`, `kDropdownSurface` and `kDropdownList`. Node interaction additions are
+`KSearchPopup` object names are `kSearchPopup` and `kSearchFilter`; its list keeps
+`kDropdownSurface` and `kDropdownList`, as a dropdown's popup (`kDropdownPopup`) does. Node interaction additions are
 `nodeContextMenu`, `nodeAddSearchAction`, `nodeAddLayerOutputAction`, `nodeAddLayerStackAction`,
 `nodeAddCompositionOutputAction`, `nodeSelectAllAction`, `nodeDuplicateAction`, `nodeDissolveAction`,
 `nodeMuteAction`, `nodeCollapseAction`, `nodeRenameAction`, `nodeDeleteAction`, `nodeRenameEditor` and

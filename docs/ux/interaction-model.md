@@ -55,6 +55,40 @@ Delete, Export Frame) are disabled. New Composition is the way to author the fir
 activates it. Deleting the final composition returns to that same blank project as one undoable
 command, and undo restores and reactivates the composition.
 
+## Dropdowns, Lists And Menus
+
+Every dropdown, the Add search and every other list in a popup is one `KPopupWindow` holding one
+`KPopupList`, so they share their keys, pointer rules and dismissal.
+
+| Where | Binding | Action |
+| --- | --- | --- |
+| Closed dropdown | `Space`, `Enter`, `F4`, `Alt+Down` | Open the list |
+| Closed dropdown (Windows, Linux) | `Up` / `Down`, `Home` / `End` | Step the value, skipping disabled items |
+| Closed dropdown (macOS) | `Up` / `Down` | Open the list (the platform's pop-up button convention) |
+| Closed dropdown | Typing | Choose the next item that starts with what was typed |
+| Open list | `Up` / `Down`, `PgUp` / `PgDn`, `Home` / `End` | Move the current row, skipping disabled rows, headings and separators |
+| Open list | `Enter` / `Return` | Choose the current row and close |
+| Open list | `Tab` / `Shift+Tab` | Choose the current row, close, and move focus on |
+| Open list | `Esc` | Close without changing the value (closing a list is not an edit) |
+| Open list | Typing | Jump to the next row that starts with what was typed; in a searchable list, filter |
+| Flowed menu (Nodes Add) | `Up` / `Down`, `Left` / `Right`, `Home` / `End`, `Enter`, `Esc` | Move within and across columns; `Left` from the first column closes the submenu |
+
+A searchable list keeps typing in its filter while `Up`, `Down`, `PgUp`, `PgDn`, `Enter`, `Tab`
+and `Esc` go to the rows. The filter is empty each time the list opens, and the popup re-fits its
+height as rows filter away. Only the left button chooses a row; a disabled row swallows the click
+and keeps the popup open, and its tooltip carries the reason. The popup is detached: moving the
+pointer off it does nothing. A press outside it closes it; a press on the field that opened it
+closes it without reopening it; a press in its shadow is treated exactly as a press just outside
+it.
+
+A dropdown separates the artist's choice from its value changing. Choosing in the list, with the
+closed field's keys, or in a mirror menu (the Viewer's View ▸ Zoom, Channel, Resolution and
+Display / View) is a choice and reaches the document; building, refreshing or setting the list
+from code is not, so a document refresh (the font catalogue arriving, a layer list rebuilt) never
+writes back and never adds an undo entry. Choosing the value a dropdown already holds is not an
+edit. A recall list that must react to a repeat is a menu, not a dropdown: the Script panel's
+History is a menu button.
+
 ## Viewer
 
 Selected layers show their delivered-frame bounds polygon and anchor. Position moves the anchor in

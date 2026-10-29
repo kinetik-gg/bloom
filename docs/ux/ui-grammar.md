@@ -28,7 +28,9 @@ Read-only progress uses `KProgressBar` (see "Import Progress Dialog" below). A r
 uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken`, showing a
 worker-decoded proxy or a glyph fitted without changing its aspect ratio; it never loads anything.
 The panel switcher is the icon variant of **KDropdown**, with the same height, styling,
-interaction and popup. Menus are created only through `kit::makeMenu`.
+interaction and popup. Menus are created only through `kit::makeMenu`. A popup is a
+`KPopupWindow` and a list in one is a `KPopupList` (dropdowns, the Add search, the colour picker);
+no surface positions, shadows or dismisses a popup of its own.
 Constructing QToolButton, QPushButton, QComboBox, QLineEdit, QCheckBox, QSlider,
 QLabel or QMenu outside the kit is a quality violation.
 
@@ -604,8 +606,14 @@ string. New names: `timelinePropertyDriven`, `timelinePropertyDriverLink`,
 `Color::OnAccent` is white (#ffffff). Kit button painters use it for ink on accent fills,
 including transport, loop, snap and keyframe toggles. KToolColumn is sticky at the canvas left
 edge, paints the header Surface, and owns ChromePadding and ChromeGap around bordered ToggleCells.
-KDropdown's minimum is the measured widest item plus its icon, padding and chevron; requested
-fixed widths are floors. The chrome builder respects that minimum after assigning density.
+KDropdown's preferred width is the measured widest item plus its icon, padding and chevron; its
+minimum is the same chrome around about six average characters, so a layout short of room elides
+the value instead of overflowing. `setWidthFloor()` is a real floor: the field hugs its widest
+item where there is room and never shrinks below the floor. A Properties row, a node card and a
+timeline column keep their dropdowns at the widest item (or the column width) when they fit; a
+non-prioritised chrome row never shrinks one below its widest item. A dropdown that commits to
+the document listens to `activated()` (the artist's choice), never to `currentIndexChanged()`
+alone, so a refresh cannot write back.
 
 Properties shows every section with no filter strip and no header search. Sections collapse
 individually with persisted state; there is no Collapse all / Expand all affordance and no
