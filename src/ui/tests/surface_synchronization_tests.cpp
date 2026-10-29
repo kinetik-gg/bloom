@@ -397,6 +397,66 @@ void agree(const Surfaces& surfaces, const std::string& where) {
 
 namespace {
 
+// Lane B: one parameter, one presentation. The same parameter's field must be configured
+// identically -- range, soft range, step, decimals, unit, display scale, integer mode -- on the
+// node card, in Properties and on its Timeline row, because all three configure it from the
+// parameter's one document presentation (bloom::ui::configureValueField).
+void presentationsAgree(const Surfaces& surfaces, const document::NodeId boundary,
+                        const document::LayerId layer) {
+    auto* stack = surfaces.layerStack();
+    const bool expanded = [&] {
+        for (const auto& entry : stack->entries())
+            if (entry.layerId == layer && entry.rowKind == TimelineLayerEntry::Kind::Layer)
+                return entry.expanded;
+        return false;
+    }();
+    if (!expanded) {
+        stack->expansionRequested(layer);
+        QCoreApplication::processEvents();
+    }
+    const auto timelineCell = [&](const QString& accessible) -> kit::KValueField* {
+        for (auto* field :
+             surfaces.timeline->findChildren<kit::KValueField*>(QStringLiteral("timelinePropertyValue")))
+            if (field->accessibleName() == accessible)
+                return field;
+        return nullptr;
+    };
+    struct Trio {
+        const char* card;
+        const char* panel;
+        QString timeline;
+    };
+    const std::array trios{Trio{"nodeOpacityEditor", "opacityEditor", QStringLiteral("Opacity")},
+                           Trio{"nodeRotationEditor", "rotationEditor", QStringLiteral("Rotation")},
+                           Trio{"nodePositionXEditor", "positionXEditor",
+                                QStringLiteral("Position X")},
+                           Trio{"nodeScaleXEditor", "scaleXEditor", QStringLiteral("Scale X")}};
+    for (const auto& trio : trios) {
+        auto* card = cardCell(surfaces, boundary, QString::fromLatin1(trio.card));
+        auto* panel = panelCell(surfaces, QString::fromLatin1(trio.panel));
+        auto* row = timelineCell(trio.timeline);
+        const std::string name = trio.panel;
+        expect(card != nullptr && panel != nullptr,
+               "presentation parity: the card and Properties cells exist for " + name);
+        if (card == nullptr || panel == nullptr)
+            continue;
+        expect(card->presentation() == panel->presentation(),
+               "presentation parity: the node card and Properties configure " + name +
+                   " identically");
+        if (row != nullptr)
+            expect(row->presentation() == panel->presentation(),
+                   "presentation parity: the Timeline row and Properties configure " + name +
+                       " identically");
+        else
+            expect(trio.timeline != QStringLiteral("Opacity"),
+                   "presentation parity: the expanded layer shows an Opacity row");
+    }
+    if (!expanded) {
+        stack->expansionRequested(layer);
+        QCoreApplication::processEvents();
+    }
+}
+
 int run(int argc, char** argv) {
     QApplication application(argc, argv);
     Surfaces surfaces;
@@ -421,6 +481,7 @@ int run(int argc, char** argv) {
     session.selectNode(*boundary);
     QCoreApplication::processEvents();
     agree(surfaces, "after selecting the layer's boundary card");
+    presentationsAgree(surfaces, *boundary, *layer);
 
     // --- An edit from the node card --------------------------------------------------------------
     if (auto* cell = cardCell(surfaces, *boundary, QStringLiteral("nodePositionXEditor"))) {

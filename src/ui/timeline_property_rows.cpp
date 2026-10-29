@@ -1,6 +1,7 @@
 #include "timeline_property_rows.hpp"
 #include "node_editor_items.hpp"
 #include "numeric_field_projection.hpp"
+#include "value_presentation.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_value_edits.hpp"
 #include "timeline_mask_rows.hpp"
@@ -560,13 +561,6 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         diamond_->setParameterId(entry.parameterId);
         diamond_->refresh();
         const auto role = std::string_view(entry.role);
-        const bool scale = role == document::kScaleParameterRole;
-        const bool opacity = role == document::kOpacityParameterRole;
-        const bool rotation = role == document::kRotationParameterRole;
-        const bool size = role == document::kTextSizeParameterRole;
-        const bool dimension = role == document::kSolidWidthParameterRole ||
-                               role == document::kSolidHeightParameterRole;
-        const bool lineHeight = role == document::kTextLineHeightParameterRole;
         const auto* record = session_.composition()->parameters().find(entry.parameterId);
         const auto items = record ? propertiesSelectorItems(record->schemaKey)
                                   : QList<std::pair<QString, std::int64_t>>{};
@@ -610,7 +604,7 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         if (vector3)
             values = {vector3->x, vector3->y, vector3->z, 0.0};
         if (scalar)
-            values[0] = *scalar * (opacity ? 100 : 1);
+            values[0] = *scalar;
         std::optional<ColorPresentation> colorValues;
         if (color && record)
             colorValues = colorPresentation(session_, record->schemaKey, *color);
@@ -632,31 +626,32 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
                 field->show();
                 continue;
             }
-            field->setRange(opacity              ? 0
-                            : dimension          ? 1
-                            : size || lineHeight ? std::numeric_limits<double>::denorm_min()
-                                                 : std::numeric_limits<double>::lowest(),
-                            opacity ? 100
-                            : size  ? document::kMaximumTextSizePixels
-                                    : std::numeric_limits<double>::max());
-            field->setDecimals(color ? 3 : opacity || size ? 1 : 2);
-            field->setSingleStep(color ? 0.01 : 1);
-            field->setUnit(scale || opacity ? "%"
-                           : rotation       ? QString::fromUtf8("°")
-                           : vector || size || dimension ||
-                                   role == document::kTextLetterSpacingParameterRole
-                               ? "px"
-                               : "");
-            // A Vector 3 carries no unit of its own: it is whatever the node reading it means by
-            // three numbers, and inventing "px" for one would be a claim nothing supports.
-            if (vector3)
-                field->setUnit(QString{});
+            // The parameter's own presentation -- the one its Properties row and node card use --
+            // for this component (a colour's alpha keeps its [0, 1] domain).
+            const auto kind = color     ? document::ParameterValueKind::Color4d
+                              : vector3 ? document::ParameterValueKind::Vec3d
+                              : vector  ? document::ParameterValueKind::Vec2d
+                                        : document::ParameterValueKind::Float64;
+            const std::size_t component =
+                componentRow ? static_cast<std::size_t>(entry.component.value()) -
+                                   (color ? static_cast<std::size_t>(
+                                                document::AnimationComponent::Red)
+                                          : 0)
+                             : static_cast<std::size_t>(i);
+            const auto presentation = document::componentPresentation(
+                document::parameterPresentation(record ? std::string_view(record->schemaKey)
+                                                       : std::string_view{},
+                                                kind, role),
+                kind, component);
+            configureValueField(*field, presentation);
             // GitHub #197: a signed/HDR colour (or unavailable conversion) presents exact
             // reference numbers under the same "reference" suffix Properties uses.
             if (colorValues && colorValues->reference)
                 field->setUnit(QStringLiteral("reference"));
-            projectNumericField(*field, values[static_cast<std::size_t>(i)], scale ? 100 : 1,
-                                field->unit(), scale ? QStringLiteral("×") : field->unit());
+            projectNumericField(*field, values[static_cast<std::size_t>(i)],
+                                presentation.displayScale, field->unit(),
+                                presentation.displayScale != 1.0 ? QStringLiteral("×")
+                                                                 : field->unit());
             field->show();
         }
         if (role == document::kBlendModeParameterRole) {
@@ -719,10 +714,11 @@ void TimelinePropertyRow::bindDriven(const bool driven) {
 void TimelinePropertyRow::commitValues(const std::size_t index) {
     const auto entry = entry_;
     const auto role = std::string_view(entry.role);
-    const double x = fields_[0]->value(), y = fields_[1]->value(), z = fields_[2]->value();
+    // Stored values: each field's own display scale (a percentage, a scale factor) divides back.
+    const double x = numericFieldValue(*fields_[0]), y = numericFieldValue(*fields_[1]),
+                 z = numericFieldValue(*fields_[2]);
     if (entry.component) {
-        double value =
-            numericFieldValue(*fields_[0], role == document::kScaleParameterRole ? 100 : 1);
+        double value = numericFieldValue(*fields_[0]);
         const auto* record = session_.composition()
                                  ? session_.composition()->parameters().find(entry.parameterId)
                                  : nullptr;
@@ -748,8 +744,7 @@ void TimelinePropertyRow::commitValues(const std::size_t index) {
         const std::array colors{
             document::AnimationComponent::Red, document::AnimationComponent::Green,
             document::AnimationComponent::Blue, document::AnimationComponent::Alpha};
-        double value =
-            numericFieldValue(*fields_[index], role == document::kScaleParameterRole ? 100 : 1);
+        double value = numericFieldValue(*fields_[index]);
         if (color) {
             const auto* record = session_.composition()
                                      ? session_.composition()->parameters().find(entry.parameterId)
@@ -775,11 +770,11 @@ void TimelinePropertyRow::commitValues(const std::size_t index) {
     else if (role == document::kAnchorParameterRole)
         (void)session_.setSelectedAnchor(x, y);
     else if (role == document::kScaleParameterRole)
-        (void)session_.setSelectedScale(x / 100, y / 100);
+        (void)session_.setSelectedScale(x, y);
     else if (role == document::kRotationParameterRole)
         (void)session_.setSelectedRotation(x);
     else if (role == document::kOpacityParameterRole)
-        (void)session_.setSelectedOpacity(x / 100);
+        (void)session_.setSelectedOpacity(x);
     else if (role == document::kTextSizeParameterRole)
         (void)session_.setSelectedTextSize(x);
     else if (session_.effectiveVec3Value(entry.parameterId))

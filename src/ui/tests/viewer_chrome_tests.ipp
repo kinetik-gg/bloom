@@ -154,11 +154,11 @@ void testViewerFooterControlsShareOneVocabulary(Expectations& expectations) {
     auto* exposure = footer->findChild<ui::kit::KValueField*>("viewerExposure");
     auto* reset = fixture.viewer.findChild<QAction*>("viewerResetViewAdjustAction");
     exposure->setValue(1.5);
-    expectations.expect(exposure->property("viewerNonDefault").toBool() && reset->isEnabled(),
+    expectations.expect(exposure->isNonDefault() && reset->isEnabled(),
                         "a changed exposure is marked and can be reset");
     reset->trigger();
     expectations.expect(exposure->value() == 0.0 &&
-                            !exposure->property("viewerNonDefault").toBool() &&
+                            !exposure->isNonDefault() &&
                             !reset->isEnabled(),
                         "Reset Exposure and Gamma returns both to their defaults");
     exposure->setValue(-2.0);

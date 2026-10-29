@@ -292,10 +292,16 @@ int run(int argc, char** argv) {
                     }
                 }
                 for (auto* value : field->findChildren<kit::KValueField*>()) {
+                    // Lane B: a resting value keeps its parameter's presentation places, trailing
+                    // zeroes included, so a column's decimal points line up (scientific and
+                    // special readings excepted).
                     const auto text = value->displayedValue();
                     const auto point = text.indexOf('.');
-                    expect(point < 0 || (text.size() - point <= 3 && !text.endsWith('0')), value,
-                           "F28 resting values have at most two decimals and no trailing zeros");
+                    const bool plain = !text.isEmpty() && !text.contains('e') &&
+                                       (text.front().isDigit() || text.startsWith('-'));
+                    expect(!plain || (point < 0 ? value->decimals() == 0
+                                                : text.size() - point - 1 == value->decimals()),
+                           value, "F28 resting values show their presentation's decimal places");
                 }
                 expect(card->cardRect().contains(proxy->mapRectToParent(proxy->boundingRect())),
                        field, "field contained in node");

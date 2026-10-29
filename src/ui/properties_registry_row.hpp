@@ -46,6 +46,8 @@ void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QW
 class KeyframeDiamond;
 namespace kit {
 class KColorChip;
+class KLineEdit;
+class KTextArea;
 class KDropdown;
 class KSwitch;
 class KRadioGroup;
@@ -80,7 +82,6 @@ class PropertiesRegistryRow final : public QWidget {
     void populateInputColorSpaceSelector();
     void pollFontCatalogue();
     [[nodiscard]] double displayScale() const;
-    bool eventFilter(QObject* watched, QEvent* event) override;
     CompositionSession& session_;
     document::NodeId node_;
     document::ParameterId parameter_;
@@ -92,9 +93,9 @@ class PropertiesRegistryRow final : public QWidget {
     kit::KSlider* slider_ = nullptr;
     kit::KSwitch* toggle_ = nullptr;
     kit::KColorChip* color_ = nullptr;
-    QLineEdit* text_ = nullptr;
-    QLineEdit* integer_ = nullptr;
-    QPlainTextEdit* multiline_ = nullptr;
+    kit::KLineEdit* text_ = nullptr;
+    kit::KValueField* integer_ = nullptr;
+    kit::KTextArea* multiline_ = nullptr;
     KeyframeDiamond* diamond_ = nullptr;
     bool refreshing_ = false;
     bool detached_ = false;

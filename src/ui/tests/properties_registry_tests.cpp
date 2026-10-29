@@ -98,11 +98,14 @@ void discreteImageRows() {
     session.selectNode(rotate);
     QCoreApplication::processEvents();
     auto* turns = row(properties, "quarterTurns");
-    auto* field = turns ? turns->findChild<QLineEdit*>("propertiesRegistryInteger") : nullptr;
-    expect(field != nullptr, "Rotate 90 presents its integer quarter-turn control");
+    auto* field =
+        turns ? turns->findChild<ui::kit::KValueField*>("propertiesRegistryInteger") : nullptr;
+    expect(field != nullptr && field->isIntegerMode(),
+           "Rotate 90 presents its quarter turns as an integer value field");
     if (field) {
-        field->setText("-3");
-        QMetaObject::invokeMethod(field, "editingFinished", Qt::DirectConnection);
+        Q_EMIT field->editStarted();
+        field->setIntegerValue(-3);
+        Q_EMIT field->editFinished();
         const auto* node = session.composition()->graph().findNode(rotate);
         const auto parameter = node->parameters.front().parameterId;
         const auto* record = session.composition()->parameters().find(parameter);
@@ -407,11 +410,17 @@ void genericKinds() {
         const auto parameter =
             document::ParameterId::fromRaw(valueRow->property("parameterId").toULongLong());
         if (type == document::kIntegerValueNodeType) {
-            auto* field = valueRow->findChild<QLineEdit*>("propertiesRegistryInteger");
-            expect(field != nullptr, "integer has an exact decimal field");
+            auto* field = valueRow->findChild<ui::kit::KValueField*>("propertiesRegistryInteger");
+            expect(field != nullptr && field->isIntegerMode(),
+                   "integer has an exact integer value field");
             if (field) {
-                field->setText("9223372036854775807");
-                Q_EMIT field->editingFinished();
+                // Typed, as the artist would: the editor parses int64 exactly.
+                QKeyEvent open(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                QCoreApplication::sendEvent(field, &open);
+                field->lineEdit()->setText("9223372036854775807");
+                QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                QCoreApplication::sendEvent(field->lineEdit(), &enter);
+                QCoreApplication::processEvents();
             }
             const auto* record = session.composition()->parameters().find(parameter);
             const auto& constant = std::get<document::ConstantValueSource>(record->source);
@@ -494,7 +503,7 @@ void scaledProjectionGestureKeepsItsUnit() {
     open();
     typeDigit(Qt::Key_2, "2");
     expect(field->isEditing() && field->unit() == QStringLiteral("×") &&
-               field->property("numericDisplayScale").toDouble() == 1 &&
+               field->displayScale() == 1 &&
                session.effectiveScalarValue(parameter) == 2,
            "synchronous Properties refresh leaves a live gesture's projection untouched");
     typeDigit(Qt::Key_3, "3");
@@ -509,9 +518,12 @@ void scaledProjectionGestureKeepsItsUnit() {
     typeDigit(Qt::Key_2, "2");
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QApplication::sendEvent(field->lineEdit(), &escape);
-    expect(session.effectiveScalarValue(parameter) == extreme && field->value() == extreme &&
-               field->unit() == QStringLiteral("×"),
-           "cancel restores authoritative line height and its matching unit");
+    // Escape confirms everywhere: the typed native factor is committed; Undo is the discard.
+    expect(session.effectiveScalarValue(parameter) == 2,
+           "Escape commits the typed line height in its native unit");
+    expect(session.undo() && session.effectiveScalarValue(parameter) == extreme &&
+               field->value() == extreme && field->unit() == QStringLiteral("×"),
+           "Undo restores authoritative line height and its matching unit");
 }
 
 void registryRows() {
@@ -554,7 +566,9 @@ void registryRows() {
         const auto before = stack.size();
         const QPoint start = field->rect().center();
         const QPoint finish = start + QPoint(20, 0);
-        const double editedValue = field->value() + 20 * field->singleStep();
+        // Twenty pixels less the drag threshold's dead zone (lane B: crossing it never jumps).
+        const double editedValue =
+            field->value() + (20 - QApplication::startDragDistance()) * field->singleStep();
         QMouseEvent press(QEvent::MouseButtonPress, start, field->mapToGlobal(start),
                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(field, &press);
