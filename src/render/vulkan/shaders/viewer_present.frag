@@ -2,7 +2,8 @@
 // Bloom viewer presentation fragment shader (offline compiled; do not load at runtime).
 //
 // Reproduces the current viewer's paintEvent composition in the target's pixel space:
-//   - display-space background (solid / checkerboard / black / white),
+//   - display-space background (solid / black / white over the whole target; the checkerboard
+//     only inside the destination rectangle, with the solid surround outside it),
 //   - the resident packed-RGBA8 display image sampled through an explicit destination rectangle and
 //     source image window, with the viewer's channel remap,
 //   - straight-alpha source-over onto the background (the display buffer is straight RGBA8 sRGB),
@@ -97,13 +98,21 @@ void main()
 {
     const vec2 targetPixel = clamp(vTargetUv01, vec2(0.0), vec2(1.0)) * present.targetExtent.xy;
 
+    const vec4 destination = present.destinationRect;
+    const bool inside = destination.z > 0.0 && destination.w > 0.0 &&
+                        targetPixel.x >= destination.x &&
+                        targetPixel.x < destination.x + destination.z &&
+                        targetPixel.y >= destination.y &&
+                        targetPixel.y < destination.y + destination.w;
+    // The checkerboard is an alpha indicator for the composition, so it covers the destination
+    // rectangle only; outside it the surround stays the solid background colour.
     vec4 background = present.backgroundColor;
     const uint backgroundMode = present.modes.y;
     if (backgroundMode == kBackgroundBlack) {
         background = vec4(0.0, 0.0, 0.0, 1.0);
     } else if (backgroundMode == kBackgroundWhite) {
         background = vec4(1.0, 1.0, 1.0, 1.0);
-    } else if (backgroundMode == kBackgroundCheckerboard) {
+    } else if (backgroundMode == kBackgroundCheckerboard && inside) {
         const float tile = max(present.checkerParams.x, 1.0);
         const ivec2 cell = ivec2(floor((targetPixel - present.checkerParams.zw) / tile));
         // The viewer raises (row + column) even; see viewer_editor.cpp drawCheckerboard().
@@ -114,12 +123,6 @@ void main()
     vec3 color = background.rgb;
     float alpha = background.a;
 
-    const vec4 destination = present.destinationRect;
-    const bool inside = destination.z > 0.0 && destination.w > 0.0 &&
-                        targetPixel.x >= destination.x &&
-                        targetPixel.x < destination.x + destination.z &&
-                        targetPixel.y >= destination.y &&
-                        targetPixel.y < destination.y + destination.w;
     if (inside) {
         const vec2 local = (targetPixel - destination.xy) / destination.zw;
         const vec2 sourcePixel = present.imageWindow.xy + local * present.imageWindow.zw;

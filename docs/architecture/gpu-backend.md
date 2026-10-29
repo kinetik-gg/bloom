@@ -372,8 +372,9 @@ command; it never calls `vkQueueWaitIdle`/`vkDeviceWaitIdle`, retains an image u
 presentation-engine signal actually proves retirement, propagates device loss, and quarantines a
 foreign-thread or unproven teardown under a bounded process fuse. `gpu_present_image.hpp` and
 `presentImage` sample the resident display image into the acquired swapchain with an explicit affine
-destination/source mapping, viewer channel remap, background/checkerboard, and an optional
-premultiplied RGBA8 overlay; both shaders are SHA-256 pinned with a manifest binding and a
+destination/source mapping, viewer channel remap, background (the checkerboard only inside the
+destination rectangle, the solid surround outside it, exactly as the Viewer's CPU paint), and an
+optional premultiplied RGBA8 overlay; both shaders are SHA-256 pinned with a manifest binding and a
 configure-time regeneration check. `GpuPresentationCoordinator` (with the Qt-free, Vulkan-free
 `GpuPresentationClient`) is a coordinator, not a thread, service, device, or message bus: it is
 constructed on the existing service owner thread, does no work until its `pump()` is called, crosses a

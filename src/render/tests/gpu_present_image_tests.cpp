@@ -119,6 +119,15 @@ struct SourceImage final {
                  top.b + (bottom.b - top.b) * fy, top.a + (bottom.a - top.a) * fy};
 }
 
+// The checkerboard covers the destination rectangle only; outside it the surround is the solid
+// background colour, exactly as the fragment shader composes it.
+[[nodiscard]] bool insideDestination(const GpuPresentImageParams& params, const float x,
+                                     const float y) {
+    const GpuPresentRect& d = params.destination;
+    return d.width > 0.0F && d.height > 0.0F && x >= d.x && x < d.x + d.width && y >= d.y &&
+           y < d.y + d.height;
+}
+
 [[nodiscard]] Pixel background(const GpuPresentImageParams& params, const float x, const float y) {
     if (params.background == GpuPresentBackground::Black) {
         return Pixel{0.0F, 0.0F, 0.0F, 1.0F};
@@ -126,7 +135,7 @@ struct SourceImage final {
     if (params.background == GpuPresentBackground::White) {
         return Pixel{1.0F, 1.0F, 1.0F, 1.0F};
     }
-    if (params.background == GpuPresentBackground::Checkerboard) {
+    if (params.background == GpuPresentBackground::Checkerboard && insideDestination(params, x, y)) {
         const float tile = params.checkerTilePixels > 0.0F ? params.checkerTilePixels : 1.0F;
         const int cx = static_cast<int>(std::floor((x - params.checkerOriginX) / tile));
         const int cy = static_cast<int>(std::floor((y - params.checkerOriginY) / tile));
@@ -187,7 +196,7 @@ void shaderPins(Expectations& expectations) {
     expectations.expect(
         digestMatches(
             std::span<const std::uint32_t>(bloom::render::vulkan_detail::kViewerPresentFragSpirv),
-            "8a2120e1c7580034e85c1954c8cce9702ceb4344868d5458e9f9980a08b15105"),
+            "63bd49fca96f9c51a6170e2bccfcaf34d7308dfc9c2cf75a0354fec6f7a6f16b"),
         "the embedded fragment SPIR-V matches the corrected pinned manifest digest");
     expectations.expect(bloom::render::vulkan_detail::kViewerPresentVertWordCount ==
                                 bloom::render::vulkan_detail::kViewerPresentVertByteCount / 4U &&
@@ -228,10 +237,16 @@ void channelAndBackground(Expectations& expectations) {
     params.checkerTilePixels = 10.0F;
     params.checkerColorA = GpuPresentColor{0.25F, 0.25F, 0.25F, 1.0F};
     params.checkerColorB = GpuPresentColor{0.75F, 0.75F, 0.75F, 1.0F};
+    params.destination = GpuPresentRect{0.0F, 0.0F, 20.0F, 20.0F};
     const Pixel raised = background(params, 0.5F, 0.5F);
     const Pixel base = background(params, 10.5F, 0.5F);
     expectations.expect(near(raised.r, 0.75F) && near(base.r, 0.25F),
                         "checkerboard parity matches the viewer (row+column even is raised)");
+    params.backgroundColor = GpuPresentColor{0.1F, 0.1F, 0.1F, 1.0F};
+    const Pixel surround = background(params, 30.5F, 0.5F);
+    expectations.expect(near(surround.r, 0.1F),
+                        "the checkerboard stops at the destination; the surround stays solid");
+    params.destination = GpuPresentRect{0.0F, 0.0F, 2.0F, 2.0F};
 
     params.background = GpuPresentBackground::Solid;
     params.backgroundColor = GpuPresentColor{0.2F, 0.2F, 0.2F, 1.0F};

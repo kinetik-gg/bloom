@@ -126,13 +126,20 @@ renderOracle(const std::vector<Rgba8>& display, const std::uint32_t displayWidth
     } else if (params.background == GpuPresentBackground::White) {
         target.fill(QColor(255, 255, 255, 255));
     } else if (params.background == GpuPresentBackground::Checkerboard) {
+        // The checkerboard covers the destination rectangle only; the surround is the solid
+        // background colour.
+        target.fill(toColor(params.backgroundColor));
         const int tile = std::max(1, static_cast<int>(std::lround(params.checkerTilePixels)));
         const QImage checker = checkerTile(params.checkerColorA, params.checkerColorB, tile);
         QPainter backgroundPainter(&target);
         backgroundPainter.setBrushOrigin(
             QPointF(static_cast<double>(params.checkerOriginX) - 2.0 * static_cast<double>(tile),
                     static_cast<double>(params.checkerOriginY) - 2.0 * static_cast<double>(tile)));
-        backgroundPainter.fillRect(QRectF(0.0, 0.0, targetWidth, targetHeight), QBrush(checker));
+        backgroundPainter.fillRect(QRectF(static_cast<double>(params.destination.x),
+                                          static_cast<double>(params.destination.y),
+                                          static_cast<double>(params.destination.width),
+                                          static_cast<double>(params.destination.height)),
+                                   QBrush(checker));
     } else {
         target.fill(toColor(params.backgroundColor));
     }

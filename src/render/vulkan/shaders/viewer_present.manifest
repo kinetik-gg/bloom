@@ -17,9 +17,9 @@
       "stage": "fragment",
       "language": "GLSL_460",
       "source": "viewer_present.frag",
-      "sha256": "817fdaeb48bf7037b69aa38e8a51ee9aee2b28d7beecbfdacbece59fe34ee7b6",
-      "spirvSha256": "8a2120e1c7580034e85c1954c8cce9702ceb4344868d5458e9f9980a08b15105",
-      "wordCount": 2643
+      "sha256": "fb9309d5db9f658b7c7bded95ea875af93eff39a01abdb73bfb5b98ced3e6a3f",
+      "spirvSha256": "63bd49fca96f9c51a6170e2bccfcaf34d7308dfc9c2cf75a0354fec6f7a6f16b",
+      "wordCount": 2652
     }
   ],
   "specializationConstants": [],
@@ -53,6 +53,6 @@
     "sourceAlpha": "straight; channel remap applied per texel tap, then premultiplied before the bilinear weights",
     "overlayAlpha": "premultiplied; composited last",
     "channelEnum": "matches bloom::ui::ViewerChannel (Rgba,Rgb,Red,Green,Blue,Alpha)",
-    "checkerboard": "raised tiles where (row+column) is even, tile pixels and origin supplied by the caller"
+    "checkerboard": "inside the destination rectangle only (the solid background is the surround); raised tiles where (row+column) is even, tile pixels and origin supplied by the caller"
   }
 }
