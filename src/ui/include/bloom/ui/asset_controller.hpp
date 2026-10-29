@@ -101,6 +101,9 @@ class AssetController final : public QObject {
                     AudioProcessingAdmission audioAdmission = AudioProcessingAdmission{});
     ~AssetController() override;
     void requestImport(QWidget* parent = nullptr);
+    // The same dialog, with `followUp` run once the import it starts commits (the Viewer's Add >
+    // Import and Add… adds the imported media as layers).
+    void requestImport(QWidget* parent, ImportFollowUp followUp);
     // Imports into the current import folder (see setImportFolder).
     void importFiles(const QStringList& paths);
     // Imports into `folder`; nullopt is the Assets root. `followUp` runs after the commit.

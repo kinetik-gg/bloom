@@ -11,6 +11,8 @@
 #include "layer_drop.hpp"
 #include "layer_mask_support.hpp"
 #include "viewer_editor_text_layout.hpp"
+#include "viewer_editor_internal.hpp"
+#include "viewer_timecode_readout.hpp"
 #include "viewer_tool_geometry.hpp"
 
 #include <bloom/ui/composition_commands.hpp>
@@ -75,6 +77,7 @@
 #include <QWindow>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <numbers>
 
@@ -92,6 +95,7 @@
 #include <vector>
 
 namespace bloom::ui {
+using namespace viewer_detail;
 namespace {
 std::vector<document::LayerId>
 pointTextLayers(const CompositionSession& session,
@@ -152,387 +156,7 @@ void nudgeViewerSelection(CompositionSession& session, const QPointF composition
     (void)session.setSelectedPosition(position->x + delta.x(), position->y + delta.y());
 }
 
-// Wheel/menu zoom step (decision 2): each wheel notch or Zoom In/Out menu action multiplies the
-// current effective zoom by this factor (clamped into ViewTransform's [kMinZoom, kMaxZoom]). The
-// value itself moved to viewer_editor.hpp for task U4 (issue #123) so the Nodes canvas steps by
-// exactly the same amount; nothing about this file's behavior changed.
-
-// The Fit item plus the fixed percentage presets a real gesture never removes (decision 3). A
-// zoom that lands off this ladder (e.g. from a wheel step) gets ONE additional trailing item --
-// see refreshZoomDropdown()'s own comment on why that item is renamed in place rather than
-// removed and re-added: kit::KDropdown has no item-removal API.
-constexpr std::array<int, 5> kZoomPresets = {25, 50, 100, 200, 400};
-constexpr std::array<const char*, 4> kResolutionNames = {"Auto", "Full", "Half", "Quarter"};
-// Task VIEW-1. Channel order is the artist's reading order, not the buffer's byte order: the
-// composite first, then the composite without alpha, then the three colour channels, then alpha.
-constexpr std::array<const char*, 6> kChannelNames = {"RGBA", "RGB", "R", "G", "B", "Alpha"};
-constexpr std::array<const char*, 4> kBackgroundNames = {"Solid", "Checkerboard", "Black", "White"};
-constexpr auto kResolutionSetting = "viewer/resolution";
-constexpr auto kBackgroundSetting = "viewer/background";
-// Deliberately the SAME key the timeline's own View > Frames/Timecode pair already writes: the
-// display format of time is one question with one answer, and a second key would let the ruler and
-// the footer disagree about it. The two surfaces read it at construction and write it on change;
-// they do not live-sync within one session, which is the honest limit of a settings key rather
-// than a shared model.
-constexpr auto kTimeFormatSetting = "timeline/time-format";
-constexpr auto kLoopSetting = "playback/loop";
-constexpr auto kSafeAreasSetting = "viewer/overlay/safe-areas";
-constexpr auto kCentreCrossSetting = "viewer/overlay/centre-cross";
-constexpr auto kThirdsSetting = "viewer/overlay/thirds";
-constexpr auto kRulersSetting = "viewer/overlay/rulers";
-constexpr auto kPixelGridSetting = "viewer/overlay/pixel-grid";
-
-[[nodiscard]] std::optional<color::ResolvedBloomNeutralConfig>
-resolveViewerColorConfig(const CompositionSession& session) {
-    const auto* builtIn = std::get_if<document::BuiltInOcioConfigLocator>(
-        &session.colorSettings().ocioConfig.locator);
-    if (builtIn == nullptr) {
-        return std::nullopt;
-    }
-    auto result =
-        color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
-                                  session.colorSettings().ocioConfig.expectedRevision.digest,
-                                  session.colorIntent().workingColorSpaceId);
-    return std::move(result).takeResolved();
-}
-
-[[nodiscard]] bool hasLookTaggedEffect(const CompositionSession& session) {
-    const auto* composition = session.composition();
-    if (composition == nullptr) {
-        return false;
-    }
-    for (const auto& node : composition->graph().nodes()) {
-        if (node.typeId != "bloom.ocio-file-transform") {
-            continue;
-        }
-        const auto look =
-            std::ranges::find(node.parameters, "look", &document::ParameterBinding::role);
-        if (look == node.parameters.end()) {
-            continue;
-        }
-        const auto* record = composition->parameters().find(look->parameterId);
-        if (record == nullptr) {
-            continue;
-        }
-        const auto* constant = std::get_if<document::ConstantValueSource>(&record->source);
-        if (constant == nullptr) {
-            return true;
-        }
-        const auto* enabled = std::get_if<bool>(&constant->value);
-        if (enabled == nullptr || *enabled) {
-            return true;
-        }
-    }
-    return false;
-}
-
-QString safeAreaPresetName(const ViewerSafeAreaPreset preset) {
-    switch (preset) {
-    case ViewerSafeAreaPreset::Broadcast:
-        return QStringLiteral("Broadcast");
-    case ViewerSafeAreaPreset::Hd:
-        return QStringLiteral("HD");
-    case ViewerSafeAreaPreset::Cinema:
-        return QStringLiteral("Cinema");
-    case ViewerSafeAreaPreset::Social:
-        return QStringLiteral("Social");
-    case ViewerSafeAreaPreset::Custom:
-        return QStringLiteral("Custom");
-    }
-    return QStringLiteral("Broadcast");
-}
-
-ViewerSafeAreaPreset safeAreaPresetFromName(const QString& name) {
-    if (name == QStringLiteral("HD"))
-        return ViewerSafeAreaPreset::Hd;
-    if (name == QStringLiteral("Cinema"))
-        return ViewerSafeAreaPreset::Cinema;
-    if (name == QStringLiteral("Social"))
-        return ViewerSafeAreaPreset::Social;
-    if (name == QStringLiteral("Custom"))
-        return ViewerSafeAreaPreset::Custom;
-    return ViewerSafeAreaPreset::Broadcast;
-}
-
-QString safeAreaPresetSetting(const document::CompositionId id) {
-    return QStringLiteral("viewer/overlay/safe-area-preset/%1").arg(id.value());
-}
-
-// Lays `controls` out left to right inside `bar`, each at its own size hint, vertically centred.
-// A manual layout rather than a QHBoxLayout because the bar paints its own surface and hairline and
-// because of the overflow rule below, which a box layout expresses by squeezing children instead.
-//
-// A control that does not fit ENTIRELY is hidden rather than clipped. A half-drawn dropdown or a
-// truncated transport button is a control an artist can see and cannot use; a narrow Viewer simply
-// offers fewer of them, and widening the panel brings them back. Nothing important is lost by that:
-// the window status bar carries the state that has to stay on screen regardless.
-// The footer's own icon-only transport button: a plain QToolButton carrying a kit icon at the
-// Control role, the same "QToolButton + kit::icon()" idiom the timeline transport used before this
-// moved (and EditorArea's header chrome still uses). NOT kit::KButton, which is not a QToolButton
-// and would break every existing findChild<QToolButton*>("playPauseButton") contract. An icon never
-// replaces an accessible name (ADR 0010), so every call site sets a tooltip AND an accessible name.
-QToolButton* makeTransportButton(const kit::IconId iconId, const QString& toolTip,
-                                 const QString& accessibleName, const QString& objectName,
-                                 QWidget* parent) {
-    auto* button = new kit::KIconButton(parent);
-    button->setObjectName(objectName);
-    button->setIcon(kit::icon(iconId, kit::IconRole::Control));
-    const int box = kit::px(kit::iconSize(kit::IconRole::Control));
-    button->setIconSize(QSize(box, box));
-    button->setToolTip(toolTip);
-    button->setAccessibleName(accessibleName);
-    button->setAutoRaise(true);
-    button->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
-    return button;
-}
-
-constexpr int kFixedZoomItemCount = 1 + static_cast<int>(kZoomPresets.size());
-
-// What the Resolution control is ACTUALLY delivering. The dropdown says which policy is chosen;
-// this says what that policy resolved to, which for Auto is the only place the effective factor is
-// visible at all. Task VIEW-1 dropped the frame/time half of this string: the exact frame and time
-// are their own click-to-edit control in the footer now (ViewerTimecodeReadout), so keeping them
-// here as well would have put the same number on screen twice.
-QString viewerResolutionText(const CompositionPreviewController& controller) {
-    const auto policy = controller.settings().resolutionPolicy;
-    const auto divisor = controller.resolutionDivisor();
-    const QString factor = divisor == 4   ? QStringLiteral("¼")
-                           : divisor == 2 ? QStringLiteral("½")
-                                          : QStringLiteral("1");
-    return policy == runtime::PreviewResolutionPolicy::Auto
-               ? ViewerEditor::tr("Auto · %1").arg(factor)
-               : ViewerEditor::tr(kResolutionNames[static_cast<std::size_t>(policy)]);
-}
-
-void drawCheckerboard(QPainter& painter, const QRectF& bounds) {
-    // The WHOLE canvas surround, not just an under-image alpha indicator -- the image is drawn on
-    // top of it with its own alpha honored, so a transparent pixel already reads as "checkerboard
-    // showing through" with no separate under-image pass needed. The kit's one checkerboard, in
-    // its mid-grey CheckerLight/CheckerDark tones at the Viewer's own cell size.
-    kit::drawAlphaCheckerboard(painter, bounds, kit::px(kit::Size::ViewerChecker));
-}
-
-// The canvas surround (task VIEW-1), chosen by the footer's Background dropdown and persisted under
-// "viewer/background". Black and White are the exact CanvasBlack/CanvasWhite tokens, because that
-// is exactly what an artist asks for when checking edges against a known value. Solid paints the
-// panel's own background token, so the surround blends with the panel chrome rather than reading as
-// a separate black rectangle; literal black is the Black choice.
-void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
-                          const ViewerBackground background) {
-    switch (background) {
-    case ViewerBackground::Checkerboard:
-        drawCheckerboard(painter, bounds);
-        return;
-    case ViewerBackground::Black:
-        painter.fillRect(bounds, kit::color(kit::Color::CanvasBlack));
-        return;
-    case ViewerBackground::White:
-        painter.fillRect(bounds, kit::color(kit::Color::CanvasWhite));
-        return;
-    case ViewerBackground::Solid:
-        break;
-    }
-    painter.fillRect(bounds, kit::color(kit::Color::Canvas));
-}
-
 } // namespace
-
-// The footer's frame/time readout (task VIEW-1): a monospaced label you click to type an exact
-// frame number into, whose context menu chooses between a frame index and non-drop timecode.
-//
-// Not in the anonymous namespace because ViewerEditor holds one by pointer and viewer_editor.hpp
-// therefore forward-declares it. No Q_OBJECT: it has no signals or slots of its own -- the seek is
-// a callback supplied by its owner -- so it needs no moc pass.
-class ViewerTimecodeReadout final : public QWidget {
-  public:
-    // Called with an exact, already-clamped frame index when the artist commits an edit. The
-    // owner is what pauses playback and writes session time; this widget never touches either.
-    using SeekFunction = std::function<void(std::uint64_t)>;
-
-    ViewerTimecodeReadout(CompositionSession& session, SeekFunction seek, QWidget* parent)
-        : QWidget(parent), session_(session), seek_(std::move(seek)) {
-        setObjectName(QStringLiteral("viewerTimeReadout"));
-        setAccessibleName(ViewerEditor::tr("Current frame and time"));
-        setToolTip(ViewerEditor::tr("Click to type an exact frame number"));
-        timecodeFormat_ =
-            QSettings()
-                .value(QLatin1StringView(kTimeFormatSetting), QStringLiteral("timecode"))
-                .toString() == QStringLiteral("timecode");
-
-        stack_ = new QStackedLayout(this);
-        stack_->setContentsMargins(0, 0, 0, 0);
-
-        label_ = new kit::KLabel(this);
-        // Unchanged objectName: this is the same readout the timeline transport used to own, moved
-        // rather than replaced (task VIEW-1's "they change parent, not identity").
-        label_->setObjectName(QStringLiteral("timelineTimeReadout"));
-        label_->setAccessibleName(ViewerEditor::tr("Current frame and time"));
-        label_->setFont(kit::font(kit::TypeRole::Value));
-        // The click that starts an edit belongs to this widget, so the label never eats it.
-        label_->setAttribute(Qt::WA_TransparentForMouseEvents);
-
-        editor_ = new kit::KLineEdit(this);
-        editor_->setObjectName(QStringLiteral("viewerTimeReadoutEditor"));
-        editor_->setAccessibleName(ViewerEditor::tr("Go to frame"));
-        editor_->setFont(kit::font(kit::TypeRole::Value));
-        // A frame INDEX, always -- even while the label is showing timecode. Typing a frame number
-        // is the one entry form that needs no parsing rules of its own, and it is what the task
-        // asks for; the display format is a separate question the context menu answers.
-        editor_->setToolTip(ViewerEditor::tr("Enter a frame number or HH:MM:SS:FF timecode"));
-        editor_->installEventFilter(this);
-
-        stack_->addWidget(label_);
-        stack_->addWidget(editor_);
-        stack_->setCurrentWidget(label_);
-
-        connect(editor_, &QLineEdit::returnPressed, this, [this] { commitEdit(); });
-
-        // Built once and added to this widget's own action list rather than created inside
-        // contextMenuEvent(): the menu is then assembled from actions that exist whether or not it
-        // has ever been opened, which is what makes the format reachable by name -- to a test, and
-        // to any future menu that wants to offer the same two choices.
-        auto* group = new QActionGroup(this);
-        group->setExclusive(true);
-        framesAction_ = new QAction(ViewerEditor::tr("Frames"), this);
-        framesAction_->setObjectName(QStringLiteral("viewerFramesAction"));
-        timecodeAction_ = new QAction(ViewerEditor::tr("Timecode"), this);
-        timecodeAction_->setObjectName(QStringLiteral("viewerTimecodeAction"));
-        timecodeAction_->setToolTip(
-            ViewerEditor::tr("Non-drop HH:MM:SS:FF at the nominal frame rate"));
-        for (auto* action : {framesAction_, timecodeAction_}) {
-            action->setCheckable(true);
-            group->addAction(action);
-            addAction(action);
-        }
-        framesAction_->setChecked(!timecodeFormat_);
-        timecodeAction_->setChecked(timecodeFormat_);
-        connect(framesAction_, &QAction::triggered, this, [this] { setTimecodeFormat(false); });
-        connect(timecodeAction_, &QAction::triggered, this, [this] { setTimecodeFormat(true); });
-
-        refresh();
-    }
-
-    [[nodiscard]] bool timecodeFormat() const noexcept { return timecodeFormat_; }
-
-    void setTimecodeFormat(const bool timecode) {
-        if (timecodeFormat_ == timecode) {
-            return;
-        }
-        timecodeFormat_ = timecode;
-        framesAction_->setChecked(!timecode);
-        timecodeAction_->setChecked(timecode);
-        QSettings().setValue(QLatin1StringView(kTimeFormatSetting),
-                             timecode ? QStringLiteral("timecode") : QStringLiteral("frames"));
-        refresh();
-    }
-
-    // The exact text on screen, and the seam a test reads instead of grabbing pixels.
-    [[nodiscard]] QString text() const { return label_->text(); }
-
-    void refresh() {
-        const auto time = session_.currentTime();
-        const auto context = frameContextFor(session_);
-        QString frameText = QStringLiteral("—");
-        if (context.has_value()) {
-            const auto nearest =
-                nearestFrameIndexForTime(context->frameRate, context->duration, time);
-            if (nearest.has_value()) {
-                frameText = formatTimelineFrameLabel(*nearest, context->frameRate, timecodeFormat_,
-                                                     context->labels);
-            }
-        }
-        label_->setText(frameText);
-        const bool dropFrame = context && context->labels.dropFrame &&
-                               document::hasDropFrameTimecode(context->frameRate);
-        label_->setToolTip(
-            timecodeFormat_
-                ? (dropFrame ? ViewerEditor::tr("Drop-frame timecode · exact composition time")
-                             : ViewerEditor::tr("Non-drop timecode · exact composition time"))
-                : ViewerEditor::tr("Frame index · exact composition time"));
-    }
-
-    [[nodiscard]] QSize sizeHint() const override {
-        // A FIXED width from the widest string this readout can ever show, not the current text's
-        // width: the text changes on every frame of playback, and a width that tracked it would
-        // relayout the whole footer sixty times a second and make every control beside it twitch.
-        return {kit::px(kit::Size::ViewerTimecodeWidth), kit::px(kit::Size::Control)};
-    }
-
-  protected:
-    void mousePressEvent(QMouseEvent* event) override {
-        if (event->button() == Qt::LeftButton) {
-            beginEdit();
-            event->accept();
-            return;
-        }
-        QWidget::mousePressEvent(event);
-    }
-
-    void contextMenuEvent(QContextMenuEvent* event) override {
-        std::unique_ptr<QMenu> menuOwner(kit::makeMenu(this));
-        auto& menu = *menuOwner;
-        menu.addAction(framesAction_);
-        menu.addAction(timecodeAction_);
-        menu.exec(event->globalPos());
-    }
-
-    bool eventFilter(QObject* watched, QEvent* event) override {
-        if (watched == editor_) {
-            if (event->type() == QEvent::FocusOut) {
-                cancelEdit();
-            } else if (event->type() == QEvent::KeyPress &&
-                       static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
-                cancelEdit();
-                return true;
-            }
-        }
-        return QWidget::eventFilter(watched, event);
-    }
-
-  private:
-    void beginEdit() {
-        const auto context = frameContextFor(session_);
-        if (!context.has_value()) {
-            return;
-        }
-        const auto nearest =
-            nearestFrameIndexForTime(context->frameRate, context->duration, session_.currentTime());
-        editor_->setText(formatTimelineFrameLabel(nearest.value_or(0), context->frameRate,
-                                                  timecodeFormat_, context->labels));
-        stack_->setCurrentWidget(editor_);
-        editor_->selectAll();
-        editor_->setFocus(Qt::MouseFocusReason);
-    }
-
-    void cancelEdit() {
-        if (stack_->currentWidget() == editor_) {
-            stack_->setCurrentWidget(label_);
-        }
-    }
-
-    void commitEdit() {
-        const auto context = frameContextFor(session_);
-        cancelEdit();
-        // A frame number or timecode in the composition's own numbering (start timecode,
-        // drop-frame); an unparseable entry reverts in silence: there is nothing to report that
-        // the unchanged readout does not already say.
-        const auto typed = context ? parseTimelineFrameLabel(editor_->text(), context->frameRate,
-                                                             timecodeFormat_, context->labels)
-                                   : std::nullopt;
-        if (!typed || !seek_)
-            return;
-        seek_(std::min<std::uint64_t>(*typed, context->maxFrameIndexValue));
-    }
-
-    CompositionSession& session_;
-    SeekFunction seek_;
-    QStackedLayout* stack_ = nullptr;
-    QLabel* label_ = nullptr;
-    QLineEdit* editor_ = nullptr;
-    QAction* framesAction_ = nullptr;
-    QAction* timecodeAction_ = nullptr;
-    bool timecodeFormat_ = false;
-};
 
 QRectF fitDisplayRect(const QRectF& available, const render::ImageExtent extent,
                       const core::PixelAspectRatio pixelAspect) noexcept {
@@ -626,536 +250,10 @@ ViewTransform zoomAboutPoint(const ViewTransform& transform, const QRectF& avail
         .fitToWindow = false, .zoom = newZoom, .pan = newTopLeft - centeredTopLeft};
 }
 
-void ViewerEditor::buildHeader() {
-    auto* bar = &chrome_.header;
-    bar->owner = this;
-    bar->objectName = "viewerHeaderMenuBar";
-    bar->overflowButtonName = "viewerHeaderOverflowButton";
-    bar->overflowMenuName = "viewerHeaderOverflowMenu";
-
-    compositionSelector_ = new kit::KDropdown(this);
-    compositionSelector_->setObjectName(QStringLiteral("viewerCompositionSelector"));
-    compositionSelector_->setAccessibleName(tr("Composition"));
-    compositionSelector_->setToolTip(tr("Choose the composition shown in the viewer"));
-    compositionSelector_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    compositionSelector_->setMinimumWidth(kit::px(kit::Size::DropdownWidthWide));
-    compositionSelector_->setMaximumWidth(kit::px(kit::Size::DropdownWidthExpanded));
-    connect(compositionSelector_, &kit::KDropdown::currentIndexChanged, this,
-            [this](const int index) {
-                if (index < 0) {
-                    return;
-                }
-                const auto id = document::CompositionId::fromRaw(
-                    compositionSelector_->itemData(index).toULongLong());
-                if (id.isValid()) {
-                    (void)session_.setComposition(id);
-                }
-            });
-    bar->addWidget(compositionSelector_);
-
-    compositionMenuButton_ = new kit::KIconButton(this);
-    compositionMenuButton_->setObjectName(QStringLiteral("viewerCompositionMenuButton"));
-    compositionMenuButton_->setIcon(kit::icon(kit::IconId::ContextMenu, kit::IconRole::Chrome));
-    compositionMenuButton_->setIconSize(QSize(kit::px(kit::iconSize(kit::IconRole::Chrome)),
-                                              kit::px(kit::iconSize(kit::IconRole::Chrome))));
-    compositionMenuButton_->setToolTip(tr("Composition commands"));
-    compositionMenuButton_->setAccessibleName(tr("Composition commands"));
-    compositionMenuButton_->setAutoRaise(true);
-    compositionMenuButton_->setFixedSize(
-        QSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control)));
-    auto* compositionMenu = kit::makeMenu(this);
-    compositionMenu->setObjectName(QStringLiteral("viewerCompositionMenu"));
-    compositionMenuButton_->setMenu(compositionMenu);
-    compositionMenuButton_->setPopupMode(QToolButton::InstantPopup);
-    compositionMenuButton_->hide();
-
-    viewerCompositionNewAction_ = compositionMenu->addAction(tr("New Composition…"));
-    viewerCompositionNewAction_->setObjectName(QStringLiteral("viewerNewCompositionAction"));
-    connect(viewerCompositionNewAction_, &QAction::triggered, this, [this] {
-        if (const auto id = showNewCompositionDialog(session_, this); id.has_value()) {
-            (void)session_.setComposition(*id);
-        }
-    });
-    viewerCompositionDuplicateAction_ = compositionMenu->addAction(tr("Duplicate Composition"));
-    viewerCompositionDuplicateAction_->setObjectName(
-        QStringLiteral("viewerDuplicateCompositionAction"));
-    connect(viewerCompositionDuplicateAction_, &QAction::triggered, this, [this] {
-        if (const auto id = duplicateComposition(session_, session_.compositionId());
-            id.has_value()) {
-            (void)session_.setComposition(*id);
-        }
-    });
-    viewerCompositionSettingsAction_ = compositionMenu->addAction(tr("Composition Settings…"));
-    viewerCompositionSettingsAction_->setObjectName(
-        QStringLiteral("viewerCompositionSettingsAction"));
-    connect(viewerCompositionSettingsAction_, &QAction::triggered, this, [this] {
-        (void)showCompositionSettingsDialog(session_, session_.compositionId(), this);
-    });
-    viewerCompositionRenameAction_ = compositionMenu->addAction(tr("Rename Composition…"));
-    viewerCompositionRenameAction_->setObjectName(QStringLiteral("viewerRenameCompositionAction"));
-    connect(viewerCompositionRenameAction_, &QAction::triggered, this,
-            [this] { (void)renameComposition(session_, session_.compositionId(), this); });
-    viewerCompositionDeleteAction_ = compositionMenu->addAction(tr("Delete Composition"));
-    viewerCompositionDeleteAction_->setObjectName(QStringLiteral("viewerDeleteCompositionAction"));
-    connect(viewerCompositionDeleteAction_, &QAction::triggered, this,
-            [this] { (void)deleteComposition(session_, session_.compositionId()); });
-
-    objectSelector_ = new kit::KDropdown(this);
-    objectSelector_->setObjectName(QStringLiteral("viewerObjectSelector"));
-    objectSelector_->setAccessibleName(tr("Object"));
-    objectSelector_->setToolTip(tr("Choose a layer in the current composition"));
-    objectSelector_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    objectSelector_->setMinimumWidth(kit::px(kit::Size::DropdownWidthWide));
-    objectSelector_->setMaximumWidth(kit::px(kit::Size::DropdownWidthExpanded));
-    connect(objectSelector_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
-        if (index <= 0) {
-            session_.clearSelection();
-            return;
-        }
-        const auto id = document::LayerId::fromRaw(objectSelector_->itemData(index).toULongLong());
-        if (id.isValid()) {
-            session_.selectLayer(id);
-        }
-    });
-    bar->addWidget(objectSelector_);
-
-    viewerViewMenu_ = kit::makeMenu(tr("View"), this);
-    viewerViewMenu_->setObjectName(QStringLiteral("viewerViewMenu"));
-    viewerFitAction_ = viewerViewMenu_->addAction(tr("Fit"));
-    viewerFitAction_->setObjectName(QStringLiteral("viewerFitAction"));
-    viewerFitAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_0));
-    viewerFitAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    viewerActualSizeAction_ = viewerViewMenu_->addAction(tr("Actual Size"));
-    viewerActualSizeAction_->setObjectName(QStringLiteral("viewerActualSizeAction"));
-    viewerActualSizeAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_1));
-    viewerActualSizeAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    viewerZoomInAction_ = viewerViewMenu_->addAction(tr("Zoom In"));
-    viewerZoomInAction_->setObjectName(QStringLiteral("viewerZoomInAction"));
-    viewerZoomInAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Plus));
-    viewerZoomInAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    viewerZoomOutAction_ = viewerViewMenu_->addAction(tr("Zoom Out"));
-    viewerZoomOutAction_->setObjectName(QStringLiteral("viewerZoomOutAction"));
-    viewerZoomOutAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Minus));
-    viewerZoomOutAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    addAction(viewerFitAction_);
-    addAction(viewerActualSizeAction_);
-    addAction(viewerZoomInAction_);
-    addAction(viewerZoomOutAction_);
-    connect(viewerFitAction_, &QAction::triggered, this, &ViewerEditor::setZoomFit);
-    connect(viewerActualSizeAction_, &QAction::triggered, this, &ViewerEditor::setZoomActualSize);
-    connect(viewerZoomInAction_, &QAction::triggered, this, &ViewerEditor::zoomInAtCenter);
-    connect(viewerZoomOutAction_, &QAction::triggered, this, &ViewerEditor::zoomOutAtCenter);
-
-    auto* channelMenu = viewerViewMenu_->addMenu(tr("Channel"));
-    channelMenu->setObjectName(QStringLiteral("viewerChannelMenu"));
-    auto* channelGroup = new QActionGroup(channelMenu);
-    channelGroup->setExclusive(true);
-    for (int index = 0; index < static_cast<int>(kChannelNames.size()); ++index) {
-        auto* action = channelMenu->addAction(tr(kChannelNames[static_cast<std::size_t>(index)]));
-        action->setObjectName(QStringLiteral("viewerChannel%1Action").arg(index));
-        action->setCheckable(true);
-        action->setData(index);
-        channelGroup->addAction(action);
-    }
-    channelGroup->actions().front()->setChecked(true);
-    connect(channelGroup, &QActionGroup::triggered, this,
-            [this](QAction* action) { chooseChannelDropdownIndex(action->data().toInt()); });
-
-    auto* backgroundMenu = viewerViewMenu_->addMenu(tr("Background"));
-    backgroundMenu->setObjectName(QStringLiteral("viewerBackgroundMenu"));
-    auto* backgroundGroup = new QActionGroup(backgroundMenu);
-    backgroundGroup->setExclusive(true);
-    for (int index = 0; index < static_cast<int>(kBackgroundNames.size()); ++index) {
-        auto* action =
-            backgroundMenu->addAction(tr(kBackgroundNames[static_cast<std::size_t>(index)]));
-        action->setObjectName(QStringLiteral("viewerBackground%1Action").arg(index));
-        action->setCheckable(true);
-        action->setData(index);
-        backgroundGroup->addAction(action);
-    }
-    backgroundGroup->actions().front()->setChecked(true);
-    connect(backgroundGroup, &QActionGroup::triggered, this, [this](QAction* action) {
-        setBackground(static_cast<ViewerBackground>(action->data().toInt()));
-    });
-
-    viewerViewMenu_->addSeparator();
-    safeAreasAction_ = viewerViewMenu_->addAction(tr("Safe Areas"));
-    safeAreasAction_->setObjectName(QStringLiteral("viewerSafeAreasAction"));
-    safeAreasAction_->setCheckable(true);
-    safeAreasAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_S));
-    safeAreasAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    overlayOptions_.safeAreas = QSettings().value(kSafeAreasSetting, false).toBool();
-    safeAreasAction_->setChecked(overlayOptions_.safeAreas);
-    addAction(safeAreasAction_);
-    connect(safeAreasAction_, &QAction::toggled, this, [this](const bool enabled) {
-        overlayOptions_.safeAreas = enabled;
-        QSettings().setValue(kSafeAreasSetting, enabled);
-        ++gpuOverlayRevision_;
-        updateGpuResidentPresentation();
-        update();
-    });
-
-    safeAreaPresetMenu_ = viewerViewMenu_->addMenu(tr("Safe Area Preset"));
-    safeAreaPresetMenu_->setObjectName(QStringLiteral("viewerSafeAreaPresetMenu"));
-    const std::array<std::pair<QString, ViewerSafeAreaPreset>, 5> presets{{
-        {tr("Broadcast (4:3)"), ViewerSafeAreaPreset::Broadcast},
-        {tr("HD (16:9)"), ViewerSafeAreaPreset::Hd},
-        {tr("Cinema"), ViewerSafeAreaPreset::Cinema},
-        {tr("Social"), ViewerSafeAreaPreset::Social},
-        {tr("Custom…"), ViewerSafeAreaPreset::Custom},
-    }};
-    for (std::size_t index = 0; index < presets.size(); ++index) {
-        auto* action = safeAreaPresetMenu_->addAction(presets[index].first);
-        action->setObjectName(QStringLiteral("viewerSafeArea%1Action").arg(index));
-        action->setCheckable(true);
-        safeAreaPresetActions_[index] = action;
-        connect(action, &QAction::triggered, this,
-                [this, preset = presets[index].second] { applySafeAreaPreset(preset); });
-    }
-
-    const auto addOverlayToggle = [this](const QString& label, const QString& objectName,
-                                         const QString& setting, const QKeySequence& shortcut,
-                                         bool* state) {
-        auto* action = viewerViewMenu_->addAction(label);
-        action->setObjectName(objectName);
-        action->setCheckable(true);
-        action->setShortcut(shortcut);
-        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-        *state = QSettings().value(setting, false).toBool();
-        action->setChecked(*state);
-        addAction(action);
-        connect(action, &QAction::toggled, this, [state, setting](const bool enabled) {
-            *state = enabled;
-            QSettings().setValue(setting, enabled);
-        });
-        connect(action, &QAction::toggled, this, [this] {
-            ++gpuOverlayRevision_;
-            updateGpuResidentPresentation();
-            update();
-        });
-        return action;
-    };
-    centreCrossAction_ = addOverlayToggle(
-        tr("Centre Cross"), QStringLiteral("viewerCentreCrossAction"), kCentreCrossSetting,
-        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C), &overlayOptions_.centreCross);
-    thirdsAction_ =
-        addOverlayToggle(tr("Thirds"), QStringLiteral("viewerThirdsAction"), kThirdsSetting,
-                         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T), &overlayOptions_.thirds);
-    rulersAction_ =
-        addOverlayToggle(tr("Rulers"), QStringLiteral("viewerRulers"), kRulersSetting,
-                         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R), &overlayOptions_.rulers);
-    pixelGridAction_ = addOverlayToggle(
-        tr("Pixel Grid"), QStringLiteral("viewerPixelGridAction"), kPixelGridSetting,
-        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P), &overlayOptions_.pixelGrid);
-
-    viewerSelectMenu_ = kit::makeMenu(tr("Select"), this);
-    viewerSelectMenu_->setObjectName(QStringLiteral("viewerSelectMenu"));
-    auto* selectAll = viewerSelectMenu_->addAction(tr("All"));
-    selectAll->setObjectName(QStringLiteral("viewerSelectAllAction"));
-    selectAll->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_A));
-    selectAll->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    auto* selectNone = viewerSelectMenu_->addAction(tr("None"));
-    selectNone->setObjectName(QStringLiteral("viewerSelectNoneAction"));
-    selectNone->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A));
-    selectNone->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    auto* invert = viewerSelectMenu_->addAction(tr("Invert"));
-    invert->setObjectName(QStringLiteral("viewerInvertSelectionAction"));
-    invert->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_A));
-    invert->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    addAction(selectAll);
-    addAction(selectNone);
-    addAction(invert);
-    connect(selectAll, &QAction::triggered, this, &ViewerEditor::selectAllObjects);
-    connect(selectNone, &QAction::triggered, this, &ViewerEditor::selectNoObjects);
-    connect(invert, &QAction::triggered, this, &ViewerEditor::invertObjectSelection);
-
-    bar->addMenuButton(tr("View"), viewerViewMenu_, QStringLiteral("viewerViewMenuButton"));
-    bar->addMenuButton(tr("Select"), viewerSelectMenu_, QStringLiteral("viewerSelectMenuButton"));
-    auto* addMenu = kit::makeMenu(tr("Add"), this);
-    addMenu->setObjectName("viewerAddMenu");
-    connect(addMenu->addAction(tr("Solid")), &QAction::triggered, this,
-            [this] { (void)addDefaultSolidLayer(session_); });
-    connect(addMenu->addAction(tr("Text")), &QAction::triggered, this,
-            [this] { (void)addDefaultTextLayer(session_); });
-    for (std::int64_t index = 0; index <= 6; ++index) {
-        const auto kind = static_cast<document::ShapeKind>(index);
-        auto* shapeAction =
-            addMenu->addAction(QString::fromUtf8(document::shapeKindName(kind).data()));
-        shapeAction->setObjectName(QStringLiteral("viewerAddShape.%1").arg(index));
-        connect(shapeAction, &QAction::triggered, this,
-                [this, kind] { (void)addDefaultShapeLayer(session_, kind); });
-    }
-    bar->addMenuButton(tr("Add"), addMenu, "viewerAddMenuButton");
-    viewerViewMenu_->addMenu(compositionMenu)->setText(tr("Composition"));
-    bar->addStretch();
-
-    fullscreenButton_ = new kit::KIconButton(this);
-    fullscreenButton_->setObjectName(QStringLiteral("viewerFullscreenButton"));
-    fullscreenButton_->setIcon(kit::icon(kit::IconId::Maximize, kit::IconRole::Chrome));
-    fullscreenButton_->setIconSize(QSize(kit::px(kit::iconSize(kit::IconRole::Chrome)),
-                                         kit::px(kit::iconSize(kit::IconRole::Chrome))));
-    fullscreenButton_->setToolTip(tr("Full Screen (F11)"));
-    fullscreenButton_->setAccessibleName(tr("Full Screen (F11)"));
-    fullscreenButton_->setAutoRaise(true);
-    fullscreenButton_->setCheckable(true);
-    fullscreenButton_->setChecked(window() != nullptr && window()->isFullScreen());
-    fullscreenButton_->setFixedSize(
-        QSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control)));
-    connect(fullscreenButton_, &QToolButton::clicked, this, [this] {
-        if (window() == nullptr) {
-            return;
-        }
-        if (auto* action = window()->findChild<QAction*>(QStringLiteral("viewFullScreenAction"))) {
-            action->trigger();
-            fullscreenButton_->setChecked(window()->isFullScreen());
-        }
-    });
-    fullscreenButton_->hide();
-    headerMenuWidget_ = EditorArea::buildChromeRow(chrome_.header, this);
-    headerMenuWidget_->hide(); // The canvas remains full-bleed until EditorArea hosts chrome.
-
-    rebuildCompositionSelector();
-    rebuildObjectSelector();
-    updateCompositionActions();
-}
-
-void ViewerEditor::rebuildCompositionSelector() {
-    if (compositionSelector_ == nullptr) {
-        return;
-    }
-    const QSignalBlocker blocker(compositionSelector_);
-    compositionSelector_->clearItems();
-    const auto compositions = session_.snapshot().project().compositions();
-    if (compositions.empty()) {
-        compositionSelector_->addItem(tr("None"));
-        return;
-    }
-    int selectedIndex = 0;
-    int index = 0;
-    for (const auto& composition : compositions) {
-        compositionSelector_->addItem(QString::fromStdString(composition.name()),
-                                      QVariant::fromValue<qulonglong>(composition.id().value()));
-        if (composition.id() == session_.compositionId()) {
-            selectedIndex = index;
-        }
-        ++index;
-    }
-    compositionSelector_->setCurrentIndex(selectedIndex);
-}
-
-void ViewerEditor::rebuildObjectSelector() {
-    if (objectSelector_ == nullptr) {
-        return;
-    }
-    const QSignalBlocker blocker(objectSelector_);
-    objectSelector_->clearItems();
-    objectSelector_->addItem(tr("None"), QVariant::fromValue<qulonglong>(0));
-    const auto* composition = session_.composition();
-    if (composition == nullptr) {
-        objectSelector_->setCurrentIndex(0);
-        return;
-    }
-    const auto selectedLayer = session_.selection().contextualLayer;
-    int selectedIndex = 0;
-    int index = 1;
-    for (const auto& boundary : composition->graph().layerOutputs()) {
-        objectSelector_->addItem(layerName(*composition, boundary.layerId),
-                                 QVariant::fromValue<qulonglong>(boundary.layerId.value()));
-        if (selectedLayer.has_value() && *selectedLayer == boundary.layerId) {
-            selectedIndex = index;
-        }
-        ++index;
-    }
-    objectSelector_->setCurrentIndex(selectedIndex);
-}
-
-void ViewerEditor::updateCompositionActions() {
-    if (viewerCompositionNewAction_ == nullptr) {
-        return;
-    }
-    const auto* composition = session_.composition();
-    const bool hasComposition = composition != nullptr;
-    viewerCompositionDuplicateAction_->setEnabled(hasComposition);
-    viewerCompositionRenameAction_->setEnabled(hasComposition);
-    viewerCompositionSettingsAction_->setEnabled(hasComposition);
-    // Deleting the final composition is allowed and returns to the blank, usable empty project.
-    viewerCompositionDeleteAction_->setEnabled(hasComposition);
-}
-
-void ViewerEditor::updateOverlayActions() {
-    const auto* composition = session_.composition();
-    if (composition != nullptr) {
-        overlayOptions_.safeAreaSettings = composition->safeAreas();
-        const QString saved =
-            QSettings().value(safeAreaPresetSetting(composition->id())).toString();
-        if (!saved.isEmpty()) {
-            overlayOptions_.safeAreaPreset = safeAreaPresetFromName(saved);
-        } else if (std::abs(overlayOptions_.safeAreaSettings.action - 0.93) < 0.0001 &&
-                   std::abs(overlayOptions_.safeAreaSettings.title - 0.90) < 0.0001) {
-            overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Hd;
-        } else if (std::abs(overlayOptions_.safeAreaSettings.action - 0.90) < 0.0001 &&
-                   std::abs(overlayOptions_.safeAreaSettings.title - 0.85) < 0.0001) {
-            overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Cinema;
-        } else if (std::abs(overlayOptions_.safeAreaSettings.action - 0.90) < 0.0001 &&
-                   std::abs(overlayOptions_.safeAreaSettings.title - 0.80) < 0.0001) {
-            overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Broadcast;
-        } else {
-            overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Custom;
-        }
-    } else {
-        overlayOptions_.safeAreaSettings = {};
-        overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Broadcast;
-    }
-    if (safeAreasAction_ != nullptr) {
-        const QSignalBlocker blocker(safeAreasAction_);
-        safeAreasAction_->setChecked(overlayOptions_.safeAreas);
-        safeAreasAction_->setEnabled(composition != nullptr);
-    }
-    if (safeAreaPresetMenu_ != nullptr) {
-        safeAreaPresetMenu_->setEnabled(composition != nullptr);
-        for (std::size_t index = 0; index < safeAreaPresetActions_.size(); ++index) {
-            const QSignalBlocker blocker(safeAreaPresetActions_[index]);
-            safeAreaPresetActions_[index]->setChecked(
-                static_cast<int>(overlayOptions_.safeAreaPreset) == static_cast<int>(index));
-        }
-    }
-}
-
-void ViewerEditor::applySafeAreaPreset(const ViewerSafeAreaPreset preset) {
-    if (preset == ViewerSafeAreaPreset::Custom) {
-        showCustomSafeAreaDialog();
-        return;
-    }
-    const auto* composition = session_.composition();
-    if (composition == nullptr) {
-        return;
-    }
-    document::SafeAreaSettings settings{};
-    switch (preset) {
-    case ViewerSafeAreaPreset::Broadcast:
-        settings = {.action = 0.90, .title = 0.80};
-        break;
-    case ViewerSafeAreaPreset::Hd:
-        settings = {.action = 0.93, .title = 0.90};
-        break;
-    case ViewerSafeAreaPreset::Cinema:
-        settings = {.action = 0.90, .title = 0.85};
-        break;
-    case ViewerSafeAreaPreset::Social:
-        settings = {.action = 0.90, .title = 0.80};
-        break;
-    case ViewerSafeAreaPreset::Custom:
-        return;
-    }
-    commands::Transaction transaction(QStringLiteral("Set Safe Area Preset").toStdString(),
-                                      session_.snapshot().revision());
-    transaction.emplace<commands::SetCompositionSafeAreas>(composition->id(), settings);
-    if (session_.executeTransaction(std::move(transaction)).succeeded()) {
-        overlayOptions_.safeAreaPreset = preset;
-        QSettings().setValue(safeAreaPresetSetting(composition->id()), safeAreaPresetName(preset));
-        updateOverlayActions();
-        update();
-    }
-}
-
-void ViewerEditor::showCustomSafeAreaDialog() {
-    const auto* composition = session_.composition();
-    if (composition == nullptr) {
-        return;
-    }
-    QDialog dialog(this);
-    dialog.setObjectName(QStringLiteral("viewerSafeAreaDialog"));
-    dialog.setWindowTitle(tr("Custom Safe Areas"));
-    auto* form = new QFormLayout(&dialog);
-    auto* action = new QDoubleSpinBox(&dialog);
-    action->setObjectName(QStringLiteral("viewerActionSafeAreaField"));
-    action->setRange(1.0, 100.0);
-    action->setDecimals(1);
-    action->setSuffix(QStringLiteral("%"));
-    action->setValue(composition->safeAreas().action * 100.0);
-    form->addRow(tr("Action"), action);
-    auto* title = new QDoubleSpinBox(&dialog);
-    title->setObjectName(QStringLiteral("viewerTitleSafeAreaField"));
-    title->setRange(1.0, 100.0);
-    title->setDecimals(1);
-    title->setSuffix(QStringLiteral("%"));
-    title->setValue(composition->safeAreas().title * 100.0);
-    form->addRow(tr("Title"), title);
-    auto* error = new kit::KLabel(&dialog);
-    error->setObjectName(QStringLiteral("viewerSafeAreaErrorLabel"));
-    error->hide();
-    form->addRow(error);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    buttons->setObjectName(QStringLiteral("viewerSafeAreaDialogButtons"));
-    form->addRow(buttons);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, action, title, error] {
-        if (title->value() > action->value()) {
-            error->setText(QObject::tr("Title safe area must not exceed Action safe area."));
-            error->show();
-            return;
-        }
-        dialog.accept();
-    });
-    if (dialog.exec() != QDialog::Accepted) {
-        return;
-    }
-    const document::SafeAreaSettings settings{action->value() / 100.0, title->value() / 100.0};
-    commands::Transaction transaction(QStringLiteral("Set Custom Safe Areas").toStdString(),
-                                      session_.snapshot().revision());
-    transaction.emplace<commands::SetCompositionSafeAreas>(composition->id(), settings);
-    if (session_.executeTransaction(std::move(transaction)).succeeded()) {
-        overlayOptions_.safeAreaPreset = ViewerSafeAreaPreset::Custom;
-        QSettings().setValue(safeAreaPresetSetting(composition->id()),
-                             safeAreaPresetName(ViewerSafeAreaPreset::Custom));
-        updateOverlayActions();
-        update();
-    }
-}
-
 double ViewerEditor::effectiveZoom(const QRectF& displayRect,
                                    const DisplayGeometry& geometry) const {
     const QRectF actual = actualPixelRect(canvasRect(), geometry.extent, geometry.pixelAspect);
     return actual.width() > 0.0 ? displayRect.width() / actual.width() : 1.0;
-}
-
-void ViewerEditor::selectAllObjects() {
-    const auto* composition = session_.composition();
-    if (composition == nullptr) {
-        return;
-    }
-    std::set<document::NodeId> nodes;
-    for (const auto& boundary : composition->graph().layerOutputs()) {
-        if (boundary.nodeId.isValid()) {
-            nodes.insert(boundary.nodeId);
-        }
-    }
-    if (!nodes.empty()) {
-        session_.selectNodes(nodes, *nodes.begin());
-    }
-}
-
-void ViewerEditor::selectNoObjects() { session_.clearSelection(); }
-
-void ViewerEditor::invertObjectSelection() {
-    const auto* composition = session_.composition();
-    if (composition == nullptr) {
-        return;
-    }
-    std::set<document::NodeId> all;
-    for (const auto& boundary : composition->graph().layerOutputs()) {
-        if (boundary.nodeId.isValid()) {
-            all.insert(boundary.nodeId);
-        }
-    }
-    std::set<document::NodeId> remaining;
-    std::ranges::set_difference(all, session_.selectedNodes(),
-                                std::inserter(remaining, remaining.end()));
-    if (remaining.empty()) {
-        session_.clearSelection();
-    } else {
-        session_.selectNodes(remaining, *remaining.begin());
-    }
 }
 
 void ViewerEditor::zoomInAtCenter() {
@@ -1178,339 +276,6 @@ void ViewerEditor::zoomOutAtCenter() {
     }
 }
 
-// Builds the footer row and everything in it (task VIEW-1). Called once, from the constructor.
-void ViewerEditor::rebuildDisplayViewControl() {
-    if (viewerDisplayView_ == nullptr) {
-        return;
-    }
-    const QSignalBlocker blocker(viewerDisplayView_);
-    viewerDisplayView_->clearItems();
-    const auto resolved = resolveViewerColorConfig(session_);
-    if (!resolved.has_value() || resolved->displays().empty()) {
-        viewerDisplayView_->addItem(tr("Unavailable"));
-        viewerDisplayView_->setCurrentIndex(0);
-        viewerDisplayView_->setEnabled(false);
-        viewerDisplayView_->setMutedValue(true);
-        return;
-    }
-
-    int defaultIndex = 0;
-    for (std::size_t index = 0; index < resolved->displays().size(); ++index) {
-        const auto& entry = resolved->displays()[index];
-        const auto label = QStringLiteral("%1 / %2").arg(QString::fromStdString(entry.display),
-                                                         QString::fromStdString(entry.view));
-        const auto data =
-            QStringList{QString::fromStdString(entry.display), QString::fromStdString(entry.view)};
-        const int itemIndex = viewerDisplayView_->addItem(label, data);
-        viewerDisplayView_->setItemToolTip(
-            itemIndex,
-            QStringLiteral("%1 · %2").arg(label, QString::fromStdString(entry.colourSpaceId)));
-        if (entry.isDefault) {
-            defaultIndex = itemIndex;
-        }
-    }
-    const auto saved = QSettings().value(displayViewSettingsKey()).toStringList();
-    int selectedIndex = defaultIndex;
-    if (saved.size() == 2) {
-        for (int index = 0; index < viewerDisplayView_->count(); ++index) {
-            if (viewerDisplayView_->itemData(index).toStringList() == saved) {
-                selectedIndex = index;
-                break;
-            }
-        }
-    }
-    viewerDisplayView_->setEnabled(true);
-    viewerDisplayView_->setMutedValue(false);
-    viewerDisplayView_->setCurrentIndex(selectedIndex);
-    const auto selected = viewerDisplayView_->itemData(selectedIndex).toStringList();
-    if (selected.size() == 2) {
-        previewController_.setViewerDisplayView(selected[0].toStdString(),
-                                                selected[1].toStdString());
-    }
-}
-
-void ViewerEditor::updateLookControl() {
-    if (viewerLookToggle_ == nullptr) {
-        return;
-    }
-    const bool available = hasLookTaggedEffect(session_);
-    viewerLookToggle_->setEnabled(available);
-    viewerLookToggle_->setToolTip(
-        available ? tr("Look: include look-tagged effects in the viewer")
-                  : tr("Look unavailable: this composition has no look-tagged effect"));
-}
-
-void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
-    auto* footer = this;
-    chrome_.footer.objectName = "viewerFooter";
-
-    // ---- Channel -------------------------------------------------------------------------------
-    channelDropdown_ = new kit::KDropdown(footer);
-    channelDropdown_->setObjectName("viewerChannelDropdown");
-    channelDropdown_->setAccessibleName(tr("Channel"));
-    channelDropdown_->setToolTip(tr("Which channels the viewer shows. Never affects an export."));
-    channelDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    for (const auto* name : kChannelNames) {
-        channelDropdown_->addItem(tr(name));
-    }
-    connect(channelDropdown_, &kit::KDropdown::currentIndexChanged, this,
-            [this](const int index) { chooseChannelDropdownIndex(index); });
-
-    roiButton_ = new kit::KIconButton(footer);
-    roiButton_->setToolTip(tr("Region of interest: Ctrl-drag with Select"));
-    roiButton_->setObjectName("viewerRoiToggle");
-    roiButton_->setAccessibleName(tr("Region of interest"));
-    roiButton_->setCheckable(true);
-    roiButton_->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    roiButton_->setText(tr("ROI"));
-    connect(roiButton_, &QToolButton::toggled, this, [this] { publishRoi(); });
-    roiClearButton_ = new kit::KIconButton(footer);
-    roiClearButton_->setToolTip(tr("Clear region of interest"));
-    roiClearButton_->setIcon(kit::icon(kit::IconId::Close, kit::IconRole::Control));
-    roiClearButton_->setEnabled(false);
-    roiClearButton_->setObjectName("viewerRoiClear");
-    connect(roiClearButton_, &QToolButton::clicked, this, [this] {
-        roiGesture_.reset();
-        roiRect_.reset();
-        roiButton_->setChecked(false);
-        publishRoi();
-    });
-
-    exposureField_ = new kit::KValueField(footer);
-    exposureField_->setObjectName("viewerExposure");
-    exposureField_->setLabel(tr("EV"));
-    exposureField_->setAccessibleName(tr("Viewer exposure in EV stops"));
-    exposureField_->setCompact(true);
-    exposureField_->setRange(-32, 32);
-    exposureField_->setSingleStep(0.1);
-    exposureField_->setDecimals(2);
-    exposureField_->setFixedWidth(kit::px(kit::Size::ViewerZoomWidth));
-    gammaField_ = new kit::KValueField(footer);
-    gammaField_->setObjectName("viewerGamma");
-    gammaField_->setLabel(tr("γ"));
-    gammaField_->setAccessibleName(tr("Viewer gamma"));
-    gammaField_->setToolTip(tr("Gamma after display encoding; viewer display only"));
-    gammaField_->setCompact(true);
-    gammaField_->setRange(0.01, 10);
-    gammaField_->setSingleStep(0.05);
-    gammaField_->setDecimals(2);
-    gammaField_->setValue(1);
-    gammaField_->setFixedWidth(kit::px(kit::Size::ViewerZoomWidth));
-    const auto changed = [this] {
-        viewAdjust_ = {exposureField_->value(), gammaField_->value()};
-        const auto prefix = analysisSettingsPrefix();
-        QSettings settings;
-        settings.setValue(prefix + "exposure", viewAdjust_.exposure);
-        settings.setValue(prefix + "gamma", viewAdjust_.gamma);
-        refreshViewAdjustment();
-        update();
-    };
-    connect(exposureField_, &kit::KValueField::valueChanged, this, changed);
-    connect(gammaField_, &kit::KValueField::valueChanged, this, changed);
-    loadViewAdjust();
-
-    viewerDisplayView_ = new kit::KDropdown(footer);
-    viewerDisplayView_->setObjectName("viewerDisplayView");
-    viewerDisplayView_->setAccessibleName(tr("Display and view"));
-    viewerDisplayView_->setToolTip(tr("Display / View; viewer display only, never export"));
-    viewerDisplayView_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    connect(viewerDisplayView_, &kit::KDropdown::currentIndexChanged, this,
-            [this](const int index) {
-                if (index < 0) {
-                    return;
-                }
-                const auto selected = viewerDisplayView_->itemData(index).toStringList();
-                if (selected.size() != 2) {
-                    return;
-                }
-                QSettings().setValue(displayViewSettingsKey(), selected);
-                previewController_.setViewerDisplayView(selected[0].toStdString(),
-                                                        selected[1].toStdString());
-            });
-
-    viewerLookToggle_ = new kit::KIconToggle(kit::IconId::Visible, footer);
-    viewerLookToggle_->setObjectName("viewerLookToggle");
-    viewerLookToggle_->setAccessibleName(tr("Look"));
-    viewerLookToggle_->setToolTip(tr("Look: include look-tagged effects in the viewer"));
-    const bool showLook = QSettings().value(lookSettingsKey(), true).toBool();
-    viewerLookToggle_->setChecked(showLook);
-    previewController_.setViewerLookEnabled(showLook);
-    connect(viewerLookToggle_, &kit::KIconToggle::toggled, this, [this](const bool enabled) {
-        QSettings().setValue(lookSettingsKey(), enabled);
-        previewController_.setViewerLookEnabled(enabled);
-    });
-    rebuildDisplayViewControl();
-    updateLookControl();
-
-    // ---- Zoom ----------------------------------------------------------------------------------
-    zoomDropdown_ = new kit::KDropdown(footer);
-    zoomDropdown_->setObjectName("viewerZoomDropdown");
-    zoomDropdown_->setAccessibleName(tr("Zoom"));
-    zoomDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    zoomDropdown_->addItem(tr("Fit"), 0);
-    for (const int percent : kZoomPresets) {
-        zoomDropdown_->addItem(tr("%1%").arg(percent), percent);
-    }
-    connect(zoomDropdown_, &kit::KDropdown::currentIndexChanged, this, [this](const int index) {
-        if (index <= 0) {
-            setZoomFit();
-            return;
-        }
-        setZoomPercent(zoomDropdown_->itemData(index).toInt());
-    });
-
-    // ---- Resolution ----------------------------------------------------------------------------
-    resolutionDropdown_ = new kit::KDropdown(footer);
-    resolutionDropdown_->setObjectName("viewerResolutionDropdown");
-    resolutionDropdown_->setAccessibleName(tr("Resolution"));
-    resolutionDropdown_->setToolTip(tr("Resolution"));
-    resolutionDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    for (const auto* name : kResolutionNames) {
-        resolutionDropdown_->addItem(tr(name));
-    }
-    const auto saved = QSettings().value(kResolutionSetting, QStringLiteral("Auto")).toString();
-    int savedIndex = 0;
-    for (std::size_t i = 0; i < kResolutionNames.size(); ++i) {
-        if (saved == QLatin1StringView(kResolutionNames[i])) {
-            savedIndex = static_cast<int>(i);
-        }
-    }
-    resolutionDropdown_->setCurrentIndex(savedIndex);
-    previewController_.setResolutionPolicy(
-        static_cast<runtime::PreviewResolutionPolicy>(savedIndex));
-    connect(resolutionDropdown_, &kit::KDropdown::currentIndexChanged, this,
-            [this](const int index) {
-                if (index < 0 || index >= static_cast<int>(kResolutionNames.size())) {
-                    return;
-                }
-                QSettings().setValue(
-                    kResolutionSetting,
-                    QString::fromLatin1(kResolutionNames[static_cast<std::size_t>(index)]));
-                previewController_.setResolutionPolicy(
-                    static_cast<runtime::PreviewResolutionPolicy>(index));
-            });
-    connect(&previewController_, &CompositionPreviewController::resolutionChanged, this, [this] {
-        const QSignalBlocker blocker(resolutionDropdown_);
-        resolutionDropdown_->setCurrentIndex(
-            static_cast<int>(previewController_.settings().resolutionPolicy));
-        resolutionReadout_->setText(viewerResolutionText(previewController_));
-        resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
-    });
-    // Part of the Resolution control, not a footer item of its own: what the chosen policy actually
-    // resolved to. For Auto that effective factor is visible nowhere else.
-    resolutionReadout_ = new kit::KLabel(footer);
-    resolutionReadout_->setObjectName("viewerResolutionReadout");
-    resolutionReadout_->setAccessibleName(tr("Effective preview resolution"));
-    resolutionReadout_->setFont(kit::font(kit::TypeRole::Value));
-    resolutionReadout_->setText(viewerResolutionText(previewController_));
-    resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
-
-    // ---- Background ----------------------------------------------------------------------------
-    backgroundDropdown_ = new kit::KDropdown(footer);
-    backgroundDropdown_->setObjectName("viewerBackgroundDropdown");
-    backgroundDropdown_->setAccessibleName(tr("Background"));
-    backgroundDropdown_->setToolTip(
-        tr("What the viewer paints behind the composition. Solid uses its background colour."));
-    backgroundDropdown_->setControlSize(kit::KDropdown::ControlSize::Compact);
-    for (const auto* name : kBackgroundNames) {
-        backgroundDropdown_->addItem(tr(name));
-    }
-    // The default background is Checkerboard, so alpha behind the composition is always visible. A
-    // missing or unrecognized viewer/background reads as it.
-    const auto savedBackground =
-        QSettings().value(kBackgroundSetting, QStringLiteral("Checkerboard")).toString();
-    int backgroundIndex = static_cast<int>(ViewerBackground::Checkerboard);
-    for (std::size_t i = 0; i < kBackgroundNames.size(); ++i) {
-        if (savedBackground == QLatin1StringView(kBackgroundNames[i])) {
-            backgroundIndex = static_cast<int>(i);
-        }
-    }
-    background_ = static_cast<ViewerBackground>(backgroundIndex);
-    backgroundDropdown_->setCurrentIndex(backgroundIndex);
-    connect(backgroundDropdown_, &kit::KDropdown::currentIndexChanged, this,
-            [this](const int index) {
-                if (index < 0 || index >= static_cast<int>(kBackgroundNames.size())) {
-                    return;
-                }
-                setBackground(static_cast<ViewerBackground>(index));
-            });
-
-    // ---- Transport -----------------------------------------------------------------------------
-    // Moved here from the timeline (task VIEW-1). Every objectName below is unchanged: these
-    // controls changed parent, not identity, and the tests that reach them by name now look in the
-    // viewer instead of the timeline.
-    stepToStartButton_ =
-        makeTransportButton(kit::IconId::CaretLeft, tr("Go to start (Home)"), tr("Go to start"),
-                            QStringLiteral("viewerStepToStartButton"), footer);
-    stepBackButton_ = makeTransportButton(kit::IconId::StepBack, tr("Step back one frame (Left)"),
-                                          tr("Step back one frame"),
-                                          QStringLiteral("timelineStepBackButton"), footer);
-    playPauseButton_ =
-        makeTransportButton(kit::IconId::Play, tr("Toggle playback (Space)"), tr("Toggle playback"),
-                            QStringLiteral("playPauseButton"), footer);
-    // playPauseButton_ MUST stay a QToolButton with its existing text()/isChecked() contract
-    // (playback_controller_tests.cpp, composition_projection_test.cpp both read it by exactly that
-    // type/objectName).
-    playPauseButton_->setCheckable(true);
-    stepForwardButton_ = makeTransportButton(
-        kit::IconId::StepForward, tr("Step forward one frame (Right)"),
-        tr("Step forward one frame"), QStringLiteral("timelineStepForwardButton"), footer);
-    stepToEndButton_ =
-        makeTransportButton(kit::IconId::CaretRight, tr("Go to end (End)"), tr("Go to end"),
-                            QStringLiteral("viewerStepToEndButton"), footer);
-    // The loop control is a real toggle now, with PlaybackController::setLooping() behind it. It
-    // was a non-interactive glyph in the timeline for an honest reason -- there was no command to
-    // turn looping off -- and task VIEW-1 added the command rather than the illusion of one.
-    // Unchanged objectName, changed kind: same role, same name, a control instead of a label.
-    loopButton_ = makeTransportButton(kit::IconId::Loop, tr("Loop playback"), tr("Loop playback"),
-                                      QStringLiteral("timelineLoopIndicator"), footer);
-    loopButton_->setCheckable(true);
-    // RAM Preview (task PERF1, item 3). IconId::Sequence is the nearest honest glyph in the kit's
-    // existing vocabulary -- a run of frames -- rather than a new vendored asset for one button;
-    // the tooltip and accessible name carry the meaning, as iconography rules require of an
-    // icon-only control.
-    ramPreviewButton_ = makeTransportButton(
-        kit::IconId::Sequence,
-        tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space)"),
-        tr("RAM preview"), QStringLiteral("timelineRamPreviewButton"), footer);
-    ramPreviewButton_->setCheckable(true);
-    ramPreviewButton_->setEnabled(ramPreview != nullptr);
-
-    // ---- Frame / timecode readout --------------------------------------------------------------
-    timeReadout_ = new ViewerTimecodeReadout(
-        session_, [this](const std::uint64_t frameIndex) { seekToFrame(frameIndex); }, footer);
-
-    channelDropdown_->setFixedWidth(kit::px(kit::Size::ViewerChannelWidth));
-    zoomDropdown_->setWidthFloor(kit::px(kit::Size::ViewerZoomWidth));
-    resolutionDropdown_->setFixedWidth(kit::px(kit::Size::ViewerResolutionWidth));
-    timeReadout_->setFixedWidth(kit::px(kit::Size::ViewerTimecodeWidth));
-    ramPreviewButton_->setFixedWidth(kit::px(kit::Size::ViewerModeWidth));
-    ramPreviewButton_->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    ramPreviewButton_->setText(tr("RAM Preview"));
-    // Background stays available from View. Keep old object identities for automation.
-    backgroundDropdown_->hide();
-    resolutionReadout_->hide();
-    resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
-    for (auto* control : std::initializer_list<QWidget*>{
-             channelDropdown_, roiButton_, roiClearButton_, exposureField_, gammaField_,
-             viewerDisplayView_, viewerLookToggle_, ramPreviewButton_, stepToStartButton_,
-             stepBackButton_, playPauseButton_, stepForwardButton_, stepToEndButton_, loopButton_})
-        chrome_.footer.addWidget(control);
-    chrome_.footer.addStretch();
-    for (auto* control :
-         std::initializer_list<QWidget*>{timeReadout_, zoomDropdown_, resolutionDropdown_})
-        chrome_.footer.addWidget(control);
-    statusBarFooter_ = EditorArea::buildChromeRow(chrome_.footer, this, true);
-    viewerDisplayView_->setFixedWidth(kit::px(kit::Size::ViewerZoomWidth));
-    chrome_.hosted = [this] {
-        statusBarFooterTaken_ = true;
-        loadViewAdjust();
-        updatePreviewResolution();
-        update();
-    };
-    layoutStatusBar();
-}
-
 ViewerEditor::ViewerEditor(CompositionSession& session,
                            CompositionPreviewController& previewController,
                            RamPreviewController* const ramPreview, QWidget* parent)
@@ -1520,52 +285,14 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     setAccessibleName(tr("Composition viewer"));
     // Assets items dropped on the Viewer become layers at the playhead, centred (#380).
     installLayerDropTarget(*this, session_);
-    auto* tools = new kit::KToolColumn(this);
-    toolColumn_ = tools;
-    tools->setObjectName("viewerToolColumn");
-    const auto addTool = [this, tools](Tool tool, kit::IconId icon, const QString& tip,
-                                       const char* name) {
-        auto* button = tools->addTool(icon, tip, name);
-        button->setProperty("viewerTool", static_cast<int>(tool));
-        connect(button, &QToolButton::clicked, this, [this, tool] { selectTool(tool); });
-        button->setChecked(tool == Tool::Select);
-    };
-    addTool(Tool::Select, kit::IconId::Select, tr("Select and move (V)"), "viewerSelectTool");
-    addTool(Tool::Hand, kit::IconId::Pan, tr("Hand: drag to pan (H)"), "viewerHandTool");
-    addTool(Tool::Zoom, kit::IconId::Zoom, tr("Zoom: click to zoom in; Alt-click to zoom out (Z)"),
-            "viewerZoomTool");
-    addTool(Tool::Text, kit::IconId::Text, tr("Text: click to place and type on the canvas (T)"),
-            "viewerTextTool");
-    addTool(Tool::Rectangle, kit::IconId::Rectangle,
-            tr("Rectangle: drag; Shift constrains; Alt draws from centre (R)"),
-            "viewerRectangleTool");
-    addTool(Tool::Ellipse, kit::IconId::Ellipse,
-            tr("Ellipse: drag; Shift makes a circle; Alt draws from centre (E)"),
-            "viewerEllipseTool");
-    addTool(Tool::Polygon, kit::IconId::Polygon,
-            tr("Polygon: drag a five-sided polygon; Shift constrains; Alt draws from centre"),
-            "viewerPolygonTool");
-    addTool(Tool::Star, kit::IconId::Star,
-            tr("Star: drag a five-point star; Shift constrains; Alt draws from centre"),
-            "viewerStarTool");
-    addTool(Tool::Line, kit::IconId::Line,
-            tr("Line: drag; Shift snaps to 45 degrees; Alt draws from centre"), "viewerLineTool");
-    addTool(Tool::Pen, kit::IconId::Pen,
-            tr("Pen: click anchors; drag handles; click first to close; Enter or Escape "
-               "finishes. On a selected path: click a segment to add a point, an anchor to "
-               "remove it, an open end to continue (P)"),
-            "viewerPenTool");
-    addTool(Tool::Cryptomatte, kit::IconId::Eyedropper,
-            tr("Cryptomatte: on a selected Cryptomatte, click or Shift-click adds the object under "
-               "the cursor; Alt- or Ctrl-click removes it"),
-            "viewerCryptomatteTool");
-    tools->adjustSize();
-    tools->move(0, 0);
+    buildToolColumn();
     buildAnchorModeSwitcher();
 
-    setMinimumSize(kit::px(kit::Size::ViewerMinWidth),
-                   std::max(kit::px(kit::Size::ViewerMinHeight),
-                            tools->sizeHint().height() + kit::px(kit::Size::Control)));
+    // An honest floor that does not depend on the tool column, which collapses its trailing
+    // tools into a More button at short heights. Hosted, the panel adds its header and footer to
+    // this (EditorChromeSpec::contentMinimumHeight); unhosted, the footer strip is inside it.
+    setMinimumSize(kit::px(kit::Size::ViewerMinWidth), kit::px(kit::Size::ViewerMinHeight));
+    chrome_.contentMinimumHeight = kit::px(kit::Size::ViewerMinHeight);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     // StrongFocus lets a press-to-drag gesture also receive the Escape key that confirms it, and
     // lets the widget receive Space/Z/F without a prior click.
@@ -1582,8 +309,8 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
         cancelCreation();
         roiRect_.reset();
-        if (roiButton_)
-            roiButton_->setChecked(false);
+        if (roiAction_)
+            roiAction_->setChecked(false);
         publishRoi();
     });
     connect(&session_, &CompositionSession::currentTimeChanged, this, [this] { cancelCreation(); });
@@ -1624,8 +351,10 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     connect(&session_, &CompositionSession::selectionChanged, this,
             [this] { finishTextEditing(true); });
     playback_ = &previewController.playbackController();
-    buildHeader();
+    // The footer first: the menus the header offers mirror its controls.
     buildFooter(ramPreview);
+    buildHeader();
+    buildEmptyState();
     wireTransport();
     connect(&session_, &CompositionSession::colorSettingsChanged, this,
             [this] { rebuildDisplayViewControl(); });
@@ -1642,6 +371,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         rebuildObjectSelector();
         updateCompositionActions();
         updateOverlayActions();
+        updateEmptyState();
         updatePreviewResolution();
         update();
         if (statusBarFooter_ != nullptr) {
@@ -1653,6 +383,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         rebuildObjectSelector();
         updateCompositionActions();
         updateOverlayActions();
+        updateEmptyState();
         updatePreviewResolution();
         update();
         if (statusBarFooter_ != nullptr) {
@@ -1681,6 +412,9 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // (docs/architecture/animation-and-time.md, "Session Time And Scrubbing") -- so it never shows
     // the previous composition's stale frame for one repaint.
     connect(&session_, &CompositionSession::compositionChanged, this,
+            [this] { timeReadout_->refresh(); });
+    // Deleting the last composition changes the snapshot, not necessarily the composition id.
+    connect(&session_, &CompositionSession::snapshotChanged, this,
             [this] { timeReadout_->refresh(); });
     // Task S5, item 3b: the dropped-frame readout follows the SAME refresh idiom as every other
     // footer element -- connect to whatever changes it, then update() this widget and the footer.
@@ -1857,7 +591,7 @@ void ViewerEditor::wireTransport() {
     // This button is the transport's own affordance for that same command, and it calls the same
     // RamPreviewController::toggle() the menu item calls -- never a synthesized key press.
     if (ramPreview_ != nullptr) {
-        connect(ramPreviewButton_, &QToolButton::clicked, ramPreview_,
+        connect(ramPreviewButton_, &QAbstractButton::clicked, ramPreview_,
                 &RamPreviewController::toggle);
         connect(ramPreview_, &RamPreviewController::stateChanged, this, [this] {
             updateRamPreviewButton();
@@ -1866,43 +600,19 @@ void ViewerEditor::wireTransport() {
         updateRamPreviewButton();
     }
 
-    // Frame-stepping shortcuts (issue #108, decisions 1/2), mirroring playPauseAction's own
-    // WindowShortcut idiom exactly. Issue #120 (task U5) replaced PropertiesEditor's Position X/Y
-    // QDoubleSpinBoxes with kit::KValueField, which has no line edit and does NOT accept
-    // ShortcutOverride for Left/Right/Home/End -- so those keys typed while a Position field has
-    // focus ALSO fire these actions. Still flagged rather than fixed here: the fix belongs to
-    // whoever next owns kit::KValueField's key handling.
-    const auto makeStepAction = [this](const QString& text, const QString& objectName,
-                                       const QKeySequence& shortcut) {
-        auto* action = new QAction(text, this);
-        action->setObjectName(objectName);
-        action->setShortcut(shortcut);
-        action->setShortcutContext(Qt::WindowShortcut);
-        addAction(action);
-        return action;
-    };
-    stepBackwardAction_ =
-        makeStepAction(tr("Step Back One Frame"), QStringLiteral("stepBackwardAction"),
-                       QKeySequence(Qt::Key_Left));
+    // The four frame-stepping actions are created with the footer (buildTransportActions()).
     connect(stepBackwardAction_, &QAction::triggered, this, [this] { stepFrame(-1); });
     // The visible button triggers this SAME action -- one behavior, two entry points. Wired through
     // trigger() rather than QToolButton::setDefaultAction() so the button's own icon, tooltip and
     // objectName stay under this class's control instead of mirroring the action's text.
     connect(stepBackButton_, &QToolButton::clicked, stepBackwardAction_, &QAction::trigger);
 
-    stepForwardAction_ =
-        makeStepAction(tr("Step Forward One Frame"), QStringLiteral("stepForwardAction"),
-                       QKeySequence(Qt::Key_Right));
     connect(stepForwardAction_, &QAction::triggered, this, [this] { stepFrame(1); });
     connect(stepForwardButton_, &QToolButton::clicked, stepForwardAction_, &QAction::trigger);
 
-    stepToStartAction_ = makeStepAction(tr("Go To Start"), QStringLiteral("stepToStartAction"),
-                                        QKeySequence(Qt::Key_Home));
     connect(stepToStartAction_, &QAction::triggered, this, &ViewerEditor::stepToStart);
     connect(stepToStartButton_, &QToolButton::clicked, stepToStartAction_, &QAction::trigger);
 
-    stepToEndAction_ = makeStepAction(tr("Go To End"), QStringLiteral("stepToEndAction"),
-                                      QKeySequence(Qt::Key_End));
     connect(stepToEndAction_, &QAction::triggered, this, &ViewerEditor::stepToEnd);
     connect(stepToEndButton_, &QToolButton::clicked, stepToEndAction_, &QAction::trigger);
 
@@ -1939,57 +649,6 @@ void ViewerEditor::wireTransport() {
             stepToStartButton_->setEnabled(!deferred);
             stepToEndButton_->setEnabled(!deferred);
         });
-}
-
-void ViewerEditor::updatePlaybackButton(const PlaybackState state) {
-    const bool playing = state == PlaybackState::Playing;
-    playPauseButton_->setChecked(playing);
-    playPauseButton_->setText(playing ? tr("Pause") : tr("Play"));
-    playPauseButton_->setIcon(
-        kit::icon(playing ? kit::IconId::Pause : kit::IconId::Play, kit::IconRole::Control));
-    // RAM Preview folded into the play button's CACHED STATE (task VIEW-1): the button says
-    // whether the range it is about to play is already in the cache, which is the one thing an
-    // artist wants to know before pressing it. The explicit RAM Preview action stays its own
-    // button, because caching a range and starting playback are different commands.
-    const bool cached = ramPreview_ != nullptr && !ramPreview_->isCaching() &&
-                        ramPreview_->totalFrameCount() > 0 &&
-                        ramPreview_->cachedFrameCount() >= ramPreview_->totalFrameCount();
-    if (playing) {
-        playPauseButton_->setToolTip(tr("Pause playback (Space)"));
-    } else if (cached) {
-        playPauseButton_->setToolTip(tr("Play cached range (Space)"));
-    } else {
-        playPauseButton_->setToolTip(tr("Play (Space)"));
-    }
-    playPauseButton_->setProperty("bloomPlaybackCached", cached);
-}
-
-void ViewerEditor::updateRamPreviewButton() {
-    if (ramPreview_ == nullptr) {
-        return;
-    }
-    const bool caching = ramPreview_->isCaching();
-    ramPreviewButton_->setChecked(caching);
-    ramPreviewButton_->setToolTip(
-        caching ? tr("Cancel the RAM preview being cached (Esc)")
-                : tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space)"));
-    if (!caching &&
-        ramPreview_->lastCompletion() == RamPreviewController::Completion::PartialBudget) {
-        ramPreviewButton_->setToolTip(
-            tr("RAM Preview stopped at the memory limit: %1 of %2 frames retained.\nLongest cached "
-               "span: %3 frames. Use Play for manual playback.")
-                .arg(ramPreview_->cachedFrameCount())
-                .arg(ramPreview_->totalFrameCount())
-                .arg(ramPreview_->playableSpan() ? ramPreview_->playableSpan()->frameCount : 0));
-    }
-}
-
-void ViewerEditor::updateLoopButton() {
-    const bool looping = playback_->isLooping();
-    loopButton_->setChecked(looping);
-    loopButton_->setToolTip(looping ? tr("Looping: playback wraps to the start of the work area")
-                                    : tr("Not looping: playback stops on the last frame"));
-    loopButton_->setAccessibleName(looping ? tr("Looping on") : tr("Looping off"));
 }
 
 void ViewerEditor::seekToFrame(const std::uint64_t frameIndex) {
@@ -2056,14 +715,9 @@ void ViewerEditor::setChannel(const ViewerChannel channel) {
         const QSignalBlocker blocker(channelDropdown_);
         channelDropdown_->setCurrentIndex(static_cast<int>(channel));
     }
-    if (viewerViewMenu_ != nullptr) {
-        for (auto* action : viewerViewMenu_->findChildren<QAction*>()) {
-            if (action->data().toInt() == static_cast<int>(channel) &&
-                action->objectName().startsWith(QStringLiteral("viewerChannel"))) {
-                action->setChecked(true);
-            }
-        }
-    }
+    // The dropdown changed silently; the View > Channel menu re-reads it.
+    if (channelMenu_ != nullptr)
+        Q_EMIT channelMenu_->aboutToShow();
     updateGpuResidentPresentation();
     update();
 }
@@ -2081,14 +735,8 @@ void ViewerEditor::setBackground(const ViewerBackground background) {
         const QSignalBlocker blocker(backgroundDropdown_);
         backgroundDropdown_->setCurrentIndex(static_cast<int>(background));
     }
-    if (viewerViewMenu_ != nullptr) {
-        for (auto* action : viewerViewMenu_->findChildren<QAction*>()) {
-            if (action->data().toInt() == static_cast<int>(background) &&
-                action->objectName().startsWith(QStringLiteral("viewerBackground"))) {
-                action->setChecked(true);
-            }
-        }
-    }
+    if (backgroundMenu_ != nullptr)
+        Q_EMIT backgroundMenu_->aboutToShow();
     updateGpuResidentPresentation();
     update();
 }
@@ -2201,56 +849,6 @@ void ViewerEditor::layoutStatusBar() {
     statusBarFooter_->setGeometry(statusBarRect().toRect());
 }
 
-void ViewerEditor::refreshZoomDropdown() {
-    updatePreviewResolution();
-    if (resolutionReadout_ != nullptr) {
-        resolutionReadout_->setText(viewerResolutionText(previewController_));
-        resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
-    }
-    if (zoomDropdown_ == nullptr) {
-        return;
-    }
-    int targetIndex = 0; // "Fit"
-    if (!transform_.fitToWindow) {
-        const int percent = static_cast<int>(std::lround(transform_.zoom * 100.0));
-        int presetIndex = -1;
-        for (std::size_t i = 0; i < kZoomPresets.size(); ++i) {
-            if (kZoomPresets[i] == percent) {
-                presetIndex = static_cast<int>(i) + 1;
-                break;
-            }
-        }
-        if (presetIndex >= 0) {
-            targetIndex = presetIndex;
-        } else {
-            // A zoom off the fixed ladder (e.g. from a wheel step) gets one trailing "current
-            // custom value" item (decision 3). kit::KDropdown has no removeItem()/setItemText()
-            // (src/ui/include/bloom/ui/kit/dropdown.hpp) -- addItem() only appends and itemText()
-            // is read-only -- so a REPEATED custom zoom renames that one trailing item in place by
-            // writing through the model kit::KDropdown itself uses (popupView()->model() is the
-            // same QStandardItemModel addItem()/itemText() read/write, exposed publicly for
-            // exactly this kind of read -- see dropdown.cpp) rather than growing a new item per
-            // step or leaving a stale value on screen. The FIRST custom zoom in a session still
-            // appends. Reported as a kit API gap (a real setItemText()/removeItem() would replace
-            // this workaround) rather than worked around inside kit itself, which is out of this
-            // task's fence.
-            const QString label = tr("%1%").arg(percent);
-            if (zoomDropdown_->count() > kFixedZoomItemCount) {
-                auto* model = zoomDropdown_->popupView()->model();
-                model->setData(model->index(kFixedZoomItemCount, 0), label, Qt::DisplayRole);
-            } else {
-                zoomDropdown_->addItem(label, percent);
-            }
-            targetIndex = kFixedZoomItemCount;
-        }
-    }
-    if (zoomDropdown_->currentIndex() != targetIndex) {
-        const QSignalBlocker blocker(zoomDropdown_);
-        zoomDropdown_->setCurrentIndex(targetIndex);
-    }
-    zoomDropdown_->update();
-}
-
 void ViewerEditor::updatePreviewResolution() {
     // A resident frame is presented at its native resolution. Auto stays stable Full so a zoom/pan
     // only updates the present parameters (destination/source) and never forces a re-evaluation or
@@ -2338,14 +936,10 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     const QString invitation = emptyStateInvitation();
 
     if (composition == nullptr) {
-        // Honest empty state (decision 5): no evaluation warnings, no busywork -- a quiet,
-        // product-neutral invitation. Muted ink, Ui type (Value/Geist Mono is reserved for
-        // numeric/timecode surfaces, not prose -- kit/tokens.hpp). With no composition at all the
-        // invitation names the composition; a project that has one but no layers names the layer.
+        // Honest empty state (decision 5): the plain surround -- no checkerboard, which belongs
+        // inside a composition frame and there is none -- under the no-composition invitation
+        // widget (buildEmptyState()), which names the composition and offers New Composition.
         drawCanvasBackground(painter, surround, background_);
-        if (!invitation.isEmpty()) {
-            paintViewerEmptyInvitation(painter, frame, invitation);
-        }
         return;
     }
 
@@ -2434,6 +1028,8 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                             ? viewTransformedDisplayRect(frame, geometry->extent,
                                                          geometry->pixelAspect, transform_)
                             : QRectF{};
+                    // The checkerboard sits inside the composition frame only, under the image.
+                    drawFrameBackground(painter, contentRect(), displayRect, background_);
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                     const auto& fullWindow = bufferView->displayWindow;
                     const QRectF dataRect{
@@ -2675,7 +1271,8 @@ void ViewerEditor::selectTool(const Tool tool) {
         endDrag(false);
     tool_ = tool;
     for (auto* button : toolColumn_->findChildren<QToolButton*>())
-        button->setChecked(button->property("viewerTool").toInt() == static_cast<int>(tool));
+        if (button->property("viewerTool").isValid())
+            button->setChecked(button->property("viewerTool").toInt() == static_cast<int>(tool));
     updatePanCursor();
     setFocus(Qt::ShortcutFocusReason);
     update();
@@ -3081,49 +1678,13 @@ void ViewerEditor::resizeEvent(QResizeEvent* event) {
         updatePanCursor();
     }
     layoutStatusBar();
+    // The tool column runs the content's full height and collapses what does not fit.
+    if (toolColumn_ != nullptr)
+        toolColumn_->setGeometry(0, 0, toolColumn_->width(),
+                                 height() - static_cast<int>(statusBarRect().height()));
+    layoutEmptyState();
     updatePreviewResolution();
     updateGpuResidentPresentation();
-}
-
-void ViewerEditor::contextMenuEvent(QContextMenuEvent* event) {
-    // Kit-styled via the application-wide QMenu stylesheet rule every other Bloom context/popup
-    // menu already picks up (e.g. TimelineEditor's "Add Layer" menu,
-    // composition_editor_support.cpp) -- no per-menu styling code needed here. Honest,
-    // placeholder-free set only (decision 4): no RAM-preview/channel/quality slots, which do not
-    // exist yet.
-    if (anchorContextMenuEvent(event))
-        return;
-    std::unique_ptr<QMenu> menuOwner(kit::makeMenu(this));
-    auto& menu = *menuOwner;
-    QAction* fitAction = menu.addAction(tr("Fit"));
-    QAction* actualSizeAction = menu.addAction(tr("100%"));
-    menu.addSeparator();
-    QAction* zoomInAction = menu.addAction(tr("Zoom In"));
-    QAction* zoomOutAction = menu.addAction(tr("Zoom Out"));
-    const bool canZoom = currentDisplayGeometry().has_value();
-    zoomInAction->setEnabled(canZoom);
-    zoomOutAction->setEnabled(canZoom);
-    connect(fitAction, &QAction::triggered, this, &ViewerEditor::setZoomFit);
-    connect(actualSizeAction, &QAction::triggered, this, &ViewerEditor::setZoomActualSize);
-    connect(zoomInAction, &QAction::triggered, this, [this] {
-        if (const auto geometry = currentDisplayGeometry(); geometry.has_value()) {
-            const QRectF frame = canvasRect();
-            transform_ = zoomAboutPoint(transform_, frame, geometry->extent, geometry->pixelAspect,
-                                        frame.center(), kZoomStepFactor);
-            refreshZoomDropdown();
-            update();
-        }
-    });
-    connect(zoomOutAction, &QAction::triggered, this, [this] {
-        if (const auto geometry = currentDisplayGeometry(); geometry.has_value()) {
-            const QRectF frame = canvasRect();
-            transform_ = zoomAboutPoint(transform_, frame, geometry->extent, geometry->pixelAspect,
-                                        frame.center(), 1.0 / kZoomStepFactor);
-            refreshZoomDropdown();
-            update();
-        }
-    });
-    menu.exec(event->globalPos());
 }
 
 #include "viewer_tools.ipp"

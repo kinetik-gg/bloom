@@ -24,6 +24,9 @@ pre-existing exceptions are `bold/circle-bold.svg`, `bold/magnet-bold.svg`, `fil
 Issue #364 (Cryptomatte eyedropper) downloaded the same pinned archive on 2026-10-24, verified its
 SHA-256 above from the downloaded bytes, and extracted `eyedropper` in regular, fill and bold
 without modification.
+The Viewer chrome polish (lane V, 2026-10-29) downloaded the same pinned archive, verified its
+SHA-256 above from the downloaded bytes, and extracted `selection` in regular, fill and bold from
+`assets/` without modification, for the Viewer's region-of-interest toggle.
 Issue #376 (Composition Settings preset rename) downloaded the same pinned archive on 2026-10-25,
 verified its SHA-256 above from the downloaded bytes, and extracted `pencil-simple` in regular,
 fill and bold from `assets/` without modification.
@@ -85,6 +88,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/dots-three-vertical.svg` | `85fdecd2193efcd7e80a83607b66d2680fef8f3d1e93380c26f9851b24edbd01` |
 | `regular/download-simple.svg` | `6450d3cf43dd9364eab343f1ada9bf4a77a85ded6e62d76deb17606ebfd62388` |
 | `regular/eyedropper.svg` | `87cad5a974a6f152cc7dce67fd6c41fdc21f75d59bed20508b68c95f65d9ebc5` |
+| `regular/selection.svg` | `5fff68fdc60d81f1855302416481dc69fe9f0abfbb353d3bc43f2c24150ab8d4` |
 | `regular/eye-slash.svg` | `070b0296a7df89ebf4cec12436e323b5531d458aa9aed3608924085889e1fd17` |
 | `regular/eye.svg` | `91d39f20bf95e0f36c07bd79b83a85fe6ff4ca20e2759c4afee7419ef80403fe` |
 | `regular/film-slate.svg` | `58b84e6c5a2950cfa0d8cae68c04e65dc32407dde463c3a2c79d265464726e0c` |
@@ -155,6 +159,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/download-simple-fill.svg` | `ffd45964adc39f8e0027ebd66ea6c843fb8e5a21290a78ef6940436f7d292466` |
 | `fill/eye-fill.svg` | `86381b51cb6f305019503b4c5d4b02fe8df5941bab3f1475ee873006a8708420` |
 | `fill/eyedropper-fill.svg` | `8fb839f52aaadbe156dc9982deab2288c1e23fe335d65f7a638ba21ac8078037` |
+| `fill/selection-fill.svg` | `39c98d739e03eecf38da5ccceb1093ca3b45826ee98a187e99bac2c3923fd8a2` |
 | `fill/eye-slash-fill.svg` | `c5c57b58e51b8b5eb30573a58fd1cc2672ef5d877759c01b948352ecb20b642c` |
 | `fill/film-slate-fill.svg` | `9b93a0c8e74ddaa01ee402f7c182c0189e25df713eb533b86eb4b9ef08ac7aca` |
 | `fill/film-strip-fill.svg` | `aae7abd682bd0985d015c90cd952e5fdb667c5c5e23a3494b30b422a6ab5ef5b` |
@@ -224,6 +229,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/download-simple-bold.svg` | `213b1d74439be031407a09958efc541c87158922a3a57e4dee785dddeef3f955` |
 | `bold/eye-bold.svg` | `766b10b6ed7d8a899a76ba28f3f066ca49e8ce0a75ae68b65bfec0e615d8130d` |
 | `bold/eyedropper-bold.svg` | `84cca4e37e3c813098a0b4dada7bfce670c56ad5ec0e924d0e3002e7218b7786` |
+| `bold/selection-bold.svg` | `bca7ab4688ca03ed591ba3cfba90bda277b25596b649898388c51aebc7742fb3` |
 | `bold/eye-slash-bold.svg` | `2c90457e608c86c1e880b897f2258eeea8ea7f60e7eaf61592b9674d7978647e` |
 | `bold/film-slate-bold.svg` | `b61683707f518cb825c158e3ea703887e6a787e40fa79f3cbdae1c7409a95287` |
 | `bold/film-strip-bold.svg` | `75f500a192705172ce51686fc8a9a2f62d22e91987419c3bd91448cec2760e38` |

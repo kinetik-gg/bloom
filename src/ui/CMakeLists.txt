@@ -150,6 +150,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/diamond.svg
         kit/third_party/phosphor-icons/regular/dots-three-vertical.svg
         kit/third_party/phosphor-icons/regular/eyedropper.svg
+        kit/third_party/phosphor-icons/regular/selection.svg
         kit/third_party/phosphor-icons/regular/pencil-simple.svg
         kit/third_party/phosphor-icons/regular/eye-slash.svg
         kit/third_party/phosphor-icons/regular/eye.svg
@@ -217,6 +218,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/dots-three-vertical-bold.svg
         kit/third_party/phosphor-icons/bold/eye-bold.svg
         kit/third_party/phosphor-icons/bold/eyedropper-bold.svg
+        kit/third_party/phosphor-icons/bold/selection-bold.svg
         kit/third_party/phosphor-icons/bold/pencil-simple-bold.svg
         kit/third_party/phosphor-icons/bold/eye-slash-bold.svg
         kit/third_party/phosphor-icons/bold/film-slate-bold.svg
@@ -271,6 +273,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/dots-three-vertical-fill.svg
         kit/third_party/phosphor-icons/fill/eye-fill.svg
         kit/third_party/phosphor-icons/fill/eyedropper-fill.svg
+        kit/third_party/phosphor-icons/fill/selection-fill.svg
         kit/third_party/phosphor-icons/fill/pencil-simple-fill.svg
         kit/third_party/phosphor-icons/fill/eye-slash-fill.svg
         kit/third_party/phosphor-icons/fill/film-slate-fill.svg
@@ -462,6 +465,9 @@ target_sources(
         viewer_overlays.cpp
         viewer_overlays_text.cpp
         viewer_editor.cpp
+        viewer_editor_chrome.cpp
+        viewer_editor_controls.cpp
+        viewer_editor_menus.cpp
     viewer_editor_shutdown.cpp
         viewer_channel_display.cpp
         viewer_editor_channel.cpp

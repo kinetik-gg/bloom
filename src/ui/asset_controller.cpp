@@ -776,7 +776,8 @@ void AssetController::retryAudioAfterCapacitySample() {
     if (!previewPending_)
         startThumbnails();
 }
-void AssetController::requestImport(QWidget* parent) {
+void AssetController::requestImport(QWidget* parent) { requestImport(parent, {}); }
+void AssetController::requestImport(QWidget* parent, ImportFollowUp followUp) {
     if (!host_.canSave())
         return;
     // A real QFileDialog instance rather than the static getOpenFileNames() convenience: it is
@@ -795,7 +796,7 @@ void AssetController::requestImport(QWidget* parent) {
     if (dialog.exec() == QDialog::Accepted) {
         const auto paths = dialog.selectedFiles();
         if (!paths.empty())
-            importFiles(paths);
+            importFiles(paths, importFolder_, std::move(followUp));
     }
 }
 void AssetController::importFiles(const QStringList& paths) { importFiles(paths, importFolder_); }

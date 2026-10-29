@@ -95,6 +95,7 @@ const auto& iconAssets() {
         {IconId::Images, QLatin1StringView("images")},
         {IconId::Snap, QLatin1StringView("magnet")},
         {IconId::Eyedropper, QLatin1StringView("eyedropper")},
+        {IconId::RegionOfInterest, QLatin1StringView("selection")},
     });
     return entries;
 }

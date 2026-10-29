@@ -29,6 +29,8 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -1008,7 +1010,7 @@ void testResolutionDropdownPersistsAndMovesWithFooter(Expectations& expectations
         ViewerFixture restored(makeTestProject("Restored resolution"));
         auto* dropdown = restored.viewer.findChild<ui::kit::KDropdown*>("viewerResolutionDropdown");
         expectations.expect(dropdown != nullptr &&
-                                dropdown->currentText() == QStringLiteral("Half") &&
+                                dropdown->currentData().toString() == QStringLiteral("Half") &&
                                 restored.controller.resolutionDivisor() == 2,
                             "a new viewer restores Half");
         reachQuiescence(restored.controller, restored.bridge, restored.scheduler, expectations);
@@ -1027,8 +1029,10 @@ void testResolutionDropdownPersistsAndMovesWithFooter(Expectations& expectations
 // --- Task VIEW-1: the viewer footer ------------------------------------------------------------
 
 // The footer's controls, in the order the task fixes them: Channel, ROI, exposure, gamma,
-// display/view, Look, transport, and the frame/time readout. Order is asserted through laid-out
-// geometry rather than child order, because the artist reads positions, not construction sequence.
+// display/view, Look, transport, the frame/time readout, zoom, resolution and RAM Preview. Clear
+// ROI shows only while a region exists (testViewerChromeRoiClearFollowsTheRegion). Order is
+// asserted through laid-out geometry rather than child order, because the artist reads positions,
+// not construction sequence.
 void testFooterControlsAreOrderedLeftToRight(Expectations& expectations) {
     using namespace bloom;
     QSettings().remove("viewer/display-view");
@@ -1074,12 +1078,10 @@ void testFooterControlsAreOrderedLeftToRight(Expectations& expectations) {
 
     const char* const ordered[] = {"viewerChannelDropdown",
                                    "viewerRoiToggle",
-                                   "viewerRoiClear",
                                    "viewerExposure",
                                    "viewerGamma",
                                    "viewerDisplayView",
                                    "viewerLookToggle",
-                                   "timelineRamPreviewButton",
                                    "viewerStepToStartButton",
                                    "timelineStepBackButton",
                                    "playPauseButton",
@@ -1088,7 +1090,8 @@ void testFooterControlsAreOrderedLeftToRight(Expectations& expectations) {
                                    "timelineLoopIndicator",
                                    "viewerTimeReadout",
                                    "viewerZoomDropdown",
-                                   "viewerResolutionDropdown"};
+                                   "viewerResolutionDropdown",
+                                   "timelineRamPreviewButton"};
     int previousRight = -1;
     for (const char* name : ordered) {
         auto* control = footer->findChild<QWidget*>(QString::fromLatin1(name));
@@ -1734,8 +1737,10 @@ void testViewerHeaderSelectorsMenusAndOverflow(Expectations& expectations) {
         return;
     }
     expectations.expect(compositions->count() == 1 && compositions->itemText(0) == "Main" &&
-                            objects->count() == 1 && objects->currentText() == "None",
-                        "selectors start with the document composition and an honest None object");
+                            objects->count() == 1 && objects->currentText() == "No layers" &&
+                            !objects->isEnabled(),
+                        "selectors start with the document composition and an honest, disabled "
+                        "layer placeholder");
 
     auto* safeAreas = fixture.viewer.findChild<QAction*>("viewerSafeAreasAction");
     auto* centreCross = fixture.viewer.findChild<QAction*>("viewerCentreCrossAction");
@@ -1761,7 +1766,8 @@ void testViewerHeaderSelectorsMenusAndOverflow(Expectations& expectations) {
     expectations.expect(objects->count() == 2 && objects->currentText() == "Layer One",
                         "the object selector follows the current composition's layer display name");
     fixture.session.clearSelection();
-    expectations.expect(objects->currentText() == "None", "clearing selection restores None");
+    expectations.expect(objects->isEnabled() && objects->currentText() == "No layer selected",
+                        "clearing selection restores the layer placeholder");
 
     const auto copyId = ui::duplicateComposition(fixture.session, fixture.session.compositionId());
     expectations.expect(copyId.has_value() && compositions->count() == 2,
@@ -2056,6 +2062,7 @@ void testViewerAdjustments(Expectations& expectations) {
 }
 
 #include "viewer_tools_tests.ipp"
+#include "viewer_chrome_tests.ipp"
 
 } // namespace
 
@@ -2175,5 +2182,16 @@ int main(int argc, char** argv) {
     testCtrlZeroFitsAndCtrlOneIsActualSize(expectations);
     testEmptyStateInvitationTextPresentWithoutComposition(expectations);
     testActiveEmptyCompositionInvitesALayer(expectations);
+    testViewerFooterLayoutAtEveryWidth(expectations);
+    testViewerFooterControlsShareOneVocabulary(expectations);
+    testViewerEmptyProjectChrome(expectations);
+    testViewerToolColumnAtShortHeights(expectations);
+    testViewerCheckerStaysInsideTheFrame(expectations);
+    try {
+        testViewerChromeRoiClearFollowsTheRegion(expectations);
+        testViewerMenusAreOrganisedAndShared(expectations);
+    } catch (const std::exception& error) {
+        expectations.expect(false, error.what());
+    }
     return expectations.failures() == 0 ? 0 : 1;
 }

@@ -14,6 +14,7 @@
 
 class QObject;
 class QMimeData;
+class QString;
 
 namespace bloom::document {
 class Project;
@@ -91,6 +92,13 @@ struct LayerDropHooks final {
 // composition. Empty for anything else, or for a stale or foreign drag.
 [[nodiscard]] std::vector<LayerDropItem> layerDropItems(const QMimeData& mime,
                                                         const CompositionSession& session);
+
+// What follows an import of files meant to become layers in `composition` (a file drop, or the
+// Viewer's Add > Import and Add…): once the import commits, one undoable step adds a layer for each
+// imported item that can be one, at `placement`, and selects them. Returns the status message.
+[[nodiscard]] std::function<QString(const std::vector<document::AssetId>&)>
+importedLayersFollowUp(CompositionSession& session, document::CompositionId composition,
+                       LayerDropPlacement placement);
 
 // Accepts Assets items and files on `target` (a widget or a window): items become layers at once;
 // files are imported first (ADR 0029) and become layers in a second undoable step once the import

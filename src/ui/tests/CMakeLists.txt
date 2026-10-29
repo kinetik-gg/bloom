@@ -1198,6 +1198,20 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endforeach()
 endif()
 
+# The maximized Viewer at a small and a large size, with and without a composition: captures for
+# review, plus the check that no hosted header or footer control lies outside its row.
+add_executable(bloom_viewer_chrome_capture viewer_chrome_capture.cpp)
+target_link_libraries(bloom_viewer_chrome_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_viewer_chrome_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_viewer_chrome_capture)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.viewer_chrome.dpr${scale} COMMAND bloom_viewer_chrome_capture)
+    set_tests_properties(bloom.ui.viewer_chrome.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;grammar" TIMEOUT 90)
+endforeach()
+
 add_executable(bloom_media_ui_test media_ui_tests.cpp)
 target_include_directories(bloom_media_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_media_ui_test PRIVATE bloom_ui Qt6::Test)

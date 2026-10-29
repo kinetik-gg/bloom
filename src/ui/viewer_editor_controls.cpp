@@ -1,0 +1,508 @@
+// The Viewer chrome's shared helpers, the footer's state updates, the tool column and the
+// no-composition invitation. The rows themselves are built in viewer_editor_chrome.cpp.
+#include "composition_editor_support.hpp"
+#include "viewer_editor_internal.hpp"
+#include "viewer_timecode_readout.hpp"
+
+#include <bloom/ui/composition_commands.hpp>
+#include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/playback_controller.hpp>
+#include <bloom/ui/ram_preview_controller.hpp>
+#include <bloom/ui/viewer_editor.hpp>
+
+#include <bloom/document/graph.hpp>
+#include <bloom/document/project.hpp>
+
+#include <QAction>
+#include <QContextMenuEvent>
+#include <QFormLayout>
+#include <QMenu>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QSettings>
+#include <QSignalBlocker>
+#include <QToolButton>
+#include <QVBoxLayout>
+#include <QWidgetAction>
+
+#include <algorithm>
+#include <cmath>
+#include <map>
+#include <memory>
+
+namespace bloom::ui {
+using namespace viewer_detail;
+
+namespace viewer_detail {
+std::optional<color::ResolvedBloomNeutralConfig>
+resolveViewerColorConfig(const CompositionSession& session) {
+    const auto* builtIn = std::get_if<document::BuiltInOcioConfigLocator>(
+        &session.colorSettings().ocioConfig.locator);
+    if (builtIn == nullptr) {
+        return std::nullopt;
+    }
+    auto result =
+        color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
+                                  session.colorSettings().ocioConfig.expectedRevision.digest,
+                                  session.colorIntent().workingColorSpaceId);
+    return std::move(result).takeResolved();
+}
+
+bool hasLookTaggedEffect(const CompositionSession& session) {
+    const auto* composition = session.composition();
+    if (composition == nullptr) {
+        return false;
+    }
+    for (const auto& node : composition->graph().nodes()) {
+        if (node.typeId != "bloom.ocio-file-transform") {
+            continue;
+        }
+        const auto look =
+            std::ranges::find(node.parameters, "look", &document::ParameterBinding::role);
+        if (look == node.parameters.end()) {
+            continue;
+        }
+        const auto* record = composition->parameters().find(look->parameterId);
+        if (record == nullptr) {
+            continue;
+        }
+        const auto* constant = std::get_if<document::ConstantValueSource>(&record->source);
+        if (constant == nullptr) {
+            return true;
+        }
+        const auto* enabled = std::get_if<bool>(&constant->value);
+        if (enabled == nullptr || *enabled) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QString safeAreaPresetName(const ViewerSafeAreaPreset preset) {
+    switch (preset) {
+    case ViewerSafeAreaPreset::Broadcast:
+        return QStringLiteral("Broadcast");
+    case ViewerSafeAreaPreset::Hd:
+        return QStringLiteral("HD");
+    case ViewerSafeAreaPreset::Cinema:
+        return QStringLiteral("Cinema");
+    case ViewerSafeAreaPreset::Social:
+        return QStringLiteral("Social");
+    case ViewerSafeAreaPreset::Custom:
+        return QStringLiteral("Custom");
+    }
+    return QStringLiteral("Broadcast");
+}
+
+ViewerSafeAreaPreset safeAreaPresetFromName(const QString& name) {
+    if (name == QStringLiteral("HD"))
+        return ViewerSafeAreaPreset::Hd;
+    if (name == QStringLiteral("Cinema"))
+        return ViewerSafeAreaPreset::Cinema;
+    if (name == QStringLiteral("Social"))
+        return ViewerSafeAreaPreset::Social;
+    if (name == QStringLiteral("Custom"))
+        return ViewerSafeAreaPreset::Custom;
+    return ViewerSafeAreaPreset::Broadcast;
+}
+
+QString safeAreaPresetSetting(const document::CompositionId id) {
+    return QStringLiteral("viewer/overlay/safe-area-preset/%1").arg(id.value());
+}
+
+QString viewerResolutionText(const CompositionPreviewController& controller) {
+    const auto policy = controller.settings().resolutionPolicy;
+    const auto divisor = controller.resolutionDivisor();
+    const QString factor = divisor == 4   ? QStringLiteral("¼")
+                           : divisor == 2 ? QStringLiteral("½")
+                                          : QStringLiteral("1");
+    return policy == runtime::PreviewResolutionPolicy::Auto
+               ? ViewerEditor::tr("Auto · %1").arg(factor)
+               : ViewerEditor::tr(kResolutionNames[static_cast<std::size_t>(policy)]);
+}
+
+QToolButton* makeFooterButton(const kit::IconId iconId, const QString& toolTip,
+                              const QString& accessibleName, const QString& objectName,
+                              QWidget* parent) {
+    auto* button = new kit::KIconButton(parent);
+    button->setObjectName(objectName);
+    button->setIcon(kit::icon(iconId, kit::IconRole::Control));
+    const int box = kit::px(kit::iconSize(kit::IconRole::Control));
+    button->setIconSize(QSize(box, box));
+    button->setToolTip(toolTip);
+    button->setAccessibleName(accessibleName);
+    button->setAutoRaise(true);
+    button->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
+    return button;
+}
+
+void drawCanvasBackground(QPainter& painter, const QRectF& bounds,
+                          const ViewerBackground background) {
+    switch (background) {
+    case ViewerBackground::Black:
+        painter.fillRect(bounds, kit::color(kit::Color::CanvasBlack));
+        return;
+    case ViewerBackground::White:
+        painter.fillRect(bounds, kit::color(kit::Color::CanvasWhite));
+        return;
+    case ViewerBackground::Checkerboard:
+    case ViewerBackground::Solid:
+        break;
+    }
+    painter.fillRect(bounds, kit::color(kit::Color::Canvas));
+}
+
+void drawFrameBackground(QPainter& painter, const QRectF& content, const QRectF& frame,
+                         const ViewerBackground background) {
+    if (background != ViewerBackground::Checkerboard || frame.isEmpty())
+        return;
+    // The kit's one checkerboard, laid on the content area's grid (the GPU present anchors its
+    // checker at the container origin too) and clipped to the composition frame.
+    painter.save();
+    painter.setClipRect(frame.intersected(content), Qt::IntersectClip);
+    kit::drawAlphaCheckerboard(painter, content, kit::px(kit::Size::ViewerChecker));
+    painter.restore();
+}
+} // namespace viewer_detail
+
+namespace {
+// The Viewer's exposure and gamma fields: a dot while the value differs from its default, and a
+// reset on a double-click on the label or from the field's context menu. Composed around the kit
+// field rather than inside it -- the field itself has no notion of a default.
+class ViewAdjustField final : public QObject {
+  public:
+    ViewAdjustField(kit::KValueField& field, const double defaultValue, QString resetLabel,
+                    QAction* resetBoth)
+        : QObject(&field), field_(field), default_(defaultValue),
+          resetLabel_(std::move(resetLabel)), resetBoth_(resetBoth) {
+        field.installEventFilter(this);
+        connect(&field, &kit::KValueField::valueChanged, this, [this] { refresh(); });
+        refresh();
+    }
+
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        switch (event->type()) {
+        case QEvent::Paint: {
+            // The field paints itself first; the dot goes on top, inside the cell's top-right
+            // corner, so it never covers the number.
+            static_cast<QObject&>(field_).event(event);
+            if (std::abs(field_.value() - default_) > 1e-9) {
+                QPainter painter(&field_);
+                painter.setRenderHint(QPainter::Antialiasing, true);
+                const qreal mark = kit::px(kit::Size::NonDefaultMark);
+                const QRectF cell = field_.cellRect();
+                const qreal inset = kit::px(kit::Spacing::XXS);
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(kit::color(kit::Color::Accent));
+                painter.drawEllipse(QRectF(cell.right() - inset - mark, cell.top() + inset, mark,
+                                           mark));
+            }
+            return true;
+        }
+        case QEvent::MouseButtonDblClick: {
+            const auto* mouse = static_cast<QMouseEvent*>(event);
+            if (field_.labelRect().contains(mouse->position())) {
+                reset();
+                return true;
+            }
+            break;
+        }
+        case QEvent::ContextMenu: {
+            std::unique_ptr<QMenu> menu(kit::makeMenu(&field_));
+            auto* single = menu->addAction(resetLabel_);
+            single->setObjectName(field_.objectName() + QStringLiteral("ResetAction"));
+            single->setEnabled(std::abs(field_.value() - default_) > 1e-9);
+            connect(single, &QAction::triggered, this, [this] { reset(); });
+            if (resetBoth_ != nullptr)
+                menu->addAction(resetBoth_);
+            menu->exec(static_cast<QContextMenuEvent*>(event)->globalPos());
+            return true;
+        }
+        default:
+            break;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+  private:
+    void reset() {
+        field_.cancelEdit();
+        field_.setValue(default_);
+    }
+    void refresh() {
+        const bool changed = std::abs(field_.value() - default_) > 1e-9;
+        field_.setProperty("viewerNonDefault", changed);
+        field_.update();
+    }
+    kit::KValueField& field_;
+    double default_;
+    QString resetLabel_;
+    QAction* resetBoth_;
+};
+
+} // namespace
+
+namespace viewer_detail {
+kit::KValueField* makeAdjustField(const QString& label, const QString& accessibleName,
+                                  const QString& objectName, const double minimum,
+                                  const double maximum, const double step, QWidget* parent) {
+    auto* field = new kit::KValueField(parent);
+    field->setObjectName(objectName);
+    field->setLabel(label);
+    field->setAccessibleName(accessibleName);
+    field->setCompact(true);
+    field->setRange(minimum, maximum);
+    field->setSingleStep(step);
+    field->setDecimals(2);
+    field->setFixedWidth(kit::px(kit::Size::ViewerAdjustWidth));
+    return field;
+}
+
+void attachDefaultReset(kit::KValueField& field, const double defaultValue, QString resetLabel,
+                        QAction* resetBoth) {
+    new ViewAdjustField(field, defaultValue, std::move(resetLabel), resetBoth);
+}
+} // namespace viewer_detail
+
+// ---- Footer state ------------------------------------------------------------------------------
+
+void ViewerEditor::setResolutionCompact(const bool compact) {
+    for (std::size_t index = 0; index < kResolutionNames.size(); ++index)
+        resolutionDropdown_->setItemText(
+            static_cast<int>(index),
+            tr(compact ? kResolutionCompactNames[index] : kResolutionNames[index]));
+}
+
+void ViewerEditor::resetViewAdjust() {
+    exposureField_->cancelEdit();
+    gammaField_->cancelEdit();
+    exposureField_->setValue(0.0);
+    gammaField_->setValue(1.0);
+}
+
+void ViewerEditor::updateRoiControls() {
+    if (roiClearButton_ == nullptr)
+        return;
+    const bool exists = roiRect_.has_value();
+    clearRoiAction_->setEnabled(exists);
+    // Clear ROI shows only while there is a region to clear.
+    roiClearButton_->setProperty("chromeSuppressed", !exists);
+    if (!exists && statusBarFooter_ == nullptr)
+        roiClearButton_->hide();
+}
+
+void ViewerEditor::updatePlaybackButton(const PlaybackState state) {
+    const bool playing = state == PlaybackState::Playing;
+    playPauseButton_->setChecked(playing);
+    playPauseButton_->setText(playing ? tr("Pause") : tr("Play"));
+    playPauseButton_->setIcon(
+        kit::icon(playing ? kit::IconId::Pause : kit::IconId::Play, kit::IconRole::Control));
+    // RAM Preview folded into the play button's CACHED STATE (task VIEW-1): the button says
+    // whether the range it is about to play is already in the cache.
+    const bool cached = ramPreview_ != nullptr && !ramPreview_->isCaching() &&
+                        ramPreview_->totalFrameCount() > 0 &&
+                        ramPreview_->cachedFrameCount() >= ramPreview_->totalFrameCount();
+    if (playing) {
+        playPauseButton_->setToolTip(tr("Pause playback (Space)"));
+    } else if (cached) {
+        playPauseButton_->setToolTip(tr("Play cached range (Space)"));
+    } else {
+        playPauseButton_->setToolTip(tr("Play (Space)"));
+    }
+    playPauseButton_->setProperty("bloomPlaybackCached", cached);
+}
+
+void ViewerEditor::updateRamPreviewButton() {
+    if (ramPreview_ == nullptr) {
+        return;
+    }
+    const bool caching = ramPreview_->isCaching();
+    ramPreviewButton_->setChecked(caching);
+    ramPreviewAction_->setChecked(caching);
+    // The label is the progress: how much of the range is cached while it caches, and that it is
+    // all cached once it is. Both counts are the controller's own.
+    const auto total = ramPreview_->totalFrameCount();
+    const auto cachedFrames = ramPreview_->cachedFrameCount();
+    QString label = tr("RAM Preview");
+    if (caching && total > 0)
+        label = tr("Caching %1%").arg(std::min<std::uint64_t>(100, cachedFrames * 100 / total));
+    else if (!caching && total > 0 && cachedFrames >= total)
+        label = tr("RAM Cached");
+    ramPreviewButton_->setText(label);
+    ramPreviewButton_->setToolTip(
+        caching ? tr("Cancel the RAM preview being cached (Esc)")
+                : tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space)"));
+    if (!caching &&
+        ramPreview_->lastCompletion() == RamPreviewController::Completion::PartialBudget) {
+        ramPreviewButton_->setToolTip(
+            tr("RAM Preview stopped at the memory limit: %1 of %2 frames retained.\nLongest cached "
+               "span: %3 frames. Use Play for manual playback.")
+                .arg(ramPreview_->cachedFrameCount())
+                .arg(ramPreview_->totalFrameCount())
+                .arg(ramPreview_->playableSpan() ? ramPreview_->playableSpan()->frameCount : 0));
+    }
+}
+
+void ViewerEditor::updateLoopButton() {
+    const bool looping = playback_->isLooping();
+    loopButton_->setChecked(looping);
+    loopButton_->setToolTip(looping ? tr("Looping: playback wraps to the start of the work area")
+                                    : tr("Not looping: playback stops on the last frame"));
+    loopButton_->setAccessibleName(looping ? tr("Looping on") : tr("Looping off"));
+}
+
+void ViewerEditor::refreshZoomDropdown() {
+    updatePreviewResolution();
+    if (resolutionReadout_ != nullptr) {
+        resolutionReadout_->setText(viewerResolutionText(previewController_));
+        resolutionDropdown_->setToolTip(
+            tr("Resolution: %1").arg(viewerResolutionText(previewController_)));
+    }
+    if (zoomDropdown_ == nullptr) {
+        return;
+    }
+    int targetIndex = 0; // "Fit"
+    if (!transform_.fitToWindow) {
+        const int percent = static_cast<int>(std::lround(transform_.zoom * 100.0));
+        int presetIndex = -1;
+        for (std::size_t i = 0; i < kZoomPresets.size(); ++i) {
+            if (kZoomPresets[i] == percent) {
+                presetIndex = static_cast<int>(i) + 1;
+                break;
+            }
+        }
+        if (presetIndex >= 0) {
+            targetIndex = presetIndex;
+        } else {
+            // A zoom off the fixed ladder (e.g. from a wheel step) gets one trailing "current
+            // custom value" item (decision 3), renamed in place on every later custom zoom.
+            const QString label = tr("%1%").arg(percent);
+            if (zoomDropdown_->count() > kFixedZoomItemCount) {
+                zoomDropdown_->setItemText(kFixedZoomItemCount, label);
+            } else {
+                zoomDropdown_->addItem(label, percent);
+            }
+            targetIndex = kFixedZoomItemCount;
+        }
+    }
+    if (zoomDropdown_->currentIndex() != targetIndex) {
+        const QSignalBlocker blocker(zoomDropdown_);
+        zoomDropdown_->setCurrentIndex(targetIndex);
+    }
+    zoomDropdown_->update();
+}
+
+// ---- Tool column -------------------------------------------------------------------------------
+
+void ViewerEditor::buildToolColumn() {
+    auto* tools = new kit::KToolColumn(this);
+    toolColumn_ = tools;
+    tools->setObjectName("viewerToolColumn");
+    // Each tooltip is the tool's name and shortcut, then how to use it.
+    const auto addTool = [this, tools](Tool tool, kit::IconId icon, const QString& tip,
+                                       const char* name) {
+        auto* button = tools->addTool(icon, tip, name);
+        button->setProperty("viewerTool", static_cast<int>(tool));
+        connect(button, &QToolButton::clicked, this, [this, tool] { selectTool(tool); });
+        button->setChecked(tool == Tool::Select);
+    };
+    // Navigation.
+    addTool(Tool::Select, kit::IconId::Select, tr("Select (V)\nSelect and move layers"),
+            "viewerSelectTool");
+    addTool(Tool::Hand, kit::IconId::Pan, tr("Hand (H)\nDrag to pan"), "viewerHandTool");
+    addTool(Tool::Zoom, kit::IconId::Zoom,
+            tr("Zoom (Z)\nClick to zoom in; Alt-click to zoom out"), "viewerZoomTool");
+    tools->addSeparator();
+    // Creation.
+    addTool(Tool::Text, kit::IconId::Text, tr("Text (T)\nClick to place and type on the canvas"),
+            "viewerTextTool");
+    addTool(Tool::Rectangle, kit::IconId::Rectangle,
+            tr("Rectangle (R)\nDrag; Shift constrains; Alt draws from centre"),
+            "viewerRectangleTool");
+    addTool(Tool::Ellipse, kit::IconId::Ellipse,
+            tr("Ellipse (E)\nDrag; Shift makes a circle; Alt draws from centre"),
+            "viewerEllipseTool");
+    addTool(Tool::Polygon, kit::IconId::Polygon,
+            tr("Polygon\nDrag a five-sided polygon; Shift constrains; Alt draws from centre"),
+            "viewerPolygonTool");
+    addTool(Tool::Star, kit::IconId::Star,
+            tr("Star\nDrag a five-point star; Shift constrains; Alt draws from centre"),
+            "viewerStarTool");
+    addTool(Tool::Line, kit::IconId::Line,
+            tr("Line\nDrag; Shift snaps to 45 degrees; Alt draws from centre"), "viewerLineTool");
+    tools->addSeparator();
+    addTool(Tool::Pen, kit::IconId::Pen,
+            tr("Pen (P)\nClick anchors; drag handles; click first to close; Enter or Escape "
+               "finishes. On a selected path: click a segment to add a point, an anchor to "
+               "remove it, an open end to continue"),
+            "viewerPenTool");
+    tools->addSeparator();
+    addTool(Tool::Cryptomatte, kit::IconId::Eyedropper,
+            tr("Cryptomatte\nOn a selected Cryptomatte, click or Shift-click adds the object "
+               "under the cursor; Alt- or Ctrl-click removes it"),
+            "viewerCryptomatteTool");
+    tools->move(0, 0);
+}
+
+// ---- The no-composition invitation -------------------------------------------------------------
+
+void ViewerEditor::buildEmptyState() {
+    emptyState_ = new QWidget(this);
+    emptyState_->setObjectName(QStringLiteral("viewerEmptyState"));
+    emptyState_->setFixedWidth(kit::px(kit::Size::ViewerEmptyStateWidth));
+    auto* column = new QVBoxLayout(emptyState_);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(kit::px(kit::Spacing::S));
+    auto* title = new kit::KLabel(tr("No composition"), emptyState_, kit::TypeRole::Title);
+    title->setObjectName(QStringLiteral("viewerEmptyStateTitle"));
+    title->setAlignment(Qt::AlignHCenter);
+    auto* hint = new kit::KLabel(
+        tr("Create a composition to begin. Media files dropped here are imported into Assets."),
+        emptyState_);
+    hint->setObjectName(QStringLiteral("viewerEmptyStateHint"));
+    hint->setTone(kit::Color::Muted);
+    hint->setWordWrap(true);
+    hint->setAlignment(Qt::AlignHCenter);
+    auto* button = new kit::KButton(tr("New Composition…"), emptyState_);
+    button->setObjectName(QStringLiteral("viewerNewCompositionButton"));
+    button->setVariant(kit::KButton::Variant::Primary);
+    button->setToolTip(tr("New Composition… (Ctrl+Alt+N)"));
+    // The same command as Composition > New Composition…: the application's own action when the
+    // Viewer is hosted, the Viewer's retired copy of it otherwise.
+    connect(button, &QAbstractButton::clicked, this, [this] {
+        if (!triggerApplicationCommand(QStringLiteral("compositionNewAction")))
+            viewerCompositionNewAction_->trigger();
+    });
+    column->addWidget(title);
+    column->addWidget(hint);
+    column->addWidget(button, 0, Qt::AlignHCenter);
+    updateEmptyState();
+}
+
+void ViewerEditor::layoutEmptyState() {
+    if (emptyState_ == nullptr || emptyState_->isHidden())
+        return;
+    emptyState_->adjustSize();
+    const QRectF frame = canvasRect();
+    const QSize size = emptyState_->size();
+    emptyState_->move(static_cast<int>(std::lround(frame.center().x() - size.width() / 2.0)),
+                      static_cast<int>(std::lround(frame.center().y() - size.height() / 2.0)));
+}
+
+void ViewerEditor::updateEmptyState() {
+    if (emptyState_ == nullptr)
+        return;
+    emptyState_->setVisible(session_.composition() == nullptr);
+    layoutEmptyState();
+}
+
+} // namespace bloom::ui

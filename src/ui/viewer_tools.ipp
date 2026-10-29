@@ -246,10 +246,9 @@ bool ViewerEditor::textPress(QMouseEvent* event) {
 }
 
 void ViewerEditor::publishRoi() {
-    previewController_.setRegionOfInterest(roiButton_ && roiButton_->isChecked() ? roiRect_
+    previewController_.setRegionOfInterest(roiAction_ && roiAction_->isChecked() ? roiRect_
                                                                                  : std::nullopt);
-    if (roiClearButton_)
-        roiClearButton_->setEnabled(roiRect_.has_value());
+    updateRoiControls();
     update();
 }
 
@@ -314,7 +313,7 @@ void ViewerEditor::commitRoiGesture(const QPointF pointer) {
                                                     mapping->compositionFormat.height()));
         if (region.width() >= 1 && region.height() >= 1) {
             roiRect_ = region;
-            roiButton_->setChecked(true);
+            roiAction_->setChecked(true);
             publishRoi();
         }
     }
@@ -329,7 +328,7 @@ void ViewerEditor::paintRoi(QPainter& painter) const {
     std::optional<QRectF> screen;
     if (roiGesture_)
         screen = QRectF(roiGesture_->origin, roiGesture_->pointer).normalized();
-    else if (roiRect_ && roiButton_->isChecked())
+    else if (roiRect_ && roiAction_->isChecked())
         screen = QRectF(mapping->toScreen({roiRect_->left(), roiRect_->top()}),
                         mapping->toScreen({roiRect_->right(), roiRect_->bottom()}));
     if (!screen)

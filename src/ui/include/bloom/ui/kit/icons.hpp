@@ -100,6 +100,8 @@ enum class IconId : std::uint8_t {
     Images,
     // #364: the Viewer's Cryptomatte picker.
     Eyedropper,
+    // The Viewer's region-of-interest toggle (a dashed selection frame).
+    RegionOfInterest,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add

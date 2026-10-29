@@ -261,31 +261,10 @@ class LayerDropTarget final : public QObject {
         }
         indicate(std::nullopt);
         if (!files.isEmpty()) {
-            const auto composition = session_.compositionId();
-            auto* session = &session_;
             AssetController::ImportFollowUp followUp;
             if (session_.composition() != nullptr)
-                followUp = [session, composition, place = placement(hit, drop->modifiers())](
-                               const std::vector<document::AssetId>& imported) -> QString {
-                    if (session->compositionId() != composition ||
-                        session->composition() == nullptr)
-                        return {};
-                    std::vector<LayerDropItem> items;
-                    for (const auto id : imported)
-                        if (droppableAsLayer(session->snapshot().project(), composition, id))
-                            items.emplace_back(id);
-                    if (items.empty())
-                        return {};
-                    commands::Transaction transaction(layerDropLabel(items),
-                                                      session->snapshot().revision());
-                    transaction.emplace<AddDroppedLayers>(composition, items, place);
-                    const auto result = session->executeTransaction(std::move(transaction));
-                    if (!result.succeeded())
-                        return QObject::tr("No layers were added");
-                    selectDroppedLayers(*session, result);
-                    return items.size() == 1 ? QObject::tr("Added 1 layer")
-                                             : QObject::tr("Added %1 layers").arg(items.size());
-                };
+                followUp = importedLayersFollowUp(session_, session_.compositionId(),
+                                                  placement(hit, drop->modifiers()));
             controller->importFiles(files, controller->importFolder(), std::move(followUp));
         }
         for (const auto& label : unresolvedShares)
@@ -315,6 +294,31 @@ class LayerDropTarget final : public QObject {
     LayerDropHooks hooks_;
 };
 } // namespace
+
+std::function<QString(const std::vector<document::AssetId>&)>
+importedLayersFollowUp(CompositionSession& session, const document::CompositionId composition,
+                       const LayerDropPlacement placement) {
+    auto* target = &session;
+    return [target, composition, placement](
+               const std::vector<document::AssetId>& imported) -> QString {
+        if (target->compositionId() != composition || target->composition() == nullptr)
+            return {};
+        std::vector<LayerDropItem> items;
+        for (const auto id : imported)
+            if (droppableAsLayer(target->snapshot().project(), composition, id))
+                items.emplace_back(id);
+        if (items.empty())
+            return {};
+        commands::Transaction transaction(layerDropLabel(items), target->snapshot().revision());
+        transaction.emplace<AddDroppedLayers>(composition, items, placement);
+        const auto result = target->executeTransaction(std::move(transaction));
+        if (!result.succeeded())
+            return QObject::tr("No layers were added");
+        selectDroppedLayers(*target, result);
+        return items.size() == 1 ? QObject::tr("Added 1 layer")
+                                 : QObject::tr("Added %1 layers").arg(items.size());
+    };
+}
 
 void installLayerDropTarget(QObject& target, CompositionSession& session, LayerDropHooks hooks) {
     new LayerDropTarget(target, session, std::move(hooks));

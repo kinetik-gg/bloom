@@ -45,13 +45,17 @@ class ImageExtent;
 }
 
 namespace bloom::ui::kit {
+class KButton;
 class KDropdown;
 class KIconToggle;
+class KLabel;
 class KRadioGroup;
 class KValueField;
 } // namespace bloom::ui::kit
 
+class QAbstractButton;
 class QAction;
+class QWidgetAction;
 class QLabel;
 class QPixmap;
 class QToolButton;
@@ -288,6 +292,8 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] ViewerChannel channelForTest() const noexcept;
     [[nodiscard]] ViewerBackground backgroundForTest() const noexcept;
     [[nodiscard]] QString timeReadoutTextForTest() const;
+    // The canvas context menu for a right-click at `point` (widget coordinates), without exec.
+    [[nodiscard]] std::unique_ptr<QMenu> canvasContextMenuForTest(QPointF point);
 
     // --- GPU-resident presentation (prepared integration) --------------------------------------
     // Explicit dependency injection, callable by the later application integration. There is no
@@ -461,9 +467,29 @@ class ViewerEditor final : public QWidget,
     void chooseChannelDropdownIndex(int index);
     void setBackground(ViewerBackground background);
     void buildHeader();
+    // viewer_editor_menus.cpp: the View, Select and Add menus and the actions they share with the
+    // footer, its overflow menu and the canvas context menu.
+    void buildMenus();
+    void buildTransportActions();
+    void buildToolColumn();
+    void buildEmptyState();
+    void layoutEmptyState();
+    void updateEmptyState();
+    void updateRoiControls();
+    void setResolutionCompact(bool compact);
+    void resetViewAdjust();
+    void importAndAddLayers();
+    // Runs the application's own command named `objectName` when this Viewer is hosted in a window
+    // that has it, so a Viewer entry point and the menu bar are one path; false when it is not.
+    bool triggerApplicationCommand(const QString& objectName);
+    [[nodiscard]] std::unique_ptr<QMenu> canvasContextMenu(QPointF point);
     void rebuildCompositionSelector();
     void rebuildObjectSelector();
     void updateCompositionActions();
+    // Select acts on anchors while a path's anchors are being edited (the Pen tool, a mask, or an
+    // anchor selection), and on the composition's layers otherwise.
+    [[nodiscard]] bool selectsAnchors() const;
+    void updateSelectActions();
     void selectAllObjects();
     void selectNoObjects();
     void invertObjectSelection();
@@ -637,6 +663,11 @@ class ViewerEditor final : public QWidget,
     runtime::ViewAdjust viewAdjust_{};
     kit::KValueField* exposureField_ = nullptr;
     kit::KValueField* gammaField_ = nullptr;
+    // The overflow menu's copies of the two fields, bound to the same values.
+    kit::KValueField* overflowExposureField_ = nullptr;
+    kit::KValueField* overflowGammaField_ = nullptr;
+    QWidgetAction* viewAdjustOverflowAction_ = nullptr;
+    QAction* resetViewAdjustAction_ = nullptr;
     std::optional<runtime::TaskHandle<runtime::PreviewPreparationResultHandle>> adjustTask_;
     std::optional<runtime::PreviewRequestIdentity> adjustIdentity_;
     PreparedPreviewFrameHandle adjustedFrame_;
@@ -648,6 +679,9 @@ class ViewerEditor final : public QWidget,
     std::optional<QRectF> roiRect_;
     QToolButton* roiButton_ = nullptr;
     QToolButton* roiClearButton_ = nullptr;
+    // The ROI's own state, shared by the footer toggle, View and the overflow menu.
+    QAction* roiAction_ = nullptr;
+    QAction* clearRoiAction_ = nullptr;
     document::PathValue penPath_;
     bool penDown_ = false;
     struct PathSelection {
@@ -763,7 +797,8 @@ class ViewerEditor final : public QWidget,
     // hands the whole row over by reparenting exactly one widget.
     kit::KDropdown* channelDropdown_ = nullptr;
     kit::KDropdown* viewerDisplayView_ = nullptr;
-    kit::KIconToggle* viewerLookToggle_ = nullptr;
+    QToolButton* viewerLookToggle_ = nullptr;
+    QAction* lookAction_ = nullptr;
     kit::KDropdown* backgroundDropdown_ = nullptr;
     // Part of the Resolution control rather than a footer item of its own: what the chosen
     // policy actually resolved to ("Auto · ¼"), which for Auto is visible nowhere else.
@@ -779,7 +814,8 @@ class ViewerEditor final : public QWidget,
     // RAM Preview (task PERF1, item 3): folded into the play button's cached state -- the play
     // button reports whether the range it is about to play is cached -- while the explicit action
     // stays its own button, because caching a range and starting playback are different commands.
-    QToolButton* ramPreviewButton_ = nullptr;
+    kit::KButton* ramPreviewButton_ = nullptr;
+    QAction* ramPreviewAction_ = nullptr;
     ViewerTimecodeReadout* timeReadout_ = nullptr;
     // Borrowed from the preview controller; every panel drives the same transport.
     PlaybackController* playback_ = nullptr;
@@ -845,6 +881,19 @@ class ViewerEditor final : public QWidget,
     QAction* pixelGridAction_ = nullptr;
     QMenu* safeAreaPresetMenu_ = nullptr;
     std::array<QAction*, 5> safeAreaPresetActions_{};
+    // Each mirrors its footer dropdown item for item (viewer_editor_menus.cpp).
+    QMenu* zoomMenu_ = nullptr;
+    QMenu* resolutionMenu_ = nullptr;
+    QMenu* channelMenu_ = nullptr;
+    QMenu* displayViewMenu_ = nullptr;
+    QMenu* backgroundMenu_ = nullptr;
+    QMenu* guidesMenu_ = nullptr;
+    QMenu* viewerAddMenu_ = nullptr;
+    QAction* selectAllAction_ = nullptr;
+    QAction* selectNoneAction_ = nullptr;
+    QAction* invertSelectionAction_ = nullptr;
+    // The no-composition invitation: a title, a hint and the New Composition command.
+    QWidget* emptyState_ = nullptr;
     // GPU-resident presentation state. `gpuResident_` is a plain typed member (no QObject base),
     // created once in the constructor; the native container it owns is parented to this widget and
     // is never reparented or destroyed while a target is live (the host gate retires first).
