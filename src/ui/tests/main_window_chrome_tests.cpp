@@ -34,6 +34,7 @@
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 
+#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QDesktopServices>
@@ -54,6 +55,7 @@
 #include <QStatusBar>
 #include <QString>
 #include <QTemporaryDir>
+#include <QTest>
 #include <QTimer>
 #include <QUrl>
 #include <QWidget>
@@ -511,6 +513,16 @@ void testHelpMenuItemsExistAndFire(Expectations& expectations) {
     auto* licensesWindow = window.findChild<LicensesWindow*>();
     expectations.expect(licensesWindow != nullptr,
                         "help menu: Open Source Licenses opens a real LicensesWindow");
+    licensesAction->trigger();
+    expectations.expect(window.findChildren<LicensesWindow*>().size() == 1,
+                        "help menu: asking again raises the one Licenses window");
+    expectations.expect(licensesWindow != nullptr &&
+                            licensesWindow->findChild<QAbstractButton*>(
+                                QStringLiteral("licensesCloseButton")) != nullptr &&
+                            licensesWindow->minimumWidth() == kit::px(kit::Size::DialogWideWidth) &&
+                            licensesWindow->windowModality() == Qt::NonModal &&
+                            licensesAction->text() == QStringLiteral("Open Source Licenses…"),
+                        "help menu: Licenses has a Close button, token sizes, and is non-modal");
 }
 
 // The Preferences window is opened from Edit | Preferences... and carries PreferencesRole, which is
@@ -1039,6 +1051,16 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
                 dialog->accept();
         });
         action->trigger();
+        // The dialog is asynchronous: let it open, be answered and close.
+        QTest::qWait(20);
+        (void)QTest::qWaitFor(
+            [&window] {
+                auto* open =
+                    window.findChild<QDialog*>(QStringLiteral("projectColorSettingsDialog"));
+                return open == nullptr || !open->isVisible();
+            },
+            2000);
+        QApplication::processEvents();
     };
 
     auto aces = *fixture.projectHost.colorSettings();

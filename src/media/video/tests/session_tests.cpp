@@ -308,15 +308,15 @@ void colourInterpretation(const std::filesystem::path& directory) {
         const auto pqMatrix = fill({9, 16, 2, 1}, 3840, 2160, 24);
         const auto tagged = fill({1, 1, 1, 1}, 64, 48, 24);
         check(hd.assumed && hd.tags == provider::ColourTags{1, 1, 1, 1} &&
-                  hd.note == "Colour tags missing — assumed Rec.709. Change in Assets → Input "
-                             "Colour",
+                  hd.note == "Colour tags missing — assumed Rec.709 with the sRGB transfer. "
+                             "Change in Assets → Input Colour",
               "untagged HD assumes Rec.709 limited range with the visible note");
         check(pal.tags == provider::ColourTags{5, 6, 5, 1} &&
                   ntsc.tags == provider::ColourTags{6, 6, 6, 1} &&
-                  pal.note.find("Rec.601") != std::string::npos,
+                  pal.note.find("Rec.601 with the sRGB transfer") != std::string::npos,
               "untagged SD assumes Rec.601, BT.470BG at 25 fps and SMPTE 170M otherwise");
         check(partial.tags == provider::ColourTags{1, 1, 1, 1} &&
-                  partial.identity == "assumed-colour-v1:mr:1,1,1,1",
+                  partial.identity == "assumed-colour-v2:mr:1,1,1,1",
               "a partly tagged stream fills only its missing tags");
         check(pqMatrix.tags == provider::ColourTags{9, 16, 9, 1},
               "a missing matrix on a BT.2020/PQ stream follows BT.2020 non-constant luminance");
@@ -359,7 +359,7 @@ void colourInterpretation(const std::filesystem::path& directory) {
         const auto assumedHd = video::assumeMissingVideoColour(
             stream.colour, {stream.width, stream.height, 24.0});
         check(stream.width == 1280 && stream.height == 720 && assumedHd.assumed &&
-                  assumedHd.identity.rfind("assumed-colour-v1:ptm", 0) == 0 &&
+                  assumedHd.identity.rfind("assumed-colour-v2:ptm", 0) == 0 &&
                   assumedHd.tags.primaries == 1 && assumedHd.tags.matrix == 1 &&
                   assumedHd.tags.transfer == 1 && assumedHd.note.find("Rec.709") != std::string::npos,
               "the untagged HD fixture assumes Rec.709 for its missing tags");

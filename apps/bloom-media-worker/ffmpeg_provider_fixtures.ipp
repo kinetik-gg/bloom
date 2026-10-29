@@ -124,7 +124,36 @@ unsigned luma(unsigned frame, unsigned x, unsigned y) {
     }
     return 16 + frame * 3;
 }
-std::vector<std::uint8_t> h264Frame(unsigned frame, bool forceKey = false) {
+// Issue #381: twelve uniform colour patches, one per 16x16 macroblock of the 64x48 picture, as a
+// camera codes them: R'G'B' (8-bit full scale) to limited-range Y'CbCr with the clip's matrix.
+// 75% bars, near black, mid grey, a skin and a sky tone, and full white.
+using Patches = std::array<std::array<unsigned, 3>, 12>;
+Patches colourPatches(const double kr, const double kb) {
+    constexpr std::array<std::array<double, 3>, 12> rgb{{{191, 191, 191},
+                                                         {191, 191, 0},
+                                                         {0, 191, 191},
+                                                         {0, 191, 0},
+                                                         {191, 0, 191},
+                                                         {191, 0, 0},
+                                                         {0, 0, 191},
+                                                         {16, 16, 16},
+                                                         {128, 128, 128},
+                                                         {224, 172, 140},
+                                                         {100, 150, 210},
+                                                         {255, 255, 255}}};
+    Patches result{};
+    for (std::size_t i = 0; i < rgb.size(); ++i) {
+        const auto r = rgb[i][0] / 255.0, g = rgb[i][1] / 255.0, b = rgb[i][2] / 255.0;
+        const auto y = kr * r + (1.0 - kr - kb) * g + kb * b;
+        const auto cb = (b - y) / (2.0 * (1.0 - kb)), cr = (r - y) / (2.0 * (1.0 - kr));
+        result[i] = {static_cast<unsigned>(std::lround(16.0 + 219.0 * y)),
+                     static_cast<unsigned>(std::lround(128.0 + 224.0 * cb)),
+                     static_cast<unsigned>(std::lround(128.0 + 224.0 * cr))};
+    }
+    return result;
+}
+std::vector<std::uint8_t> h264Frame(unsigned frame, bool forceKey = false,
+                                    const Patches* patches = nullptr) {
     const bool key = forceKey || frame % 12 == 0;
     Bits s;
     s.ue(0);
@@ -147,6 +176,15 @@ std::vector<std::uint8_t> h264Frame(unsigned frame, bool forceKey = false) {
             s.ue(0);
         s.ue(key ? 25 : 30);
         s.align();
+        if (patches != nullptr) {
+            // I_PCM: 256 luma samples, then the 8x8 Cb and the 8x8 Cr block.
+            const auto& patch = (*patches)[mb];
+            for (unsigned i = 0; i < 256; ++i)
+                s.number(patch[0], 8);
+            for (unsigned i = 0; i < 128; ++i)
+                s.number(i < 64 ? patch[1] : patch[2], 8);
+            continue;
+        }
         for (unsigned y = 0; y < 16; ++y)
             for (unsigned x = 0; x < 16; ++x)
                 // The pattern repeats every 48 frames (the long fixture keeps 8-bit samples).
@@ -172,7 +210,8 @@ struct Output {
     }
 };
 void fixture(const std::filesystem::path& path, bool prores, bool alpha = false,
-             const FixtureColour& colour = {}, unsigned frames = 48) {
+             const FixtureColour& colour = {}, unsigned frames = 48,
+             const Patches* patches = nullptr) {
     Output out;
     require(out.frame && out.packet, "Fixture allocation");
     require(avformat_alloc_output_context2(&out.format, nullptr, "mov", path.c_str()) >= 0,
@@ -264,7 +303,7 @@ void fixture(const std::filesystem::path& path, bool prores, bool alpha = false,
                         avcodec_receive_packet(out.codec, out.packet) >= 0,
                     "Fixture ProRes encode");
         } else {
-            const auto bytes = h264Frame(n);
+            const auto bytes = h264Frame(n, false, patches);
             require(av_new_packet(out.packet, static_cast<int>(bytes.size())) >= 0,
                     "Fixture packet allocation");
             std::memcpy(out.packet->data, bytes.data(), bytes.size());
@@ -457,6 +496,64 @@ void special(const std::filesystem::path& path, const Special kind) {
     }
     require(av_write_trailer(out.format) >= 0, "Fixture mux trailer");
 }
+// Issue #381: the player-equivalent decode of a clip's first frame, written as packed RGB24. FFmpeg
+// decodes the stream and swscale converts limited-range Y'CbCr with `matrix` to full-range R'G'B'
+// with no transfer change, exactly what `-vf scale=in_color_matrix=...:in_range=tv:out_range=full`
+// does for a player: the R'G'B' goes to the display as it is.
+void playerReference(const std::filesystem::path& clip, const std::filesystem::path& output,
+                     const int matrix) {
+    AVFormatContext* format = nullptr;
+    require(avformat_open_input(&format, clip.c_str(), nullptr, nullptr) >= 0, "Reference open");
+    const std::unique_ptr<AVFormatContext*, void (*)(AVFormatContext**)> formatOwner(
+        &format, avformat_close_input);
+    require(avformat_find_stream_info(format, nullptr) >= 0, "Reference stream info");
+    const int index = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    require(index >= 0, "Reference video stream");
+    const auto* parameters = format->streams[index]->codecpar;
+    const auto* decoder = avcodec_find_decoder(parameters->codec_id);
+    require(decoder, "Reference decoder");
+    AVCodecContext* codec = avcodec_alloc_context3(decoder);
+    const std::unique_ptr<AVCodecContext*, void (*)(AVCodecContext**)> codecOwner(
+        &codec, avcodec_free_context);
+    require(codec && avcodec_parameters_to_context(codec, parameters) >= 0 &&
+                avcodec_open2(codec, decoder, nullptr) >= 0,
+            "Reference decoder open");
+    AVPacket* packet = av_packet_alloc();
+    const std::unique_ptr<AVPacket*, void (*)(AVPacket**)> packetOwner(&packet, av_packet_free);
+    AVFrame* frame = av_frame_alloc();
+    const std::unique_ptr<AVFrame*, void (*)(AVFrame**)> frameOwner(&frame, av_frame_free);
+    require(packet && frame, "Reference allocation");
+    bool decoded = false;
+    while (!decoded && av_read_frame(format, packet) >= 0) {
+        if (packet->stream_index == index && avcodec_send_packet(codec, packet) >= 0)
+            decoded = avcodec_receive_frame(codec, frame) >= 0;
+        av_packet_unref(packet);
+    }
+    if (!decoded && avcodec_send_packet(codec, nullptr) >= 0)
+        decoded = avcodec_receive_frame(codec, frame) >= 0;
+    require(decoded, "Reference decode");
+    auto* scale = sws_getContext(frame->width, frame->height,
+                                 static_cast<AVPixelFormat>(frame->format), frame->width,
+                                 frame->height, AV_PIX_FMT_RGB24,
+                                 SWS_BILINEAR | SWS_ACCURATE_RND | SWS_FULL_CHR_H_INT, nullptr,
+                                 nullptr, nullptr);
+    const std::unique_ptr<SwsContext, void (*)(SwsContext*)> scaleOwner(scale, sws_freeContext);
+    require(scale != nullptr, "Reference scaler");
+    require(sws_setColorspaceDetails(scale, sws_getCoefficients(matrix), 0,
+                                     sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16,
+                                     1 << 16) >= 0,
+            "Reference colour details");
+    std::vector<std::uint8_t> rgb(static_cast<std::size_t>(frame->width) *
+                                  static_cast<std::size_t>(frame->height) * 3U);
+    std::array<std::uint8_t*, 4> planes{rgb.data(), nullptr, nullptr, nullptr};
+    std::array<int, 4> strides{frame->width * 3, 0, 0, 0};
+    require(sws_scale(scale, frame->data, frame->linesize, 0, frame->height, planes.data(),
+                      strides.data()) == frame->height,
+            "Reference conversion");
+    std::ofstream file(output, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
+    require(file.good(), "Reference write");
+}
 } // namespace
 bool generateFixtures(const std::string& directory) {
     try {
@@ -478,6 +575,14 @@ bool generateFixtures(const std::string& directory) {
         special(path / "uhd8k-prores.mov", Special::EightK);
         // Issue #352: a 1,200-frame (50 s) constant-cadence H.264 stream for the lazy index.
         fixture(path / "long-h264.mp4", false, false, {}, 1200);
+        // Issue #381: colour patches tagged BT.709 and untagged (64x48 is SD, so the size
+        // convention assumes Rec.601), each with its player-equivalent FFmpeg RGB24 decode.
+        const auto bt709 = colourPatches(0.2126, 0.0722), bt601 = colourPatches(0.299, 0.114);
+        fixture(path / "bars709-h264.mp4", false, false, {1, 1, 1, true}, 2, &bt709);
+        fixture(path / "bars-untagged-h264.mp4", false, false, {1, 1, 1, false}, 2, &bt601);
+        playerReference(path / "bars709-h264.mp4", path / "bars709-h264.rgb24", SWS_CS_ITU709);
+        playerReference(path / "bars-untagged-h264.mp4", path / "bars-untagged-h264.rgb24",
+                        SWS_CS_ITU601);
         std::ofstream provenance(path / "provenance.txt");
         provenance
             << "MEDIA-3 generated-read-v1\nFFmpeg 8.1.2 qualified intake mux/ProRes encode\n"
@@ -490,6 +595,8 @@ bool generateFixtures(const std::string& directory) {
                "12-frame untagged 1280x720 ProRes 422 (tiled numbered pattern)\n"
                "1200-frame H.264 (pattern repeats every 48 frames) for lazy indexing\n"
                "2-frame 7680x4320 Rec.709 ProRes 422 (tiled numbered pattern)\n"
+               "2-frame H.264 colour patches (BT.709 tagged, untagged BT.601) with their\n"
+               "FFmpeg swscale RGB24 decodes (limited Y'CbCr to full-range R'G'B')\n"
                "PCM mono 48000 Hz: sample[n]=((n%997)-498)/1024\n"
                "Original synthetic content; generated at test time; no external media\n";
         const auto specification =
@@ -500,7 +607,8 @@ bool generateFixtures(const std::string& directory) {
              {"numbered-h264.mp4", "numbered-prores.mov", "alpha-prores.mov", "untagged-h264.mp4",
               "pq2020-h264.mp4", "hlg2020-h264.mp4", "vfr-h264.mp4", "rotated-h264.mp4",
               "interlaced-prores.mov", "rgb-tiff.mov", "anamorphic-h264.mp4",
-              "untagged-hd-prores.mov", "long-h264.mp4", "uhd8k-prores.mov"}) {
+              "untagged-hd-prores.mov", "long-h264.mp4", "uhd8k-prores.mov", "bars709-h264.mp4",
+              "bars-untagged-h264.mp4", "bars709-h264.rgb24", "bars-untagged-h264.rgb24"}) {
             const auto identity = sourceIdentity((path / name).string()).first.toLowercaseHex();
             provenance << name << " SHA-256: " << std::string(identity.begin(), identity.end())
                        << '\n';

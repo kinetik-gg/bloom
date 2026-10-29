@@ -24,12 +24,14 @@
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_media_scene_preparation_test_support.hpp"
 #include "gpu_media_video_scene_preparation_test_support.hpp"
+#include "video_player_reference.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
+#include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -113,6 +115,7 @@ int main(const int argc, char** argv) {
             testProxiedIdentityStill(expectations, *device.device, evaluator, fixture, ocioContext);
             testRealVideoColour(expectations, *device.device, evaluator, options.fixtures,
                                 ocioContext);
+            testPlayerReferenceVideo(expectations, *device.device, options.fixtures, ocioContext);
             testPqInputSweep(expectations, *device.device, evaluator, ocioContext);
         }
 

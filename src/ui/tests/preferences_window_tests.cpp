@@ -10,12 +10,18 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QEventLoop>
+#include <QFile>
 #include <QFontMetrics>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QString>
+#include <QTemporaryDir>
+#include <QTest>
 #include <QTimer>
+#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/dialog.hpp>
 
 #include <algorithm>
 #include <iostream>
@@ -42,6 +48,10 @@ class Expectations final {
 
 namespace ui = bloom::ui;
 
+// Every kit dialog needs an owner window; main() provides one.
+QWidget* gOwner = nullptr;
+[[nodiscard]] QWidget& owner() { return *gOwner; }
+
 [[nodiscard]] ui::ApplicationPreferences samplePreferences() {
     ui::ApplicationPreferences prefs;
     prefs.audioEnabled = false;
@@ -64,7 +74,7 @@ namespace ui = bloom::ui;
 }
 
 void testControlsReflectPreferences(Expectations& check) {
-    ui::PreferencesWindow window(samplePreferences());
+    ui::PreferencesWindow window(owner(), samplePreferences());
     const auto prefs = samplePreferences();
 
     auto* audio =
@@ -119,8 +129,8 @@ void testControlsReflectPreferences(Expectations& check) {
 
 void testEditingUpdatesDraftAndApplyState(Expectations& check) {
     ui::ApplicationPreferences initial;
-    ui::PreferencesWindow window(initial);
-    auto* apply = window.findChild<QPushButton*>(QStringLiteral("preferencesApplyButton"));
+    ui::PreferencesWindow window(owner(), initial);
+    auto* apply = window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"));
     check.expect(apply != nullptr && !apply->isEnabled(), "Apply is disabled with no edits");
 
     auto* audio =
@@ -149,8 +159,8 @@ void testEditingUpdatesDraftAndApplyState(Expectations& check) {
 
 void testApplyEmitsAndClearsDirty(Expectations& check) {
     ui::ApplicationPreferences initial;
-    ui::PreferencesWindow window(initial);
-    auto* apply = window.findChild<QPushButton*>(QStringLiteral("preferencesApplyButton"));
+    ui::PreferencesWindow window(owner(), initial);
+    auto* apply = window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"));
 
     int emissions = 0;
     ui::ApplicationPreferences emitted;
@@ -171,7 +181,7 @@ void testApplyEmitsAndClearsDirty(Expectations& check) {
 }
 
 void testSetPreferencesRoundTripsControls(Expectations& check) {
-    ui::PreferencesWindow window(ui::ApplicationPreferences{});
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{});
     const auto prefs = samplePreferences();
     window.setPreferences(prefs);
 
@@ -180,24 +190,74 @@ void testSetPreferencesRoundTripsControls(Expectations& check) {
     check.expect(audio != nullptr && !audio->isChecked(),
                  "setPreferences pushes the value into the control");
 
-    auto* apply = window.findChild<QPushButton*>(QStringLiteral("preferencesApplyButton"));
+    auto* apply = window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"));
     check.expect(apply != nullptr && apply->isEnabled(),
                  "pushing a value makes the draft differ from the applied baseline");
     check.expect(window.preferences() == prefs, "setPreferences round-trips through preferences()");
 }
 
+// Restore Defaults asks first (Cancel is the default answer); only the confirmation resets the
+// draft, and nothing is persisted until OK or Apply.
 void testRestoreDefaults(Expectations& check) {
-    ui::PreferencesWindow window(samplePreferences());
+    ui::PreferencesWindow window(owner(), samplePreferences());
     auto* restore =
-        window.findChild<QPushButton*>(QStringLiteral("preferencesRestoreDefaultsButton"));
+        window.findChild<QAbstractButton*>(QStringLiteral("preferencesRestoreDefaultsButton"));
     check.expect(restore != nullptr, "the Restore Defaults button exists");
+    if (restore == nullptr)
+        return;
+    const auto confirmation = [&window] {
+        return window.findChild<ui::kit::KDialog*>(
+            QStringLiteral("preferencesRestoreDefaultsConfirmation"));
+    };
     restore->click();
+    auto* asked = confirmation();
+    check.expect(asked != nullptr && asked->isVisible() &&
+                     asked->defaultRole() == ui::kit::KDialog::Role::Reject,
+                 "Restore Defaults asks first, with Cancel as the default");
+    check.expect(window.preferences() == samplePreferences(), "asking changes nothing yet");
+    if (asked == nullptr)
+        return;
+    QTest::keyClick(asked, Qt::Key_Return);
+    QApplication::processEvents();
+    check.expect(window.preferences() == samplePreferences(),
+                 "Return answers the safe default and keeps the preferences");
+    restore->click();
+    asked = confirmation();
+    if (auto* confirm =
+            asked != nullptr ? asked->button(ui::kit::KDialog::Role::Destructive) : nullptr)
+        confirm->click();
+    QApplication::processEvents();
     check.expect(window.preferences() == ui::defaultApplicationPreferences(),
-                 "Restore Defaults resets the draft to the model defaults");
+                 "confirming Restore Defaults resets the draft to the model defaults");
+}
+
+// A cache directory that is a file is refused under its field once it is chosen or left, and OK
+// waits; a usable folder clears the reason.
+void testCacheDirectoryIsValidated(Expectations& check) {
+    QTemporaryDir directory;
+    QFile file(directory.filePath(QStringLiteral("not-a-folder")));
+    check.expect(file.open(QIODevice::WriteOnly), "a file to refuse");
+    file.close();
+    ui::PreferencesWindow window(owner(), samplePreferences());
+    auto* edit =
+        window.findChild<QLineEdit*>(QStringLiteral("preferencesMediaDiskCacheDirectoryEdit"));
+    auto* reason =
+        window.findChild<QLabel*>(QStringLiteral("preferencesMediaDiskCacheDirectoryReason"));
+    auto* ok = window.findChild<QAbstractButton*>(QStringLiteral("preferencesOkButton"));
+    check.expect(edit && reason && ok, "the cache directory row has its reason and OK exists");
+    if (!edit || !reason || !ok)
+        return;
+    edit->setText(file.fileName());
+    emit edit->editingFinished();
+    check.expect(!reason->isHidden() && !reason->text().isEmpty() && !ok->isEnabled(),
+                 "a file is refused as the cache folder and OK waits");
+    edit->setText(directory.path());
+    emit edit->editingFinished();
+    check.expect(reason->isHidden() && ok->isEnabled(), "a writable folder is accepted");
 }
 
 void testTimelineKeyframesAndGraphAreMutuallyExclusive(Expectations& check) {
-    ui::PreferencesWindow window(ui::defaultApplicationPreferences());
+    ui::PreferencesWindow window(owner(), ui::defaultApplicationPreferences());
     auto* keyframes =
         window.findChild<QAbstractButton*>(QStringLiteral("preferencesTimelineKeyframesSwitch"));
     auto* graph =
@@ -216,7 +276,7 @@ void testTimelineKeyframesAndGraphAreMutuallyExclusive(Expectations& check) {
 }
 
 void testRestartBadgesAndRail(Expectations& check) {
-    ui::PreferencesWindow window(samplePreferences());
+    ui::PreferencesWindow window(owner(), samplePreferences());
     const auto badges = window.findChildren<QLabel*>(QStringLiteral("preferencesRestartBadge"));
     check.expect(badges.size() == 3, "only the three disk cache preferences carry Restart badges");
     for (const auto* fieldName :
@@ -246,7 +306,7 @@ void testRestartBadgesAndRail(Expectations& check) {
 void testAutomaticMemoryBudgetsAreResolved(Expectations& check) {
     constexpr auto gib = std::size_t{1024} * 1024 * 1024;
     bloom::runtime::MemoryBudgetLedger ledger(32 * gib, 32 * gib);
-    ui::PreferencesWindow window(ui::ApplicationPreferences{}, nullptr, nullptr, ledger);
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{}, nullptr, ledger);
     const auto* operation = window.findChild<ui::kit::KValueField*>(
         QStringLiteral("preferencesOperationCacheBytesField"));
     const auto* ram =
@@ -288,7 +348,7 @@ void testLargeBudgetPreferencesRemainExactOnApply(Expectations& check) {
     preferences.operationCacheBytes = 4096 * gib;
     preferences.ramPreviewBytes = 8192 * gib;
     preferences.mediaDiskCacheBudgetBytes = 16384 * gib;
-    ui::PreferencesWindow window(preferences);
+    ui::PreferencesWindow window(owner(), preferences);
     const auto* operation = window.findChild<ui::kit::KValueField*>(
         QStringLiteral("preferencesOperationCacheBytesField"));
     const auto* ram =
@@ -303,7 +363,7 @@ void testLargeBudgetPreferencesRemainExactOnApply(Expectations& check) {
                      [&](const auto& value) { applied = value; });
     window.findChild<QAbstractButton*>(QStringLiteral("preferencesAudioEnabledSwitch"))
         ->setChecked(true);
-    window.findChild<QPushButton*>(QStringLiteral("preferencesApplyButton"))->click();
+    window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"))->click();
     check.expect(applied.operationCacheBytes == preferences.operationCacheBytes &&
                      applied.ramPreviewBytes == preferences.ramPreviewBytes &&
                      applied.mediaDiskCacheBudgetBytes == preferences.mediaDiskCacheBudgetBytes,
@@ -318,7 +378,7 @@ void testLargeBudgetPreferencesRemainExactOnApply(Expectations& check) {
 }
 
 void testPreferenceLabelsRemainReadable(Expectations& check) {
-    ui::PreferencesWindow window(samplePreferences());
+    ui::PreferencesWindow window(owner(), samplePreferences());
     window.show();
     window.findChild<ui::kit::KRadioGroup*>(QStringLiteral("preferencesCategoryRail"))
         ->setCurrentIndex(1);
@@ -348,7 +408,7 @@ void testGridAndAutomaticWidthMatchRuntime(Expectations& check) {
     auto preferences = samplePreferences();
     preferences.nodeGridSize = 1;
     preferences.timelineLayerColumnWidth = 0;
-    ui::PreferencesWindow window(preferences);
+    ui::PreferencesWindow window(owner(), preferences);
     auto* grid =
         window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesNodeGridSizeField"));
     auto* width = window.findChild<ui::kit::KValueField*>(
@@ -367,7 +427,7 @@ void testGridAndAutomaticWidthMatchRuntime(Expectations& check) {
 }
 
 void testPerformancePageReportsCpuOnly(Expectations& check) {
-    ui::PreferencesWindow window(ui::ApplicationPreferences{});
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{});
     auto* backend = window.findChild<QLabel*>(QStringLiteral("preferencesPerformanceBackendValue"));
     auto* state = window.findChild<QLabel*>(QStringLiteral("preferencesPerformanceStateValue"));
     auto* deviceRow = window.findChild<QWidget*>(QStringLiteral("preferencesPerformanceDeviceRow"));
@@ -395,7 +455,7 @@ class StubAccelerationStatus final : public ui::AccelerationStatusProvider {
 
 void testPerformancePageUsesInjectedProvider(Expectations& check) {
     const StubAccelerationStatus provider;
-    ui::PreferencesWindow window(ui::ApplicationPreferences{}, &provider);
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{}, &provider);
     auto* backend = window.findChild<QLabel*>(QStringLiteral("preferencesPerformanceBackendValue"));
     auto* device = window.findChild<QLabel*>(QStringLiteral("preferencesPerformanceDeviceValue"));
     auto* deviceRow = window.findChild<QWidget*>(QStringLiteral("preferencesPerformanceDeviceRow"));
@@ -435,7 +495,7 @@ void testPerformancePageRefreshesWhileVisible(Expectations& check) {
     provider.status.presentationStatus = QStringLiteral("Not requested");
     provider.status.summary = QStringLiteral("Checking GPU acceleration.");
 
-    ui::PreferencesWindow window(ui::ApplicationPreferences{}, &provider);
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{}, &provider);
     auto* backend = window.findChild<QLabel*>(QStringLiteral("preferencesPerformanceBackendValue"));
     auto* state = window.findChild<QLabel*>(QStringLiteral("preferencesPerformanceStateValue"));
     auto* deviceRow = window.findChild<QWidget*>(QStringLiteral("preferencesPerformanceDeviceRow"));
@@ -487,7 +547,7 @@ void testPerformancePageRefreshesWhileVisible(Expectations& check) {
 void testPerformancePageDestructionSafe(Expectations& check) {
     MutableAccelerationStatus provider;
     {
-        ui::PreferencesWindow window(ui::ApplicationPreferences{}, &provider);
+        ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{}, &provider);
         window.show();
         // No explicit hide: destroying the dialog must destroy its Qt-owned timer.
     }
@@ -502,12 +562,15 @@ void testPerformancePageDestructionSafe(Expectations& check) {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    QWidget ownerWindow;
+    gOwner = &ownerWindow;
     Expectations check;
     testControlsReflectPreferences(check);
     testEditingUpdatesDraftAndApplyState(check);
     testApplyEmitsAndClearsDirty(check);
     testSetPreferencesRoundTripsControls(check);
     testRestoreDefaults(check);
+    testCacheDirectoryIsValidated(check);
     testTimelineKeyframesAndGraphAreMutuallyExclusive(check);
     testRestartBadgesAndRail(check);
     testAutomaticMemoryBudgetsAreResolved(check);

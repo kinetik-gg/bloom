@@ -18,6 +18,7 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 
+#include <QAbstractButton>
 #include <QApplication>
 #include <QDialog>
 #include <QLabel>
@@ -39,6 +40,10 @@
 #include <utility>
 
 namespace {
+
+// Every kit dialog needs an owner window; main() provides one.
+QWidget* gOwner = nullptr;
+[[nodiscard]] QWidget& owner() { return *gOwner; }
 
 using namespace bloom;
 
@@ -111,17 +116,17 @@ runDialog(ui::CompositionSession& session,
         }
         interact(*dialog, expectations);
     });
-    return ui::showNewCompositionDialog(session, nullptr);
+    return ui::showNewCompositionDialog(session, owner());
 }
 
 [[nodiscard]] ui::kit::KDropdown* unitControl(QDialog& dialog) {
-    return dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsDurationUnitDropdown"));
+    return dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("compositionSettingsDurationUnit"));
 }
 [[nodiscard]] QLineEdit* durationControl(QDialog& dialog) {
-    return dialog.findChild<QLineEdit*>(QStringLiteral("assetsDurationField"));
+    return dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsDuration"));
 }
 [[nodiscard]] QLineEdit* frameRateControl(QDialog& dialog) {
-    return dialog.findChild<QLineEdit*>(QStringLiteral("assetsFrameRateField"));
+    return dialog.findChild<QLineEdit*>(QStringLiteral("compositionSettingsRate"));
 }
 // #376: each reason sits under its own field; this is the one currently shown.
 [[nodiscard]] QString inlineError(QDialog& dialog) {
@@ -132,10 +137,10 @@ runDialog(ui::CompositionSession& session,
 }
 
 [[nodiscard]] ui::kit::KDropdown* ratePresets(QDialog& dialog) {
-    return dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("assetsFrameRatePresetDropdown"));
+    return dialog.findChild<ui::kit::KDropdown*>(QStringLiteral("compositionSettingsRatePreset"));
 }
-[[nodiscard]] QPushButton* okControl(QDialog& dialog) {
-    return dialog.findChild<QPushButton*>(QStringLiteral("assetsDialogOk"));
+[[nodiscard]] QAbstractButton* okControl(QDialog& dialog) {
+    return dialog.findChild<QAbstractButton*>(QStringLiteral("compositionSettingsOk"));
 }
 
 // One frame at 24 fps stays exactly 1/24 across repeated Frames -> Seconds -> Frames switches.
@@ -622,6 +627,8 @@ void testOverflowValidation(Expectations& expectations) {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    QWidget ownerWindow;
+    gOwner = &ownerWindow;
     Expectations expectations;
 
     testOneFrameSurvivesUnitRoundtrip(expectations);

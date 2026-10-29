@@ -40,7 +40,6 @@
 
 #include <QAction>
 #include <QApplication>
-#include <QColorDialog>
 #include <QContextMenuEvent>
 #include <QEvent>
 #include <QFontMetrics>
@@ -65,6 +64,7 @@
 #include <QVBoxLayout>
 #include <QVariant>
 #include <QWheelEvent>
+#include <bloom/ui/kit/color_picker.hpp>
 
 #include <bloom/document/layer_masks.hpp>
 
@@ -896,6 +896,10 @@ void TimelineLayerStack::mouseReleaseEvent(QMouseEvent* event) {
     (void)session_.executeTransaction(std::move(transaction));
 }
 bool TimelineLayerStack::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == labelPicker_ && event->type() == QEvent::Hide && labelPickerOpen_) {
+        labelPickerOpen_ = false;
+        commitLabelColor();
+    }
     if (renameEditor_ && event->type() == QEvent::MouseButtonPress) {
         const auto* target = qobject_cast<QWidget*>(watched);
         if (target && target != renameEditor_ && !renameEditor_->isAncestorOf(target))
@@ -991,6 +995,49 @@ void TimelineLayerStack::mouseDoubleClickEvent(QMouseEvent* event) {
         event->position().x() < kNameCellX + nameCellWidth(width()))
         renameLayer(entries_[static_cast<std::size_t>(row)].layerId);
 }
+void TimelineLayerStack::openLabelColorPicker(const int row, const document::LayerId layer) {
+    if (row < 0 || row >= rowCount())
+        return;
+    const auto& entry = entries_[static_cast<std::size_t>(row)];
+    if (labelPicker_ == nullptr) {
+        labelPicker_ = new kit::KColorPicker(this);
+        labelPicker_->setObjectName(QStringLiteral("timelineLayerLabelColorPicker"));
+        labelPicker_->installEventFilter(this);
+        connect(labelPicker_, &kit::KColorPicker::editCancelled, this,
+                [this] { labelPickerCancelled_ = true; });
+        labelPickerAnchor_ = new QWidget(this);
+        labelPickerAnchor_->setObjectName(QStringLiteral("timelineLayerLabelColorAnchor"));
+        labelPickerAnchor_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+    labelPickerComposition_ = session_.compositionId();
+    labelPickerLayer_ = layer;
+    labelPickerInitial_ =
+        entry.labelColor.isValid() ? entry.labelColor : kit::color(entry.clipColor);
+    labelPickerCancelled_ = false;
+    labelPicker_->setColor(kit::KColor::fromQColor(labelPickerInitial_));
+    // The popup opens under the row it colours.
+    labelPickerAnchor_->setGeometry(0, rowTop(row), width(), kTimelineRowHeight);
+    labelPickerOpen_ = true;
+    labelPicker_->openBelow(*labelPickerAnchor_);
+}
+
+void TimelineLayerStack::commitLabelColor() {
+    // One commit when the popup closes, never one per drag step; Escape keeps the old colour.
+    if (labelPickerCancelled_ || labelPicker_ == nullptr ||
+        session_.compositionId() != labelPickerComposition_)
+        return;
+    const auto chosen = labelPicker_->color().toQColor();
+    if (chosen.rgb() == labelPickerInitial_.rgb())
+        return;
+    commands::Transaction transaction("Set Layer Label Color", session_.snapshot().revision());
+    transaction.emplace<commands::SetLayerLabelColor>(
+        labelPickerComposition_, labelPickerLayer_,
+        std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(chosen.red()),
+                                    static_cast<std::uint8_t>(chosen.green()),
+                                    static_cast<std::uint8_t>(chosen.blue())});
+    (void)session_.executeTransaction(std::move(transaction));
+}
+
 void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
     const int row = (event->pos().y() + scrollOffset_) / kTimelineRowHeight;
     if (row < 0 || row >= rowCount()) {
@@ -1059,17 +1106,8 @@ void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
                                                  static_cast<std::uint8_t>(color.blue())});
         });
     }
-    connect(colors->addAction(tr("Custom...")), &QAction::triggered, this, [this, setColor] {
-        auto* picker = new QColorDialog(this);
-        picker->setObjectName("timelineLayerLabelColorDialog");
-        picker->setAttribute(Qt::WA_DeleteOnClose);
-        connect(picker, &QColorDialog::colorSelected, this, [setColor](const QColor& color) {
-            setColor(std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(color.red()),
-                                                 static_cast<std::uint8_t>(color.green()),
-                                                 static_cast<std::uint8_t>(color.blue())});
-        });
-        picker->open();
-    });
+    connect(colors->addAction(tr("Custom…")), &QAction::triggered, this,
+            [this, row, layerId] { openLabelColorPicker(row, layerId); });
     connect(menu->addAction(tr("Split at Playhead")), &QAction::triggered, this,
             [this, compositionId, layerId, revision] {
                 commands::Transaction transaction("Split Layer at Playhead", revision);

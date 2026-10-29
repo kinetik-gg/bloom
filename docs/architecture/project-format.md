@@ -1,6 +1,8 @@
 # Bloom Project Format
 
-The current document schema is 1.27. It adds the optional composition `folder`, the Assets folder
+The current document schema is 1.28. It changes no member: it marks projects saved after ordinary
+and untagged SDR video in Auto began to be shown through the sRGB texture space (see "Video Colour
+Default In Document 1.28"). Document 1.27 added the optional composition `folder`, the Assets folder
 that holds a composition (see "Composition Folders In Document 1.27"), on top of the 1.26 Image
 source node v2 (optional `part` and `layer` parameters and a `channels` output; see "Channel Sets
 In Document 1.26") and optional composition `timecode` (see "Composition Timecode In Document
@@ -1381,9 +1383,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.27`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.28`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.27.schema.json` and `manifest-1.27.schema.json`; the
+The current artifacts are `document-1.28.schema.json` and `manifest-1.28.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1527,6 +1529,18 @@ it differs from the default (start 0, non-drop), so a composition without it kee
 The decoder reads it only at `1.26` or later, refuses a negative start as a domain violation, and
 preserves unknown trailing members like any composition attachment.
 
+## Video Colour Default In Document 1.28
+
+Document `1.28` changes no member ([ADR 0032](../decisions/0032-sdr-video-colour-default.md),
+issue #381). From this version, Auto shows ordinary Rec.709/601 and untagged SDR video through the
+config's sRGB texture space instead of its Rec.709 video space (see
+[colour management](color-management.md#automatic-asset-rules)). The `1.27` → `1.28` DOM step only
+advances the version: Auto stays Auto and every explicit or legacy input colour is kept exactly, so
+no per-asset assumption is recorded. The opened document's source version is reported by the open
+path (`SessionOpenResult::openedDocumentSchemaVersion()`). When it is below `1.28` and a video asset
+in Auto has stored stream tags that take the new default, Open shows a one-time information note
+naming how many video assets now look less pale. Saving writes `1.28`, so the note does not return.
+
 ## Composition Folders In Document 1.27
 
 A composition gains an optional `folder` member after `timecode` (#378):
@@ -1579,14 +1593,14 @@ advances the version: every new member is optional, so no record is inserted or 
 
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.27.schema.json` and
-`manifest-1.27.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The current document and manifest schema artifacts are `document-1.28.schema.json` and
+`manifest-1.28.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
 The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
 likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
 defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step,
 1.20 → 1.21 LUT step, 1.21 → 1.22 locator version step, 1.22 → 1.23 layer-time step,
-1.23 → 1.24 layer-mask version step, 1.24 → 1.25 video-metadata step, 1.25 → 1.26 channel-set step
-and 1.26 → 1.27 composition-folder version step.
+1.23 → 1.24 layer-mask version step, 1.24 → 1.25 video-metadata step, 1.25 → 1.26 channel-set step,
+1.26 → 1.27 composition-folder version step and 1.27 → 1.28 video-colour-default version step.
 
 `AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
 interpretation, dimensions and organization envelope, with a closed `video` member before

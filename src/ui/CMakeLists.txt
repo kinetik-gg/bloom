@@ -22,7 +22,11 @@ target_sources(
         kit/color_picker.cpp
         kit/color_sampler.cpp
         kit/color_swatches.cpp
+        kit/dialog.cpp
+        kit/dialog_prompts.cpp
         kit/dropdown.cpp
+        kit/file_chooser.cpp
+        kit/network_shares.cpp
         kit/search_popup.cpp
         kit/section.cpp
         kit/dropdown_popup.cpp
@@ -46,6 +50,7 @@ target_sources(
         kit/thumbnail.cpp
         kit/title_bar.cpp
         kit/tokens.cpp
+        kit/task_dialog.cpp
         kit/typography.cpp
         kit/value_field.cpp
     PUBLIC
@@ -58,7 +63,11 @@ target_sources(
             include/bloom/ui/kit/color_picker.hpp
             include/bloom/ui/kit/color_sampler.hpp
             include/bloom/ui/kit/color_swatches.hpp
+            include/bloom/ui/kit/dialog.hpp
+            include/bloom/ui/kit/dialog_prompts.hpp
             include/bloom/ui/kit/dropdown.hpp
+            include/bloom/ui/kit/file_chooser.hpp
+            include/bloom/ui/kit/network_shares.hpp
             include/bloom/ui/kit/search_popup.hpp
             include/bloom/ui/kit/section.hpp
             include/bloom/ui/kit/dropdown_popup.hpp
@@ -81,6 +90,7 @@ target_sources(
             include/bloom/ui/kit/slider.hpp
             include/bloom/ui/kit/split_handle.hpp
             include/bloom/ui/kit/switch_control.hpp
+            include/bloom/ui/kit/task_dialog.hpp
             include/bloom/ui/kit/theme.hpp
             include/bloom/ui/kit/title_bar.hpp
             include/bloom/ui/kit/tokens.hpp
@@ -381,6 +391,7 @@ target_sources(
         script_panel.hpp
         frame_export_controller.cpp
         frame_export_controller_composition.cpp
+        frame_export_controller_dialogs.cpp
         frame_export_controller_deliverables.cpp
         composition_export_dialog.cpp
         composition_export_dialog.hpp
@@ -413,7 +424,6 @@ target_sources(
         reveal_in_file_manager.hpp
         import_progress_dialog.cpp
         import_progress_dialog.hpp
-        network_share_paths.cpp
         network_share_paths.hpp
         media_disk_cache_settings.cpp
         node_editor.cpp
@@ -441,6 +451,15 @@ target_sources(
         path_editing.cpp
         composition_presets.cpp
         composition_settings_dialog.cpp
+        safe_area_fields.cpp
+        safe_area_fields.hpp
+        project_change_check.cpp
+        project_change_check.hpp
+        project_item_delete.cpp
+        project_item_delete.hpp
+        project_color_settings_dialog.cpp
+        project_color_settings_dialog.hpp
+        h264_encoder_service.cpp
         timeline_layer_timing_gesture.cpp
         timeline_key_time.cpp
         timeline_key_time.hpp
@@ -527,6 +546,7 @@ target_sources(
             include/bloom/ui/editor_native_surface.hpp
             include/bloom/ui/native_surface_retirement.hpp
             include/bloom/ui/frame_export_controller.hpp
+            include/bloom/ui/h264_encoder_service.hpp
             include/bloom/ui/frameless_window_support.hpp
             include/bloom/ui/jobs_editor.hpp
             include/bloom/ui/licenses_window.hpp

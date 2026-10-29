@@ -89,6 +89,22 @@ writes back and never adds an undo entry. Choosing the value a dropdown already 
 edit. A recall list that must react to a repeat is a menu, not a dropdown: the Script panel's
 History is a menu button.
 
+## Dialogs
+
+Every dialog is a `kit::KDialog` ([ui-grammar.md](ui-grammar.md), Dialogs). The keys are the
+dialog's, so every dialog answers them the same way:
+
+| Key | Action |
+| --- | --- |
+| `Return` / `Enter` | Presses the focused button-row button, else the default button (Accept, or the safe action of a destructive prompt). Refused, and nothing happens, while that button is disabled. A field that uses Return itself keeps it: a multi-line field's newline, a value field opening or committing its editor |
+| `Ctrl+Return` / `Ctrl+Enter` (`Cmd` on macOS) | Always presses Accept, from any field, including a multi-line field and an open value-field editor, which commits what was typed first. Refused while the dialog is invalid |
+| `Escape` | Rejects the dialog. When a field's own editor is open (a value field being typed into, an open dropdown or colour picker popup) the first Escape belongs to that field and the dialog stays; the next Escape rejects |
+
+A value the dialog refuses keeps its accept button disabled and says why under its own field; a
+prompt never closes and reopens to refuse. A dialog that edits project items (Edit Tags, Input
+Colour, Delete) also refuses, live and again at accept, when the project changed while it was open,
+and commits nothing; cancel and open it again.
+
 ## Viewer
 
 Selected layers show their delivered-frame bounds polygon and anchor. Position moves the anchor in
@@ -124,7 +140,7 @@ visible Viewer, the window makes no displayed qualification claim.
 | View → Safe Areas / Centre Cross / Thirds / Rulers / Pixel Grid | Toggles display-only guides; Safe Areas uses the active composition's stored percentages |
 | View → Safe Area Preset | Applies Broadcast, HD, Cinema, Social, or validated Custom percentages in one undoable composition edit |
 | Select → All / None / Invert | Selects, clears, or inverts the current composition's layer boundaries |
-| Composition menu / selector trailing menu | New Composition, Composition Settings, Duplicate, Rename, and Delete Composition; Composition Settings, Duplicate, Rename, and Delete are disabled while no composition is active, and Delete may remove the final composition (returning to the blank project) |
+| Composition menu / selector trailing menu | New Composition, Composition Settings, Duplicate, Rename, and Delete Composition; Composition Settings, Duplicate, Rename, and Delete are disabled while no composition is active, and Delete may remove the final composition (returning to the blank project). Delete Composition here, in the Composition menu and in Assets is one delete path: an unused composition goes at once, a used one warns with its usage first (Assets, below). Rename asks in a prompt that keeps an unusable name's reason inside it |
 | `Ctrl+0` | Fit |
 | `Ctrl+1` | Actual size (100%) |
 | Middle drag | Pan |
@@ -302,7 +318,7 @@ Viewer composition menu, and the Assets Add menu, footer and context menus.
 | --- | --- |
 | Name | Required |
 | Preset | Custom, the user's presets, then HD 1080p (1920 × 1080), HD 720p (1280 × 720), UHD 4K (3840 × 2160), DCI 2K (2048 × 1080), DCI 4K (4096 × 2160), Vertical 1080 × 1920 and Square 1080, all square pixels. Under the preset a muted summary reads the current values, for example `1920 × 1080 · 16:9 · Square pixels · 24 fps · 10 s (240 frames)`: the frame aspect (size times pixel aspect, reduced, or a ratio to one at two decimals such as `1.9:1` when its terms exceed 32), the pixel aspect, the rate (with `drop-frame` when labels are drop-frame) and the duration; a part whose value is invalid is left out. Choosing a built-in sets size and pixel aspect only; choosing a user preset sets every value it holds. The field shows the first preset whose values equal the current ones (user presets first) and Custom otherwise, including while a value is invalid |
-| Save as preset… / Rename preset… / Delete preset | The three buttons beside the preset (plus, pencil, trash). Save names the current values as a user preset; Rename and Delete act on the selected user preset and are disabled on Custom and built-ins. Names are trimmed, at most 128 UTF-8 bytes and unique ignoring case. User presets are a per-user application setting, never project data. A refused name is reported under the preset |
+| Save as preset… / Rename preset… / Delete preset | The three buttons beside the preset (plus, pencil, trash). Save names the current values as a user preset; Rename and Delete act on the selected user preset and are disabled on Custom and built-ins. Names are trimmed, at most 128 UTF-8 bytes and unique ignoring case. User presets are a per-user application setting, never project data. A refused name is reported inside the name prompt, which keeps its OK disabled; Delete asks first |
 | Size and lock | Width and height in pixels; the link toggle keeps the aspect ratio while one is edited |
 | Pixel Aspect Ratio | Square, D1/DV NTSC (10/11) and widescreen (40/33), D1/DV PAL (59/54) and widescreen (118/81), HDV 1080 / DVCPRO HD 720 (4/3), DVCPRO HD 1080 (3/2), and Anamorphic 2:1; a stored ratio outside the list is shown as its own entry |
 | Frame Rate | One dropdown: 23.976 (24000/1001), 24, 25, 29.97 (30000/1001), 30, 48, 50, 59.94 (60000/1001) and 60 fps, then Custom. Only Custom shows the exact rate field beside it, which takes a positive integer, exact decimal (`29.97` is `2997/100`), or `numerator/denominator`; entered components must fit signed 64-bit integers and the reduced rate's components 32 bits. Typing in the Custom field stays Custom; a rate that equals a preset shows that preset whenever it is set any other way |
@@ -316,7 +332,10 @@ Viewer composition menu, and the Assets Add menu, footer and context menus.
 
 An invalid value disables OK and shows one plain reason directly under its own field (name, size,
 frame rate, start, duration or title safe). A reason under Title Safe opens Advanced so it is never
-hidden.
+hidden. Save as preset… and Rename preset… ask for the name in a prompt that shows a refused name's
+reason (empty, too long, or already used) inside the prompt; Delete preset asks first, because a
+preset is a per-user setting that Undo cannot restore. Action and Title Safe are the same control
+as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
 
 ## Nodes
 
@@ -535,12 +554,13 @@ path where a window manager claims Alt-drag. Its object names are `layerStartFra
 Bar magnetic targets are other layers' in/out points, the playhead and work-area edges. A guide
 marks the chosen target. Empty lane space retains ruler scrubbing. Visibility, solo and lock cells
 commit their boundary commands; audio and Parent columns stay hidden. A label menu offers eight
-presets, a custom RGB picker and Kind Default. Name editing consumes text/navigation keys before
+presets, Custom… (the kit colour picker popup under the row, committing one Set Layer Label Color
+step when it closes with a new colour; Escape keeps the old one) and Kind Default. Name editing consumes text/navigation keys before
 Timeline commands. Parenting remains separate work.
 
 New object names: `timelineSetWorkAreaStartAction`, `timelineSetWorkAreaEndAction`,
 `timelineSplitLayerAction`, `timelineLayerInsertionIndicator`, `timelineLayerRenameEditor`,
-`timelineLayerContextMenu`, `timelineLayerLabelColorDialog`. Existing object names are retained,
+`timelineLayerContextMenu`, `timelineLayerLabelColorPicker`. Existing object names are retained,
 including the hidden `layerParentDropdown`.
 
 Expanded layers contain Transform (Position, Anchor, Scale, Rotation), Appearance (Opacity,
