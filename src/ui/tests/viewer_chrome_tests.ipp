@@ -58,6 +58,13 @@ void testViewerFooterLayoutAtEveryWidth(Expectations& expectations) {
         for (const char* name : kNeverCollapses)
             expectations.expect(control(name) != nullptr && !control(name)->isHidden(),
                                 std::string{name} + " never collapses" + at);
+        // Last of all, the frame field drops its duration rather than leave the row.
+        if (auto* duration = footer->findChild<ui::kit::KLabel*>("viewerTimeReadoutDuration");
+            width == 320 || width == 1920)
+            expectations.expect(duration != nullptr && duration->isHidden() == (width == 320),
+                                "the frame field shows its duration unless the footer is at its "
+                                "narrowest" +
+                                    at);
         // The collapse order: once a rank has left the row, every lower rank has too.
         int highestCollapsed = 0;
         for (const auto& entry : kFooterRanks)
@@ -216,7 +223,9 @@ void testViewerEmptyProjectChrome(Expectations& expectations) {
     expectations.expect(viewer->timeReadoutTextForTest() == QStringLiteral("00:00:00:00") &&
                             !viewer->findChild<QWidget*>("viewerTimeReadout")->isEnabled() &&
                             viewer->findChild<ui::kit::KLabel*>("timelineTimeReadout")->tone() ==
-                                ui::kit::Color::Faint,
+                                ui::kit::Color::Faint &&
+                            viewer->findChild<ui::kit::KLabel*>("viewerTimeReadoutDuration")
+                                ->isHidden(),
                         "the readout shows a disabled zero in its own format, never a dash");
 
     auto* invitation = viewer->findChild<QWidget*>("viewerEmptyState");

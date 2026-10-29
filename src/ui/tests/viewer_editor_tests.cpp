@@ -39,6 +39,7 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
+#include <bloom/ui/timeline_ruler.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 
 #include <QApplication>
@@ -46,6 +47,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
+#include <QFocusEvent>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -1403,6 +1405,26 @@ void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
     }
     expectations.expect(fixture.viewer.timeReadoutTextForTest() == QStringLiteral("0"),
                         "the readout starts on the frame-index format");
+    // The field carries the composition's duration after the current frame, in muted ink.
+    const auto* const frameComposition = fixture.session.composition();
+    const auto lastFrame =
+        ui::maxFrameIndex(frameComposition->format().frameRate(), frameComposition->duration());
+    auto* duration = fixture.viewer.findChild<ui::kit::KLabel*>("viewerTimeReadoutDuration");
+    expectations.expect(duration != nullptr && lastFrame.has_value() &&
+                            duration->text() ==
+                                QStringLiteral(" / %1").arg(*lastFrame + 1) &&
+                            duration->tone() == ui::kit::Color::Muted,
+                        "the field shows the duration in frames after the current frame, muted");
+    // Its width fits the longest value and never follows the current one.
+    const int restingWidth = readout->width();
+    const int framesFullWidth = readout->sizeHint().width();
+    for (const int seconds : {1, 3, 0}) {
+        (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(seconds));
+        QCoreApplication::processEvents();
+        expectations.expect(readout->width() == restingWidth &&
+                                readout->height() == ui::kit::px(ui::kit::Size::Control),
+                            "the frame field keeps one width and the control height as time moves");
+    }
 
     // A click opens the editor seeded with the current frame; typing a number and pressing Return
     // moves session time to that frame's EXACT mapped time.
@@ -1467,10 +1489,46 @@ void testTimeReadoutEditsFramesAndSwitchesFormat(Expectations& expectations) {
     QMetaObject::invokeMethod(editor, "returnPressed");
     expectations.expect(expectedTimecode && fixture.session.currentTime() == *expectedTimecode,
                         "invalid timecode leaves time unchanged");
+    expectations.expect(duration != nullptr && lastFrame.has_value() &&
+                            duration->text() ==
+                                QStringLiteral(" / ") +
+                                    ui::formatTimelineFrameLabel(
+                                        *lastFrame + 1, composition->format().frameRate(), true),
+                        "in timecode the duration reads as timecode too");
+    const int timecodeWidth = readout->width();
+    (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(1));
+    QCoreApplication::processEvents();
+    expectations.expect(readout->sizeHint().width() > framesFullWidth &&
+                            readout->width() == timecodeWidth,
+                        "the timecode reading is wider, and as steady as the frame reading");
     (void)fixture.session.setCurrentTime(core::RationalTime::fromInteger(3));
     frames->trigger();
     expectations.expect(fixture.viewer.timeReadoutTextForTest() == QStringLiteral("72"),
                         "Frames restores the frame-index reading");
+    expectations.expect(readout->width() == restingWidth, "and its width");
+
+    // Escape confirms, like Return; so does clicking away.
+    QCoreApplication::sendEvent(readout, &press);
+    editor->setText(QStringLiteral("7"));
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(editor, &escape);
+    QCoreApplication::processEvents();
+    const auto seventh =
+        ui::frameTimeForIndex(composition->format().frameRate(), composition->duration(), 7);
+    expectations.expect(seventh.has_value() && fixture.session.currentTime() == *seventh &&
+                            fixture.viewer.timeReadoutTextForTest() == QStringLiteral("7"),
+                        "Escape commits the typed frame");
+    QCoreApplication::sendEvent(readout, &press);
+    editor->setText(QStringLiteral("9"));
+    QFocusEvent focusOut(QEvent::FocusOut, Qt::MouseFocusReason);
+    QCoreApplication::sendEvent(editor, &focusOut);
+    QCoreApplication::processEvents();
+    const auto ninth =
+        ui::frameTimeForIndex(composition->format().frameRate(), composition->duration(), 9);
+    expectations.expect(ninth.has_value() && fixture.session.currentTime() == *ninth,
+                        "clicking away commits the typed frame");
+    expectations.expect(readout->toolTip().contains(QStringLiteral("Right-click")),
+                        "the tooltip says how to switch the reading");
 
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
     QSettings().remove("timeline/time-format");

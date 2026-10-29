@@ -196,7 +196,6 @@ enum class Size : int {
     ToolColumnWidth = 32,
     ViewerChannelWidth = 80,
     ViewerModeWidth = 108,
-    ViewerTimecodeWidth = 104,
     ViewerZoomWidth = 64,
     ViewerResolutionWidth = 96,
     // The Resolution dropdown's compact form (Auto, Full, ½, ¼) when the footer runs short.

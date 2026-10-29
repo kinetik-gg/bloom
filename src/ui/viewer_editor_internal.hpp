@@ -89,6 +89,8 @@ enum CollapseRank : int {
     CollapseRamPreview = 8,
     CollapseStepToEnds = 9,
     CollapseFraming = 10,
+    // Last of all, the frame field drops its duration and keeps the current value.
+    CompactFrameField = 11,
 };
 
 [[nodiscard]] std::optional<color::ResolvedBloomNeutralConfig>
