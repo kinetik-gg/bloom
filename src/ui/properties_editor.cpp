@@ -230,6 +230,7 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
     bindCommits();
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &PropertiesEditor::rebuild);
+    connect(&session_, &QObject::destroyed, this, [this] { sessionGone_ = true; });
     connect(&session_, &CompositionSession::liveValueChanged, this,
             &PropertiesEditor::refreshLiveValues);
     connect(&session_, &CompositionSession::compositionChanged, this, &PropertiesEditor::rebuild);
@@ -302,6 +303,8 @@ void PropertiesEditor::commitRotationFromControls() {
 PropertiesEditor::~PropertiesEditor() {
     // Nothing in this panel listens to the session once it starts to go: a cell torn down with a
     // live edit cancels it, and the session's answer must not reach a half-destroyed panel.
+    if (sessionGone_)
+        return;
     disconnect(&session_, nullptr, this, nullptr);
     for (auto* object : findChildren<QObject*>())
         disconnect(&session_, nullptr, object, nullptr);

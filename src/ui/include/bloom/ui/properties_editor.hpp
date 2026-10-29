@@ -246,6 +246,8 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     QLabel* dataBlockReaders_ = nullptr;
 
     bool rebuilding_ = false;
+    // Set when the session goes first (a project replacement), so teardown never touches it.
+    bool sessionGone_ = false;
     // True between a cell's scrubStarted() and its scrubFinished()/scrubCancelled(). One flag for
     // the panel, because the panel has one pointer on it.
 };
