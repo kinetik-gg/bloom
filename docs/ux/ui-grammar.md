@@ -23,7 +23,7 @@ This contract supersedes conflicting component metrics in [Visual Language](visu
 
 Every interactive control is a kit class: `KDropdown`, `KMenuButton`, `KButton`,
 `KIconButton`, `KIconToggle`, `KCheckBox`, `KSwitch`, `KValueField`, `KSlider`,
-`KSearchField`, `KLineEdit`, `KSection`, `KRadioGroup`, or `KColorSwatchRow`. Text uses TypeRole-bound `KLabel`.
+`KSearchField`, `KLineEdit`, `KFieldFrame`, `KSection`, `KRadioGroup`, or `KColorSwatchRow`. Text uses TypeRole-bound `KLabel`.
 Read-only progress uses `KProgressBar` (see "Import Progress Dialog" below). A read-only picture
 uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken`, showing a
 worker-decoded proxy or a glyph fitted without changing its aspect ratio; it never loads anything.
@@ -40,7 +40,7 @@ All dimensions resolve through tokens. One design pixel is one Qt logical pixel.
 
 | Token | Logical pixels | Contract |
 | --- | --- | --- |
-| `Size::Control` | 26 | All header, footer and row controls |
+| `Size::Control` | 26 | Every header, footer and row control: buttons, icon buttons, toggles, dropdowns, value and text fields, segmented bars |
 | `Spacing::ControlInset` | 1 | The air between a control's widget and its painted box on every side: every control paints a `ToggleCell`-tall (24) box |
 | `Size::HeaderRow` | 32 | Panel header |
 | `Size::FooterRow` | 32 | Optional panel footer |
@@ -60,6 +60,45 @@ All dimensions resolve through tokens. One design pixel is one Qt logical pixel.
 Editor literals in fixed extents, QSize, pixel multiplication or geometry arithmetic are
 quality violations. Existing specialized canvas tokens remain valid; new dimensions require
 an owned semantic token, never a local pixel constant.
+
+## One control look, one control height
+
+Every clickable control that is not text entry wears ONE look, the Secondary recipe of
+`kit::buttonColors()` (the Viewer footer's RAM Preview button is the reference): a `SurfaceRaised`
+plate, one surface rung up under the pointer and one down while pressed, a hairline border by state,
+`Foreground` ink for labels and glyphs alike, an `Accent` border under keyboard focus, and the
+`Accent` plate with `OnAccent` ink when checked (loop on, ROI on, a linked scale, an open sampler).
+It covers `KButton` Secondary, every `KIconButton` (the transport, footer toggles, View options,
+panel header maximize and full screen, the Timeline and Assets footer buttons, dialog preset
+buttons), `KIconToggle`, every `KDropdown` closed field (the panel switcher, the composition and
+layer pickers, Fit, Resolution, Channel, Display / View, the Timeline row's Blending, Parent and
+Matte, Properties and node-card dropdowns, dialog dropdowns), the frame of a square `KColorChip`
+(the colour itself is the swatch inside it), the `KSection` header buttons, and the
+`KRadioGroup` segmented bar, whose segments share the plate, hover rung and Selected plate.
+
+The exceptions are deliberate and closed:
+
+| Exception | Why |
+| --- | --- |
+| Panel menu titles (`KMenuButton`: View, Select, Add, the Timeline and Nodes menus) | Menus, like a menu bar's titles, not buttons: flat text with the `Accent` hover bar |
+| Text entry (`KValueField`, `KLineEdit`, `KSearchField`, the Viewer frame field) | The one text-entry recipe, `kit::fieldColors()`: a `Field` well, so an editable value never reads as a button. A field standing in a chrome row or on a node card keeps a resting `Border`; a property cell rests borderless |
+| Timeline layer switches (eye, audio, solo, lock) | The glyph is the state (an eye that is there or not), so a switch never takes the Accent plate; its cell is the Secondary plate |
+| The tool column | Keeps its plate-less (Ghost) choices with the Selected plate until the tools move to the contextual bar |
+| Ghost | Only where a control deliberately has no resting surface: disclosure carets (layer and property disclosure, the RGBA and multiline expanders) and the window title bar buttons |
+
+There is no Recessed recipe and no `ControlSurface` token any more: both existed only for the
+header icon buttons and dropdown fields this look replaced.
+
+Every control in a row is one `Size::Control` (26) tall at every device pixel ratio and paints
+its body in `kit::controlBody()`: `controlBounds()`, `Spacing::ControlInset` in on every side, so
+every painted body is `ToggleCell` (24) tall and shares its row's vertical centre. Icon buttons
+and toggles are `Control` squares. A dense strip whose geometry is a fixed cell pitch (the
+timeline's layer switches, the tool column) uses `ToggleCell` cells instead, which are already
+exactly that body; that is the one compact token, and no call site sizes a control of its own.
+`KButton`'s Compact size is the same height with tighter padding, and `KDropdown::ControlSize::Dense`
+likewise. `control_geometry_tests.cpp` walks every chrome row, panel header and row of the
+main-window fixture (Viewer, Timeline, Nodes, Assets, Properties) and holds both rules, and checks
+that every kind's resting colours come from the one recipe.
 
 ## Rasterization and type
 
@@ -251,20 +290,21 @@ The footer (`viewerFooter`) is a priority row of three groups:
 | Group | Controls |
 | --- | --- |
 | Leading (view and display) | Channel (`ViewerChannelWidth`), Transparency Grid toggle, ROI toggle, Clear ROI, exposure (EV) and gamma (`ViewerAdjustWidth`), Display / View (its items' widest, `DropdownWidth`..`ViewerDisplayViewWidth`), Look |
-| Centre (time) | Go to start, step back, play/pause, step forward, go to end, loop, the time readout (`ViewerTimecodeWidth`), centred in the row while there is room and never stranded from the transport |
+| Centre (time) | Go to start, step back, play/pause, step forward, go to end, loop, the frame field, centred in the row while there is room and never stranded from the transport |
 | Trailing (framing and quality) | Zoom (`ViewerZoomWidth` floor), Resolution (`ViewerResolutionWidth`), RAM Preview |
 
 As the footer narrows, controls leave the row in this order, each offered in the View options
 overflow (`viewerFooterOverflowButton`, `SlidersHorizontal`, menu `viewerFooterOverflowMenu`) under
 its full label: Look, Display / View, exposure and gamma (as labelled fields plus Reset Exposure
 and Gamma), ROI and Clear ROI, Transparency Grid, Channel; then Resolution compresses to Auto / Full / ½ / ¼ at
-`ViewerResolutionCompactWidth`; then RAM Preview, go to start/end, and finally Zoom and
-Resolution. Step back, play, step forward, loop and the readout never collapse. No control is
+`ViewerResolutionCompactWidth`; then RAM Preview, go to start/end, then Zoom and Resolution; and
+last of all the frame field drops its duration, keeping the current value in a box that fits any
+timecode. Step back, play, step forward, loop and the frame field never collapse. No control is
 clipped at any width down to the panel minimum.
 
-Every footer control is one `Control` slot painting a `ToggleCell` plate. The Transparency Grid,
-ROI, Look and loop toggles and the transport are `KIconButton`s with `IconRole::Control` glyphs; a
-checked toggle shows the one Selected plate. The Transparency Grid toggle carries the Phosphor
+Every footer control is one `Control` slot painting a `ToggleCell` body in the one control look.
+The Transparency Grid, ROI, Look and loop toggles and the transport are `KIconButton`s with
+`IconRole::Control` glyphs in `Foreground` ink; a checked toggle shows the one Selected plate. The Transparency Grid toggle carries the Phosphor
 `square-half` glyph (the pinned set has no checkerboard) and is View > Transparency Grid's own
 action (`viewerTransparencyGridAction`). The ROI toggle carries the Phosphor `selection` glyph;
 Clear ROI shows only while a region exists. RAM Preview is a labelled Secondary `KButton` toggle whose label reads the
@@ -273,7 +313,18 @@ dot while they differ from 0 / 1 and reset by a double-click on their label or f
 menu. Display / View shows the view name (qualified by its display only when several displays
 share it); the display, view and colour space are in its tooltip and the View menu. Background is
 chosen from View; the retired `viewerBackgroundDropdown` and `viewerResolutionReadout` identities
-remain for automation. With no composition the readout shows `00:00:00:00` (or `0`) disabled.
+remain for automation.
+
+The frame field (`viewerTimeReadout`) closes the transport cluster, one `ChromeGap` after loop like
+every transport button. It is a text-entry `Field` box one control tall (`kit::KFieldFrame`) showing the current frame in
+the `Value` role and the composition's duration after it in muted ink: `120 / 240` in frames, or
+`00:00:05:00 / 00:00:10:00` in timecode. Its width is fixed from the composition's longest value
+(its last frame's label and the duration) and changes only with the composition or the reading, so
+nothing moves during playback; the current value right-aligns in its column. A click opens the kit
+line edit in the same box; Return, Escape and clicking away all commit (an unparseable entry
+reverts). Its context menu switches Frames / Timecode, and its tooltip names the reading and how to
+change it. With no composition it shows `00:00:00:00` (or `0`) disabled in the same box, with no
+duration.
 
 ### Viewer canvas and empty state
 
@@ -314,7 +365,7 @@ context menu. Dropdown-backed submenus mirror their footer dropdown item for ite
 | Add | Solid, Text; the shape kinds; Import and Add… (the drop path's import, then layers at the playhead) |
 | Canvas context menu | On a layer: Select it, Duplicate Layer, Delete Layer; then Fit, 100%, Zoom In, Zoom Out; Add ▸, Guides ▸; Composition Settings…. The anchor menu stays first while a path is edited |
 
-The time readout defaults to `HH:MM:SS:FF`, honors `timeline/time-format`, accepts either
+The frame field defaults to `HH:MM:SS:FF`, honors `timeline/time-format`, accepts either
 non-drop timecode or an exact frame index, clamps to the composition, and rejects invalid
 fields without changing time. It uses nominal-rate timecode and exact rational frame mapping.
 
@@ -441,7 +492,6 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `ViewerResolutionCompactWidth` | 64 | Resolution in its compact form |
 | `ViewerEmptyStateWidth` | 320 | No-composition invitation column |
 | `NonDefaultMark` | 4 | A value field's differs-from-default dot |
-| `ViewerTimecodeWidth` | 104 | Stable time readout |
 | `ViewerZoomWidth` | 64 | Fit/zoom dropdown |
 | `ViewerResolutionWidth` | 96 | Resolution dropdown |
 | `NodeCardWidth` | 240 | Normal card floor |

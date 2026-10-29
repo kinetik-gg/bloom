@@ -158,16 +158,16 @@ different things. The play button reports whether the range it is about to play 
 
 | Gesture or control | Action |
 | --- | --- |
-| Click the frame/time readout | Opens an inline editor seeded with the current frame index |
+| Click the frame field | Opens an inline editor seeded with the current frame in the field's reading |
 | Type a frame number, `Return` | Seeks to that frame's exact mapped time, clamped to the composition's range |
-| `Escape` or focus loss while editing | Cancels; an unparseable entry reverts in silence |
-| Right-click the readout > Frames / Timecode | Switches the reading between a frame index and non-drop timecode |
+| `Escape` or focus loss while editing | Commits, like `Return` (Escape confirms everywhere); an unparseable entry reverts in silence |
+| Right-click the frame field > Frames / Timecode | Switches the reading between a frame index and non-drop timecode |
 
-The readout's editor always takes a frame INDEX, even while the label is showing timecode: it is
-the one entry form that needs no parsing rules of its own. Frames / Timecode writes the same
-`timeline/time-format` preference the Timeline's own View menu writes, so the ruler's tick labels
-and this readout cannot disagree about the format. Exact composition seconds stay visible beside
-either reading.
+The field's editor takes a frame number or a timecode in the composition's own numbering (start
+timecode, drop-frame), whichever reading is showing. The field shows the composition's duration
+after the current value (`120 / 240`, `00:00:05:00 / 00:00:10:00`). Frames / Timecode writes the
+same `timeline/time-format` preference the Timeline's own View menu writes, so the ruler's tick
+labels and this field cannot disagree about the format.
 
 The guide toggles, under View > Guides, use `Ctrl+Alt+S` for Safe Areas and `Ctrl+Shift+C`,
 `Ctrl+Shift+T`, `Ctrl+Shift+R`, and `Ctrl+Shift+P` for Centre Cross, Thirds, Rulers, and Pixel Grid.

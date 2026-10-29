@@ -44,7 +44,6 @@ snapped to a whole number of physical pixels at the device pixel ratio in use
 | `Surface` | `#181818` | Panel chrome: headers, status bar, toolbars, list rows |
 | `SurfaceRaised` | `#222222` | Menus, popups, dialogs, raised controls, and the hover step on Surface |
 | `Field` | `#2B2B2B` | Input cells: value fields, slider tracks |
-| `ControlSurface` | `#0E0E0E` | Header-variant icon buttons and every dropdown closed field -- darker than `Background` itself, by design |
 | `Foreground` | `#FFFFFF` | Primary text and active icons |
 | `OnAccent` | `#FFFFFF` | Text and glyphs on an `Accent` surface |
 | `Muted` | `#999999` | Secondary text, resting icons, units |
@@ -235,11 +234,25 @@ relation the accent triple already states rather than inventing its own pair of 
 blends toward `Foreground` by the same amount `AccentHover` does, and press scales the channels by
 the same factor `AccentPressed` does.
 
-Buttons share one recipe, `kit::buttonColors()`: `KButton`'s Primary, Secondary, Ghost and Danger,
-the recessed `KIconButton`, and the `KMenuButton` menu-strip title -- whose stylesheet rules, like
-the stock `QPushButton` ones, are generated from the same function. Danger rests outlined in
-`Error` and fills only once the pointer commits. A dialog's default `QPushButton` wears the
-Primary plate.
+Buttons share one recipe, `kit::buttonColors()`, and one look: Secondary. Every clickable control
+that is not text entry rests on it -- `KButton`, `KIconButton`, `KIconToggle`, every `KDropdown`
+closed field, the `KRadioGroup` segmented bar and a square `KColorChip`'s frame (see "One control
+look, one control height" in `ui-grammar.md` for the full list and its closed exceptions).
+
+| Kind | Rest | Hover | Pressed | Checked | Keyboard focus | Disabled |
+| --- | --- | --- | --- | --- | --- | --- |
+| Secondary (the control look) | `SurfaceRaised` plate, `Border` hairline, `Foreground` ink and glyph | `Field` plate, `BorderHover` | `Surface` plate, `BorderHover` | `Accent` plate, `OnAccent` ink | `Accent` border | Plate still, ink at 40% |
+| Primary | `Accent` plate, `OnAccent` ink | `AccentHover` | `AccentPressed` | -- | `Foreground` border | Faded plate and ink |
+| Ghost (disclosure carets, the title bar) | Nothing, `Muted` ink | `SurfaceRaised` plate, `BorderHover` | `Background` plate | `Accent` plate | `Accent` border | Ink at 40% |
+| Danger | `Error` outline and ink | Filled `Error` (the accent relation) | Pressed `Error` | -- | `Accent` border | Faded outline |
+| MenuItem (panel menu titles) | Flat text | `Accent` bar, `OnAccent` | `AccentPressed` bar | -- | `Accent` border | Ink at 40% |
+| Field (text entry, `kit::fieldColors()`) | `Field` well; `Border` in a chrome row or on a node card, none in a property cell | `BorderHover` | -- | -- | `Accent` while editing or focused | Ink at 40% |
+
+The `KMenuButton` menu-strip title and the kit line edits have stylesheet rules, like the stock
+`QPushButton` ones, generated from the same two functions. Danger rests outlined in `Error` and
+fills only once the pointer commits. A dialog's default `QPushButton` wears the Primary plate.
+There is no Recessed recipe: the header icon buttons and dropdown fields that used a darker
+`ControlSurface` well now wear the control look, and the token is gone.
 
 | Surface | Recipe |
 | --- | --- |
