@@ -106,6 +106,7 @@ void ViewerEditor::buildHeader() {
             if (const auto id = showNewCompositionDialog(session_, *this); id.has_value())
                 (void)session_.setComposition(*id);
         });
+    viewerCompositionNewAction_->setIcon(kit::icon(kit::IconId::Composition, kit::IconRole::Chrome));
     viewerCompositionDuplicateAction_ = addCompositionAction(
         tr("Duplicate Composition"), QStringLiteral("viewerDuplicateCompositionAction"),
         QStringLiteral("compositionDuplicateAction"), [this] {
@@ -199,7 +200,9 @@ void ViewerEditor::rebuildCompositionSelector() {
     int index = 0;
     for (const auto& composition : compositions) {
         const auto name = QString::fromStdString(composition.name());
-        compositionSelector_->addItem(name,
+        // Every composition reads as one: the film strip, monochrome like every kind glyph.
+        compositionSelector_->addItem(kit::icon(kit::IconId::Composition, kit::IconRole::Chrome),
+                                      name,
                                       QVariant::fromValue<qulonglong>(composition.id().value()));
         compositionSelector_->setItemToolTip(index,
                                              tr("Composition shown in the Viewer: %1").arg(name));
@@ -623,7 +626,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
 
     // RAM Preview: a labelled toggle, because caching a range and playing it are different
     // commands; its label carries the caching progress (updateRamPreviewButton()).
-    ramPreviewButton_ = new kit::KButton(kit::IconId::Sequence, tr("RAM Preview"), footer);
+    ramPreviewButton_ = new kit::KButton(kit::IconId::RamPreview, tr("RAM Preview"), footer);
     ramPreviewButton_->setObjectName(QStringLiteral("timelineRamPreviewButton"));
     ramPreviewButton_->setAccessibleName(tr("RAM preview"));
     ramPreviewButton_->setToolTip(
@@ -642,7 +645,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     // sequence); the entry only shows it.
     ramPreviewAction_ = new QAction(tr("RAM Preview") + QStringLiteral("\tCtrl+Shift+Space"), this);
     ramPreviewAction_->setObjectName(QStringLiteral("viewerRamPreviewAction"));
-    ramPreviewAction_->setIcon(kit::icon(kit::IconId::Sequence, kit::IconRole::Chrome));
+    ramPreviewAction_->setIcon(kit::icon(kit::IconId::RamPreview, kit::IconRole::Chrome));
     ramPreviewAction_->setCheckable(true);
     ramPreviewAction_->setEnabled(ramPreview != nullptr);
 

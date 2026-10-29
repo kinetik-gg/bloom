@@ -18,8 +18,8 @@ namespace bloom::ui::kit {
 // a curated, pinned Phosphor subset (src/ui/kit/third_party/phosphor-icons/provenance.md).
 //
 // A few ids deliberately share one upstream glyph -- Minimize and Subtract are both a minus rule,
-// and there is no honest visual difference between them. Sharing the asset keeps the vocabulary
-// semantic without vendoring a duplicate file.
+// Zoom and Search both a magnifying glass -- and there is no honest visual difference between
+// them. Sharing the asset keeps the vocabulary semantic without vendoring a duplicate file.
 enum class IconId : std::uint8_t {
     // Window and panel chrome.
     Close,
@@ -66,10 +66,11 @@ enum class IconId : std::uint8_t {
     Error,
     Info,
     Link,
-    // Data kinds.
+    // Data kinds. Composition is the film strip wherever a composition is meant (an Assets row,
+    // New Composition, the nested-composition glyph); an image sequence is the Images stack.
     Keyframe,
     Folder,
-    Sequence,
+    FolderOpen,
     Clip,
     Image,
     Audio,
@@ -104,6 +105,11 @@ enum class IconId : std::uint8_t {
     RegionOfInterest,
     // The Viewer's Transparency Grid toggle (a half-filled square: the pinned set has no checker).
     TransparencyGrid,
+    // RAM Preview (a lightning bolt: the pinned set has no memory-chip glyph). Kept apart from
+    // Composition, whose film strip it used to share.
+    RamPreview,
+    // A panel's search toggle. Shares the magnifying glass with Zoom: one glyph, two meanings.
+    Search,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add

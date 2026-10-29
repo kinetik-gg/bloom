@@ -170,7 +170,8 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/clock.svg
         kit/third_party/phosphor-icons/regular/corners-in.svg
         kit/third_party/phosphor-icons/regular/corners-out.svg
-        kit/third_party/phosphor-icons/regular/cube.svg
+        kit/third_party/phosphor-icons/regular/folder-open.svg
+        kit/third_party/phosphor-icons/regular/lightning.svg
         kit/third_party/phosphor-icons/regular/cursor.svg
         kit/third_party/phosphor-icons/regular/diamond.svg
         kit/third_party/phosphor-icons/regular/dots-three-vertical.svg
@@ -238,7 +239,8 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/clock-bold.svg
         kit/third_party/phosphor-icons/bold/corners-in-bold.svg
         kit/third_party/phosphor-icons/bold/corners-out-bold.svg
-        kit/third_party/phosphor-icons/bold/cube-bold.svg
+        kit/third_party/phosphor-icons/bold/folder-open-bold.svg
+        kit/third_party/phosphor-icons/bold/lightning-bold.svg
         kit/third_party/phosphor-icons/bold/cursor-bold.svg
         kit/third_party/phosphor-icons/bold/diamond-bold.svg
         kit/third_party/phosphor-icons/bold/dots-three-vertical-bold.svg
@@ -294,7 +296,8 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/clock-fill.svg
         kit/third_party/phosphor-icons/fill/corners-in-fill.svg
         kit/third_party/phosphor-icons/fill/corners-out-fill.svg
-        kit/third_party/phosphor-icons/fill/cube-fill.svg
+        kit/third_party/phosphor-icons/fill/folder-open-fill.svg
+        kit/third_party/phosphor-icons/fill/lightning-fill.svg
         kit/third_party/phosphor-icons/fill/cursor-fill.svg
         kit/third_party/phosphor-icons/fill/diamond-fill.svg
         kit/third_party/phosphor-icons/fill/dots-three-vertical-fill.svg

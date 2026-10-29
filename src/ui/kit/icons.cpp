@@ -67,11 +67,11 @@ const auto& iconAssets() {
         {IconId::Link, QLatin1StringView("link-simple")},
         {IconId::Keyframe, QLatin1StringView("diamond")},
         {IconId::Folder, QLatin1StringView("folder")},
-        {IconId::Sequence, QLatin1StringView("film-strip")},
+        {IconId::FolderOpen, QLatin1StringView("folder-open")},
         {IconId::Clip, QLatin1StringView("film-slate")},
         {IconId::Image, QLatin1StringView("image")},
         {IconId::Audio, QLatin1StringView("music-notes")},
-        {IconId::Composition, QLatin1StringView("cube")},
+        {IconId::Composition, QLatin1StringView("film-strip")},
         {IconId::Text, QLatin1StringView("text-t")},
         {IconId::Stack, QLatin1StringView("stack")},
         {IconId::Clock, QLatin1StringView("clock")},
@@ -97,6 +97,8 @@ const auto& iconAssets() {
         {IconId::Eyedropper, QLatin1StringView("eyedropper")},
         {IconId::RegionOfInterest, QLatin1StringView("selection")},
         {IconId::TransparencyGrid, QLatin1StringView("square-half")},
+        {IconId::RamPreview, QLatin1StringView("lightning")},
+        {IconId::Search, QLatin1StringView("magnifying-glass")},
     });
     return entries;
 }

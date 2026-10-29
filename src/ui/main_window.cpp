@@ -404,6 +404,7 @@ void MainWindow::createMenus(QMenuBar& menuBar) {
 void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     newCompositionAction_ = compositionMenu.addAction("New Composition…");
     newCompositionAction_->setObjectName("compositionNewAction");
+    newCompositionAction_->setIcon(kit::icon(kit::IconId::Composition, kit::IconRole::Chrome));
     newCompositionAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_N));
     newCompositionAction_->setShortcutContext(Qt::WindowShortcut);
     connect(newCompositionAction_, &QAction::triggered, this, [this] {

@@ -437,7 +437,7 @@ void ViewerEditor::buildEmptyState() {
     hint->setTone(kit::Color::Muted);
     hint->setWordWrap(true);
     hint->setAlignment(Qt::AlignHCenter);
-    auto* button = new kit::KButton(tr("New Composition…"), emptyState_);
+    auto* button = new kit::KButton(kit::IconId::Composition, tr("New Composition…"), emptyState_);
     button->setObjectName(QStringLiteral("viewerNewCompositionButton"));
     button->setVariant(kit::KButton::Variant::Primary);
     button->setToolTip(tr("New Composition… (Ctrl+Alt+N)"));

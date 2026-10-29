@@ -1,6 +1,6 @@
 # Phosphor Icons Provenance
 
-Reviewed: 2026-09-15
+Reviewed: 2026-10-30
 
 ## Component
 
@@ -14,7 +14,7 @@ Reviewed: 2026-09-15
 | License | MIT |
 | License file | `LICENSE` (upstream `core-2.0.8/LICENSE`, byte-identical) |
 | License file SHA-256 | `b5b1f1da112d18ea2147decfd48ddc1bf2b5aeb6c265381579340e95b15a2bb2` |
-| Modified | Six pre-existing circle/magnet SVGs differ from the pinned archive; retained unchanged by this intake. All new MEDIA-1, #364, #376 and Viewer chrome glyphs are byte-identical. |
+| Modified | Six pre-existing circle/magnet SVGs differ from the pinned archive; retained unchanged by this intake. All new MEDIA-1, #364, #376, Viewer chrome and Assets glyphs are byte-identical. |
 
 MEDIA-1 downloaded the pinned codeload release archive on 2026-09-15 and computed its digest
 from the downloaded bytes. All twelve new files (folder-simple-plus, download-simple,
@@ -31,6 +31,11 @@ The Viewer background split (lane V2, 2026-10-29) downloaded the same pinned arc
 SHA-256 above from the downloaded bytes, and extracted `square-half` in regular, fill and bold from
 `assets/` without modification, for the Viewer's Transparency Grid toggle. The pinned release has no
 checkerboard glyph; a half-filled square is its transparency mark.
+The Assets panel redesign (lane P, 2026-10-30) downloaded the same pinned archive, verified its
+SHA-256 above from the downloaded bytes, and extracted `lightning` (the RAM Preview glyph; the
+pinned release has no `memory` chip) and `folder-open` (an expanded folder row) in regular, fill
+and bold from `assets/` without modification. The same intake retired `cube`: Composition now
+binds the already vendored `film-strip`, so the three `cube` files are no longer embedded.
 Issue #376 (Composition Settings preset rename) downloaded the same pinned archive on 2026-10-25,
 verified its SHA-256 above from the downloaded bytes, and extracted `pencil-simple` in regular,
 fill and bold from `assets/` without modification.
@@ -41,7 +46,7 @@ pre-existing exceptions; they do not claim that those exceptions are upstream-id
 
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
-embeds 64 of them in three weights (192 files). The three weights are exactly the three the
+embeds 67 of them in three weights (201 files). The three weights are exactly the three the
 Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
 
 - `regular` -- the resting interface weight, and the default of every non-role call.
@@ -51,7 +56,7 @@ Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp
 Task VIEW-1 completed the `bold` subset. It previously held five files (the timeline's own
 toggles); `IconRole::Chrome` asks for Bold on every chrome glyph in the application, so a partial
 subset would have rendered some chrome icons blank. All three weights are now complete over the
-same 64 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
+same 67 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
 exception list. The other three upstream weights (`thin`, `light`, `duotone`) are deliberately not
 vendored, because no Kinetik icon role names one.
 
@@ -85,7 +90,6 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/clock.svg` | `b8c6c2899d2b9af48a55ba02ba6d7faf89b757915772dd24f5397f7b0d02aa5c` |
 | `regular/corners-in.svg` | `31e9060aafdd6e24f4b8aef7742a89e7e616e6e2da07160691d020cb5ab07dee` |
 | `regular/corners-out.svg` | `fd79277404b3662b50b737127fb6bf6f63ae93c9b60d9f2aca9122a950ec08c8` |
-| `regular/cube.svg` | `7c0f13cb492d0dd212e48ab259dabec4627df32d71aa00ce31b3228c0f35112b` |
 | `regular/cursor.svg` | `f0ba62c40c27b39286904ad57ed71df3fbed8383b9fb4f00643db05a2d601bff` |
 | `regular/diamond.svg` | `7f9ebf5bb51a955c248da77b9b8a50226a7ecd81706b59e78233d7ad2a9d9d45` |
 | `regular/dots-six-vertical.svg` | `01e0c8e778cec9c1c0ff5c2e4aaadc5808a8d1dec0db8b9a51bcd5c5e9c8dcae` |
@@ -98,6 +102,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/eye.svg` | `91d39f20bf95e0f36c07bd79b83a85fe6ff4ca20e2759c4afee7419ef80403fe` |
 | `regular/film-slate.svg` | `58b84e6c5a2950cfa0d8cae68c04e65dc32407dde463c3a2c79d265464726e0c` |
 | `regular/film-strip.svg` | `6d079e87432258b9fe9eff9d10ababcfbca7a400537277a215360a436581987f` |
+| `regular/folder-open.svg` | `942efb250dee7be742d1891cc3e34d1cc7a0ee715d983ae3514b8b0e5dc156b8` |
 | `regular/folder-simple-plus.svg` | `723f8e4e8503114a0dcddeb18e5a5726b7ab87473a88510626289d57848a8779` |
 | `regular/folder.svg` | `4a882bcd4a91ae0a01887024f08d358932f183b6b171e87a3e48c5910364d507` |
 | `regular/gear.svg` | `5c0cb3ba307c72babf78d952d9140c682ff30307fedc7fbb87c9a293c1e2fd64` |
@@ -107,6 +112,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/image.svg` | `642a0575f7b5a7ea2f5fefa6f27a5dc57683911845b85213a7e33652c2a3179d` |
 | `regular/images.svg` | `7e8e0035864a6cc3e0ea1e0441d073b582001b74c374939fd8ece6ff55101a2b` |
 | `regular/info.svg` | `438a1f319d53d86e840af73fb7b1d224c9224a437b9fa449a4e2cb45a82a3552` |
+| `regular/lightning.svg` | `3a50c776266b21812f8ec5b5a841a81f54aa942569a31eb03a36fb0a5bfbe66e` |
 | `regular/link-simple.svg` | `7a97dad4b2f16c3a386ea69ba78d29bf3a71c311f2e34100d79143559ba13151` |
 | `regular/list.svg` | `fb1851842c74b40a3f42ce3d6ae0e67ede556b624218e79c0f4ead7d9ceec51f` |
 | `regular/lock-simple-open.svg` | `55c3dcdb0db66b65f4afab5ead515b0db381aecfbac9f61ec1e2691d83cc5330` |
@@ -156,7 +162,6 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/clock-fill.svg` | `4abe98cfc61350de60baf70ce93e85b3a9acbb80e34f9cf19688661aaddbc140` |
 | `fill/corners-in-fill.svg` | `ade092d133654ec69ee3484ed10b79523ffe23eb9b8f9c96e5e1fe72b7af31be` |
 | `fill/corners-out-fill.svg` | `206cdf1c6c7a3d2da17edebae2a122b5bcf8186f276170cac730a041c3077a1d` |
-| `fill/cube-fill.svg` | `9c681bfc8547fbb142d5df4d69ad923af5c422fea1013e6d69c32cef9ced3de3` |
 | `fill/cursor-fill.svg` | `b66c0ee5273847a03504f4c07b34eda3e8904a8fa9f607a1cc6c5527264c4a59` |
 | `fill/diamond-fill.svg` | `e50d5227db3ca71ba862deb7a6e60b78eb27c7780ed2e2b856c31269b63f4a68` |
 | `fill/dots-six-vertical-fill.svg` | `9386e9649ba767b8c1930156f40dd4425177ceb91ef127d87ce3bcc959888787` |
@@ -170,6 +175,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/film-slate-fill.svg` | `9b93a0c8e74ddaa01ee402f7c182c0189e25df713eb533b86eb4b9ef08ac7aca` |
 | `fill/film-strip-fill.svg` | `aae7abd682bd0985d015c90cd952e5fdb667c5c5e23a3494b30b422a6ab5ef5b` |
 | `fill/folder-fill.svg` | `2217bd2f730884d7a8aec3e3358eb7500448b0e3d86f33a63142f40f0622bfe9` |
+| `fill/folder-open-fill.svg` | `4524c115cb08d9879eea06001d470f36156fd12a6b0abdd2b59025d6a05936d2` |
 | `fill/folder-simple-plus-fill.svg` | `b28aea1a66bd889e532c9f6b672d5199ac97bd3785bcc1fca7d115e943c1ff65` |
 | `fill/gear-fill.svg` | `564f53f72b0bd4371dc14a3d39a3fcf4c5a1a74d285eb56fff465a954f993ec8` |
 | `fill/graph-fill.svg` | `73eea2682fd6c43d58d448107bd01c65cd662c3890bea8d28b39964031bdd110` |
@@ -178,6 +184,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/image-fill.svg` | `8cbeb0cac6e7f683e08d8a71a5db21c10435c39d0487c3277b75b146a86abf42` |
 | `fill/images-fill.svg` | `50a8bc0a4eefefdea374c97123e59a34c35fbe1b5d6faff43ac77abab8bcc49a` |
 | `fill/info-fill.svg` | `8240b810f7a3b076271a829dff61c7dd64257a781c30f29c938f88835f11136a` |
+| `fill/lightning-fill.svg` | `024d190cc1ce86eb59184eb7a598604ad28946248243fbc0cf07b9887babf88d` |
 | `fill/link-simple-fill.svg` | `601ae01a732bdfcfa7a3e01dbe1302a32c4bd03b60d73c5c3a8f051793105e6a` |
 | `fill/list-fill.svg` | `40af80e60bd65c8230d4e7aed12baa064a31b06d9d32a406ffdcf5f281ac99ba` |
 | `fill/lock-simple-fill.svg` | `54b137caf94b8082e63a2831e5b726bbc9cd32ad40938bf5656ff4d44b442d95` |
@@ -227,7 +234,6 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/clock-bold.svg` | `45cf8bb6e1929b4d7fcbf52d83b35c6d130f4ea12d981db19370392cba724f4a` |
 | `bold/corners-in-bold.svg` | `2664fc88c8de3564849e732f5950232109cd7d201b93ede1e516e60931e56300` |
 | `bold/corners-out-bold.svg` | `df74ba3c2a496a344f98e80c0782f43aa3760ed4b8b6103a4c621bfc59575e16` |
-| `bold/cube-bold.svg` | `960f01377a6e286fb39507861a01bb0ff6ff8e5f4b1ac0ded92f6f2bec376e91` |
 | `bold/cursor-bold.svg` | `7339f39dee9b99e0c0412ea73cfd68497ae90faa8cb4a2e07581747af613f945` |
 | `bold/diamond-bold.svg` | `85ec2bc0851b2e1cbaa1deba7a059568688098493f8651949eb45aaebe0b995a` |
 | `bold/dots-six-vertical-bold.svg` | `d2226adc97d9449bad231d06210191e2656eb4eed30e7c194cba9878d9929a3f` |
@@ -241,6 +247,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/film-slate-bold.svg` | `b61683707f518cb825c158e3ea703887e6a787e40fa79f3cbdae1c7409a95287` |
 | `bold/film-strip-bold.svg` | `75f500a192705172ce51686fc8a9a2f62d22e91987419c3bd91448cec2760e38` |
 | `bold/folder-bold.svg` | `3f564dd4a0d27706ff9cb2d9738cef9ac1009b70f82d1da6d3bac119e41949a0` |
+| `bold/folder-open-bold.svg` | `dfdcc48a3ea3549f597ac5826111f067e2889c9f555f5d9b1a387786d092d15e` |
 | `bold/folder-simple-plus-bold.svg` | `bd87b2d0c73989f5a434a627ba5ee13929305c9bb4dcab28e3581bb8655a423c` |
 | `bold/gear-bold.svg` | `b70f71ce6d08d59ee13575d7278737ff6dc2011adb5d126c9090641bc783fdd2` |
 | `bold/graph-bold.svg` | `967c65d7659edbaf8ccdad545b8b8c9408805bf2c167377984a6c78e84a46690` |
@@ -249,6 +256,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/image-bold.svg` | `d99ef65cc79a3db6a0b213c878238e06689ef701285f207629b49868808b852e` |
 | `bold/images-bold.svg` | `a50a765edc94ef94e186d945e16f01f48a07ba441966990ed2ea2285f10fee99` |
 | `bold/info-bold.svg` | `b8241eb546c8764cda301e10c63fc2a9c52c36d75a568832ef7244cb10d15d9b` |
+| `bold/lightning-bold.svg` | `f97cef3b5189ec2b33691920408d3c79df11ea83cc69a25f86e38e33ce7ae34f` |
 | `bold/link-simple-bold.svg` | `6e657df99dd4f15c8ee7140cccfc1b0e154dc241a8b32f900f60449c5cd625df` |
 | `bold/list-bold.svg` | `eebf2179178a5d4e93097a35f6a02efec45db6a88c1fbbc027fe81a167fd910f` |
 | `bold/lock-simple-bold.svg` | `656f6bff423aa14e5d58c60f25bec0ffd853c3fbec9514e36576fa48b545370c` |
@@ -284,7 +292,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 
 ## Manifest
 
-SHA-256 of sorted `<sha256>  <filename>\n` lines for all SVGs above: `c64d559b3e72cbe0ca5782bf154ed7a86207301cce25a2ce498ba22f2c9e8433`.
+SHA-256 of sorted `<sha256>  <filename>\n` lines for all SVGs above: `ade49dc931473cb679796f06674eab9be02a5afa3781018e74518672775a6233`.
 
 ```sh
 (cd regular && sha256sum *.svg; cd ../fill && sha256sum *.svg; cd ../bold && sha256sum *.svg) | LC_ALL=C sort | sha256sum
