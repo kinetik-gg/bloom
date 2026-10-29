@@ -1693,11 +1693,27 @@ plus its verified digest, or `vaapi <driver>`. No output is presented as archiva
 qualified.
 
 OpenH264 policy is host-owned and Qt-free. The first install requires explicit consent to Cisco's
-binary licence and stores `media/openh264-consent=2.6.0` in `Bloom.conf`; it never fetches at
-startup. The host supervises system `curl` for at most 60 seconds and 16 MiB, then `bunzip2`,
+binary licence and stores `media/openh264-consent=2.6.0` in the per-user `Bloom.conf` beside the
+`openh264` directory (a Qt-free file, not the application's QSettings store); the entry is written
+once, through a temporary file, however often Bloom installs, and duplicate `[media]` groups left by
+earlier appends collapse to one. It never fetches at startup. The host supervises system `curl` for at most 60 seconds and 16 MiB, then `bunzip2`,
 verifies both archive and library SHA-256 values from the dependency lock, and atomically publishes
 `libopenh264.so.8` and `BINARY_LICENSE.txt` below the per-user `Kinetik/Bloom/openh264/2.6.0`
-directory. A locate action applies the same verification. The worker receives the directory and
+directory. A locate action applies the same verification: it hashes the chosen file while copying it
+into a staging file beside the install (the artist's own file is never moved, and a copy across
+file systems works), publishes the staging file only when its digest matches, and stops between
+chunks when cancelled, leaving no staging file.
+
+Which H.264 encoder a platform uses is the export provider's answer, `output::h264EncoderSupportV1()`,
+a pure platform query that opens no file: VideoToolbox inside the macOS AVFoundation provider
+(nothing to install or consent to), Cisco OpenH264 or VA-API hardware on Linux x86-64, VA-API
+hardware only on Linux on other processors (Cisco publishes no binary there), and none yet on
+Windows, where the H.264 preset reports the worker as unavailable. The Export dialog offers
+install, consent and Locate only when the answer is OpenH264. Everything that touches the disk --
+`verifyH264RuntimeV1()` (the library's SHA-256), `vaapiRenderNodeAvailableV1()` (the
+`/dev/dri/renderD*` probe) and `locateH264RuntimeV1()` -- runs as a `BlockingIo` task through
+`ui::H264EncoderService`, which publishes the result to the dialog; Locate shows a busy bar and
+Cancel inside the dialog while it runs. The worker receives the directory and
 expected digest, prepends that verified directory to its private loader directory before FFmpeg
 use, and rejects a mismatch. Every worker and fixture-generator build also contains a Bloom-owned
 `libopenh264.so.8` API shim in the private `lib/` directory. The shim contains no codec code and

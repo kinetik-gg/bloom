@@ -464,6 +464,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `PropertyLabelCompact` | 64 | Timeline property label |
 | `DialogTextWidth / DiagnosticHeight` | 520 / 140 | Read-only explanation / job diagnostics |
 | `DialogWideWidth` | 700 | Minimum width of a settings dialog with Basic and Advanced sections (Composition dialog) |
+| `DialogDocumentHeight` | 480 | Minimum height of a dialog whose body is a document or a page stack (Open Source Licenses, Preferences) |
 | `ProgressTrack` | 6 | `KProgressBar` track height |
 | `SplitHandle` | 6 | Draggable divider hit zone (`KSplitHandle`); paints one snapped hairline centered in it |
 | `ScrollBarTrack / ScrollBarThumb` | 12 / 8 | Constant scrollbar width / resting thumb |
@@ -499,6 +500,26 @@ Existing object names remain stable. New names are `viewerToolColumn`, `viewerSe
 `viewerPolygonTool`, `viewerStarTool`, `viewerLineTool`, `viewerPenTool`,
 and `nodeReadOnlyValue`. Node row widgets expose `nodeParameterRole` and
 `nodeParameterRowPitch` for geometry audits; list headings expose `headerRow`.
+
+Dialog automation names (lane C): the Composition dialog's fields are `compositionSettingsName`,
+`compositionSettingsWidth`, `compositionSettingsHeight`, `compositionSettingsRatePreset`,
+`compositionSettingsRate`, `compositionSettingsStart`, `compositionSettingsDuration` and
+`compositionSettingsDurationUnit`, its buttons `compositionSettingsButtons`, `compositionSettingsOk`
+and `compositionSettingsCancel` (the earlier `assets*` names are retired); its preset prompts are
+`compositionSavePreset`, `compositionRenamePreset` and `compositionDeletePreset`. Other dialogs:
+`compositionRenamePrompt`, `assetsDeleteConfirmation`, `assetsTagsDialog`, `assetsInputColorDialog`,
+`viewerSafeAreaDialog`, `projectColorSettingsDialog`, `projectUnsavedChanges`,
+`projectRecoverUnsaved`, `preferencesWindow` (with `preferencesOkButton`,
+`preferencesRestoreDefaultsConfirmation` and `preferencesMediaDiskCacheDirectoryReason`),
+`licensesWindow` (`licensesCloseButton`), `compositionExportDialog` (`compositionExportFirst`,
+`compositionExportLast`, `compositionExportBrowse`, `compositionExportAudio`,
+`compositionExportContinue`, `locateOpenH264Progress`, `cancelLocateOpenH264`,
+`locateOpenH264Message`), `openh264Consent`, `exportFrameRangeDialog`
+(`exportFrameRangeDestination`, `exportFrameRangeBrowse`), `exportApproval`, the failure notices
+`projectSaveFailed`, `projectOpenFailed`, `projectCopyFailed`, `exportFailed` and
+`projectColorSettingsFailed`, and the label colour picker `timelineLayerLabelColorPicker` (it
+replaces `timelineLayerLabelColorDialog`). A prompt's heading and detail are `<dialog>Heading` and
+`<dialog>Detail`.
 
 The metric audit covers the status line, eleven enabled viewer tools,
 card/control containment and socket-row alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
@@ -761,8 +782,9 @@ share, resolving it through the same GVFS mount the file manager used; an `smb:/
 share this machine has not mounted yet is still accepted (the cursor stays honest about there
 being something to do) but imports nothing, reporting "Connect to `<host>/<share>` in your file
 manager first" through the status bar's transient-message cell rather than dropping it silently.
-Import, Relink, Open Project, Save Project As and Export Frame file dialogs list every mounted
-network share in their sidebar alongside the platform's own entries.
+Every file dialog (`kit::chooseFile()`: Import, Relink, Open Project, Save Project As, Export Frame,
+Export Frame Range, Export Composition, Locate OpenH264 and the cache folder) lists every mounted
+network share in the sidebar of Qt's own dialog alongside the platform's own entries.
 Dragging an image/sequence row to Nodes creates an Image source; dragging an Audio row creates an
 Audio source. Dropping media or compositions on the Timeline or the Viewer creates the matching
 wired Layers (interaction-model.md, "Layer drops"). During a Timeline drag the layer stack shows
@@ -820,11 +842,57 @@ connection intact. Video rows retain ordinary layer selection, expansion and pro
 Solo and range remain the same Layer semantics as other rows. An unavailable audio
 file shows the warning glyph and remains relinkable from Assets.
 
-The Composition dialog (New Composition and Composition Settings, #376) is one `QDialog` at least
-`DialogWideWidth` wide, titled `New Composition` or `Composition Settings`, built only from kit
+**Dialogs.** Every Bloom dialog is a `kit::KDialog` (`kit/dialog.hpp`) in the platform's native
+window frame; there are no frameless or custom-titlebar dialogs. A dialog is constructed with a
+title, an object name and a required owner, resolved to the owner's top-level window, and states
+its modality. It sits on `SurfaceRaised` with `Spacing::M` margins and `Spacing::S` between rows,
+and takes its width only from `DialogTextWidth` or `DialogWideWidth` (a document or page stack also
+takes the `DialogDocumentHeight` minimum height); no dialog calls `resize()` with a literal.
+
+- **Form.** `KForm` lays out two columns: `KLabel` labels, left-aligned on every platform, in one
+  label column shared by every form of the dialog (sections included), and fields that grow to the
+  right. Rows are added in visual order and the dialog's Tab order follows that order (a section's
+  header first), whatever order the widgets were constructed in. A check box row puts its words in
+  a `KCheckLabel` that toggles the box when clicked.
+- **Reasons.** One validator per dialog returns the first refusal: its field and its plain reason.
+  The reason shows directly under that field (the inline field reason below), or above the buttons
+  when it belongs to the dialog as a whole (the project changed while the dialog was open); a field
+  inside a collapsed section opens it. Accept, Destructive and Alternate stay disabled while any
+  reason exists.
+- **Button row.** Kit buttons in a `QDialogButtonBox`, so the platform orders them while the kit
+  paints them: Accept is a Primary `KButton`, Destructive a Danger one, Reject, Alternate, Apply
+  and Reset Secondary. Buttons are named `<dialog>AcceptButton`, `<dialog>RejectButton` and so on
+  unless a dialog keeps an older automation name. A destructive prompt's default button is the safe
+  action.
+- **Helpers** (`kit/dialog_prompts.hpp`). `kit::confirm()` (synchronous or asynchronous) names the
+  subject and the action in a `Title` heading with a `Muted` detail and a tone glyph (Question,
+  Warning, Error, Info); with only an OK it is the error and information notice (`kit::inform()`).
+  `kit::promptText()` and `kit::promptRange()` show a refused value's reason inside the prompt and
+  keep OK disabled, so a prompt never closes and reopens to refuse.
+- **Files** (`kit/file_chooser.hpp`). Every file dialog is `kit::chooseFile()`: parented to the
+  owner's window, starting in the folder last used for the same kind of file (a user setting,
+  never project data), applying the default suffix to a name typed without one, and listing the
+  mounted network shares in the sidebar of Qt's own dialog. A native platform dialog keeps its own
+  sidebar and ignores that list.
+- **Task dialog** (`kit/task_dialog.hpp`). `KTaskDialog` is the progress-then-summary modal the
+  import dialog below is built on: elided heading and detail, a `KProgressBar`, Cancel that only
+  asks the work to stop, then a summary with one Close that Return takes. `KTaskTiming` delays it
+  and refreshes it.
+
+Dialogs open asynchronously (window-modal, answered through a callback) unless a caller must hand a
+synchronous answer back: the Composition dialog, Export Composition, Export Frame Range, the
+unsaved-change, open, save and recovery prompts of the project host, Preferences, and prompts nested
+inside an already modal dialog run with `exec()`, each documented at its call site. Approve Export,
+Edit Tags, Input Colour, Custom Safe Areas, Project Settings — Colour, Delete, Rename Composition,
+Restore Defaults and every failure notice are asynchronous. The keys are in
+[interaction-model.md](interaction-model.md#dialogs).
+
+The Composition dialog (New Composition and Composition Settings, #376) is one `kit::KDialog` at
+least `DialogWideWidth` wide, titled `New Composition` or `Composition Settings`, built only from kit
 controls: a **Basic** `KSection` and an **Advanced** `KSection` that starts collapsed. Both sections
-are two-column forms that share ONE label column, sized to the widest label of either, so every
-field starts at the same x. Text entry uses `KLineEdit`, pixel and percentage values `KValueField`,
+are `KForm`s of the one dialog, so they share ONE label column, sized to the widest label of either,
+and every field starts at the same x. Start, Duration and its unit are laid out (and tabbed) in that
+order; Start, Duration and the Custom frame rate are entered in the Value role. Text entry uses `KLineEdit`, pixel and percentage values `KValueField`,
 choices `KDropdown` (frame rate is one dropdown; its exact `KLineEdit` appears only for Custom), the
 aspect lock a `KIconToggle` (`IconId::Link`), and the preset buttons `KIconButton`s with tooltips
 `Save as preset…` (`IconId::Add`), `Rename preset…` (`IconId::Rename`, Phosphor `pencil-simple`) and
@@ -837,7 +905,7 @@ spare height sits below the sections. The interaction contract is in
 
 **Import Progress Dialog.** Every batch import (#377,
 [ADR 0029](../decisions/0029-import-progress-and-cancellation.md)) shows one application-modal
-`QDialog` titled `Import`, at least `DialogTextWidth` wide, built only from kit parts with `Spacing::M`
+`kit::KTaskDialog` titled `Import`, at least `DialogTextWidth` wide, built only from kit parts with `Spacing::M`
 margins and `Spacing::S` between rows. While importing it shows an elided `KLabel` heading (`Finding frames…`, `Finding files…`,
 `Importing SC020_SH070_image · sequence`, `Importing 2 of 5: plate.png`, `Cancelling…`), an elided
 `UiSmall` `KLabel` detail in `Muted` ink (`SC020_SH070_image · 522 found`, `Reading frame 120 of
@@ -849,8 +917,8 @@ only after `ImportProgressPresenter::kShowDelay` (300 ms) and refreshes every 50
 worker's latest report. The summary replaces those rows with the heading (`Import finished`,
 `Import cancelled`, `Nothing was imported`), a counts `KLabel` joined by ` · `, an optional wrapped
 `UiSmall` `Muted` note, and the skipped files in a frameless scroll area at most `DiagnosticHeight`
-tall: each row is the file name in `Ui` above its reason in wrapped `UiSmall` `Muted`, rows
-`Spacing::S` apart. The one action is a Primary `KButton` Close, which also takes Return.
+tall: each row is the file name in `Ui` (elided, the whole name in its tooltip) above its reason in
+wrapped `UiSmall` `Muted`, rows `Spacing::S` apart. The one action is a Primary `KButton` Close, which also takes Return.
 
 `KProgressBar` is read-only and never takes focus: a `Field` track with fully rounded ends,
 `ProgressTrack` tall, filled with `Accent` from the start to completed / total. **Busy mode**

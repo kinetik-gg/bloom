@@ -9,7 +9,9 @@ Bloom keeps two kinds of saved choice apart:
 
 Open **Edit → Preferences…** (⌘, on macOS, where the operating system moves it into the Bloom
 application menu). The window uses **OK**, **Cancel**, **Apply**, and **Restore Defaults**. Apply
-saves without closing; Cancel discards anything not applied.
+saves without closing; Cancel discards anything not applied. Restore Defaults asks first (Cancel is
+the default answer) and only resets the window's values; nothing is saved until OK or Apply. A cache
+folder that is a file, or one Bloom cannot write or create, is refused under the field and OK waits.
 
 ## Pages
 
