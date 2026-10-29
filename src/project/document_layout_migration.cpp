@@ -150,7 +150,8 @@ enum class Step {
     LutAssets,
     ExternalFileLocators,
     LayerMasks,
-    CompositionFolders
+    CompositionFolders,
+    VideoColourDefault
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -166,6 +167,10 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // Composition folders (1.26 -> 1.27, #378) is version-only too: the composition `folder`
     // member is optional and absent means the Assets root.
     if (step == Step::CompositionFolders)
+        return false;
+    // The SDR video colour default (1.27 -> 1.28, ADR 0032) is version-only: no member changes.
+    // The source version tells the open path that the project was saved under the old default.
+    if (step == Step::VideoColourDefault)
         return false;
     if (step == Step::Images) {
         return (scope == Scope::Project && value.findMember("assets")) ||
@@ -340,6 +345,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::LutAssets            ? "{\"major\":1,\"minor\":21}"
                            : step == Step::LayerMasks           ? "{\"major\":1,\"minor\":24}"
                            : step == Step::CompositionFolders   ? "{\"major\":1,\"minor\":27}"
+                           : step == Step::VideoColourDefault   ? "{\"major\":1,\"minor\":28}"
                                                                 : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -866,6 +872,13 @@ MigrationStepOutcome migrateCompositionFoldersV1_26(const JsonValue& root,
                                                     std::pmr::memory_resource*, Buffer& output) {
     if (!sourceVersionIs(root, "26") ||
         !transform(root, Scope::Root, Step::CompositionFolders, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateVideoColourDefaultV1_27(const JsonValue& root,
+                                                    std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "27") ||
+        !transform(root, Scope::Root, Step::VideoColourDefault, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }
