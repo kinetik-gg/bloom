@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-// Structured verification results of the export queue (ADR 0033, proposed). The queue's verify
+// Structured verification results of the export queue (ADR 0033). The queue's verify
 // step replaces the old pre-export approval prompt: the expected preservation is visible before
 // Start (from the preset), the analysis is accepted by an explicit policy instead of a modal
 // question, and every published output carries these typed results afterwards.
@@ -150,24 +150,81 @@ struct ExportOutputVerification final {
     ExportDeviceProvenance provenance;
 };
 
-// Problems known before Start. Blocking issues make Start unavailable with the issue's reason;
-// warnings are shown but do not block.
+// Problems known before Start. Destination facts (exists, writable, free space, the existing
+// file's fingerprint) are sampled on a blocking-I/O worker and cached; nothing here is computed by
+// touching the filesystem on the caller's thread.
 enum class ExportPreflightCode : std::uint8_t {
-    DestinationMissing = 1,      // no path chosen (blocking)
-    DestinationNotWritable = 2,  // folder missing or not writable (blocking)
-    DestinationExists = 3,       // warning with Replace, blocking with Refuse
-    NamingInvalid = 4,           // pattern refused (blocking)
-    InsufficientSpace = 5,       // estimate exceeds free space (blocking, issue #369)
-    PresetUnavailable = 6,       // encoder/platform/config (blocking; see ExportAvailability)
-    CompositionMissing = 7,      // composition deleted (blocking)
-    RangeOutsideComposition = 8, // custom range no longer fits (blocking)
-    DuplicateTarget = 9,         // two enabled outputs write the same file (blocking)
+    DestinationMissing = 1,     // no path chosen
+    DestinationNotWritable = 2, // folder missing or not writable
+    // The destination (or, for a sequence, a file the pattern would write) exists.
+    // NeedsConfirmation under AskBeforeReplacing, Warning under Replace, Blocking under Refuse.
+    DestinationExists = 3,
+    NamingInvalid = 4,            // pattern or destination token refused
+    InsufficientSpace = 5,        // estimate exceeds free space (issue #369)
+    PresetUnavailable = 6,        // encoder, platform or project config
+    CompositionMissing = 7,       // composition deleted
+    RangeOutsideComposition = 8,  // custom range no longer fits
+    DuplicateTarget = 9,          // two enabled outputs write the same file
+    DestinationCheckPending = 10, // the worker has not sampled this destination yet
+};
+
+// Which part of the job or output an issue is about, so the panel can mark the right field.
+enum class ExportPreflightTarget : std::uint8_t {
+    Job = 1,
+    Composition = 2,
+    Range = 3,
+    Destination = 4,
+    Naming = 5,
+    Container = 6,
+    Codec = 7,
+    Colour = 8,
+    Audio = 9,
+    Encoder = 10,
+};
+
+enum class ExportPreflightSeverity : std::uint8_t {
+    // Start is unavailable until the issue is fixed.
+    Blocking = 1,
+    // Shown; does not block.
+    Warning = 2,
+    // Start is unavailable until the artist confirms (ExportCommand::ConfirmReplace). Used only
+    // for an existing destination under AskBeforeReplacing.
+    NeedsConfirmation = 3,
 };
 
 struct ExportPreflightIssue final {
     ExportPreflightCode code = ExportPreflightCode::DestinationMissing;
-    bool blocking = true;
+    ExportPreflightTarget target = ExportPreflightTarget::Destination;
+    ExportPreflightSeverity severity = ExportPreflightSeverity::Blocking;
     // Human-readable, ready for a tooltip.
+    std::string reason;
+};
+
+// The result of "Import into Assets after render" for one output. Reported separately from the
+// export: a failed import never changes the export's success or its verification.
+enum class ExportAssetImportStatus : std::uint8_t {
+    // The output's importIntoAssets flag is off.
+    NotRequested = 0,
+    // Waiting for the verified publish, preparing on a worker, or waiting to apply on the owner
+    // thread (for example while an interactive edit gesture is open).
+    Pending = 1,
+    // A new asset was added (one undoable import).
+    Imported = 2,
+    // An asset already referred to this file; it was re-identified instead of duplicated.
+    Refreshed = 3,
+    Failed = 4,
+    // The output did not publish (failed or stopped), so there was nothing to import.
+    Skipped = 5,
+};
+
+struct ExportAssetImportResult final {
+    document::ExportOutputId output;
+    ExportAssetImportStatus status = ExportAssetImportStatus::NotRequested;
+    // The imported or refreshed asset.
+    std::optional<document::AssetId> asset;
+    // Stable identifier for a failure ("export.import.read-only-project", "export.import.probe").
+    std::string code;
+    // Human-readable, ready for display; empty unless Failed or Skipped.
     std::string reason;
 };
 

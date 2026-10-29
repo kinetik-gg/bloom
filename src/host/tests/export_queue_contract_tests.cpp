@@ -42,7 +42,9 @@ static_assert(host::exportCommandKind(host::ExportCommand::RemoveFinished) ==
               host::ExportCommandKind::ProjectTruth);
 static_assert(host::exportCommandKind(host::ExportCommand::EditOutput) ==
               host::ExportCommandKind::ProjectTruth);
-static_assert(static_cast<std::size_t>(host::ExportCommand::RevealOutput) + 1 ==
+static_assert(host::exportCommandKind(host::ExportCommand::ConfirmReplace) ==
+              host::ExportCommandKind::Session);
+static_assert(static_cast<std::size_t>(host::ExportCommand::ConfirmReplace) + 1 ==
               host::kExportCommandCount);
 
 int expect(const bool condition, const char* message) {
@@ -76,8 +78,22 @@ int main() {
     failures += expect(document::ExportOutputSettings{}.format == document::ExportFormat::H264Mp4,
                        "default output settings are the MP4/H.264 video default");
     failures += expect(queue.jobs.front().outputs.front().destination.overwrite ==
-                           document::ExportOverwritePolicy::Replace,
-                       "a new output replaces an unchanged existing file by default");
+                           document::ExportOverwritePolicy::AskBeforeReplacing,
+                       "a new output asks before replacing an existing file");
+    failures += expect(!queue.jobs.front().outputs.front().importIntoAssets,
+                       "import into Assets is off by default");
+    failures += expect(!queue.jobs.front().labelColor.has_value(), "a new job has no label");
+
+    host::ExportPreflightIssue exists;
+    exists.code = host::ExportPreflightCode::DestinationExists;
+    exists.severity = host::ExportPreflightSeverity::NeedsConfirmation;
+    failures += expect(exists.target == host::ExportPreflightTarget::Destination,
+                       "a preflight issue names the field it is about");
+
+    host::ExportOutputView outputView;
+    failures += expect(!outputView.estimatedBytes && !outputView.freeBytesAtDestination &&
+                           outputView.import.status == host::ExportAssetImportStatus::NotRequested,
+                       "size facts may be absent and imports start NotRequested");
 
     host::ExportJobView view;
     view.id = job.id;

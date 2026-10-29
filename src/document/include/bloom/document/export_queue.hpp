@@ -3,13 +3,14 @@
 #include <bloom/core/id.hpp>
 #include <bloom/document/ids.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
-// The export queue's durable authoring records (ADR 0033, proposed; document schema 1.29).
+// The export queue's durable authoring records (ADR 0033; document schema 1.29).
 //
 // These are project truth: the jobs, their render settings and their outputs are saved in the
 // project, mutated only through undoable commands, and restored by undo/redo. Nothing here
@@ -94,12 +95,13 @@ enum class ExportFormat : std::uint8_t {
 enum class ExportEncoderPreference : std::uint8_t {
     Automatic = 1, // the platform's qualified default (software when one exists)
     Software = 2,  // refuse to start if only a hardware encoder is available
-    Hardware = 3,  // VA-API / VideoToolbox; refuse to start without one
+    Hardware = 3,  // VA-API on Linux; refuse to start without one
 };
 
-// File naming for image sequences. Unchanged from the COLOR-5 export dialog: `startFrame` changes
-// file names only (absent means the range's first frame); the pattern accepts `<base>`, `<ext>`,
-// `{name}` and exactly one `####` or `{frame}`.
+// File naming for image sequences. `startFrame` changes file names only (absent means the range's
+// first frame). The pattern accepts the destination tokens (`<base>`, `<ext>`, `{name}`, `{job}`,
+// `{format}`, `{date}`; see bloom::host::resolveDestination) and exactly one `####` or `{frame}`,
+// padded to `framePadding` digits (widened when the range needs more).
 struct ExportSequenceNaming final {
     std::optional<std::uint64_t> startFrame;
     std::uint32_t framePadding = 4;
@@ -135,22 +137,28 @@ struct ExportOutputSettings final {
     friend bool operator==(const ExportOutputSettings&, const ExportOutputSettings&) = default;
 };
 
+// What happens when an output's destination already exists. In every policy Bloom refuses to
+// replace a file someone else changed after it was checked (frame-output.md,
+// ExternalModificationConflict).
 enum class ExportOverwritePolicy : std::uint8_t {
-    // Replace an existing file. Bloom still refuses to replace a file changed by someone else
-    // after preflight (frame-output.md, ExternalModificationConflict).
-    Replace = 1,
+    // The default. An existing destination is a preflight issue that needs the artist's explicit
+    // confirmation (ExportQueueService::confirmReplace) before Start; never a silent replace.
+    AskBeforeReplacing = 1,
+    // Replace without asking.
+    Replace = 2,
     // Refuse to start while the destination exists.
-    Refuse = 2,
+    Refuse = 3,
 };
 
 // Where an output is written. Uses the asset locator portability rules of document 1.22:
 // "project-relative" stores a path relative to the project file's folder (preferred, so a project
 // moved with its renders keeps working); "external" stores an absolute RFC 8089 file URI. An empty
-// path means "not chosen yet" and blocks Start with a reason.
+// path means "not chosen yet" and blocks Start with a reason. The path may contain the destination
+// tokens (`{name}`, `{job}`, `{format}`, `{date}`) in any component.
 struct ExportDestination final {
     std::string portability = "project-relative";
     std::string path;
-    ExportOverwritePolicy overwrite = ExportOverwritePolicy::Replace;
+    ExportOverwritePolicy overwrite = ExportOverwritePolicy::AskBeforeReplacing;
     friend bool operator==(const ExportDestination&, const ExportDestination&) = default;
 };
 
@@ -162,6 +170,10 @@ struct ExportOutput final {
     ExportOutputSettings settings;
     ExportDestination destination;
     bool enabled = true;
+    // After a verified publish, import the result into the project's Assets through the ordinary
+    // import path (an undoable import). A failed import never fails the export; it is reported
+    // separately. Off by default.
+    bool importIntoAssets = false;
     friend bool operator==(const ExportOutput&, const ExportOutput&) = default;
 };
 
@@ -175,6 +187,9 @@ struct ExportJob final {
     std::vector<ExportOutput> outputs;
     // Included by Start All. A disabled job can still be started on its own.
     bool enabled = true;
+    // Optional row label, the same sRGB triple representation as a layer's label colour.
+    // Compositions have no label colour to mirror, so a job's label is its own.
+    std::optional<std::array<std::uint8_t, 3>> labelColor;
     friend bool operator==(const ExportJob&, const ExportJob&) = default;
 };
 

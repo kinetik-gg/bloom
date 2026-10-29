@@ -18,7 +18,7 @@ namespace bloom::runtime {
 class TaskScheduler;
 } // namespace bloom::runtime
 
-// The export preset catalogue (ADR 0033, proposed): built-in presets plus the user's own, with
+// The export preset catalogue (ADR 0033): built-in presets plus the user's own, with
 // categories and an explicit availability reason for every preset on this computer.
 //
 // A preset is a named ExportOutputSettings value. Applying one copies its settings into an output
@@ -30,8 +30,14 @@ class TaskScheduler;
 // Encoder availability (H.264, HEVC, VA-API, the supervised media worker) is probed on a worker and
 // published into the catalogue as an ExportEncoderStatus value. In the desktop application the
 // existing H264EncoderService (Qt) forwards its state with setEncoderStatus(); headless owners call
-// refreshEncoders(). Nothing in this header probes a device or touches a file on the caller's
-// thread.
+// refreshEncoders().
+//
+// Threading guarantee: every member is non-blocking and performs no I/O on the calling thread.
+// snapshot(), availabilityFor() and defaultPreset() read in-memory state only and are safe on the
+// UI thread; the user-preset store and every encoder probe run on scheduler workers.
+//
+// Export runs on Linux in this version. On macOS and Windows every preset is listed and editable,
+// and its platform availability is PlatformNotSupported (tracked by #371 and #370).
 namespace bloom::host {
 
 // Categories in catalogue order: video first. Image sequences are first-class presets in their own
@@ -52,14 +58,16 @@ enum class ExportAvailabilityCode : std::uint8_t {
     Probing = 2,
     // Linux x86-64 software H.264 needs Cisco OpenH264, which is not installed yet.
     EncoderNotInstalled = 3,
-    // No qualified encoder for this codec on this computer (e.g. no HEVC software encoder).
+    // No qualified encoder for this codec on this computer.
     NoQualifiedEncoder = 4,
-    // The output asks for a hardware encoder and no usable VA-API/VideoToolbox device exists.
+    // The codec is hardware-only (HEVC) or the output asks for hardware, and no VA-API render
+    // node exposes the needed encode entry point. HEVC has no software encoder by design.
     HardwareEncoderMissing = 5,
-    // The supervised media worker (FFmpeg/AVFoundation provider) is not available on this OS.
+    // The supervised media worker could not be started on this computer.
     WorkerUnavailable = 6,
-    // Staged atomic publication has no provider on this OS.
-    PublicationUnavailable = 7,
+    // Export runs on Linux in this version (macOS #371, Windows #370). Start is unavailable; the
+    // queue stays fully editable.
+    PlatformNotSupported = 7,
     // Project-dependent: a named deliverable needs the built-in ACES CG config.
     RequiresAcesConfig = 8,
     // Project-dependent: the selected OCIO config has no pinned revision.
@@ -131,12 +139,12 @@ struct ExportEncoderStatus final {
     OpenH264 openh264 = OpenH264::Checking;
     // A VA-API render node exists and its driver exposes the encode entry point.
     bool vaapiH264 = false;
+    // HEVC is hardware-only: VA-API HEVC Main/Main 10 encode. There is no software HEVC encoder.
     bool vaapiHevc = false;
-    bool videoToolboxHevc = false;
-    // The supervised media worker can be started on this OS.
+    // The supervised media worker can be started on this computer.
     bool mediaWorker = false;
-    // Staged atomic publication is implemented on this OS.
-    bool stagedPublication = false;
+    // This build's platform runs exports (Linux in this version).
+    bool exportPlatform = false;
     // True once the first worker probe has answered.
     bool probed = false;
 };
