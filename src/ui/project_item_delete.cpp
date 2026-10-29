@@ -121,23 +121,37 @@ void requestDeleteProjectItems(CompositionSession& session, QWidget& owner,
                                ? QObject::tr("1 composition")
                                : QObject::tr("%1 compositions").arg(usage.compositions));
     } else if (usedDirect > 0) {
-        heading = QObject::tr("Delete %n used items?", nullptr, static_cast<int>(usedDirect));
+        heading = usedDirect == 1
+                      ? QObject::tr("Delete %n used item?", nullptr, 1)
+                      : QObject::tr("Delete %n used items?", nullptr, static_cast<int>(usedDirect));
     }
     QString detail;
     if (holdsItems) {
-        const auto count = contents.assets.size() + contents.compositions.size() +
-                           contents.folders.size() - selection.folders.size();
+        // Qt's %n plural form; without a loaded translation the singular is its own source text.
+        const auto count = static_cast<int>(contents.assets.size() + contents.compositions.size() +
+                                            contents.folders.size() - selection.folders.size());
+        const bool one = count == 1;
+        const bool oneFolder = selection.folders.size() == 1;
         if (heading.isEmpty())
-            heading = selection.folders.size() == 1
-                          ? QObject::tr("Delete the folder and its %1 items?").arg(count)
-                          : QObject::tr("Delete the folders and their %1 items?").arg(count);
+            heading =
+                oneFolder
+                    ? (one ? QObject::tr("Delete the folder and its %n item?", nullptr, 1)
+                           : QObject::tr("Delete the folder and its %n items?", nullptr, count))
+                    : (one ? QObject::tr("Delete the folders and their %n item?", nullptr, 1)
+                           : QObject::tr("Delete the folders and their %n items?", nullptr, count));
         else
-            detail = selection.folders.size() == 1
-                         ? QObject::tr("The folder holds %1 items.").arg(count) + QLatin1Char(' ')
-                         : QObject::tr("The folders hold %1 items.").arg(count) + QLatin1Char(' ');
+            detail =
+                (oneFolder ? (one ? QObject::tr("The folder holds %n item.", nullptr, 1)
+                                  : QObject::tr("The folder holds %n items.", nullptr, count))
+                           : (one ? QObject::tr("The folders hold %n item.", nullptr, 1)
+                                  : QObject::tr("The folders hold %n items.", nullptr, count))) +
+                QLatin1Char(' ');
         if (usedInside > 0)
-            detail += QObject::tr("%1 of them are used in compositions.").arg(usedInside) +
-                      QLatin1Char(' ');
+            detail +=
+                (usedInside == 1 ? QObject::tr("%n of them is used in compositions.", nullptr, 1)
+                                 : QObject::tr("%n of them are used in compositions.", nullptr,
+                                               static_cast<int>(usedInside))) +
+                QLatin1Char(' ');
         detail += QObject::tr("Delete only the folders and move their contents up, or delete the "
                               "contents too? Undo restores either.");
     } else {

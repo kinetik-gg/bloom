@@ -415,8 +415,8 @@ compositionExportDialog(QWidget& owner, const CompositionExportDialogOptions& op
         if (id != output::OutputPresetV1::H264MovV1 || hardware->isChecked())
             return std::nullopt;
         if (locating())
-            return kit::KRefusal{locateRow,
-                                 QObject::tr("Wait while OpenH264 is verified, or cancel it.")};
+            return kit::KRefusal{
+                locateRow, QObject::tr("Wait while OpenH264 is verified, or cancel it."), true};
         if (support.software == output::H264EncoderV1::None)
             return kit::KRefusal{note, hardwareOnly
                                            ? QObject::tr("No VA-API hardware was found, so H.264 "
@@ -429,7 +429,8 @@ compositionExportDialog(QWidget& owner, const CompositionExportDialogOptions& op
                                      ? QObject::tr("Checking the H.264 encoder…")
                                      : QObject::tr("Install OpenH264 (accepting Cisco's licence), "
                                                    "locate a downloaded copy, or use VA-API "
-                                                   "hardware.")};
+                                                   "hardware."),
+                                 runtime() == H264EncoderService::Runtime::Checking};
         return std::nullopt;
     });
 

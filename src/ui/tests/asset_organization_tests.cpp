@@ -311,11 +311,20 @@ void run() {
 
     // Edit Tags from the context menu.
     bool editedDialog = false;
+    bool tagsBandFits = false;
     QTimer::singleShot(50, &editor, [&] {
         auto* dialog = editor.findChild<QDialog*>("assetsTagsDialog");
         if (!dialog)
             return;
         const auto fields = dialog->findChildren<QLineEdit*>("assetsTagField");
+        // The tag rows take their own height: no empty band between the last tag and Add Tag.
+        if (auto* add = dialog->findChild<QWidget*>("assetsAddTagButton");
+            add != nullptr && !fields.isEmpty()) {
+            const int lastBottom =
+                fields.back()->mapTo(dialog, QPoint(0, fields.back()->height())).y();
+            const int addTop = add->mapTo(dialog, QPoint()).y();
+            tagsBandFits = addTop - lastBottom <= 2 * ui::kit::px(ui::kit::Spacing::S);
+        }
         if (fields.size() == 2) {
             fields[0]->setText("review");
             fields[1]->setText("hero");
@@ -334,6 +343,7 @@ void run() {
     require(editedDialog && session.snapshot().project().findAsset(a)->tags ==
                                 std::vector<std::string>{"hero", "review"},
             "tag dialog authors normalized tags");
+    require(tagsBandFits, "Edit Tags fits its rows, with no empty band above Add Tag");
 
     // Drag out: the canvas payloads keep their formats.
     auto mime = mimeFor(*tree, {item(assets::kAssetRole, b.value())});
