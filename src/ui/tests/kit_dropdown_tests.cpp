@@ -254,11 +254,12 @@ void testTheClosedFieldIsBorderedWithTheVendoredDoubleChevron(Expectations& expe
     bool sawBorder = false;
     for (int y = 0; y < image.height(); ++y)
         for (int x = 0; x < image.width(); ++x) {
-            sawFill = sawFill || near(image.pixelColor(x, y), kit::color(kit::Color::ControlSurface));
+            sawFill = sawFill || near(image.pixelColor(x, y), kit::color(kit::Color::SurfaceRaised));
             sawBorder = sawBorder || near(image.pixelColor(x, y), kit::color(kit::Color::Border));
         }
     expectations.expect(sawFill && sawBorder,
-                        "the closed field paints ControlSurface inside a Border hairline");
+                        "the closed field wears the one control look: the SurfaceRaised plate "
+                        "inside a Border hairline");
 }
 
 // Windows and Linux: Up/Down step a closed dropdown's value; Alt+Down, F4, Space and Enter open

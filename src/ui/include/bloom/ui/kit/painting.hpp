@@ -62,18 +62,23 @@ namespace bloom::ui::kit {
 // The ink a control's text takes in a given state, already faded when disabled.
 [[nodiscard]] QColor inkForState(Color resting, State state);
 
-// The kit's ONE button state recipe. KButton's four variants, the recessed KIconButton, and the
-// menu-strip KMenuButton (whose rules the generated stylesheet emits from this same function) all
-// resolve their fill, border and ink here, so "checked", "danger", "hover" and "focused" read the
-// same on every kind of button.
+// The kit's ONE button state recipe. KButton's four variants, KIconButton, KIconToggle, every
+// KDropdown closed field (the panel switcher included), KRadioGroup's segmented bar, KColorChip's
+// frame and the menu-strip KMenuButton (whose rules the generated stylesheet emits from this same
+// function) all resolve their fill, border and ink here, so "checked", "danger", "hover" and
+// "focused" read the same on every kind of control.
 //
 //   Primary       Accent fill; the affirmative action.
-//   Secondary     A raised plate with a hairline; the ordinary action.
-//   Ghost         Chrome weight: no plate at rest, a plate under the pointer.
+//   Secondary     THE control look: a SurfaceRaised plate, one rung up on hover and one down when
+//                 pressed, a hairline border by state, Foreground ink. Every clickable control that
+//                 is not text entry rests here (the Viewer footer's RAM Preview button is the
+//                 reference), icon buttons and dropdown fields included.
+//   Ghost         No plate at rest, a plate under the pointer. Only where a control deliberately has
+//                 no resting surface: disclosure carets and the window title bar.
 //   Danger        Outlined in Error at rest, Error fill once the pointer commits.
 //   GhostDanger   Ghost at rest, the Danger fill under the pointer (close buttons).
-//   Recessed      The ControlSurface well of a header icon button.
-//   MenuItem      A menu-strip title: transparent at rest, the Accent hover bar under the pointer.
+//   MenuItem      A menu-strip title: transparent at rest, the Accent hover bar under the pointer --
+//                 a menu, like a menu bar's titles, not a button.
 //
 // Selected (a checked toggle) is Accent with OnAccent ink on every kind. Disabled keeps the plate
 // still and fades the ink by the one disabled recipe. Keyboard focus turns the single border
@@ -85,7 +90,6 @@ enum class ButtonKind : std::uint8_t {
     Ghost,
     Danger,
     GhostDanger,
-    Recessed,
     MenuItem,
 };
 
@@ -97,6 +101,15 @@ struct ButtonColors {
 };
 
 [[nodiscard]] ButtonColors buttonColors(ButtonKind kind, State state, bool keyboardFocus);
+
+// The kit's ONE text-entry recipe, which deliberately differs from the button recipe so an editable
+// value never reads as a button: KValueField, KLineEdit (its sheet rules are generated from this)
+// and the Viewer's frame field. A Field well that never moves, Foreground ink, and the single
+// border by the kit-wide rule (borderForInteraction): Accent while editing or keyboard-focused,
+// BorderHover under the pointer, and at rest Border when `outlinedAtRest` (a field standing in a
+// chrome row) or nothing (a property cell, which already reads as a field). Disabled fades the ink.
+[[nodiscard]] ButtonColors fieldColors(bool enabled, bool active, bool hovered,
+                                       bool outlinedAtRest);
 
 // A pen exactly one physical pixel wide at the painter's device pixel ratio -- no blur at 125% or
 // 150% -- with the painter offset conventions the rounded-rect helpers below expect.
@@ -121,6 +134,13 @@ void fillRoundedSurface(QPainter& painter, const QRectF& bounds, const QColor& f
 // The box a control paints inside its own widget rectangle: Spacing::ControlInset in on every
 // side. Every button, dropdown and value field draws its plate here, so they share one height.
 [[nodiscard]] QRectF controlBounds(const QWidget& widget);
+
+// The body a kit control paints: controlBounds() for a control one Size::Control tall, and the
+// whole widget for a dense ToggleCell control (a timeline layer switch, a tool choice), which is
+// already exactly that body's size (ToggleCell is Control minus twice ControlInset). Either way
+// every painted body in a row is ToggleCell tall and shares the row's vertical centre --
+// control_geometry_tests.cpp walks the main window to hold that.
+[[nodiscard]] QRectF controlBody(const QWidget& widget);
 
 // A selected list row (timeline layer and lane rows, KRow, Assets and Jobs rows): the opaque
 // selectionWash() over the row's own surface, with a Size::SelectionEdge Accent edge at its

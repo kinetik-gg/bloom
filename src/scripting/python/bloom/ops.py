@@ -42,6 +42,7 @@ _CONTEXT_DEFAULTS = {
     "time": "bloom.context.time",
     "layer": "bloom.context.layers[0]",
     "selection": "bloom.context.selection",
+    "layers": "bloom.context.layers",
 }
 
 

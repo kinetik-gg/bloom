@@ -187,12 +187,6 @@ ButtonColors buttonColors(const ButtonKind kind, const State state, const bool k
         result.ink = inkForState(Color::Muted, state);
         break;
     }
-    case ButtonKind::Recessed:
-        // ControlSurface is not a ladder rung: hover and press move the border and the ink.
-        result.fill = color(Color::ControlSurface);
-        result.border = color(borderForState(state == State::Focused ? State::Normal : state));
-        result.ink = inkForState(Color::Muted, state);
-        break;
     case ButtonKind::MenuItem:
         if (state == State::Hover || state == State::Pressed) {
             result.fill = color(state == State::Pressed ? Color::AccentPressed : Color::Accent);
@@ -211,6 +205,17 @@ ButtonColors buttonColors(const ButtonKind kind, const State state, const bool k
              result.fill == color(Color::AccentPressed));
         result.border = color(accentPlate ? Color::Foreground : Color::Accent);
     }
+    return result;
+}
+
+ButtonColors fieldColors(const bool enabled, const bool active, const bool hovered,
+                         const bool outlinedAtRest) {
+    ButtonColors result;
+    result.fill = color(Color::Field);
+    const Color border = borderForInteraction(enabled, active, hovered);
+    result.border = border == Color::Border && !outlinedAtRest ? QColor(Qt::transparent)
+                                                               : color(border);
+    result.ink = enabled ? color(Color::Foreground) : disabledInk(color(Color::Foreground));
     return result;
 }
 
@@ -235,6 +240,10 @@ QRectF snappedToDevicePixels(const QPainter& painter, const QRectF& bounds) {
 QRectF controlBounds(const QWidget& widget) {
     const auto inset = static_cast<qreal>(px(Spacing::ControlInset));
     return QRectF(widget.rect()).adjusted(inset, inset, -inset, -inset);
+}
+
+QRectF controlBody(const QWidget& widget) {
+    return widget.height() <= px(Size::ToggleCell) ? QRectF(widget.rect()) : controlBounds(widget);
 }
 
 void fillRoundedSurface(QPainter& painter, const QRectF& bounds, const QColor& fill,

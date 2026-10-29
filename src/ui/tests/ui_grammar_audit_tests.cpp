@@ -164,13 +164,11 @@ int run(int argc, char** argv) {
             if (const auto* toggle = qobject_cast<kit::KIconToggle*>(widget)) {
                 const auto pixmap = toggle->glyphPixmap();
                 const bool layerSwitch = toggle->property("layerSwitch").toBool();
-                // Layer switches and tool choices are chrome glyphs (IconMedium).
-                const bool chrome = layerSwitch || toggle->property("toolChoice").toBool();
-                const int extent = layerSwitch && !toggle->isChecked()
-                                       ? 0
-                                       : qRound(kit::px(chrome ? kit::Size::IconMedium
-                                                               : kit::Size::IconLarge) *
-                                                widget->devicePixelRatioF());
+                // Every toggle glyph is a chrome glyph (IconMedium); an off layer switch has none.
+                const int extent =
+                    layerSwitch && !toggle->isChecked()
+                        ? 0
+                        : qRound(kit::px(kit::Size::IconMedium) * widget->devicePixelRatioF());
                 expect(pixmap.width() == extent, widget, "toggle integer physical glyph box");
                 ++icons;
             }

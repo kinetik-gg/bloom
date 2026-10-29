@@ -2,6 +2,7 @@
 
 #include <bloom/commands/operation.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/host/layer_alignment.hpp>
 #include <bloom/scripting/value.hpp>
 
 #include <cstdint>
@@ -49,6 +50,8 @@ enum class ContextSource : std::uint8_t {
     Layer,
     // The whole selection, for operations that take a set.
     Selection,
+    // Every selected layer, for operations that take a set of layers (align and distribute).
+    Layers,
 };
 
 struct ArgumentSchema final {
@@ -73,6 +76,12 @@ struct OperationSchema final {
     std::vector<ArgumentSchema> arguments;
 };
 
+// ADR 0031. Measures every layer of a composition at a time for align and distribute: the CPU
+// reference evaluation of the session's current snapshot. It runs on the calling client thread
+// (the script, MCP or CLI thread), never the UI thread.
+using LayerGeometryProvider = std::function<host::LayerAlignmentGeometryResult(
+    document::CompositionId composition, core::RationalTime time)>;
+
 // The live session values that contextual arguments fall back to. Every field is optional because
 // a headless session may have no selection, and a project may have no composition at all.
 struct OperationContext final {
@@ -83,6 +92,9 @@ struct OperationContext final {
     // spaces -- so only a selected Layer Output boundary names a layer here.
     std::vector<std::uint64_t> layers;
     std::optional<core::RationalTime> time;
+    // Absent when the client cannot evaluate. Operations that need evaluated geometry are then
+    // created without it and rejected when they apply, naming what was missing.
+    LayerGeometryProvider layerGeometry{};
 };
 
 // Fills every omitted contextual argument the context can answer and returns their names in schema
@@ -125,10 +137,17 @@ class [[nodiscard]] OperationCreateResult final {
 };
 
 using OperationFactory = std::function<OperationCreateResult(const std::string&, const Arguments&)>;
+// A factory that also reads the live context beyond its argument defaults -- today only the layer
+// geometry align and distribute measure before they are queued.
+using ContextualOperationFactory = std::function<OperationCreateResult(
+    const std::string&, const Arguments&, const OperationContext&)>;
 
 struct OperationDescriptor final {
     OperationSchema schema;
     OperationFactory factory;
+    // When present, create() with a context calls this instead of `factory`; `factory` is the
+    // same operation with an empty context.
+    ContextualOperationFactory contextualFactory{};
 };
 
 class OperationRegistry final {
@@ -155,6 +174,10 @@ class OperationRegistry final {
                                                const OperationContext& context) const;
 
   private:
+    [[nodiscard]] OperationCreateResult createWith(std::string_view typeId,
+                                                   const Arguments& arguments,
+                                                   const OperationContext* context) const;
+
     std::vector<OperationDescriptor> descriptors_;
 };
 

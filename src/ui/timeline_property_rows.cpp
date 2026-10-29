@@ -435,7 +435,6 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
     drivenLayout->setSpacing(kit::px(kit::Spacing::XXS));
     driverLink_ = new kit::KButton(driven_);
     driverLink_->setObjectName("timelinePropertyDriverLink");
-    driverLink_->setVariant(kit::KButton::Variant::Ghost);
     driverLink_->setControlSize(kit::KButton::ControlSize::Compact);
     driverLink_->setIconId(kit::IconId::Link);
     drivenLayout->addWidget(driverLink_);

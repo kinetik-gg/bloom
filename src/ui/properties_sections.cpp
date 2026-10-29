@@ -253,13 +253,10 @@ QWidget* addColorRow(CompositionSession& session, const std::string_view role, Q
 QWidget* makeLinkToggle(const QString& objectName, const QString& tooltip, QWidget* parent) {
     auto* toggle = new kit::KButton(parent);
     toggle->setObjectName(objectName);
-    toggle->setVariant(kit::KButton::Variant::Ghost);
+    // The one control look; linked is the Selected (Accent) plate every checked button shows.
     toggle->setIconId(kit::IconId::Link);
     toggle->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
     toggle->setCheckable(true);
-    QObject::connect(toggle, &kit::KButton::toggled, toggle, [toggle](bool linked) {
-        toggle->setVariant(linked ? kit::KButton::Variant::Primary : kit::KButton::Variant::Ghost);
-    });
     toggle->setToolTip(tooltip);
     return toggle;
 }

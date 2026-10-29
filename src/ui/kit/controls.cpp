@@ -248,18 +248,23 @@ void KIconButton::leaveEvent(QEvent* event) {
 }
 void KIconButton::paintEvent(QPaintEvent*) {
     QPainter painter(this);
+    // Plate-less only where the glyph is not a button of its own: a column heading's glyph and a
+    // disclosure caret. Every other icon button wears the one control look (Secondary).
     const bool heading = parentWidget() && parentWidget()->property("headerRow").toBool();
+    const bool plate = !heading && !property("disclosure").toBool();
     const State state = visualState();
-    const ButtonColors colors = buttonColors(ButtonKind::Recessed, state, hasKeyboardFocus(*this));
-    if (!heading && !property("disclosure").toBool())
-        fillRoundedSurface(painter, controlBounds(*this), colors.fill, colors.border,
-                           Radius::Small);
+    const ButtonColors colors = buttonColors(ButtonKind::Secondary, state, hasKeyboardFocus(*this));
+    if (plate)
+        fillRoundedSurface(painter, controlBody(*this), colors.fill, colors.border, Radius::Small);
     const QIcon::Mode mode = state == State::Disabled ? QIcon::Disabled
                              : state == State::Hover  ? QIcon::Active
                                                       : QIcon::Normal;
     auto glyph =
         icon().pixmap(iconSize(), devicePixelRatioF(), mode, isChecked() ? QIcon::On : QIcon::Off);
-    if (isChecked() && !glyph.isNull()) {
+    if ((plate || isChecked()) && !glyph.isNull()) {
+        // A plated button's glyph takes the recipe's ink exactly as a KButton's label does --
+        // Foreground at rest, OnAccent on the Selected plate, faded when disabled -- whatever tint
+        // the QIcon was built with.
         QPainter ink(&glyph);
         ink.setCompositionMode(QPainter::CompositionMode_SourceIn);
         ink.fillRect(glyph.rect(), colors.ink);
@@ -276,7 +281,10 @@ void KIconButton::paintEvent(QPaintEvent*) {
 
 KIconToggle::KIconToggle(IconId id, QWidget* parent) : KIconButton(parent), glyph_(id) {
     setCheckable(true);
-    setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
+    // A toggle is one control square like every icon button. A dense strip (the timeline's layer
+    // switches, the tool column) fixes its cells at ToggleCell instead: that IS the painted body,
+    // so the switches line up with the controls beside them (kit::controlBody()).
+    setFixedSize(px(Size::Control), px(Size::Control));
     ensureKeyboardFocusTracking(*this);
 }
 void KIconToggle::setGlyph(IconId id) {
@@ -284,14 +292,8 @@ void KIconToggle::setGlyph(IconId id) {
     update();
 }
 QPixmap KIconToggle::glyphPixmap() const {
-    if (property("layerSwitch").toBool()) {
-        if (!isChecked())
-            return {};
-        return iconPixmap(glyph_, Size::IconMedium, Color::Foreground,
-                          isEnabled() ? State::Normal : State::Disabled, IconWeight::Regular,
-                          devicePixelRatioF());
-    }
-    if (property("toolChoice").toBool()) {
+    const auto toolChoice = property("toolChoice").toBool();
+    if (toolChoice) {
         // A tool reads at the chrome box and weight; the chosen one takes the Selected plate's
         // OnAccent ink in the Fill weight.
         if (isChecked())
@@ -303,28 +305,41 @@ QPixmap KIconToggle::glyphPixmap() const {
                                          : State::Normal,
                           iconWeight(IconRole::Chrome), devicePixelRatioF());
     }
-    return iconPixmap(glyph_, Size::IconLarge, Color::Muted,
-                      !isEnabled()  ? State::Disabled
-                      : isChecked() ? State::Selected
-                                    : State::Normal,
-                      isChecked() ? IconWeight::Fill : IconWeight::Regular, devicePixelRatioF());
+    // A layer switch shows its state by the glyph itself (an eye that is there or not), so it
+    // never takes the Accent plate; any other toggle does, with OnAccent ink in the Fill weight.
+    const bool layerSwitch = property("layerSwitch").toBool();
+    if (layerSwitch && !isChecked())
+        return {};
+    const bool selected = isChecked() && !layerSwitch;
+    const auto ink = buttonColors(ButtonKind::Secondary, selected   ? State::Selected
+                                                         : isEnabled() ? State::Normal
+                                                                       : State::Disabled,
+                                  false)
+                         .ink;
+    return iconPixmap(glyph_, Size::IconMedium, ink, devicePixelRatioF(),
+                      selected ? IconWeight::Fill : iconWeight(IconRole::Chrome));
+}
+State KIconToggle::visualState() const {
+    const State state = KIconButton::visualState();
+    // A layer switch's checked state is its glyph, not a plate.
+    if (state == State::Selected && property("layerSwitch").toBool())
+        return underMouse() ? State::Hover : State::Normal;
+    return state;
 }
 void KIconToggle::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    const QRectF box = rect();
     if (property("toolChoice").toBool()) {
-        // The kit's one Selected recipe on a chrome-weight (Ghost) plate: nothing at rest, the
-        // hover step under the pointer, the Accent plate when chosen -- the same plate every
-        // checked Viewer toggle shows, at the same ToggleCell size.
+        // The tool column keeps its chrome-weight (Ghost) plate until the tools move to the
+        // contextual bar: nothing at rest, the hover step under the pointer, the Accent plate when
+        // chosen.
         const auto colors = buttonColors(ButtonKind::Ghost, visualState(), hasKeyboardFocus(*this));
         if (colors.fill.isValid() || colors.border.isValid())
-            fillRoundedSurface(painter, box, colors.fill.isValid() ? colors.fill : Qt::transparent,
+            fillRoundedSurface(painter, rect(), colors.fill.isValid() ? colors.fill : Qt::transparent,
                                colors.border, Radius::Small);
     } else {
-        fillRoundedSurface(
-            painter, box, color(Color::Surface),
-            color(borderForInteraction(isEnabled(), hasKeyboardFocus(*this), underMouse())),
-            Radius::Small);
+        const auto colors =
+            buttonColors(ButtonKind::Secondary, visualState(), hasKeyboardFocus(*this));
+        fillRoundedSurface(painter, controlBody(*this), colors.fill, colors.border, Radius::Small);
     }
     const auto glyph = glyphPixmap();
     const auto size = glyph.deviceIndependentSize();
@@ -510,6 +525,33 @@ void KLabel::resizeEvent(QResizeEvent* event) {
     QLabel::resizeEvent(event);
     if (elides_)
         setText(fontMetrics().elidedText(fullText_, Qt::ElideRight, width()));
+}
+KFieldFrame::KFieldFrame(QWidget* parent) : QWidget(parent) {
+    setAttribute(Qt::WA_Hover, true);
+    setFixedHeight(px(Size::Control));
+    setProperty("kitControl", true);
+}
+void KFieldFrame::setEditing(const bool editing) {
+    editing_ = editing;
+    update();
+}
+int KFieldFrame::textInset() { return px(Spacing::ControlInset) + px(Spacing::XS); }
+void KFieldFrame::paintEvent(QPaintEvent*) {
+    if (editing_)
+        return;
+    QPainter painter(this);
+    const auto colors = fieldColors(isEnabled(), false, hovered_, true);
+    fillRoundedSurface(painter, controlBounds(*this), colors.fill, colors.border, Radius::Small);
+}
+void KFieldFrame::enterEvent(QEnterEvent* event) {
+    hovered_ = isEnabled();
+    update();
+    QWidget::enterEvent(event);
+}
+void KFieldFrame::leaveEvent(QEvent* event) {
+    hovered_ = false;
+    update();
+    QWidget::leaveEvent(event);
 }
 KLineEdit::KLineEdit(QWidget* parent) : KLineEdit(QString{}, parent) {}
 KLineEdit::KLineEdit(const QString& text, QWidget* parent) : QLineEdit(text, parent) {

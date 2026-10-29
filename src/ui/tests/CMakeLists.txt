@@ -1192,6 +1192,20 @@ foreach(scale IN ITEMS 1 1.5 2)
         LABELS "ui;grammar" TIMEOUT 60)
 endforeach()
 
+# One control look and one control height: every chrome row, panel header and card row of the
+# main-window fixture, and each control kind's resting, hover and checked colours.
+add_executable(bloom_control_geometry_test control_geometry_tests.cpp)
+target_include_directories(bloom_control_geometry_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_control_geometry_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_control_geometry_test PRIVATE BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_control_geometry_test)
+foreach(scale IN ITEMS 1 1.5 2)
+    add_test(NAME bloom.ui.control_geometry.dpr${scale} COMMAND bloom_control_geometry_test)
+    set_tests_properties(bloom.ui.control_geometry.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;grammar" TIMEOUT 60)
+endforeach()
+
 add_executable(bloom_window_golden_test window_golden_tests.cpp)
 target_link_libraries(bloom_window_golden_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_window_golden_test PRIVATE
@@ -2020,4 +2034,11 @@ target_include_directories(bloom_composition_settings_dialog_test PRIVATE ..)
 target_link_libraries(bloom_composition_settings_dialog_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_composition_settings_dialog_test)
 bloom_add_test(NAME bloom.ui.composition-settings COMMAND bloom_composition_settings_dialog_test
+               LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# ADR 0031: the delivered preview frame's layer bounds equal the headless CPU reference query's.
+add_executable(bloom_layer_alignment_parity_test layer_alignment_parity_tests.cpp)
+target_link_libraries(bloom_layer_alignment_parity_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_layer_alignment_parity_test)
+bloom_add_test(NAME bloom.ui.layer-alignment-parity COMMAND bloom_layer_alignment_parity_test
                LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

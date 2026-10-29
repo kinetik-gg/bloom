@@ -259,8 +259,14 @@ void KRadioGroup::keyPressEvent(QKeyEvent* event) {
 }
 
 void KRadioGroup::paintSegmented(QPainter& painter) {
-    const QRectF bar(rect());
-    fillRoundedSurface(painter, bar, color(Color::Surface), color(borderToken()), Radius::Small);
+    // The bar is one control body wearing the one control look (Secondary): a SurfaceRaised plate
+    // and the single border by the kit-wide rule. Each segment takes the same recipe for its own
+    // state -- the hover rung, the Accent plate when chosen -- so a segment reads exactly like the
+    // button it is.
+    const QRectF bar = controlBounds(*this);
+    const ButtonColors resting =
+        buttonColors(ButtonKind::Secondary, isEnabled() ? State::Normal : State::Disabled, false);
+    fillRoundedSurface(painter, bar, resting.fill, color(borderToken()), Radius::Small);
     // A segment sits one hairline inside the bar, so its corner is the bar's minus that inset:
     // concentric, never a 3px corner pressed into a 3px frame.
     const auto inset = static_cast<qreal>(px(Spacing::ControlInset));
@@ -269,22 +275,18 @@ void KRadioGroup::paintSegmented(QPainter& painter) {
     const QFontMetrics metrics(font());
     for (int index = 0; index < count(); ++index) {
         const State state = stateForOption(index);
-        const QRectF segment(optionRect(index));
+        const QRectF segment = QRectF(optionRect(index)).intersected(bar);
         const QRectF inner = segment.adjusted(inset, inset, -inset, -inset);
         const bool fadedCurrent = index == currentIndex_ && state == State::Disabled;
-        if (state == State::Selected) {
-            fillRoundedSurface(painter, inner, color(Color::Accent), {}, segmentCorner);
+        const ButtonColors colors =
+            buttonColors(ButtonKind::Secondary, fadedCurrent ? State::Selected : state, false);
+        if (state == State::Selected || state == State::Hover) {
+            fillRoundedSurface(painter, inner, colors.fill, {}, segmentCorner);
         } else if (fadedCurrent) {
-            fillRoundedSurface(painter, inner, disabledInk(color(Color::Accent)), {},
-                               segmentCorner);
-        } else if (state == State::Hover) {
-            fillRoundedSurface(painter, inner, color(surfaceStep(Color::Surface, 1)), {},
-                               segmentCorner);
+            fillRoundedSurface(painter, inner, disabledInk(colors.fill), {}, segmentCorner);
         }
 
-        const QColor ink = state == State::Selected ? color(Color::OnAccent)
-                           : fadedCurrent           ? disabledInk(color(Color::OnAccent))
-                                                    : inkForState(Color::Muted, state);
+        const QColor ink = fadedCurrent ? disabledInk(colors.ink) : colors.ink;
         QRectF content = segment.adjusted(px(Spacing::S), 0.0, -px(Spacing::S), 0.0);
         if (const std::optional<IconId> glyph = options_.at(index).icon; glyph.has_value()) {
             const auto size = iconsOnly_ ? iconSize(IconRole::Chrome) : Size::IconSmall;

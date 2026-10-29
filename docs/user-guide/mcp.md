@@ -50,6 +50,14 @@ the document unchanged. Tool results include both `structuredContent` and a JSON
 `isError` distinguishes failed operations from successful tools. Invalid JSON-RPC or tool arguments
 produce protocol errors with the request ID where valid.
 
+`bloom.layer.align-layers` and `bloom.layer.distribute-layers` measure the layers' evaluated bounds
+on the server before the transaction runs (the CPU reference evaluation of one frame), so a
+`transact` call with them can take longer than other edits. Their `layers` argument is contextual
+(`context` `"layers"`: the selected layers) and `time` defaults to the session time. Skipped layers
+arrive as `bloom.scripting.operation-warning` diagnostics; when no layer can move, the transaction
+fails with the reasons. See [Scripting Bloom with Python](python.md#align-and-distribute) for the
+arguments.
+
 For a large parameter set, start with `{"kind":"parameters","composition":1,"pageSize":64}`.
 Repeat with its `nextCursor` until it is `null`. Each page includes `revision` and `totalRecords`;
 the cursor binds the server session, project, composition, revision and next record index. A

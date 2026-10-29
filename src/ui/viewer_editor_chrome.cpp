@@ -676,7 +676,6 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     loopButton_->setCheckable(true);
     timeReadout_ = new ViewerTimecodeReadout(
         session_, [this](const std::uint64_t frameIndex) { seekToFrame(frameIndex); }, footer);
-    timeReadout_->setFixedWidth(kit::px(kit::Size::ViewerTimecodeWidth));
 
     buildTransportActions();
     buildMenus();
@@ -712,6 +711,8 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     row.setCollapse(stepToEndButton_, CollapseStepToEnds, stepToEndAction_);
     row.setCollapse(zoomDropdown_, CollapseFraming, zoomMenu_->menuAction());
     row.setCollapse(resolutionDropdown_, CollapseFraming, resolutionMenu_->menuAction());
+    row.setCompactForm(timeReadout_, CompactFrameField, ViewerTimecodeReadout::compactWidth(),
+                       [this](const bool compact) { timeReadout_->setCompact(compact); });
     updateRoiControls();
     statusBarFooter_ = EditorArea::buildChromeRow(row, this, true);
     chrome_.hosted = [this] {

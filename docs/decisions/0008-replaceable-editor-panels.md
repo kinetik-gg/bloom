@@ -1,6 +1,7 @@
 # ADR 0008: Replaceable Editor Panels
 
-Status: accepted
+Status: accepted; the "only fixed application surface" clause is superseded by
+[ADR 0031](0031-contextual-tool-bar.md) (the menu bar and the contextual bar are the fixed surfaces)
 
 Date: 2026-08-25
 
@@ -12,7 +13,8 @@ the application hard-coding one permanent arrangement.
 
 ## Decision
 
-- The menu bar is Bloom's only fixed application surface.
+- The menu bar is Bloom's only fixed application surface. (Superseded by ADR 0031: the menu bar
+  and the contextual bar under it are the fixed surfaces.)
 - Every workspace content area hosts a replaceable editor panel.
 - A panel's editor type and target context are session/layout state, not project truth.
 - Any compatible panel may switch to any registered editor type.

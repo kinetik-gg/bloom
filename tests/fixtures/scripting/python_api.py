@@ -234,6 +234,29 @@ class PythonApi(unittest.TestCase):
             bloom.ops.layer.set_enabled(False)
         self.assertIn('bloom.context', str(error.exception))
 
+    def test_align_and_distribute_layers(self):
+        """ADR 0031: the ops measure the layers headlessly and move them in one undoable step."""
+        layers = []
+        for name, x in (('A', 300), ('B', 900), ('C', 1500)):
+            result = bloom.ops.layer.add_solid(name, (1, 1, 1, 1), position=(x, 540))
+            layers.append(next(o['id'] for o in result['outputs'] if o['name'] == 'layer'))
+        revision = bloom.data.snapshot()['revision']
+        result = bloom.ops.layer.align_layers('left', target='composition', layers=layers)
+        self.assertTrue(result['succeeded'])
+        moved = {o['id'] for o in result['outputs'] if o['name'] == 'movedLayer'}
+        self.assertEqual(moved, set(layers))
+        self.assertEqual(bloom.data.snapshot()['revision'], revision + 1)
+        again = bloom.ops.layer.align_layers('left', target='composition', layers=layers)
+        self.assertTrue(again['succeeded'])
+        self.assertFalse([o for o in again['outputs'] if o['name'] == 'movedLayer'])
+        with self.assertRaises(bloom.OperationError):
+            bloom.ops.layer.distribute_layers('horizontal', layers=layers[:2])
+        with self.assertRaises(bloom.OperationError) as error:
+            bloom.ops.layer.align_layers('left', target='key-object', layers=layers)
+        self.assertIn("'key'", str(error.exception))
+        self.assertTrue(bloom.ops.layer.distribute_layers(
+            'vertical', target='key-object', key=layers[0], layers=layers)['succeeded'])
+
     def test_reprs(self):
         self.assertEqual(repr(bloom.context.composition), "<Composition 1 'Composition'>")
         self.assertEqual(repr(bloom.context.project), "<Project 1 'Untitled'>")

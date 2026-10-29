@@ -147,3 +147,16 @@ the mean channel errors against the prior references were 1.2433 (DPR 1) and 1.1
 to the Properties panel and one node-card switch row, with composition pixels, viewer, and
 timeline unchanged. After approval the DPR 1 error is 0. Comparison tolerances and full-image
 coverage are unchanged; rendering identity goldens are unchanged.
+
+UNIFY approval (2026-10-30): one control look and one control height. Every icon button (the
+transport, footer toggles, View options, panel header maximize, the Assets and Timeline footer
+buttons), every dropdown closed field (panel switchers, the Viewer header pickers, Fit and
+Resolution, the Timeline row and Properties dropdowns, node-card dropdowns), the section Reset
+buttons, the link toggles and the timeline layer switches now wear the Secondary plate of the RAM
+Preview button, with Foreground glyphs; the recessed `ControlSurface` wells are gone. Value fields
+and line edits rest in the `Field` well. The Viewer frame field is a Field box reading
+`00:00:00:00 / 00:00:10:00`; at the fixture's Viewer width the wider field moves Channel into View
+options. Both references were regenerated with `--update-goldens` at DPR 1 and 1.5 and visually
+inspected. Before approval the mean channel errors were 1.86695 (DPR 1) and 1.86923 (DPR 1.5), with
+changed fractions 0.0284935 and 0.0282184. Comparison tolerances and full-image coverage are
+unchanged; rendering identity goldens are unchanged.

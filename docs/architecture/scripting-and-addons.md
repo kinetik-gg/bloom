@@ -2,7 +2,7 @@
 
 Status: accepted; SCRIPT-0 host and SCRIPT-1 Python, live Script editor and MCP clients delivered
 
-Updated: 2026-09-17
+Updated: 2026-10-30
 
 ## Purpose
 
@@ -207,7 +207,7 @@ callable set are the same. Operations accept positional arguments in schema orde
 alike; `Proxy` objects and raw stable IDs are interchangeable for ID arguments; tuples and lists
 read as vectors and colours; and a time is a whole frame, a `Fraction`, a float or an exact
 `(numerator, denominator)` pair. Arguments marked contextual in the schema -- `composition`, `time`,
-`layer`, `selection` -- default to the live `bloom.context` values, which `help()` states and the
+`layer`, `selection`, `layers` -- default to the live `bloom.context` values, which `help()` states and the
 CLI and MCP clients apply identically. `Proxy.__repr__` reads `<Composition 1 'Composition 1'>` and
 `bloom.context` summarises project, composition, selection and time. `ui`, `addons`, `props` and contribution
 `types` are reserved stubs that raise `NotImplementedError` with ADR references. The registered Script editor uses kit controls and a shared interpreter owned by a scripting
@@ -221,6 +221,15 @@ Cancellation reaches foreground
 Python tracing, Python task tickets and native render tasks. The GUI console bounds each foreground
 Python CPU slice; long work belongs in `bloom.tasks`. Integration tests exercise a Python-keyed
 parameter through UI Undo and compare frame-12 bytes from Python, CLI and UI exports.
+
+Align and distribute (`bloom.layer.align-layers`, `bloom.layer.distribute-layers`,
+[ADR 0031](../decisions/0031-contextual-tool-bar.md)) are the only operations whose factory reads
+more than argument defaults from the context: an `OperationDescriptor::contextualFactory` measures
+the layers through `OperationContext::layerGeometry` before the operation is queued. Every client
+context (`Session::operationContext`, the live Python host, MCP) carries a provider that runs the
+headless CPU reference measurement on the calling client thread -- never the UI thread -- against
+the session's render-source snapshot; Python releases the GIL while it runs. The command itself
+stays evaluation-free. See [`layer-alignment.md`](layer-alignment.md).
 
 Native `Render::run` callers explicitly inject one `GpuExportProvider` shared across their still,
 range and concurrent requests; a missing provider is a typed `MissingProcessingRoot` refusal before

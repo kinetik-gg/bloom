@@ -20,12 +20,11 @@
 namespace bloom::ui::kit {
 namespace {
 
-// The header's own chrome buttons are Ghost/Compact: a section header is chrome, so nothing in it
-// may carry a resting surface that would compete with the rows below it.
+// The header's own buttons (Reset, Jump to node) wear the one control look, like every panel
+// header's buttons: one Control square on a Secondary plate.
 KButton* makeHeaderButton(QWidget* parent, const QString& objectName) {
     auto* button = new KButton(parent);
     button->setObjectName(objectName);
-    button->setVariant(KButton::Variant::Ghost);
     button->setFixedSize(px(Size::Control), px(Size::Control));
     button->setFocusPolicy(Qt::NoFocus);
     return button;
@@ -59,6 +58,8 @@ KSection::KSection(const QString& title, QWidget* parent) : QWidget(parent) {
 
     chevron_ = makeHeaderButton(header_, QStringLiteral("kSectionChevron"));
     chevron_->setIconId(IconId::CaretDown);
+    // A disclosure caret: deliberately no resting surface (the Ghost exception).
+    chevron_->setVariant(KButton::Variant::Ghost);
     connect(chevron_, &KButton::clicked, this, [this] { setCollapsed(!collapsed_); });
     headerLayout->addWidget(chevron_);
 

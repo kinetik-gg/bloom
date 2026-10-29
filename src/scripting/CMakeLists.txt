@@ -20,6 +20,8 @@ target_sources(
     PRIVATE
         json_script.cpp
         operation_registry.cpp
+        operation_registry_alignment.cpp
+        operation_values.hpp
         render.cpp
         session.cpp
     PUBLIC
@@ -58,6 +60,15 @@ if(BUILD_TESTING)
         NAME bloom.scripting.operation-schemas
         COMMAND bloom_scripting_operation_schema_test
         LABELS unit scripting commands document
+    )
+    add_executable(bloom_scripting_layer_alignment_test tests/layer_alignment_tests.cpp)
+    target_link_libraries(bloom_scripting_layer_alignment_test PRIVATE bloom_scripting)
+    bloom_enable_warnings(bloom_scripting_layer_alignment_test)
+    bloom_add_test(
+        NAME bloom.scripting.layer-alignment
+        COMMAND bloom_scripting_layer_alignment_test
+        LABELS unit scripting host commands runtime
+        TIMEOUT 120
     )
     add_executable(bloom_scripting_facade_test tests/facade_tests.cpp)
     target_link_libraries(bloom_scripting_facade_test PRIVATE bloom_scripting)
