@@ -357,7 +357,11 @@ findUniqueDisplayViewForColorSpace(const OCIO::ConstConfigRcPtr& config,
             const char* const transform = config->getDisplayViewTransformName(display, view);
             if (normalized(view) != wanted && normalized(transform) != wanted)
                 continue;
-            const char* const colorSpaceName = config->getDisplayViewColorSpaceName(display, view);
+            // A shared view names its display's color space through <USE_DISPLAY_NAME>.
+            const char* colorSpaceName = config->getDisplayViewColorSpaceName(display, view);
+            if (colorSpaceName != nullptr &&
+                std::string_view(colorSpaceName) == OCIO::OCIO_VIEW_USE_DISPLAY_NAME)
+                colorSpaceName = display;
             const OCIO::ConstColorSpaceRcPtr colorSpace =
                 colorSpaceName == nullptr ? nullptr : config->getColorSpace(colorSpaceName);
             if (colorSpace && !colorSpace->isData())
