@@ -1696,8 +1696,15 @@ No operation-cache or memory-ledger implementation changes are required.
 Colour conversion preserves stream tags when a decoder omits them from its frame. The provider
 copies left-sited YUV420P8 directly; any other layout or chroma siting is expanded to bounded
 YUVA444P16 by bit-exact bilinear chroma reconstruction at the frame's H.273 chroma location
-(unspecified 4:2:0 siting is the H.273 default, left). The host reconstructs YUV420P8 chroma with
-the same left-sited bilinear filter rather than nearest neighbour. `src/media/video` performs the
+(unspecified siting is left: the H.273 default for 4:2:0, and the co-sited convention of 4:2:2
+codecs such as ProRes and DNxHR, which carry no chroma location). Siting applies per axis and only
+along an axis the layout subsamples: a location's vertical half is a 4:2:0 statement, so 4:2:2 and
+4:4:4 chroma rows stay on their luma rows (issue #393; before it, "left" 4:2:2 chroma was resampled
+half a line down). The host reconstructs YUV420P8 chroma with the same left-sited bilinear filter
+rather than nearest neighbour: chroma row k sits half-way between luma rows 2k and 2k+1, so luma
+row y reads chroma coordinate y/2 - 1/4 (issue #393 corrected a y/2 - 1/8 coordinate, a quarter-line
+shift). Exact-value regression tests: `bloom.media.video-session` (a ProRes 422 HQ Cr step between
+rows 23 and 24 stays a step; 4:2:0 row weights 0, 1/4, 3/4, 1). `src/media/video` performs the
 matrix/range step and `src/color` applies the resolved OCIO input-id-to-working-space transform on
 straight RGB before alpha is restored; the GPU route uploads the same host-prepared pre-OCIO RGB
 and runs that transform as a GPU OCIO effect.

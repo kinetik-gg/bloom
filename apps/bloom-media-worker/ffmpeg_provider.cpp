@@ -625,9 +625,17 @@ FrameProduct frame(Input& input, const AVStream& stream, AVFrame* decoded) {
             sws_freeContext(input.scale);
             input.scale = sws_alloc_context();
             require(input.scale != nullptr, "Pixel layout unavailable", Error::Oversized);
+            // Siting applies per axis, and only along an axis the layout subsamples: 4:2:2 has
+            // full vertical chroma resolution, so its chroma rows sit on the luma rows whatever
+            // the declared location (whose vertical half is a 4:2:0 statement). Positions are in
+            // 1/256 luma samples; 0 is co-sited with the first luma sample of the pair.
             int horizontal = 0, vertical = 0;
             require(av_chroma_location_enum_to_pos(&horizontal, &vertical, siting) >= 0,
                     "Chroma siting unavailable", Error::Unavailable);
+            if (layout->log2_chroma_w == 0)
+                horizontal = 0;
+            if (layout->log2_chroma_h == 0)
+                vertical = 0;
             auto* options = static_cast<void*>(input.scale);
             require(av_opt_set_int(options, "srcw", decoded->width, 0) >= 0 &&
                         av_opt_set_int(options, "srch", decoded->height, 0) >= 0 &&

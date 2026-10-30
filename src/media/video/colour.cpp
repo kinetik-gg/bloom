@@ -100,10 +100,11 @@ float chroma(const CpuPlane& plane, const std::uint32_t x, const std::uint32_t y
         return component(plane, static_cast<std::uint32_t>(cx), static_cast<std::uint32_t>(cy),
                          false);
     };
-    // Chroma-grid coordinates: horizontal x/2, vertical y/2 - 1/4.
+    // Chroma-grid coordinates: horizontal x/2, vertical y/2 - 1/4 (chroma row k sits half-way
+    // between luma rows 2k and 2k+1). `vy` is that vertical coordinate in eighths of a chroma row.
     const auto cx = static_cast<std::int64_t>(x / 2U);
     const float fx = (x & 1U) != 0 ? 0.5F : 0.0F;
-    const auto vy = static_cast<std::int64_t>(4 * static_cast<std::int64_t>(y) - 1);
+    const auto vy = static_cast<std::int64_t>(4 * static_cast<std::int64_t>(y) - 2);
     const auto cy = vy < 0 ? std::int64_t{-1} : vy / 8;
     const float fy = static_cast<float>((vy - cy * 8)) / 8.0F;
     const auto top = at(cx, cy) * (1.0F - fx) + at(cx + 1, cy) * fx;
