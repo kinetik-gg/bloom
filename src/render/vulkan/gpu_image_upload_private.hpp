@@ -124,6 +124,12 @@ struct GpuImageUpload::Impl final {
 
     std::unique_ptr<GpuImage> residentImage;
     UploadStagingBuffer staging;
+    // #401: the last proven-retired staging buffer, kept for the next upload of the same scene
+    // (same processing phase) instead of allocating a fresh mapped buffer per layer per frame.
+    // releaseSpareStaging() frees it when the scene ends; it is never reused across phases.
+    UploadStagingBuffer spareStaging;
+    const void* sparePhase = nullptr;
+    std::uint64_t stagingAllocations = 0;
 
     GpuImageUploadJobState jobState = GpuImageUploadJobState::Idle;
     bool queueSubmitted = false;

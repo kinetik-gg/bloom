@@ -409,6 +409,48 @@ void testChunkedStagingCopy(Expectations& expectations, GpuImageUpload& upload) 
     expectations.expect(taken.isValid(), "the chunked upload result is taken");
 }
 
+// #401: a proven-retired job's staging buffer is reused by the next upload instead of a fresh
+// mapped allocation per upload; the reused buffer is fully overwritten, and releasing the spare
+// (the executor does at scene end) makes the next upload allocate again.
+void testStagingReuse(Expectations& expectations, GpuImageUpload& upload) {
+    const auto window = ImageWindow::create(0, 0, 640, 360);
+    const auto pixelAspect = PixelAspectRatio::create(1, 1);
+    if (!window || !pixelAspect) {
+        expectations.expect(false, "the reuse fixture windows build");
+        return;
+    }
+    const auto uploadOnce = [&](const bool checkPixels) {
+        auto fixture = buildFixture(*window.value(), *window.value(), *pixelAspect);
+        if (!fixture)
+            return false;
+        const auto source = std::make_shared<const Rgba32fImage>(std::move(*fixture));
+        GpuImageUploadParameters parameters;
+        parameters.source = source;
+        if (upload.begin(parameters, 1ULL << 32ULL).code != GpuImageUploadDiagnosticCode::None ||
+            pollUntilTerminal(upload) != GpuImageUploadPollResult::Ready)
+            return false;
+        bool exact = true;
+        if (checkPixels) {
+            auto readback = upload.readback();
+            exact = readback.hasValue() && readback.pixels.size() == source->pixels().size() &&
+                    std::memcmp(readback.pixels.data(), source->pixels().data(),
+                                readback.pixels.size() * sizeof(Rgba32f)) == 0;
+        }
+        GpuImage taken = upload.takeImage();
+        return exact && taken.isValid();
+    };
+    upload.releaseSpareStaging();
+    const auto before = upload.stagingAllocations();
+    expectations.expect(uploadOnce(false) && upload.stagingAllocations() == before + 1,
+                        "the first upload allocates its staging buffer");
+    expectations.expect(uploadOnce(true) && upload.stagingAllocations() == before + 1,
+                        "the next upload reuses the retired staging buffer bit-exactly");
+    upload.releaseSpareStaging();
+    expectations.expect(uploadOnce(false) && upload.stagingAllocations() == before + 2,
+                        "after the spare is released the next upload allocates again");
+    upload.releaseSpareStaging();
+}
+
 int main(const int argc, char** argv) {
     const Options options = parseOptions(argc, argv);
     if (!options.valid) {
@@ -439,6 +481,7 @@ int main(const int argc, char** argv) {
     expectations.expect(upload.isBoundTo(*device.device), "the upload is bound to its device");
     testBitExactUpload(expectations, *device.device, upload);
     testChunkedStagingCopy(expectations, upload);
+    testStagingReuse(expectations, upload);
     testBudgetsAndArguments(expectations, upload);
     testWrongThread(expectations, upload);
     testCancellation(expectations, upload);

@@ -77,7 +77,10 @@ owns a device-resident RGBA32F image; `GpuImageUpload` stages one already-decode
 with no media decode on the GPU thread (a staging copy of more than one 8 MiB chunk runs through the
 caller's optional `parallelFor`; the scene executor passes the scheduler's row-band executor via
 `GpuSceneExecutorBudgets::uploadCopyExecutor`, so a many-layer frame's uploads no longer serialise
-on one single-threaded memcpy on the owner thread, issue #401); `GpuComposite` runs `TranslationOpacityBilinearV1` and
+on one single-threaded memcpy on the owner thread, issue #401; a proven-retired job keeps its
+staging buffer as a spare that the next upload under the same processing phase reuses when it is
+large enough and still fits the request budget, and the executor releases it when its scene ends, so
+a frame allocates one or two staging buffers instead of one per layer); `GpuComposite` runs `TranslationOpacityBilinearV1` and
 `SourceOverV1`, each writing a new resident image; `GpuResidentDisplay` copies a resident RGBA32F
 image device-to-device through the embedded Bloom Neutral V1 shader into a resident packed RGBA8
 image, reading back only the 4-byte status word; `GpuNeutralDisplay` runs the fixed `OcioDisplayV1`

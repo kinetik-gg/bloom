@@ -139,6 +139,15 @@ class GpuImageUpload final {
     // Marks an outstanding job's result discarded; resources stay until the fence retires.
     void cancel() noexcept;
 
+    // A proven-retired job keeps its staging buffer as a spare; the next begin() under the same
+    // processing phase reuses it when it is large enough and still fits the request budget,
+    // instead of allocating a new mapped buffer per upload (issue #401). The scene executor calls
+    // this when its scene ends, so a spare never outlives the phase that charged it. Owner thread
+    // only; a no-op elsewhere or while nothing is spare.
+    void releaseSpareStaging() noexcept;
+    // Staging buffers actually allocated by begin(), for tests of the reuse above.
+    [[nodiscard]] std::uint64_t stagingAllocations() const noexcept;
+
     // Recoverable bounded-pool pressure, not a permanent fuse: true while a foreign-released or
     // unproven resident is retained for owner drain, and false again once the rightful owner thread
     // has proved retirement (or device loss) and freed it.

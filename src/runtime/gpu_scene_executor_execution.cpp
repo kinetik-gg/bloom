@@ -35,6 +35,9 @@ using gpu_scene_executor_detail::NativePoll;
 } // namespace
 
 void GpuSceneExecutor::Impl::clearJob() noexcept {
+    // The upload's spare staging buffer is charged to this request's phase: free it with the job.
+    if (upload)
+        upload->releaseSpareStaging();
     // A completed/failed request must not keep the device's exclusive batch slot from another
     // executor. Unproven submissions retain their owner until the existing drain proves safety.
     if (operationBatch && !operationBatch->hasUnretiredSubmission())
@@ -207,6 +210,8 @@ void GpuSceneExecutor::Impl::finishReady() noexcept {
     // Release the exclusive batch owner while this executor and its output remain alive.
     if (operationBatch && !operationBatch->hasUnretiredSubmission())
         operationBatch.reset();
+    if (upload)
+        upload->releaseSpareStaging(); // charged to this request's phase; never kept past it
     state = GpuSceneExecutorJobState::Ready;
     diagnostic = {};
     ++counters.scenesCompleted;

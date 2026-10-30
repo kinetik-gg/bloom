@@ -82,6 +82,7 @@ GpuImageUpload::Impl::~Impl() {
     assert(residentSlot == kUploadNoResidentSlot || onOwnerThread());
     releaseResident();
     staging.release();
+    spareStaging.release();
     resetResources();
     releaseResidentSlot();
 }
@@ -176,6 +177,17 @@ bool GpuImageUpload::hasUnretiredSubmission() const noexcept {
 
 std::uint64_t GpuImageUpload::lastJobAllocationBytes() const noexcept {
     return impl_ != nullptr ? impl_->lastJobBytes : 0;
+}
+
+void GpuImageUpload::releaseSpareStaging() noexcept {
+    if (impl_ == nullptr || !impl_->onOwnerThread())
+        return;
+    impl_->spareStaging.release();
+    impl_->sparePhase = nullptr;
+}
+
+std::uint64_t GpuImageUpload::stagingAllocations() const noexcept {
+    return impl_ != nullptr ? impl_->stagingAllocations : 0;
 }
 
 bool GpuImageUpload::Impl::createResources() {
@@ -384,8 +396,29 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
 
     impl.clearJob();
     try {
-        const auto stagingOutcome = createUploadStagingBuffer(
-            *impl.control, imageBytes, impl.budgets.maxStagingBytes, impl.staging);
+        // Reuse the spare only under the phase that charged it, when it holds this upload and it
+        // plus the resident image (with a 1 MiB rounding margin) still fit the request budget.
+        const void* const phase = impl.control->processingPhase.get();
+        bool reused = false;
+        if (impl.spareStaging.armed) {
+            const auto spareBytes = impl.spareStaging.bytes;
+            constexpr std::uint64_t kRoundingMargin = 1ULL << 20U;
+            if (impl.sparePhase == phase && spareBytes >= imageBytes &&
+                spareBytes <= impl.budgets.maxStagingBytes && byteBudget >= imageBytes &&
+                byteBudget - imageBytes >= spareBytes + kRoundingMargin) {
+                impl.staging = std::move(impl.spareStaging);
+                reused = true;
+            } else {
+                impl.spareStaging.release();
+            }
+            impl.sparePhase = nullptr;
+        }
+        const auto stagingOutcome =
+            reused ? vulkan_detail::NativeBufferAllocationOutcome::Allocated
+                   : createUploadStagingBuffer(*impl.control, imageBytes,
+                                               impl.budgets.maxStagingBytes, impl.staging);
+        if (!reused && stagingOutcome == vulkan_detail::NativeBufferAllocationOutcome::Allocated)
+            ++impl.stagingAllocations;
         if (stagingOutcome != vulkan_detail::NativeBufferAllocationOutcome::Allocated) {
             const bool refused =
                 stagingOutcome == vulkan_detail::NativeBufferAllocationOutcome::PhaseRefused ||
@@ -662,8 +695,14 @@ GpuImageUploadPollResult GpuImageUpload::poll() {
         return GpuImageUploadPollResult::Failure;
     }
     impl.queueSubmitted = false;
-    // The copy is proved complete, so the staging bytes are no longer referenced.
-    impl.staging.release();
+    // The copy is proved complete, so the staging bytes are no longer referenced: keep the buffer
+    // as the spare for the next upload of this scene (releaseSpareStaging frees it at scene end).
+    if (impl.staging.armed && !impl.spareStaging.armed) {
+        impl.spareStaging = std::move(impl.staging);
+        impl.sparePhase = impl.control->processingPhase.get();
+    } else {
+        impl.staging.release();
+    }
     if (!pending) {
         return GpuImageUploadPollResult::Failure;
     }
