@@ -47,6 +47,9 @@ class CommandStack final {
         std::uint64_t historyEntriesRetired = 0;
         // Transactions whose parameter/animation footprint was proven by one before/after diff.
         std::uint64_t parameterFootprintDiffs = 0;
+        // #399. Applied transactions whose render impact was proven by comparing the evaluation
+        // inputs before and after (document/evaluation_inputs.hpp).
+        std::uint64_t evaluationInputProofs = 0;
     };
     explicit CommandStack(document::Document& document);
     CommandStack(document::Document& document, HistoryLimits limits);

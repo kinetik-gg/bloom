@@ -1,6 +1,7 @@
 #include "render_footprint.hpp"
 
 #include <bloom/document/animation.hpp>
+#include <bloom/document/evaluation_inputs.hpp>
 
 #include <algorithm>
 #include <array>
@@ -16,36 +17,6 @@ namespace bloom::commands::detail {
 namespace {
 
 using document::RenderTimeSpan;
-
-[[nodiscard]] bool sameGraph(const document::CanonicalGraph& left,
-                             const document::CanonicalGraph& right) {
-    if (!std::ranges::equal(left.nodes(), right.nodes()) ||
-        !std::ranges::equal(left.edges(), right.edges()) ||
-        !std::ranges::equal(left.layerOutputs(), right.layerOutputs()) ||
-        left.compositionOutput() != right.compositionOutput() ||
-        left.merges().size() != right.merges().size())
-        return false;
-    for (std::size_t index = 0; index < left.merges().size(); ++index) {
-        const auto& a = left.merges()[index];
-        const auto& b = right.merges()[index];
-        if (a.nodeId() != b.nodeId() || a.enabled() != b.enabled() ||
-            !std::ranges::equal(a.entries(), b.entries()))
-            return false;
-    }
-    return true;
-}
-
-[[nodiscard]] bool sameMuteState(const document::NodeLayout& left,
-                                 const document::NodeLayout& right) {
-    const auto muted = [](const document::NodeLayout& layout) {
-        std::vector<document::NodeId> result;
-        for (const auto& [id, record] : layout)
-            if (record.muted)
-                result.push_back(id);
-        return result;
-    };
-    return muted(left) == muted(right);
-}
 
 // The span over which one component's sampled value can differ between two key lists. A changed
 // key (added, removed, moved, or with a different value, interpolation or handle) changes at most
@@ -248,8 +219,9 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
         return AffectedTimeFootprint{.compositionId = compositionId, .intervals = {}};
     const auto duration = after->duration();
     if (before->duration() != duration || before->format() != after->format() ||
-        duration <= core::RationalTime{} || !sameGraph(before->graph(), after->graph()) ||
-        !sameMuteState(before->nodeLayout(), after->nodeLayout()))
+        duration <= core::RationalTime{} ||
+        !document::sameEvaluationGraph(before->graph(), after->graph()) ||
+        !document::sameEvaluationLayout(before->nodeLayout(), after->nodeLayout()))
         return std::nullopt;
 
     std::map<document::ParameterId,
