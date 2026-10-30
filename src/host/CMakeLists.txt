@@ -5,6 +5,14 @@ target_sources(
     PRIVATE
         copy_async_io.cpp
         copy_publication.cpp
+        export_destination.cpp
+        export_job_runner.cpp
+        export_output_drivers.cpp
+        export_preset_store.cpp
+        export_presets.cpp
+        export_queue_service.cpp
+        export_run_backend.cpp
+        export_queue_service_views.cpp
         font_catalogue.cpp
         frame_export_publication.cpp
         frame_export_publication_naming.cpp
@@ -29,6 +37,7 @@ target_sources(
             include/bloom/host/bloom_neutral_profile.hpp
             include/bloom/host/copy_async_io.hpp
             include/bloom/host/copy_publication.hpp
+            include/bloom/host/export_job_runner.hpp
             include/bloom/host/export_presets.hpp
             include/bloom/host/export_queue.hpp
             include/bloom/host/export_verification.hpp
@@ -97,6 +106,21 @@ target_link_libraries(bloom_host PUBLIC bloom_color bloom_color_ocio bloom_comma
 bloom_enable_warnings(bloom_host)
 
 if(BUILD_TESTING)
+    include(BloomTesting)
+    # Test support: the deterministic fake export runner (never linked into production).
+    add_library(bloom_host_export_testing STATIC testing/fake_export_runner.cpp)
+    target_include_directories(bloom_host_export_testing PUBLIC
+                               "${CMAKE_CURRENT_SOURCE_DIR}/testing/include")
+    target_link_libraries(bloom_host_export_testing PUBLIC bloom_host)
+    bloom_enable_warnings(bloom_host_export_testing)
+
+    add_executable(bloom_host_export_queue_fake_test tests/export_queue_fake_runner_tests.cpp)
+    target_link_libraries(bloom_host_export_queue_fake_test PRIVATE bloom_host_export_testing
+                                                                    bloom_commands)
+    bloom_enable_warnings(bloom_host_export_queue_fake_test)
+    bloom_add_test(NAME bloom.host.export-queue-fake COMMAND bloom_host_export_queue_fake_test
+                   LABELS unit host)
+
     include(BloomTesting)
     add_executable(
         bloom_host_publication_coordinator_test
@@ -329,6 +353,14 @@ if(BUILD_TESTING)
         bloom_enable_warnings(bloom_host_sequence_export_runner_test)
         bloom_add_test(NAME bloom.host.sequence-export COMMAND bloom_host_sequence_export_runner_test
                        "${CMAKE_CURRENT_BINARY_DIR}/sequence-export-fixtures" LABELS unit host media output TIMEOUT 180)
+
+        add_executable(bloom_host_export_queue_service_test tests/export_queue_service_tests.cpp)
+        target_link_libraries(bloom_host_export_queue_service_test PRIVATE bloom_host bloom_commands)
+        add_dependencies(bloom_host_export_queue_service_test bloom-media-worker)
+        bloom_enable_warnings(bloom_host_export_queue_service_test)
+        bloom_add_test(NAME bloom.host.export-queue-service
+                       COMMAND bloom_host_export_queue_service_test
+                       LABELS unit host media output TIMEOUT 300)
 
         add_executable(bloom_host_frame_export_publication_test
                        tests/frame_export_publication_tests.cpp)

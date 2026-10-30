@@ -143,6 +143,8 @@ struct ExportEncoderStatus final {
     bool vaapiHevc = false;
     // The supervised media worker can be started on this computer.
     bool mediaWorker = false;
+    // The VA-API render node whose driver opened the encode entry points (#369).
+    std::string vaapiRenderNode;
     // This build's platform runs exports (Linux in this version).
     bool exportPlatform = false;
     // True once the first worker probe has answered.
@@ -159,6 +161,8 @@ struct ExportPresetCatalogueSnapshot final {
 };
 
 inline constexpr std::string_view kExportDefaultVideoPresetId = "builtin:h264-mp4";
+inline constexpr std::string_view kExportDpxUnavailableReason =
+    "DPX sequences are not available in this build";
 inline constexpr std::string_view kExportFallbackVideoPresetId = "builtin:prores-422hq-mov";
 
 struct ExportDefaultPreset final {
@@ -187,6 +191,39 @@ struct ExportPresetCatalogueOptions final {
     // The platform's pure H.264 answer (output::h264EncoderSupportV1()); refined by probes.
     ExportEncoderStatus initialEncoders;
 };
+
+// ---------------------------------------------------------------------------------------------
+// Pure helpers shared by the catalogue, the runner, scripting and the panel. No I/O.
+
+// The destination extension without the dot ("mp4", "exr", "tiff").
+[[nodiscard]] std::string_view exportFormatExtension(document::ExportFormat format) noexcept;
+// The `{format}` token value ("mp4", "prores", "exr").
+[[nodiscard]] std::string_view exportFormatShortName(document::ExportFormat format) noexcept;
+// The preservation the settings' format is declared to produce, facet by facet.
+[[nodiscard]] std::array<output::OutputPreservationStateV1, output::kOutputAnalysisFacetCountV1>
+exportExpectedPreservation(const document::ExportOutputSettings& settings) noexcept;
+// The AnalysisPolicy rule: an analysed facet fits when it is at most the declared state on the
+// scale Exact < Equivalent < Approximated < Omitted < ExternalReference. Missing and Unsupported
+// never fit.
+[[nodiscard]] bool exportPreservationFits(output::OutputPreservationStateV1 actual,
+                                          output::OutputPreservationStateV1 expected) noexcept;
+// Platform availability of `settings` on a computer with `encoders` (no project input).
+[[nodiscard]] ExportAvailability
+exportPlatformAvailability(const document::ExportOutputSettings& settings,
+                           const ExportEncoderStatus& encoders);
+// Project-dependent requirements: ACES names need the pinned built-in ACES CG config; names the
+// built-in neutral config does not have are missing.
+[[nodiscard]] ExportAvailability
+exportProjectAvailability(const document::ExportOutputSettings& settings,
+                          const document::ColorSettings& project);
+// This build's platform answer for ExportEncoderStatus::exportPlatform.
+[[nodiscard]] constexpr bool exportPlatformSupported() noexcept {
+#if defined(__linux__)
+    return true;
+#else
+    return false;
+#endif
+}
 
 class ExportPresetCatalogue final {
   public:
@@ -234,7 +271,8 @@ class ExportPresetCatalogue final {
   private:
     explicit ExportPresetCatalogue(ExportPresetCatalogueOptions options);
     struct State;
-    std::unique_ptr<State> state_;
+    // Shared with the catalogue's worker tasks, which hold it weakly.
+    std::shared_ptr<State> state_;
 };
 
 } // namespace bloom::host

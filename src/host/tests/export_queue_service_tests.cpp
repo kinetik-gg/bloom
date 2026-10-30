@@ -1,0 +1,710 @@
+// ADR 0033: the export queue's runtime owner, presets, destinations and runner, driven headlessly
+// through a real ProjectSession, scheduler, staged publication and the media worker.
+#include <bloom/commands/export_queue_operations.hpp>
+#include <bloom/commands/operations.hpp>
+#include <bloom/document/color_settings.hpp>
+#include <bloom/document/new_project.hpp>
+#include <bloom/host/export_job_runner.hpp>
+#include <bloom/host/export_presets.hpp>
+#include <bloom/host/export_queue.hpp>
+#include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/host/project_session.hpp>
+#include <bloom/host/publication_coordinator.hpp>
+#include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/output/media_output.hpp>
+#include <bloom/output/output_export_resource_ledger.hpp>
+#include <bloom/platform/staged_artifact.hpp>
+#include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
+
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <stop_token>
+#include <thread>
+
+namespace {
+
+using namespace bloom;
+using host::ExportCommand;
+using host::ExportJobState;
+using host::ExportUnavailableCode;
+
+document::Snapshot currentSnapshot(const host::ProjectSession& session) {
+    const auto decoded = session.decodedSnapshot();
+    return decoded.snapshot();
+}
+
+int failures = 0;
+void expect(const bool condition, const std::string& message) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << message << '\n';
+    }
+}
+
+std::filesystem::path scratch(const std::string& name) {
+    auto path = std::filesystem::temp_directory_path() /
+                ("bloom-export-queue-" + name + "-" +
+                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::remove_all(path);
+    std::filesystem::create_directories(path);
+    return path;
+}
+
+std::string fileUri(const std::filesystem::path& path) { return "file://" + path.string(); }
+
+host::ExportEncoderStatus linuxEncoders(const bool openh264 = true, const bool vaapi = false) {
+    host::ExportEncoderStatus status;
+    status.exportPlatform = true;
+    status.probed = true;
+    status.mediaWorker = true;
+    status.h264Software = output::H264EncoderV1::OpenH264;
+    status.openh264 = openh264 ? host::ExportEncoderStatus::OpenH264::Installed
+                               : host::ExportEncoderStatus::OpenH264::NotInstalled;
+    status.vaapiH264 = vaapi;
+    status.vaapiHevc = vaapi;
+    return status;
+}
+
+// ---------------------------------------------------------------------------------------------
+
+void testResolveDestination() {
+    document::ExportJob job;
+    job.name = "Final";
+    job.render.range = {document::ExportRangeKind::Custom, 8, 12};
+    document::ExportOutput movie;
+    movie.destination.path = "Exports/{name}_{job}_{date}.{format}";
+    host::ExportDestinationContext context;
+    context.projectFolder = std::filesystem::path("/projects/show");
+    context.compositionName = "Shot: 10";
+    context.range = host::ExportResolvedRange{8, 12};
+    context.year = 2026;
+    context.month = 10;
+    context.day = 30;
+    auto resolved = host::resolveDestination(job, movie, context);
+    expect(resolved.issues.empty() &&
+               resolved.firstPath == "/projects/show/Exports/Shot_ 10_Final_2026-10-30.mp4" &&
+               resolved.fileCount == 1,
+           "tokens expand, values are sanitized and the movie is one file");
+
+    movie.destination.path = "Exports/{nope}.mp4";
+    expect(!host::resolveDestination(job, movie, context).issues.empty(),
+           "an unknown token is NamingInvalid");
+    movie.destination.path = "Exports/out.mov";
+    expect(!host::resolveDestination(job, movie, context).issues.empty(),
+           "a changed extension is NamingInvalid");
+    context.compositionName = "A/B";
+    movie.destination.path = "{name}.mp4";
+    expect(!host::resolveDestination(job, movie, context).issues.empty(),
+           "a separator from a value is NamingInvalid");
+    context.compositionName = "Shot";
+    movie.destination.path = "../outside.mp4";
+    expect(!host::resolveDestination(job, movie, context).issues.empty(),
+           "a project-relative destination stays below the project");
+    movie.destination = {"external", "file:///renders/a%20b.mp4",
+                         document::ExportOverwritePolicy::Replace};
+    expect(host::resolveDestination(job, movie, context).firstPath == "/renders/a b.mp4",
+           "an external file URI resolves");
+    context.projectFolder.reset();
+    movie.destination = {};
+    movie.destination.path = "Exports/{name}.mp4";
+    expect(!host::resolveDestination(job, movie, context).issues.empty(),
+           "an unsaved project has no project-relative destination");
+
+    document::ExportOutput frames;
+    frames.settings.format = document::ExportFormat::OpenExr;
+    frames.settings.naming = {1001, 4, "{job}.<base>.####.<ext>"};
+    frames.destination = {"external", "file:///renders/plate.exr",
+                          document::ExportOverwritePolicy::AskBeforeReplacing};
+    resolved = host::resolveDestination(job, frames, context);
+    expect(resolved.issues.empty() && resolved.firstPath == "/renders/Final.plate.1001.exr" &&
+               resolved.lastPath == "/renders/Final.plate.1005.exr" && resolved.fileCount == 5 &&
+               resolved.basePath == "/renders/plate.exr",
+           "a sequence names its first and last files from the start frame");
+    job.render.range = {document::ExportRangeKind::Frame, 9, 0};
+    context.range = host::ExportResolvedRange{9, 9};
+    resolved = host::resolveDestination(job, frames, context);
+    expect(resolved.firstPath == "/renders/plate.exr" && resolved.fileCount == 1,
+           "an image output with a one-frame range writes one still");
+}
+
+void testScript() {
+    document::ExportJob job;
+    job.composition = document::CompositionId::fromRaw(3);
+    job.name = "Review";
+    job.render.range = {document::ExportRangeKind::Custom, 2, 9};
+    document::ExportOutput output;
+    output.presetId = "builtin:h264-mp4";
+    output.destination.path = "Exports/{name}.mp4";
+    job.outputs = {output};
+    const auto cli = host::exportJobScript(job, host::ExportScriptFormat::CliJson);
+    expect(cli.find("\"op\":\"bloom.export.add-job\"") != std::string::npos &&
+               cli.find("\"op\":\"export.start\"") != std::string::npos &&
+               cli.find("\"first\":2") != std::string::npos,
+           "the CLI script adds the job and starts it");
+    const auto python = host::exportJobScript(job, host::ExportScriptFormat::Python);
+    expect(python.find("bloom.ops.export.add_job(") != std::string::npos &&
+               python.find("bloom.export.start()") != std::string::npos,
+           "the Python script adds the job and starts it");
+}
+
+void testPresets() {
+    auto catalogue = host::ExportPresetCatalogue::create(
+        {.userDataDirectory = std::nullopt, .initialEncoders = linuxEncoders()});
+    auto chosen = catalogue->defaultPreset();
+    expect(chosen.presetId == host::kExportDefaultVideoPresetId && !chosen.usedFallback &&
+               chosen.preferredAvailability.available,
+           "H.264 MP4 is the default where it is available");
+    catalogue->setEncoderStatus(linuxEncoders(false, false));
+    chosen = catalogue->defaultPreset();
+    expect(chosen.presetId == host::kExportFallbackVideoPresetId && chosen.usedFallback &&
+               chosen.preferredAvailability.code ==
+                   host::ExportAvailabilityCode::EncoderNotInstalled &&
+               chosen.preferredAvailability.remedy == host::ExportRemedy::InstallOpenH264,
+           "ProRes 422 HQ is the fallback, with the H.264 reason recorded");
+    catalogue->setEncoderStatus(linuxEncoders(false, true));
+    expect(catalogue->defaultPreset().presetId == host::kExportDefaultVideoPresetId,
+           "VA-API H.264 keeps the default without OpenH264");
+
+    auto elsewhere = host::ExportPresetCatalogue::create(
+        {.userDataDirectory = std::nullopt, .initialEncoders = {}});
+    chosen = elsewhere->defaultPreset();
+    expect(chosen.presetId == host::kExportDefaultVideoPresetId && !chosen.usedFallback &&
+               chosen.preferredAvailability.code ==
+                   host::ExportAvailabilityCode::PlatformNotSupported &&
+               chosen.preferredAvailability.reason == "Export runs on Linux in this version",
+           "without an export platform the job still gets H.264 MP4 with the platform reason");
+
+    const auto snapshot = catalogue->snapshot();
+    bool categoriesOrdered = true;
+    for (std::size_t index = 1; index < snapshot->presets.size(); ++index)
+        categoriesOrdered = categoriesOrdered && snapshot->presets[index - 1].category <=
+                                                     snapshot->presets[index].category;
+    expect(categoriesOrdered && snapshot->presets.front().id == host::kExportDefaultVideoPresetId,
+           "Video comes first, then VFX / sequences, then Audio");
+    for (const auto& preset : snapshot->presets)
+        if (preset.capabilities.imageSequence)
+            expect(preset.category == host::ExportPresetCategory::VfxSequences,
+                   "image sequences live in VFX / sequences");
+    for (const auto& encoders :
+         {linuxEncoders(), linuxEncoders(false, false), host::ExportEncoderStatus{}}) {
+        catalogue->setEncoderStatus(encoders);
+        const auto id = catalogue->defaultPreset().presetId;
+        const auto found =
+            std::ranges::find(catalogue->snapshot()->presets, id, &host::ExportPreset::id);
+        expect(found != catalogue->snapshot()->presets.end() && !found->capabilities.imageSequence,
+               "the default is never an image sequence");
+    }
+
+    document::ExportOutputSettings hevc;
+    hevc.format = document::ExportFormat::HevcMp4;
+    hevc.encoder = document::ExportEncoderPreference::Software;
+    expect(host::exportPlatformAvailability(hevc, linuxEncoders()).code ==
+               host::ExportAvailabilityCode::NoQualifiedEncoder,
+           "HEVC has no software encoder");
+    hevc.encoder = document::ExportEncoderPreference::Automatic;
+    expect(host::exportPlatformAvailability(hevc, linuxEncoders()).code ==
+               host::ExportAvailabilityCode::HardwareEncoderMissing,
+           "HEVC without a VA-API render node is HardwareEncoderMissing");
+    expect(host::exportPlatformAvailability(hevc, linuxEncoders(true, true)).available,
+           "HEVC is available with VA-API HEVC encode");
+
+    document::ExportOutputSettings handoff;
+    handoff.format = document::ExportFormat::OpenExr;
+    handoff.outputColorSpaceId = "ACES2065-1";
+    expect(
+        catalogue->availabilityFor(handoff, document::makeBloomNeutralColorSettingsV1({})).code ==
+            host::ExportAvailabilityCode::RequiresAcesConfig,
+        "the ACES deliverable needs the built-in ACES config");
+
+    // Expected preservation is what the policy approves against.
+    using S = output::OutputPreservationStateV1;
+    expect(host::exportPreservationFits(S::Exact, S::Approximated) &&
+               !host::exportPreservationFits(S::Omitted, S::Approximated) &&
+               !host::exportPreservationFits(S::Missing, S::ExternalReference),
+           "a facet fits when it is at most the declared state; Missing never fits");
+}
+
+void testUserPresets() {
+    const auto folder = scratch("presets");
+    runtime::TaskScheduler scheduler;
+    {
+        auto catalogue = host::ExportPresetCatalogue::create(
+            {.userDataDirectory = folder, .initialEncoders = linuxEncoders()});
+        catalogue->loadUserPresets(scheduler);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        auto status = host::ExportUserPresetStatus::StoreUnavailable;
+        while (status == host::ExportUserPresetStatus::StoreUnavailable &&
+               std::chrono::steady_clock::now() < deadline) {
+            document::ExportOutputSettings settings;
+            settings.format = document::ExportFormat::ProResMov;
+            settings.codecProfile = "4444";
+            status = catalogue->saveUserPreset("Alpha master", settings);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        expect(status == host::ExportUserPresetStatus::Accepted, "a user preset saves");
+        expect(catalogue->saveUserPreset("Alpha master", {}) ==
+                   host::ExportUserPresetStatus::NameTaken,
+               "user preset names are unique");
+        const auto id = catalogue->snapshot()->presets.back().id;
+        expect(catalogue->renameUserPreset(id, "Alpha 4444") ==
+                   host::ExportUserPresetStatus::Accepted,
+               "a user preset renames");
+        expect(catalogue->deleteUserPreset("builtin:h264-mp4") ==
+                   host::ExportUserPresetStatus::BuiltInReadOnly,
+               "built-ins are read-only");
+        // Let the queued store writes land before the catalogue goes away.
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent())
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    runtime::TaskScheduler second;
+    auto reloaded = host::ExportPresetCatalogue::create(
+        {.userDataDirectory = folder, .initialEncoders = linuxEncoders()});
+    reloaded->loadUserPresets(second);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (reloaded->snapshot()->presets.back().displayName != "Alpha 4444" &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    const auto& last = reloaded->snapshot()->presets.back();
+    expect(last.origin == host::ExportPresetOrigin::User && last.displayName == "Alpha 4444" &&
+               last.settings.codecProfile == "4444" &&
+               last.category == host::ExportPresetCategory::User,
+           "user presets persist in the versioned store");
+    second.beginShutdown();
+    while (!second.isQuiescent())
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::filesystem::remove_all(folder);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The service against a real session.
+
+struct Fixture {
+    std::filesystem::path folder;
+    host::ProjectSessionIdentitySource identity;
+    host::ProjectSession session;
+    runtime::NodeDefinitionRegistry registry;
+    runtime::SnapshotCompiler compiler{registry};
+    runtime::TaskScheduler scheduler;
+    host::PublicationCoordinator publications = [] {
+        auto result = host::PublicationCoordinator::create();
+        if (!result)
+            throw std::runtime_error("publication coordinator");
+        return std::move(*result);
+    }();
+    platform::StagedArtifactCoordinator artifacts = [] {
+        auto result = platform::StagedArtifactCoordinator::create({});
+        if (!result)
+            throw std::runtime_error("artifact coordinator");
+        return std::move(result).takeCoordinator();
+    }();
+    std::shared_ptr<output::ExportResourceLedgerV1> ledger =
+        std::make_shared<output::ExportResourceLedgerV1>();
+    std::shared_ptr<host::GpuExportProvider> gpu = [] {
+        runtime::GpuProcessFrameEvaluatorOptions options;
+        options.enabled = false;
+        return host::GpuExportProvider::create(std::move(options));
+    }();
+    std::shared_ptr<host::SequenceExportRetirementOwnerV1> retirement =
+        host::SequenceExportRetirementOwnerV1::create();
+    std::shared_ptr<host::ExportPresetCatalogue> presets;
+    std::unique_ptr<host::ExportQueueService> service;
+
+    static host::ProjectSession makeSession(host::ProjectSessionIdentitySource& identity,
+                                            const std::filesystem::path& folder) {
+        auto format = document::CompositionFormat::create(64, 32);
+        auto created =
+            document::makeNewProject("Queue", "Main", core::RationalTime::fromInteger(1), *format);
+        auto path = host::ProjectDisplayPath::create(folder / "queue.bloom");
+        auto result = host::ProjectSession::createDecoded(
+            identity, {.project = std::move(created.project),
+                       .colorSettings = document::makeBloomNeutralColorSettingsV1({}),
+                       .editability = host::DecodedProjectEditability::Editable,
+                       .displayPath = std::move(path),
+                       .persistedAllocatorHighWater = std::nullopt});
+        if (!result)
+            throw std::runtime_error("session fixture");
+        return std::move(result).takeSession();
+    }
+
+    explicit Fixture(const std::string& name, host::ExportEncoderStatus encoders = linuxEncoders())
+        : folder(scratch(name)), session(makeSession(identity, folder)) {
+        if (!runtime::registerBuiltInNodeDefinitions(registry))
+            throw std::runtime_error("registry");
+        registry.freeze();
+        gpu->prepare(scheduler);
+        presets = host::ExportPresetCatalogue::create(
+            {.userDataDirectory = std::nullopt, .initialEncoders = encoders});
+        service = std::make_unique<host::ExportQueueService>(
+            host::ExportQueueServiceDependencies{.session = session,
+                                                 .scheduler = scheduler,
+                                                 .compiler = compiler,
+                                                 .publications = publications,
+                                                 .artifacts = artifacts,
+                                                 .ledger = ledger,
+                                                 .gpu = gpu,
+                                                 .retirement = retirement,
+                                                 .presets = presets,
+                                                 .limits = {},
+                                                 .displayProcessor = nullptr,
+                                                 .scratchDirectory = folder / "scratch",
+                                                 .backend = nullptr});
+        std::filesystem::create_directories(folder / "scratch");
+    }
+    ~Fixture() {
+        service->beginShutdown(host::ExportStopCause::ApplicationQuit);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (!service->quiescent() && std::chrono::steady_clock::now() < deadline) {
+            service->pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        service.reset();
+        scheduler.beginShutdown();
+        retirement->beginShutdown();
+        while (!scheduler.isQuiescent() || !retirement->retirementComplete())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        while (!retirement->collect())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        (void)gpu->shutdownAndWait(std::chrono::seconds(10));
+        std::filesystem::remove_all(folder);
+    }
+
+    document::CompositionId composition() const {
+        return currentSnapshot(session).project().compositions().front().id();
+    }
+
+    document::ExportJobId addJob(document::ExportOutputSettings settings, std::string path,
+                                 document::ExportOverwritePolicy policy =
+                                     document::ExportOverwritePolicy::AskBeforeReplacing,
+                                 document::ExportRange range = {document::ExportRangeKind::Custom,
+                                                                0, 2},
+                                 bool importIntoAssets = false) {
+        document::ExportJob job;
+        job.composition = composition();
+        job.render.range = range;
+        document::ExportOutput output;
+        output.presetId = "test";
+        output.settings = std::move(settings);
+        output.destination = {"project-relative", std::move(path), policy};
+        output.importIntoAssets = importIntoAssets;
+        job.outputs = {output};
+        commands::Transaction transaction("Add export job");
+        transaction.emplace<commands::AddExportJob>(job);
+        const auto result = session.execute(std::move(transaction));
+        if (!result.changed())
+            throw std::runtime_error("add job");
+        return *result.command->outputId<document::ExportJobId>(commands::kExportJobOutput);
+    }
+
+    const host::ExportJobView* view(const document::ExportJobId id) const {
+        service->pump();
+        const auto snapshot = service->snapshot();
+        for (const auto& job : snapshot->jobs)
+            if (job.id == id) {
+                lastView = job;
+                return &*lastView;
+            }
+        return nullptr;
+    }
+
+    template <typename Predicate> bool pumpUntil(Predicate&& done, int seconds = 60) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+        while (std::chrono::steady_clock::now() < deadline) {
+            service->pump();
+            if (done())
+                return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return false;
+    }
+
+    bool startable(const document::ExportJobId id) {
+        return pumpUntil([&] { return service->canStart(id).available; }, 20);
+    }
+
+    mutable std::optional<host::ExportJobView> lastView;
+};
+
+document::ExportOutputSettings png() {
+    document::ExportOutputSettings settings;
+    settings.format = document::ExportFormat::Png;
+    settings.includeAudio = false;
+    return settings;
+}
+
+void testLifecycle() {
+    Fixture f("lifecycle");
+    const auto first = f.addJob(png(), "Exports/{name}.png");
+    const auto second = f.addJob(png(), "Exports/second.png");
+    expect(f.view(first) && f.view(first)->state == ExportJobState::Ready, "a new job is Ready");
+    expect(f.service->canStart(first).code == ExportUnavailableCode::DestinationCheckPending ||
+               f.service->canStart(first).available,
+           "Start waits for the first destination sample: " + f.service->canStart(first).reason);
+    expect(f.startable(first) && f.startable(second), "both jobs become startable");
+    const document::ExportJobId both[] = {first, second};
+    const auto started = f.service->start(both);
+    expect(started.accepted, "start accepts both jobs");
+    f.service->pump();
+    const auto* secondView = f.view(second);
+    expect(secondView && secondView->state == ExportJobState::Waiting,
+           "only one job runs at a time; the other waits");
+    expect(f.view(first)->commands[ExportCommand::EditJob].code ==
+                   ExportUnavailableCode::LockedWhileRunning ||
+               host::isTerminal(f.view(first)->state),
+           "a running job is locked for edits");
+    expect(f.pumpUntil([&] {
+        const auto* a = f.view(first);
+        const auto* b = f.view(second);
+        return a && b && host::isTerminal(a->state) && host::isTerminal(b->state);
+    }),
+           "both jobs finish");
+    const auto* done = f.view(first);
+    expect(done && (done->state == ExportJobState::Done ||
+                    done->state == ExportJobState::DoneWithWarnings),
+           "the first job succeeds");
+    if (done && done->failure)
+        std::cerr << "  failure: " << done->failure->reason << '\n';
+    expect(done && done->outputs.front().verification &&
+               done->outputs.front().verification->artifacts.publishedArtifacts == 3,
+           "the sequence verifies three published frames");
+    expect(std::filesystem::exists(f.folder / "Exports/Main.0002.png"),
+           "the last frame is on disk");
+    const auto events = f.service->events(0);
+    std::size_t succeeded = 0;
+    bool drained = false;
+    for (const auto& event : events.events) {
+        succeeded += std::holds_alternative<host::ExportJobSucceeded>(event.payload) ? 1 : 0;
+        drained = drained || std::holds_alternative<host::ExportQueueDrained>(event.payload);
+    }
+    expect(succeeded == 2 && drained, "terminal events report both jobs and the drain");
+    expect(f.service->log(first, 0).entries.size() >= 2, "the run log is readable");
+
+    // Re-running the files this session published needs no confirmation.
+    expect(f.pumpUntil([&] { return f.service->canStart(first).available; }, 20),
+           "a re-run over this session's own files needs no confirmation");
+
+    // Retry starts a fresh run.
+    const auto retried = f.service->retry(first);
+    expect(retried.accepted, "retry accepts a finished job");
+    f.service->pump();
+    expect(f.view(first)->run && f.view(first)->run->run > 1, "retry starts a new run");
+    // Stop cancels an active job.
+    expect(f.pumpUntil([&] { return host::isTerminal(f.view(first)->state); }), "retry finishes");
+    const auto longJob =
+        f.addJob(png(), "Exports/long.png", document::ExportOverwritePolicy::Replace,
+                 {document::ExportRangeKind::Composition, 0, 0});
+    expect(f.startable(longJob), "the long job becomes startable");
+    const document::ExportJobId longIds[] = {longJob};
+    expect(f.service->start(longIds).accepted, "start the long job");
+    const auto stopped = f.service->stop(longJob);
+    expect(stopped.accepted, "stop accepts an active job");
+    expect(f.pumpUntil([&] { return host::isTerminal(f.view(longJob)->state); }),
+           "the stopped job ends");
+    expect(f.view(longJob)->state == ExportJobState::Stopped &&
+               f.view(longJob)->stopCause == host::ExportStopCause::User,
+           "stop ends in Stopped with the user cause");
+}
+
+void testReplaceConfirmation() {
+    Fixture f("replace");
+    std::filesystem::create_directories(f.folder / "Exports");
+    {
+        std::ofstream(f.folder / "Exports/still.png") << "not a png";
+    }
+    const auto job =
+        f.addJob(png(), "Exports/still.png", document::ExportOverwritePolicy::AskBeforeReplacing,
+                 {document::ExportRangeKind::Frame, 0, 0});
+    expect(f.pumpUntil(
+               [&] {
+                   return f.service->canStart(job).code ==
+                          ExportUnavailableCode::NeedsReplaceConfirmation;
+               },
+               20),
+           "an existing destination needs confirmation under AskBeforeReplacing");
+    const auto* view = f.view(job);
+    expect(view && view->outputs.front().commands[ExportCommand::ConfirmReplace].available,
+           "confirm replace is offered");
+    expect(f.service->confirmReplace(job, view->outputs.front().id).accepted,
+           "confirm replace records the sample");
+    expect(f.service->canStart(job).available, "a confirmed job can start");
+    const document::ExportJobId ids[] = {job};
+    expect(f.service->start(ids).accepted, "start after confirmation");
+    expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }), "replace finishes");
+    expect(f.view(job)->state != ExportJobState::Failed, "the confirmed file is replaced");
+
+    const auto refusing =
+        f.addJob(png(), "Exports/still.png", document::ExportOverwritePolicy::Refuse,
+                 {document::ExportRangeKind::Frame, 0, 0});
+    expect(f.pumpUntil(
+               [&] {
+                   return f.service->canStart(refusing).code ==
+                          ExportUnavailableCode::PreflightBlocked;
+               },
+               20),
+           "Refuse blocks Start while the destination exists");
+}
+
+void testPlatformNotSupported() {
+    Fixture f("platform", host::ExportEncoderStatus{});
+    const auto job = f.addJob(png(), "Exports/x.png");
+    f.service->pump();
+    const auto start = f.service->canStart(job);
+    expect(!start.available && start.code == ExportUnavailableCode::PlatformNotSupported &&
+               start.reason == "Export runs on Linux in this version",
+           "Start answers PlatformNotSupported off Linux");
+    expect(f.service->availability(ExportCommand::StartAll).code ==
+               ExportUnavailableCode::PlatformNotSupported,
+           "Start All answers PlatformNotSupported");
+    expect(f.service->availability(job, ExportCommand::EditJob).available,
+           "the queue stays fully editable");
+    host::ExportTransientJobRequest transient;
+    transient.composition = f.composition();
+    transient.range = {document::ExportRangeKind::Frame, 0, 0};
+    transient.settings = png();
+    transient.destination = {"external", fileUri(f.folder / "t.png"),
+                             document::ExportOverwritePolicy::Replace};
+    const auto refused = f.service->submitTransient(transient);
+    expect(!refused.accepted &&
+               refused.availability.code == ExportUnavailableCode::PlatformNotSupported,
+           "a transient job answers PlatformNotSupported too");
+}
+
+void testTransient() {
+    Fixture f("transient");
+    host::ExportTransientJobRequest request;
+    request.composition = f.composition();
+    request.range = {document::ExportRangeKind::Frame, 0, 0};
+    request.settings = png();
+    request.destination = {"external", fileUri(f.folder / "capture.png"),
+                           document::ExportOverwritePolicy::Replace};
+    const auto submitted = f.service->submitTransient(request);
+    expect(submitted.accepted && submitted.job, "a transient job is accepted");
+    if (!submitted.job)
+        return;
+    const auto id = *submitted.job;
+    expect(f.view(id) && f.view(id)->transient, "the snapshot marks it transient");
+    expect(currentSnapshot(f.session).project().exportJobs().empty(),
+           "a transient job is never saved in the project");
+    expect(f.view(id)->run && f.view(id)->run->group.isValid(),
+           "a transient job owns and groups its tasks");
+    expect(f.pumpUntil([&] { return f.view(id) && host::isTerminal(f.view(id)->state); }),
+           "the transient job finishes");
+    expect(std::filesystem::exists(f.folder / "capture.png") &&
+               f.view(id)->state != ExportJobState::Failed,
+           "the transient job publishes its still");
+    expect(f.service->acknowledgeTransient(id), "the result is acknowledged");
+    expect(f.view(id) == nullptr, "an acknowledged terminal transient job leaves the snapshot");
+
+    // Never silent: an existing destination under AskBeforeReplacing is refused at run time.
+    request.destination.overwrite = document::ExportOverwritePolicy::AskBeforeReplacing;
+    const auto ask = f.service->submitTransient(request);
+    expect(ask.accepted && ask.job, "an asking transient job is accepted");
+    if (ask.job) {
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(*ask.job)->state); }),
+               "the asking transient job ends");
+        expect(f.view(*ask.job)->state == ExportJobState::Failed &&
+                   f.view(*ask.job)->failure->code == host::ExportFailureCode::PublicationConflict,
+               "an existing destination is never replaced silently");
+    }
+    // Stop by id.
+    request.range = {document::ExportRangeKind::Custom, 0, 23};
+    request.settings.format = document::ExportFormat::Png;
+    request.destination = {"external", fileUri(f.folder / "long.png"),
+                           document::ExportOverwritePolicy::Replace};
+    request.settings.naming.pattern = "<base>.####.<ext>";
+    const auto running = f.service->submitTransient(request);
+    if (running.job) {
+        expect(f.service->stop(*running.job).accepted, "a transient job stops by id");
+        expect(f.pumpUntil([&] {
+            const auto* v = f.view(*running.job);
+            return v && (host::isTerminal(v->state) || v->state == ExportJobState::Ready);
+        }),
+               "the stopped transient job ends");
+    }
+    const auto missing =
+        f.service->submitTransient({.composition = document::CompositionId::fromRaw(99),
+                                    .range = {},
+                                    .settings = png(),
+                                    .destination = {},
+                                    .name = {},
+                                    .presetId = {}});
+    expect(!missing.accepted &&
+               missing.availability.code == ExportUnavailableCode::CompositionMissing,
+           "a transient job needs an existing composition");
+}
+
+// End to end: a movie through the media worker, reopened by the worker and checked for its
+// container, colour tags, frame count and digest.
+void testVideoEndToEnd(const document::ExportFormat format,
+                       const host::ExportEncoderStatus encoders, const std::string& name) {
+    Fixture f(name, encoders);
+    document::ExportOutputSettings settings;
+    settings.format = format;
+    settings.codecProfile = format == document::ExportFormat::ProResMov ? "hq" : "high";
+    settings.includeAudio = false;
+    const auto extension = std::string(host::exportFormatExtension(format));
+    const auto job = f.addJob(settings, "Exports/{name}." + extension,
+                              document::ExportOverwritePolicy::AskBeforeReplacing,
+                              {document::ExportRangeKind::Composition, 0, 0});
+    expect(f.startable(job), name + ": the movie job becomes startable");
+    const document::ExportJobId ids[] = {job};
+    expect(f.service->start(ids).accepted, name + ": start");
+    expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }, 120),
+           name + ": the movie finishes");
+    const auto* view = f.view(job);
+    if (view && view->failure)
+        std::cerr << "  " << name << " failure: " << view->failure->reason << '\n';
+    expect(view && view->state != ExportJobState::Failed, name + ": the movie publishes");
+    if (!view || !view->outputs.front().verification)
+        return;
+    const auto& verification = *view->outputs.front().verification;
+    const auto find = [&](host::ExportCheck what) {
+        return std::ranges::find(verification.checks, what, &host::ExportCheckResult::check);
+    };
+    expect(find(host::ExportCheck::Reopen)->outcome == host::ExportCheckOutcome::Passed,
+           name + ": reopened by the worker");
+    expect(find(host::ExportCheck::FrameCount)->outcome == host::ExportCheckOutcome::Passed,
+           name + ": frame count matches the range");
+    expect(find(host::ExportCheck::Container)->outcome == host::ExportCheckOutcome::Passed,
+           name + ": the container and codec match");
+    expect(find(host::ExportCheck::ColourTags)->outcome == host::ExportCheckOutcome::Passed,
+           name + ": the colour tags match the output colour intent");
+    expect(verification.artifacts.digest.has_value() &&
+               std::filesystem::exists(f.folder / ("Exports/Main." + extension)),
+           name + ": the published file has its digest");
+}
+
+} // namespace
+
+int main() {
+    try {
+        testResolveDestination();
+        testScript();
+        testPresets();
+        testUserPresets();
+        testLifecycle();
+        testReplaceConfirmation();
+        testPlatformNotSupported();
+        testTransient();
+        testVideoEndToEnd(document::ExportFormat::ProResMov, linuxEncoders(), "prores-mov");
+        // H.264 MP4 on the encoder this computer has: OpenH264 when installed, else VA-API.
+        const bool openh264 = output::verifyH264RuntimeV1().installed;
+        const auto vaapi = output::probeVaapiEncodeV1();
+        if (openh264 || vaapi.h264) {
+            auto encoders = linuxEncoders(openh264, vaapi.h264);
+            encoders.vaapiRenderNode = vaapi.renderNode;
+            testVideoEndToEnd(document::ExportFormat::H264Mp4, encoders, "h264-mp4");
+        } else {
+            std::cout << "SKIP h264-mp4: no OpenH264 runtime and no VA-API H.264 encode here\n";
+        }
+    } catch (const std::exception& error) {
+        std::cerr << "FAIL: " << error.what() << '\n';
+        return 1;
+    }
+    return failures == 0 ? 0 : 1;
+}

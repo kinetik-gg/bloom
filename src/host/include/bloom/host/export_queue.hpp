@@ -25,6 +25,7 @@ namespace bloom::platform {
 class StagedArtifactCoordinator;
 } // namespace bloom::platform
 namespace bloom::runtime {
+class QualifiedDisplayProcessorProvider;
 class SnapshotCompiler;
 class TaskScheduler;
 } // namespace bloom::runtime
@@ -67,6 +68,7 @@ class TaskScheduler;
 // fully editable and Start, Start All and Retry are unavailable with PlatformNotSupported.
 namespace bloom::host {
 
+class ExportRunBackend;
 class GpuExportProvider;
 class ProjectSession;
 class PublicationCoordinator;
@@ -395,6 +397,9 @@ struct ExportDestinationContext final {
 };
 
 struct ExportResolvedDestination final {
+    // The expanded destination before sequence naming (a sequence's `<base>`/`<ext>` source);
+    // equal to firstPath for a single file.
+    std::filesystem::path basePath;
     // The first (or only) file the output writes, absolute.
     std::filesystem::path firstPath;
     // The last file of a sequence; equal to firstPath for a single file.
@@ -467,6 +472,9 @@ struct ExportOutputView final {
 
 struct ExportJobView final {
     ExportJobId id;
+    // A transient job (submitTransient()): runtime only, never saved in the project, removed from
+    // the snapshot after acknowledgeTransient() once it is terminal.
+    bool transient = false;
     // Monotonic per job; bumps whenever anything in this view changes. Equal revisions mean equal
     // views, so the panel can skip a row.
     std::uint64_t revision = 0;
@@ -597,8 +605,10 @@ class ExportQueueSubscription final {
                                                              const std::stop_token& stop) const;
     void close() noexcept;
 
-  private:
+    // Opaque implementation state, shared with the service that wakes it.
     struct State;
+
+  private:
     friend class ExportQueueService;
     explicit ExportQueueSubscription(std::shared_ptr<State>) noexcept;
     std::shared_ptr<State> state_;
@@ -612,6 +622,35 @@ struct ExportQueueSubscribeResult final {
 };
 
 inline constexpr std::size_t kExportQueueSubscriptionCapacity = 8;
+
+// ---------------------------------------------------------------------------------------------
+// Transient jobs (ADR 0033 section 13; the render, export and capture tools of scripting and
+// MCP). A transient job is one composition, one range (a single frame for a still or capture),
+// one output and a destination. It is never saved in the project and never enters undo; it is a
+// runtime job with the same preflight, verification, GPU priority, replacement policy (an
+// existing destination is never replaced silently: pass Replace explicitly, or the run refuses)
+// and PlatformNotSupported behaviour as any other job. Its tasks are owned and grouped like any
+// run, it stops with stop(job), and it leaves the snapshot once it is terminal and the caller has
+// acknowledged its result.
+
+struct ExportTransientJobRequest final {
+    document::CompositionId composition;
+    document::ExportRange range;
+    document::ExportOutputSettings settings;
+    document::ExportDestination destination;
+    // Shown as the job's name; empty shows the composition's name.
+    std::string name;
+    std::string presetId;
+};
+
+struct ExportTransientSubmitResult final {
+    bool accepted = false;
+    // When refused, why (the same codes and reasons the queue's Start uses).
+    ExportCommandAvailability availability;
+    std::optional<ExportJobId> job;
+    std::optional<ExportOutputId> output;
+    std::uint64_t revision = 0;
+};
 
 // ---------------------------------------------------------------------------------------------
 // Service
@@ -637,6 +676,12 @@ struct ExportQueueServiceDependencies final {
     std::shared_ptr<SequenceExportRetirementOwnerV1> retirement;
     std::shared_ptr<ExportPresetCatalogue> presets;
     ExportQueueServiceLimits limits;
+    // Optional application-wide qualified display processor (the Viewer's); PNG reuses it.
+    runtime::QualifiedDisplayProcessorProvider* displayProcessor = nullptr;
+    // Caller-owned scratch folder for publication's bridging files (never a destination).
+    std::filesystem::path scratchDirectory;
+    // The runner seam. Null uses makeProductionExportRunBackend(); tests pass a fake.
+    std::shared_ptr<ExportRunBackend> backend;
 };
 
 class ExportQueueService final {
@@ -688,9 +733,17 @@ class ExportQueueService final {
     // anything that changed after the sample (ExternalModificationConflict). A file this session
     // itself published for the output needs no confirmation on a re-run.
     ExportCommandResult confirmReplace(ExportJobId job, ExportOutputId output);
+    // Transient jobs (see above). submitTransient() validates, enqueues and pumps; the job starts
+    // in queue order. acknowledgeTransient() marks a terminal transient job's result as read; it
+    // leaves the snapshot on that pump. False when the job is unknown, not transient or active.
+    ExportTransientSubmitResult submitTransient(ExportTransientJobRequest request);
+    bool acknowledgeTransient(ExportJobId job);
     // Asks the worker to re-sample destinations now (after the artist created a folder outside
     // Bloom, for example). Non-blocking.
     void refreshPreflight();
+    // While an interactive edit gesture is open, ready asset imports wait (section 8). The owner
+    // reports the gesture state; imports apply on the first pump after it closes.
+    void setInteractiveGestureActive(bool active);
 
     // Shutdown edge: refuses new starts and stops every active job with `cause`. Non-blocking;
     // the owner keeps pumping until quiescent(), then retires the GPU provider and the encoder
@@ -700,8 +753,10 @@ class ExportQueueService final {
     // Jobs that would be stopped by closing the project or quitting (Waiting, running, Paused).
     [[nodiscard]] std::size_t activeJobCount() const noexcept;
 
-  private:
+    // Opaque implementation state (src/host only).
     struct State;
+
+  private:
     std::unique_ptr<State> state_;
 };
 
