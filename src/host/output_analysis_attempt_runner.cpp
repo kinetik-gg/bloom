@@ -8,9 +8,11 @@
 #include <bloom/runtime/gpu_process_frame.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <limits>
 #include <new>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -109,6 +111,39 @@ OutputAnalysisAttemptOutcomeV1::failure(OutputAnalysisAttemptFailureV1 failureVa
     OutputAnalysisAttemptOutcomeV1 outcome;
     outcome.failure_.emplace(failureValue); // trivially copyable; std::move() would be a no-op
     return outcome;
+}
+
+std::string describeOutputAnalysisAttemptV1(const OutputAnalysisAttemptOutcomeV1& outcome) {
+    static constexpr std::array<std::string_view, 5> stages{
+        "resolving", "color-preparing", "evaluating", "identifying", "analyzing"};
+    std::string detail;
+    const auto append = [&detail](std::string_view text) {
+        if (!detail.empty())
+            detail += "; ";
+        detail += text;
+    };
+    if (const auto* failure = outcome.failure()) {
+        const auto stage = static_cast<std::size_t>(failure->stage());
+        append("stage=" +
+               (stage < stages.size() ? std::string(stages[stage]) : std::to_string(stage)));
+        std::visit(
+            [&](const auto& value) {
+                if constexpr (!std::is_same_v<std::decay_t<decltype(value)>, std::monostate>)
+                    append("code=" + std::to_string(static_cast<unsigned>(value)));
+            },
+            failure->payload());
+        if (failure->cancelled())
+            append("cancelled");
+    }
+    if (const auto attempt = outcome.attempt()) {
+        append(attempt->approvable() ? "approvable" : "not approvable");
+        if (const auto& report = attempt->report())
+            for (const auto& facet : report->view().facets)
+                append("facet " + std::string(output::outputFacetDisplayNameV1(facet.facet)) + "=" +
+                       std::to_string(static_cast<unsigned>(facet.state)) + ":" +
+                       std::to_string(static_cast<unsigned>(facet.stableCode)));
+    }
+    return detail.empty() ? std::string("no attempt") : detail;
 }
 
 namespace detail {

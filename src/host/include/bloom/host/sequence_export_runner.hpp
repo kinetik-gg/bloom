@@ -126,6 +126,9 @@ struct SequenceExportResultV1 {
     // Issue #369: what the output colour intent and preset asked the container to carry, for the
     // ColourTags and Container checks against the reopened artifact (evidence).
     media::provider::ColourTags expectedColourTags;
+    // Technical detail of a failure (stage, codes, facets) for logs and diagnostics only. The
+    // failure's own detail is the human-readable sentence.
+    std::string diagnostic;
     std::string expectedContainer;
     [[nodiscard]] bool published() const noexcept { return publication.targetWasPublished(); }
 };

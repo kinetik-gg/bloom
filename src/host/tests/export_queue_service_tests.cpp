@@ -1,5 +1,7 @@
 // ADR 0033: the export queue's runtime owner, presets, destinations and runner, driven headlessly
 // through a real ProjectSession, scheduler, staged publication and the media worker.
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/color_settings.hpp>
@@ -316,24 +318,27 @@ struct Fixture {
     std::unique_ptr<host::ExportQueueService> service;
 
     static host::ProjectSession makeSession(host::ProjectSessionIdentitySource& identity,
-                                            const std::filesystem::path& folder) {
+                                            const std::filesystem::path& folder,
+                                            std::optional<document::ColorSettings> colour = {}) {
         auto format = document::CompositionFormat::create(64, 32);
         auto created =
             document::makeNewProject("Queue", "Main", core::RationalTime::fromInteger(1), *format);
         auto path = host::ProjectDisplayPath::create(folder / "queue.bloom");
         auto result = host::ProjectSession::createDecoded(
-            identity, {.project = std::move(created.project),
-                       .colorSettings = document::makeBloomNeutralColorSettingsV1({}),
-                       .editability = host::DecodedProjectEditability::Editable,
-                       .displayPath = std::move(path),
-                       .persistedAllocatorHighWater = std::nullopt});
+            identity,
+            {.project = std::move(created.project),
+             .colorSettings = colour ? *colour : document::makeBloomNeutralColorSettingsV1({}),
+             .editability = host::DecodedProjectEditability::Editable,
+             .displayPath = std::move(path),
+             .persistedAllocatorHighWater = std::nullopt});
         if (!result)
             throw std::runtime_error("session fixture");
         return std::move(result).takeSession();
     }
 
-    explicit Fixture(const std::string& name, host::ExportEncoderStatus encoders = linuxEncoders())
-        : folder(scratch(name)), session(makeSession(identity, folder)) {
+    explicit Fixture(const std::string& name, host::ExportEncoderStatus encoders = linuxEncoders(),
+                     std::optional<document::ColorSettings> colour = {})
+        : folder(scratch(name)), session(makeSession(identity, folder, std::move(colour))) {
         if (!runtime::registerBuiltInNodeDefinitions(registry))
             throw std::runtime_error("registry");
         registry.freeze();
@@ -638,6 +643,67 @@ void testTransient() {
            "a transient job needs an existing composition");
 }
 
+// OCIO colour-space names are free text. A working space such as "Linear Rec.709 (sRGB)" (spaces
+// and parentheses) used to fail every frame's analysis before encoding; stills, sequences and
+// movies all export with it now.
+void testFreeTextWorkingSpace(const std::string& workingSpace) {
+    const auto revision = color::ocioBuiltInContentRevision(
+        color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
+    if (!revision) {
+        expect(false, "the ACES config is available");
+        return;
+    }
+    auto colour = document::makeBloomNeutralColorSettingsV1({});
+    colour.processColorSpaceId = workingSpace;
+    colour.ocioConfig.locator =
+        document::BuiltInOcioConfigLocator{std::string(color::kAcesCgV1ConfigUri)};
+    colour.ocioConfig.expectedRevision.digest = *revision;
+    Fixture f("working-space", linuxEncoders(), colour);
+    std::vector<std::pair<document::ExportJobId, std::string>> jobs;
+    const auto add = [&](document::ExportFormat format, std::string profile, std::string path,
+                         document::ExportRange range) {
+        document::ExportOutputSettings settings;
+        settings.format = format;
+        settings.codecProfile = std::move(profile);
+        settings.includeAudio = false;
+        jobs.emplace_back(f.addJob(settings, path, document::ExportOverwritePolicy::Replace, range),
+                          path);
+    };
+    add(document::ExportFormat::Png, {}, "Exports/still.png",
+        {document::ExportRangeKind::Frame, 0, 0});
+    add(document::ExportFormat::OpenExr, {}, "Exports/still.exr",
+        {document::ExportRangeKind::Frame, 0, 0});
+    add(document::ExportFormat::Tiff, {}, "Exports/still.tiff",
+        {document::ExportRangeKind::Frame, 0, 0});
+    add(document::ExportFormat::ProResMov, "hq", "Exports/movie.mov",
+        {document::ExportRangeKind::Custom, 0, 1});
+    std::vector<document::ExportJobId> ids;
+    for (const auto& [id, path] : jobs) {
+        expect(f.startable(id), workingSpace + ": " + path + " becomes startable");
+        ids.push_back(id);
+    }
+    expect(f.service->start(ids).accepted, workingSpace + ": start");
+    expect(f.pumpUntil(
+               [&] {
+                   return std::ranges::all_of(
+                       ids, [&](auto id) { return host::isTerminal(f.view(id)->state); });
+               },
+               180),
+           workingSpace + ": every job finishes");
+    for (const auto& [id, path] : jobs) {
+        const auto* view = f.view(id);
+        if (view && view->failure)
+            std::cerr << "  " << path << ": " << view->failure->reason << '\n';
+        expect(view && view->state != ExportJobState::Failed &&
+                   std::filesystem::exists(f.folder / path),
+               workingSpace + ": " + path + " exports with a free-text working space");
+        if (view && view->failure)
+            expect(view->failure->reason.find("stage=") == std::string::npos &&
+                       view->failure->reason.find("code=") == std::string::npos,
+                   "failure text carries no stage or code numbers");
+    }
+}
+
 // End to end: a movie through the media worker, reopened by the worker and checked for its
 // container, colour tags, frame count and digest.
 void testVideoEndToEnd(const document::ExportFormat format,
@@ -692,6 +758,8 @@ int main() {
         testPlatformNotSupported();
         testTransient();
         testVideoEndToEnd(document::ExportFormat::ProResMov, linuxEncoders(), "prores-mov");
+        testFreeTextWorkingSpace("Linear Rec.709 (sRGB)");
+        testFreeTextWorkingSpace("Linear P3-D65");
         // H.264 MP4 on the encoder this computer has: OpenH264 when installed, else VA-API.
         const bool openh264 = output::verifyH264RuntimeV1().installed;
         const auto vaapi = output::probeVaapiEncodeV1();

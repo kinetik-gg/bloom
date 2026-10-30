@@ -5,6 +5,7 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <condition_variable>
 #include <exception>
+#include <iostream>
 #include <mutex>
 #include <thread>
 
@@ -527,6 +528,8 @@ struct SequenceExportRunnerV1::State {
     std::shared_ptr<const output::OutputAnalysisAttemptV1> pending;
     bool approved = false;
     bool pauseRequested = false;
+    // Technical detail of the last failure, for logs only.
+    std::string diagnostic;
     bool holding = false;
     std::uint64_t visibleEncoded = 0;
     std::optional<SequenceExportResultV1> outcome;
@@ -572,6 +575,7 @@ struct SequenceExportRunnerV1::State {
     void fail(Unavailable error) {
         SequenceExportResultV1 result;
         result.failure = std::move(error);
+        result.diagnostic = std::exchange(diagnostic, {});
         result.encodedFrames = visibleEncoded;
         if (result.failure->reason == Error::Cancelled)
             result.publication.outcome =
@@ -769,22 +773,27 @@ void SequenceExportRunnerV1::poll() {
             return;
         }
         if (!*outcome || !outcome->attempt() || !outcome->attempt()->approvable()) {
-            std::string detail = "Frame preservation report is not approvable";
-            if (const auto* failure = outcome->failure()) {
-                detail += "; stage=" + std::to_string(static_cast<unsigned>(failure->stage()));
-                std::visit(
-                    [&](const auto& value) {
-                        if constexpr (!std::is_same_v<std::decay_t<decltype(value)>,
-                                                      std::monostate>)
-                            detail += "; code=" + std::to_string(static_cast<unsigned>(value));
-                    },
-                    failure->payload());
-            }
-            if (outcome->attempt())
+            // The artist reads a sentence; the stage, codes and facets go to the diagnostic log.
+            const auto frame = s.work->request.range.firstFrame + s.visibleEncoded;
+            std::string facets;
+            if (outcome->attempt() && outcome->attempt()->report())
                 for (const auto& facet : outcome->attempt()->report()->view().facets)
-                    detail += "; facet=" + std::to_string(static_cast<unsigned>(facet.facet)) +
-                              ":" + std::to_string(static_cast<unsigned>(facet.stableCode));
-            s.fail({Error::Unavailable, std::move(detail)});
+                    if (facet.state == output::OutputPreservationStateV1::Missing ||
+                        facet.state == output::OutputPreservationStateV1::Unsupported)
+                        facets += (facets.empty() ? "" : ", ") +
+                                  std::string(output::outputFacetDisplayNameV1(facet.facet));
+            std::string message =
+                facets.empty()
+                    ? "Bloom couldn't check frame " + std::to_string(frame) +
+                          " before encoding, so the export stopped. This is a bug in Bloom; the "
+                          "details are in the log."
+                    : "Frame " + std::to_string(frame) + " can't be exported in this format (" +
+                          facets + "), so the export stopped.";
+            std::string detail = "frame " + std::to_string(frame) + " not approvable; " +
+                                 describeOutputAnalysisAttemptV1(*outcome);
+            std::cerr << "Bloom export: " << detail << '\n';
+            s.diagnostic = std::move(detail);
+            s.fail({Error::Unavailable, std::move(message)});
             return;
         }
         s.pending = outcome->attempt();

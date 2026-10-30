@@ -154,9 +154,18 @@ class DriverBase : public ExportOutputDriver {
             if (!analysed_)
                 report_.verification.facets[index] = {id, state};
             if (!exportPreservationFits(state, expected_[index])) {
-                fail(failure(ExportFailureCode::AnalysisRefused, "export.check.analysis-policy",
-                             "The analysis does not fit the preset's declared preservation",
-                             frame));
+                log(runtime::DiagnosticSeverity::Error, "export.check.analysis-policy",
+                    std::string(output::outputFacetDisplayNameV1(id)) + " analysed as " +
+                        std::to_string(static_cast<unsigned>(state)) + ", preset expects at most " +
+                        std::to_string(static_cast<unsigned>(expected_[index])),
+                    frame);
+                fail(failure(
+                    ExportFailureCode::AnalysisRefused, "export.check.analysis-policy",
+                    (frame ? "Frame " + std::to_string(*frame) : std::string("This output")) +
+                        " can't be exported with this preset (" +
+                        std::string(output::outputFacetDisplayNameV1(id)) +
+                        " would not be preserved), so the export stopped.",
+                    frame));
                 checks_.push_back(check(ExportCheck::AnalysisPolicy, ExportCheckOutcome::Failed,
                                         "export.check.analysis-policy.refused",
                                         static_cast<std::uint64_t>(expected_[index]),
@@ -462,14 +471,24 @@ class ImageDriver final : public DriverBase {
             if ((attemptFailure && attemptFailure->cancelled()) || stopRequested_)
                 return finishStopped();
             auto code = ExportFailureCode::EvaluationFailed;
-            std::string reason = "The frame could not be evaluated";
+            const auto frameText = std::to_string(next_);
+            log(runtime::DiagnosticSeverity::Error, "export.attempt.detail",
+                describeOutputAnalysisAttemptV1(outcome), next_);
+            std::string reason =
+                attemptFailure &&
+                        attemptFailure->stage() == OutputAnalysisAttemptStageV1::Evaluating
+                    ? "Bloom couldn't render frame " + frameText +
+                          ", so the export stopped. The details are in the log."
+                    : "Bloom couldn't check frame " + frameText +
+                          " before exporting, so the export stopped. This is a bug in Bloom; the "
+                          "details are in the log.";
             if (attemptFailure) {
                 if (const auto* phase =
                         attemptFailure->payloadAs<runtime::GpuProcessFrameDiagnosticCode>();
                     phase && (*phase == runtime::GpuProcessFrameDiagnosticCode::BudgetRefused ||
                               *phase == runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity)) {
                     code = ExportFailureCode::ResourceRefused;
-                    reason = "The export could not reserve its processing memory";
+                    reason = "The export couldn't reserve its processing memory, so it stopped.";
                 }
                 if (const auto* resource =
                         attemptFailure->payloadAs<output::OutputAnalysisAttemptErrorCodeV1>();
@@ -477,7 +496,7 @@ class ImageDriver final : public DriverBase {
                     *resource ==
                         output::OutputAnalysisAttemptErrorCodeV1::ResourceReservationFailed) {
                     code = ExportFailureCode::ResourceRefused;
-                    reason = "The export could not reserve enough memory";
+                    reason = "The export couldn't reserve enough memory, so it stopped.";
                 }
             }
             return fail(failure(code, "export.attempt.failed", std::move(reason), next_));
@@ -485,10 +504,16 @@ class ImageDriver final : public DriverBase {
         if (stopRequested_)
             return finishStopped();
         auto attempt = outcome.attempt();
-        if (!attempt || !attempt->approvable() || !attempt->digest() || !attempt->report())
-            return fail(
-                failure(ExportFailureCode::AnalysisRefused, "export.analysis.not-approvable",
-                        "This frame cannot be exported: its analysis is not approvable", next_));
+        if (!attempt || !attempt->approvable() || !attempt->digest() || !attempt->report()) {
+            log(runtime::DiagnosticSeverity::Error, "export.attempt.detail",
+                describeOutputAnalysisAttemptV1(outcome), next_);
+            return fail(failure(ExportFailureCode::AnalysisRefused,
+                                "export.analysis.not-approvable",
+                                "Bloom couldn't check frame " + std::to_string(next_) +
+                                    " before exporting, so the export stopped. This is a bug in "
+                                    "Bloom; the details are in the log.",
+                                next_));
+        }
         if (!acceptAnalysis(
                 attempt->report()->view().facets,
                 [](const auto& facet) { return std::pair{facet.facet, facet.state}; },
@@ -531,7 +556,10 @@ class ImageDriver final : public DriverBase {
         const auto digest = attempt->digest();
         if (!digest)
             return fail(failure(ExportFailureCode::AnalysisRefused, "export.analysis.digest",
-                                "The analysis lost its approval digest", next_));
+                                "Bloom couldn't check frame " + std::to_string(next_) +
+                                    " before exporting, so the export stopped. This is a bug in "
+                                    "Bloom; the details are in the log.",
+                                next_));
         auto approval = approveFrameExportV1(dependencies_.publications, attempt, *digest);
         if (!approval)
             return fail(failure(ExportFailureCode::AnalysisRefused, "export.approval.refused",
@@ -860,6 +888,8 @@ class MediaDriver final : public DriverBase {
                     break;
                 }
             }
+            if (!result.diagnostic.empty())
+                log(runtime::DiagnosticSeverity::Error, "export.media.detail", result.diagnostic);
             return fail(failure(code, "export.media.failed",
                                 result.failure ? result.failure->detail
                                                : std::string("The movie could not be published")));

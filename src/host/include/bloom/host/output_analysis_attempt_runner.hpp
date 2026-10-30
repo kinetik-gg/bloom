@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <variant>
 
 // docs/architecture/frame-output.md "Pre-Approval Output Analysis Attempt": "The application
@@ -230,6 +231,11 @@ class [[nodiscard]] OutputAnalysisAttemptOutcomeV1 final {
     std::optional<OutputAnalysisAttemptGpuProvenanceV1> gpuProvenance_;
     std::optional<OutputAnalysisAttemptFailureV1> failure_;
 };
+
+// The technical record of a failed or non-approvable attempt (stage, payload code and each
+// facet's stable code) for logs and diagnostics. User-facing text never shows it.
+[[nodiscard]] std::string
+describeOutputAnalysisAttemptV1(const OutputAnalysisAttemptOutcomeV1& outcome);
 
 namespace detail {
 struct OutputAnalysisAttemptRunnerState;
