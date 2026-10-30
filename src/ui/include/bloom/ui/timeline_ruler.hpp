@@ -42,9 +42,12 @@ struct TimelineAxis final {
     int inset = 0;
     // How the composition labels its frames (start timecode, drop-frame). Display only.
     document::CompositionTimecode labels{};
+    // Extra room before frame 0 only, on top of `inset`: the graph editor's value gutter, so a key
+    // at frame 0 sits clear of the axis labels instead of under them.
+    int lead = 0;
 
     [[nodiscard]] int pixelSpan() const noexcept {
-        return std::max(1, widthPixels - 1 - 2 * inset);
+        return std::max(1, widthPixels - 1 - 2 * inset - lead);
     }
     [[nodiscard]] static std::optional<TimelineAxis>
     create(const document::Composition& composition, int widthPixels);
@@ -127,6 +130,14 @@ class TimelineRuler final : public QWidget {
     void zoomBy(double factor, qreal anchorX);
     void setTimecodeLabels(bool timecode);
     [[nodiscard]] bool handleWheel(QWheelEvent* event);
+    // The graph editor's value gutter: room the shared time axis keeps before frame 0 while the
+    // graph is shown, so every time-axis surface (this ruler, the work area, the graph) moves
+    // together and a frame-0 key is never covered.
+    void setLeadingInset(int pixels);
+    [[nodiscard]] int leadingInset() const noexcept { return leadingInset_; }
+    // The times of the ruler's LABELLED major ticks at `widthPixels`: the graph editor's vertical
+    // grid lines, aligned with the ruler by being the ruler's own decision.
+    [[nodiscard]] std::vector<core::RationalTime> majorTickTimes(int widthPixels) const;
 
   signals:
     void axisChanged();
@@ -155,6 +166,7 @@ class TimelineRuler final : public QWidget {
     CompositionPreviewController& previewController_;
     bool scrubbing_ = false;
     bool timecodeLabels_ = false;
+    int leadingInset_ = 0;
 };
 
 // Full-duration overview with a draggable window and independently resizable edges.

@@ -742,6 +742,27 @@ void TimelineRuler::setTimecodeLabels(const bool timecode) {
     update();
 }
 
+void TimelineRuler::setLeadingInset(const int pixels) {
+    if (leadingInset_ == pixels)
+        return;
+    leadingInset_ = pixels;
+    update();
+    emit axisChanged();
+}
+
+std::vector<core::RationalTime> TimelineRuler::majorTickTimes(const int widthPixels) const {
+    std::vector<core::RationalTime> times;
+    const auto axis = axisForWidth(widthPixels);
+    if (!axis.has_value())
+        return times;
+    const auto labelAreaHeight =
+        static_cast<qreal>(height()) - 2 * kPlayheadMarkerHeight - kit::px(kit::Spacing::XXS);
+    for (const auto& label : computeMajorTickLabels(*axis, labelAreaHeight, timecodeLabels_))
+        if (const auto time = frameTimeForIndex(axis->frameRate, axis->duration, label.index))
+            times.push_back(*time);
+    return times;
+}
+
 void TimelineRuler::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event)
     QPainter painter(this);
