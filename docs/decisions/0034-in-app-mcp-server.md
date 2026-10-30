@@ -1,7 +1,7 @@
 # ADR 0034: In-App MCP Server And The MCP Server Panel
 
-Status: proposed (for review by the Engine lead, the UI lead and the owner; the supervisor may
-renumber the ADR at integration)
+Status: accepted (owner and UI review of 2026-10-30; the supervisor may renumber the ADR at
+integration)
 
 Date: 2026-10-30
 
@@ -564,9 +564,9 @@ over Bloom's listener.
 - **Project open, close and save tools**: those flows ask the artist questions.
 - **The panel owning the server**: panels are replaceable and may be closed or duplicated.
 
-## Decisions for the owner
+## Owner decisions
 
-Each default below was chosen by this proposal; the owner may change any of them.
+The owner accepted every default below on 2026-10-30.
 
 1. **Off until started.** The server does not run unless the artist starts it.
 2. **Auto-start is an opt-in preference, off by default** (Start when Bloom opens).
