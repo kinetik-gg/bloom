@@ -316,7 +316,7 @@ class PythonApi(unittest.TestCase):
                   'destination': {'portability': 'project-relative',
                                   'path': 'Exports/{name}.png', 'overwrite': 'replace'},
                   'enabled': True, 'importIntoAssets': False}
-        added = bloom.ops.export.add_job(composition, range='frame', first=3,
+        added = bloom.ops.export.add_job(composition=composition, range='frame', first=3,
                                          outputs=(json.dumps(output),))
         self.assertTrue(added['succeeded'])
         with tempfile.TemporaryDirectory(prefix='bloom-cli-export-') as directory:
