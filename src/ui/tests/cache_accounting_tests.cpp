@@ -24,6 +24,7 @@
 
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
@@ -369,6 +370,62 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
 // loop staged 64 x 126.6 MiB = 7.9 GiB of decoded pixels the memory ledger never saw -- and 31.6
 // GiB had the frames been 8K. The bound is now bytes, and it is applied before the memory is
 // staged rather than by the writer thread afterwards.
+// Normal UI use with a RAM headroom: the operation, decoded-video (playback) and RAM-preview
+// caches share one ledger. As they fill, the machine's free memory falls by what they retain;
+// together they stop at the free memory beyond the headroom (one entry of slack), and when another
+// program then takes memory they shrink below what they held. Each pool used to be offered all
+// free memory and never shrink, which grew a desktop session past 20 GB without any export.
+void testHeadroomCachesFillTogetherAndShrink(Expectations& check) {
+    constexpr std::size_t gib = 1024 * kMebibyte;
+    constexpr std::size_t headroom = 256 * kMebibyte;
+    constexpr std::size_t machineFree = 1280 * kMebibyte;
+    runtime::MemoryBudgetLedger ledger(16 * gib, 16 * gib);
+    const auto origin = runtime::MemoryBudgetLedger::Clock::time_point{};
+    ledger.beginProcessSampling();
+    static_cast<void>(ledger.applySample(memorySample({}, origin), origin));
+    ledger.setRamHeadroom(headroom);
+    runtime::OperationCache operations(gib, ledger);
+    bloom::media::video::DecodedVideoCache video(gib, ledger);
+    bloom::ui::PreviewFrameCache preview(gib, ledger);
+    const auto tracked = [&] {
+        return operations.retainedBytes() + video.residentBytes() + preview.residentBytes();
+    };
+    std::size_t peak = 0;
+    for (int index = 0; index < 24; ++index) {
+        static_cast<void>(
+            ledger.poll({.availableBytes = machineFree - std::min(machineFree, tracked())},
+                        origin + std::chrono::seconds(index + 1)));
+        operations.store(
+            "headroom:" + keyFor(index), {},
+            {.image = makeUhdImage(static_cast<float>(index) / 24.0F), .values = {}, .bounds = {}},
+            runtime::OperationCacheEntryKind::Operation);
+        for (int part = 0; part < 16; ++part) {
+            auto frame = std::make_shared<bloom::media::provider::FrameProduct>();
+            frame->format = bloom::media::provider::PixelFormat::Rgba8;
+            frame->colour = {1, 1, 1, 1};
+            bloom::media::provider::CpuPlane plane;
+            plane.width = 1024;
+            plane.height = 512;
+            plane.stride = 4096;
+            plane.bytes.resize(static_cast<std::size_t>(plane.stride) * plane.height);
+            plane.digest = bloom::media::provider::digestBytes(plane.bytes);
+            frame->planes.push_back(std::move(plane));
+            video.store({{}, 0, static_cast<std::uint64_t>(index * 16 + part), 0, {}, {}, {}},
+                        std::move(frame));
+        }
+        peak = std::max(peak, tracked());
+    }
+    check.expect(operations.retainedBytes() > 0 && video.residentBytes() > 0,
+                 "headroom: operation and playback caches both fill under normal use");
+    check.expect(peak <= machineFree - headroom + 2 * kUhdBytes,
+                 "headroom: the caches together stop at the free memory beyond the headroom");
+    const auto filled = tracked();
+    static_cast<void>(
+        ledger.poll({.availableBytes = headroom / 2}, origin + std::chrono::seconds(100)));
+    check.expect(tracked() + headroom / 2 <= filled + 4 * kMebibyte,
+                 "headroom: another program's demand shrinks the caches below what they held");
+}
+
 void testUnboundedAsyncQueueWouldHaveHeldGigabytes(Expectations& check) {
     ScratchDirectory scratch("cachefix1-queue-bound");
     cache::MediaDiskCacheConfig config;
@@ -566,6 +623,7 @@ int main(int argc, char** argv) {
     Expectations check;
     testTwoHundredUhdImportsStayInsideEveryBudget(check);
     testContentionDuringTwoHundredImports(check);
+    testHeadroomCachesFillTogetherAndShrink(check);
     testUnboundedAsyncQueueWouldHaveHeldGigabytes(check);
     testBadAllocOnInsertDropsTheEntryAndKeepsTheValue(check);
     testProxyCacheBoundIsMeasuredRatherThanAssumed(check);
