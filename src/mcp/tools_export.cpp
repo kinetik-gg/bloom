@@ -172,6 +172,8 @@ yyjson_mut_val* verificationValue(Json& out, const host::ExportOutputVerificatio
     out.set(value, "encoder", out.text(verification.provenance.encoder));
     out.set(value, "gpuFrames", out.number(verification.provenance.gpuFrames));
     out.set(value, "cpuReferenceFrames", out.number(verification.provenance.cpuReferenceFrames));
+    out.set(value, "gpuDisplayFrames", out.number(verification.provenance.gpuDisplayFrames));
+    out.set(value, "cpuDisplayFrames", out.number(verification.provenance.cpuDisplayFrames));
     return value;
 }
 

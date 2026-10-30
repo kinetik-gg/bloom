@@ -133,6 +133,13 @@ struct ExportDeviceProvenance final {
     std::uint64_t gpuProcessPayloadBytes = 0;
     std::uint64_t gpuEncodedPayloadBytes = 0;
     std::uint64_t gpuDeviceOwnershipEpoch = 0;
+    // Video outputs only: frames whose display/view (output colour) transform ran on the GPU in the
+    // frame's combined readback, and frames that took the CPU reference display transform at the
+    // codec boundary instead. A CPU display frame is a CPU colour transform of the whole frame, so
+    // it is never reported as a GPU frame (AGENTS.md GPU coverage). Both are zero for image
+    // sequences, whose output colour is part of the evaluated frame.
+    std::uint64_t gpuDisplayFrames = 0;
+    std::uint64_t cpuDisplayFrames = 0;
     // Frames taken from the scene-referred composite cache instead of being evaluated again
     // (the output's useCachedFrames setting). Each reused frame still passes the same analysis,
     // approval and verification as an evaluated one.

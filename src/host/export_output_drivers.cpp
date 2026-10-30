@@ -251,11 +251,14 @@ class DriverBase : public ExportOutputDriver {
 
     ExportCheckResult provenanceCheck() const {
         const auto& provenance = report_.verification.provenance;
-        if (provenance.cpuReferenceFrames > 0)
+        // A video frame is a GPU frame only when its display transform ran on the GPU as well.
+        const auto gpuFrames = provenance.cpuDisplayFrames > 0
+                                   ? std::min(provenance.gpuFrames, provenance.gpuDisplayFrames)
+                                   : provenance.gpuFrames;
+        if (provenance.cpuReferenceFrames > 0 || provenance.cpuDisplayFrames > 0)
             return check(ExportCheck::DeviceProvenance, ExportCheckOutcome::Warning,
                          "export.check.device.cpu-reference",
-                         provenance.gpuFrames + provenance.cpuReferenceFrames,
-                         provenance.gpuFrames);
+                         provenance.gpuFrames + provenance.cpuReferenceFrames, gpuFrames);
         return check(ExportCheck::DeviceProvenance, ExportCheckOutcome::Passed,
                      "export.check.device.gpu", provenance.gpuFrames, provenance.gpuFrames);
     }
@@ -1198,8 +1201,11 @@ class MediaDriver final : public DriverBase {
         provenance.gpuEncodedPayloadBytes = result.gpuEncodedPayloadBytes;
         provenance.gpuDeviceOwnershipEpoch = result.gpuDeviceOwnershipEpoch;
         provenance.framesReused = result.framesReused;
-        route_ = provenance.cpuReferenceFrames > 0 ? ExportDeviceRoute::CpuReference
-                                                   : ExportDeviceRoute::Gpu;
+        provenance.gpuDisplayFrames = result.gpuDisplayFrames;
+        provenance.cpuDisplayFrames = result.cpuDisplayFrames;
+        route_ = provenance.cpuReferenceFrames > 0 || provenance.cpuDisplayFrames > 0
+                     ? ExportDeviceRoute::CpuReference
+                     : ExportDeviceRoute::Gpu;
         if (const auto* analysis = runner_->analysis())
             provenance.encoder = analysis->implementationNote;
         if (report_.failure)
