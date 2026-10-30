@@ -13,6 +13,7 @@
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/project_item_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -362,23 +363,14 @@ void AssetsEditor::newCompositionFromSelection() {
     if (footage.empty())
         return;
     // Sized from the first visual footage item, like After Effects; the active composition (or
-    // the defaults) supplies what the footage does not state.
-    commands::CompositionSettings base;
-    base.name = tr("Composition %1").arg(project.compositions().size() + 1).toStdString();
-    base.duration = core::RationalTime::fromInteger(10);
-    if (const auto* current = session_.composition())
-        base = commands::compositionSettingsOf(*current);
-    const auto* first = project.findAsset(footage.front());
-    for (const auto id : footage)
-        if (const auto* asset = project.findAsset(id); asset->kind != document::AssetKind::Audio) {
-            first = asset;
-            break;
-        }
-    auto settings = commands::compositionSettingsForAsset(*first, base);
-    settings.timecode = {};
+    // the defaults) supplies what the footage does not state. The command is shared with
+    // bloom.composition.add-from-assets.
     commands::Transaction transaction("New Composition from Selection", snapshot.revision());
-    transaction.emplace<commands::AddCompositionFromAssets>(
-        std::move(settings), footage, assets::targetFolder(tree_->currentItem()));
+    const auto* current = session_.composition();
+    transaction.emplace<commands::AddCompositionFromFootage>(
+        footage, current != nullptr ? std::optional(session_.compositionId()) : std::nullopt,
+        tr("Composition %1").arg(project.compositions().size() + 1).toStdString(),
+        assets::targetFolder(tree_->currentItem()));
     const auto result = session_.executeTransaction(std::move(transaction));
     if (const auto id = result.outputId<document::CompositionId>(commands::kAddCompositionOutput))
         openComposition(*id);

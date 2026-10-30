@@ -278,12 +278,10 @@ void NodeGraphEditor::arrangeAllNodes() {
         showStatus(tr("Node command submission is unavailable"));
         return;
     }
-    const auto* composition = session_.composition();
-    const auto positions = arrangeNodes(*composition, measuredNodeSizes(*scene_));
-    if (positions.empty())
-        return;
+    // The command (shared with bloom.node.arrange) lays out with the cards' measured sizes.
     commands::Transaction transaction("Arrange Nodes", session_.snapshot().revision());
-    transaction.emplace<commands::MoveNodes>(session_.compositionId(), positions);
+    transaction.emplace<commands::ArrangeNodes>(
+        session_.compositionId(), std::set<document::NodeId>{}, measuredNodeSizes(*scene_));
     const auto result = scene_->submit(std::move(transaction));
     if (result.succeeded())
         view_->frameGraph();
@@ -299,37 +297,9 @@ void NodeGraphEditor::arrangeSelectedNodes() {
         showStatus(tr("Select nodes first"));
         return;
     }
-    const auto* composition = session_.composition();
-    const auto sizes = measuredNodeSizes(*scene_);
-    const auto relative = arrangeNodes(*composition, sizes, selection);
-    if (relative.empty())
-        return;
-
-    // ArrangeSelection is local to the selection. Shift its local result back to the selected
-    // cards' current bounding-box top-left, so arranging never drags the selection across the
-    // canvas as a side effect.
-    double oldLeft = std::numeric_limits<double>::infinity();
-    double oldTop = std::numeric_limits<double>::infinity();
-    double newLeft = std::numeric_limits<double>::infinity();
-    double newTop = std::numeric_limits<double>::infinity();
-    const auto defaults = document::defaultNodeLayout(composition->graph().nodes());
-    for (const auto id : selection) {
-        const auto current = composition->nodeLayout().find(id);
-        const auto& record =
-            current == composition->nodeLayout().end() ? defaults.at(id) : current->second;
-        oldLeft = std::min(oldLeft, record.position.x);
-        oldTop = std::min(oldTop, record.position.y);
-        const auto arranged = relative.at(id);
-        newLeft = std::min(newLeft, arranged.x);
-        newTop = std::min(newTop, arranged.y);
-    }
-    const document::Vec2d offset{oldLeft - newLeft, oldTop - newTop};
-    std::map<document::NodeId, document::Vec2d> positions;
-    for (const auto& [id, position] : relative)
-        positions.emplace(id, document::Vec2d{position.x + offset.x, position.y + offset.y});
-
     commands::Transaction transaction("Arrange Nodes", session_.snapshot().revision());
-    transaction.emplace<commands::MoveNodes>(session_.compositionId(), std::move(positions));
+    transaction.emplace<commands::ArrangeNodes>(session_.compositionId(), selection,
+                                                measuredNodeSizes(*scene_));
     static_cast<void>(scene_->submit(std::move(transaction)));
 }
 

@@ -4,6 +4,7 @@
 #include "project_change_check.hpp"
 
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/project_item_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dialog_prompts.hpp>
@@ -48,22 +49,14 @@ void commitDelete(CompositionSession& session, const document::Snapshot& snapsho
                (withContents &&
                 std::ranges::find(contents.compositions, active) != contents.compositions.end());
     }();
+    // One command, shared with bloom.asset.delete-items, reads the folders' contents again when it
+    // applies; the change check guarantees they are the ones the question showed.
     commands::Transaction transaction("Delete", snapshot.revision());
-    for (const auto asset : selection.assets)
-        transaction.emplace<commands::RemoveAsset>(asset);
-    for (const auto composition : selection.compositions)
-        transaction.emplace<commands::DeleteComposition>(composition);
-    if (withContents) {
-        for (const auto asset : contents.assets)
-            transaction.emplace<commands::RemoveAsset>(asset);
-        for (const auto composition : contents.compositions)
-            transaction.emplace<commands::DeleteComposition>(composition);
-        for (const auto folder : contents.folders)
-            transaction.emplace<commands::RemoveAssetFolder>(folder);
-    } else {
-        for (const auto folder : selection.folders)
-            transaction.emplace<commands::RemoveAssetFolder>(folder);
-    }
+    transaction.emplace<commands::DeleteProjectItems>(
+        commands::ProjectItems{.assets = selection.assets,
+                               .compositions = selection.compositions,
+                               .folders = selection.folders},
+        withContents);
     if (!session.executeTransaction(std::move(transaction)).succeeded())
         return;
     const auto remaining = session.snapshot().project().compositions();

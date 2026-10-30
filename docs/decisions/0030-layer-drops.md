@@ -52,3 +52,8 @@ items at once, optionally end to end. The owner asked for the same behaviour.
   committed assets and the follow-up's sentence.
 - Dropping the active composition onto itself, fonts and LUTs is refused before the drop is
   accepted; a deeper nesting cycle is refused by the nested composition command, with no change.
+- `AddDroppedLayers`, the nested composition layer of `AddCompositionSource` and the Timeline's
+  body-move math (`proposeLayerTiming`) are Qt-free commands in `src/commands`
+  (`layer_drop_operations.hpp`, `node_editor_operations.hpp`, `layer_timing_gesture.hpp`). Scripts
+  and MCP agents run the same drop as `bloom.layer.add-from-assets`, naming the placement layer by
+  its layer id instead of its stack slot.

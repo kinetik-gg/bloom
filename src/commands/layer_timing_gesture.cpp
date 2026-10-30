@@ -1,11 +1,11 @@
-#include "timeline_layer_timing_gesture.hpp"
+#include <bloom/commands/layer_timing_gesture.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 
-namespace bloom::ui {
+namespace bloom::commands {
 namespace {
 
 using core::RationalTime;
@@ -84,9 +84,8 @@ std::optional<LayerTimingProposal> proposeLayerTiming(const LayerTimingGestureIn
     };
     if (input.handle == 0) {
         // Keep at least one frame inside [0, duration): in <= last - 1 and out >= 1.
-        const auto shift = input.alt ? deltaFrames
-                                     : std::clamp(deltaFrames, std::int64_t{1} - out,
-                                                  last - 1 - in);
+        const auto shift =
+            input.alt ? deltaFrames : std::clamp(deltaFrames, std::int64_t{1} - out, last - 1 - in);
         const auto shifted = addScaled(input.start, RationalTime::fromInteger(shift),
                                        rate.denominator(), rate.numerator());
         if (!shifted)
@@ -128,4 +127,4 @@ std::optional<LayerTimingProposal> proposeLayerTiming(const LayerTimingGestureIn
     return result;
 }
 
-} // namespace bloom::ui
+} // namespace bloom::commands
