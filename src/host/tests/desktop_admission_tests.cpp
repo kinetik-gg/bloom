@@ -11,12 +11,12 @@
 
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/core/sha256.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
-#include <bloom/media/image.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
@@ -35,10 +35,13 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -125,8 +128,14 @@ void writeFootage(const std::filesystem::path& path) {
 }
 
 [[nodiscard]] std::optional<document::AssetRecord> footageAsset(const std::filesystem::path& path) {
-    const auto probe = bloom::media::probeImage(path);
-    if (!probe.value)
+    // The asset's content digest is the SHA-256 of the file bytes, as the image probe records it.
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        return std::nullopt;
+    const std::vector<char> fileBytes((std::istreambuf_iterator<char>(input)),
+                                      std::istreambuf_iterator<char>());
+    bloom::core::Sha256Hasher hasher;
+    if (!hasher.update(std::as_bytes(std::span(fileBytes.data(), fileBytes.size()))))
         return std::nullopt;
     document::AssetRecord asset;
     asset.id = document::AssetId::fromRaw(0x2001);
@@ -135,10 +144,10 @@ void writeFootage(const std::filesystem::path& path) {
     asset.locator.portability = "project-relative";
     asset.locator.path = path.filename().string();
     asset.locator.relinkHint = "file:";
-    asset.contentDigest = probe.value->contentDigest;
+    asset.contentDigest = hasher.finalize();
     asset.interpretation.colorSpace = document::AssetColorSpace::Auto;
-    asset.width = probe.value->width;
-    asset.height = probe.value->height;
+    asset.width = static_cast<std::uint32_t>(kWidth);
+    asset.height = static_cast<std::uint32_t>(kHeight);
     asset.name = "footage";
     return asset;
 }
