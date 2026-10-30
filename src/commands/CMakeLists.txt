@@ -18,9 +18,11 @@ target_sources(
         composition_settings_operations.cpp
         layer_alignment_operations.cpp
         layer_drop_operations.cpp
+        layer_stack_operations.cpp
         layer_timing_gesture.cpp
         node_editor_operations.cpp
         node_layout_arrange.cpp
+        parameter_reset_operations.cpp
         project_item_operations.cpp
         video_source_operations.cpp
         node_duplication.cpp
@@ -48,9 +50,11 @@ target_sources(
             include/bloom/commands/composition_settings_operations.hpp
             include/bloom/commands/layer_alignment_operations.hpp
             include/bloom/commands/layer_drop_operations.hpp
+            include/bloom/commands/layer_stack_operations.hpp
             include/bloom/commands/layer_timing_gesture.hpp
             include/bloom/commands/node_editor_operations.hpp
             include/bloom/commands/node_layout_arrange.hpp
+            include/bloom/commands/parameter_reset_operations.hpp
             include/bloom/commands/project_item_operations.hpp
             include/bloom/commands/video_source_operations.hpp
             include/bloom/commands/result.hpp
