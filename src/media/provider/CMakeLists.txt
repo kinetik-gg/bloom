@@ -20,8 +20,14 @@ if(BUILD_TESTING)
     bloom_add_test(NAME bloom.media.registry COMMAND bloom_media_registry_test LABELS unit media)
 endif()
 
-target_sources(bloom_media_provider PRIVATE protocol.cpp)
+target_sources(bloom_media_provider PRIVATE protocol.cpp provider_chain.cpp)
 if(BUILD_TESTING)
+    add_executable(bloom_media_provider_chain_test tests/provider_chain_tests.cpp)
+    target_link_libraries(bloom_media_provider_chain_test PRIVATE bloom_media_provider)
+    bloom_enable_warnings(bloom_media_provider_chain_test)
+    bloom_add_test(NAME bloom.media.provider-chain COMMAND bloom_media_provider_chain_test
+                   LABELS unit media)
+
     add_executable(bloom_media_protocol_test tests/protocol_tests.cpp)
     target_link_libraries(bloom_media_protocol_test PRIVATE bloom_media_provider)
     bloom_enable_warnings(bloom_media_protocol_test)
