@@ -392,6 +392,8 @@ void testNumpadZeroIsTheRamPreviewShortcut(Expectations& expectations) {
                             action->shortcuts().contains(
                                 QKeySequence(Qt::KeypadModifier | Qt::Key_0)) &&
                             action->shortcuts().contains(
+                                QKeySequence(Qt::KeypadModifier | Qt::Key_Insert)) &&
+                            action->shortcuts().contains(
                                 QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space)),
                         "Numpad 0 and Ctrl+Shift+Space are window shortcuts of one action");
     auto* cancel = window.findChild<QAction*>(QStringLiteral("cancelRamPreviewAction"));
