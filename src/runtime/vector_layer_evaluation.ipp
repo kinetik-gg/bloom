@@ -17,11 +17,13 @@ if (const auto* shape = std::get_if<CompiledShape>(&sourceOperation)) {
     const auto fill = detail::resolveParameter(shape->fillColor, *plan, sourceResolved);
     const auto color = detail::resolveParameter(shape->strokeColor, *plan, sourceResolved);
     const auto width = detail::resolveParameter(shape->strokeWidth, *plan, sourceResolved);
-    if (!size || !fill || !color || !width)
+    const auto fillSwitch = detail::resolvedFillEnabled(*shape, sourceResolved);
+    const auto strokeSwitch = detail::resolvedStrokeEnabled(*shape, sourceResolved);
+    if (!size || !fill || !color || !width || !fillSwitch || !strokeSwitch)
         return;
     paths.push_back(shapePath(*shape, size->value));
-    vectorHasFill = shape->fillEnabled && shape->kind != document::ShapeKind::Line;
-    vectorHasStroke = shape->strokeEnabled && width->value > 0;
+    vectorHasFill = *fillSwitch && shape->kind != document::ShapeKind::Line;
+    vectorHasStroke = *strokeSwitch && width->value > 0;
     stroke = {vectorHasStroke ? width->value : 0,
               static_cast<render::PathStrokeAlign>(shape->strokeAlign),
               static_cast<render::PathStrokeJoin>(shape->strokeJoin),

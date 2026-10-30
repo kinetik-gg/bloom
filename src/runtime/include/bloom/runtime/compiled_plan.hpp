@@ -468,6 +468,14 @@ struct CompiledShape {
     document::ShapeStrokeJoin strokeJoin = document::ShapeStrokeJoin::Miter;
     document::ShapeStrokeCap strokeCap = document::ShapeStrokeCap::Butt;
     document::ShapeFillRule fillRule = document::ShapeFillRule::NonZero;
+    // The fill and stroke switches may be driven by a Boolean value node: the plan then carries the
+    // value-graph output each reads per frame, beside the authored constant it replaces (see
+    // CompiledText::drivenContent). Resolve them with detail::resolvedFillEnabled() and
+    // resolvedStrokeEnabled(), never by reading fillEnabled/strokeEnabled directly.
+    document::ParameterId fillEnabledParameterId{};
+    std::optional<ValueOutputIndex> drivenFillEnabled{};
+    document::ParameterId strokeEnabledParameterId{};
+    std::optional<ValueOutputIndex> drivenStrokeEnabled{};
     friend bool operator==(const CompiledShape&, const CompiledShape&) = default;
 };
 

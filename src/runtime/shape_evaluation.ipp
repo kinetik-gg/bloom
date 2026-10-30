@@ -3,15 +3,18 @@
     const auto fill = detail::resolveParameter(shape.fillColor, *plan, resolved);
     const auto stroke = detail::resolveParameter(shape.strokeColor, *plan, resolved);
     const auto width = detail::resolveParameter(shape.strokeWidth, *plan, resolved);
-    if (!size || !fill || !stroke || !width || !std::isfinite(size->value.x) ||
+    const auto fillSwitch = detail::resolvedFillEnabled(shape, resolved);
+    const auto strokeSwitch = detail::resolvedStrokeEnabled(shape, resolved);
+    if (!size || !fill || !stroke || !width || !fillSwitch || !strokeSwitch ||
+        !std::isfinite(size->value.x) ||
         !std::isfinite(size->value.y) || size->value.x < 0 || size->value.y < 0 ||
         !std::isfinite(width->value) || width->value < 0) {
         operationFailure = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
                                       "Shape parameters are invalid", {}, operationSubject);
         return;
     }
-    const bool fillEnabled = shape.fillEnabled && shape.kind != document::ShapeKind::Line;
-    const bool strokeEnabled = shape.strokeEnabled && width->value > 0;
+    const bool fillEnabled = *fillSwitch && shape.kind != document::ShapeKind::Line;
+    const bool strokeEnabled = *strokeSwitch && width->value > 0;
     if (!fillEnabled && !strokeEnabled)
         return;
     const auto fillPixel = render::solidPixelFromStraightLinearRec709Scene(fill->value);

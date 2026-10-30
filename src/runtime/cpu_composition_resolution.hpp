@@ -158,6 +158,22 @@ resolveParameter(const CompiledLayerOutput& layer, const ResolvedEvaluation& res
     return stored.has_value() ? core::blendModeFromStoredValue(stored->value) : std::nullopt;
 }
 
+// A shape's fill and stroke switches at this frame: the authored constant, or the Boolean a
+// driver hands them. A driver that produced no Boolean answers nothing (a malformed plan).
+[[nodiscard]] inline std::optional<bool>
+resolvedFillEnabled(const CompiledShape& shape, const ResolvedEvaluation& resolved) noexcept {
+    const auto value = resolveParameter(shape.fillEnabledParameterId, shape.fillEnabled,
+                                        shape.drivenFillEnabled, resolved);
+    return value ? std::optional(value->value) : std::nullopt;
+}
+
+[[nodiscard]] inline std::optional<bool>
+resolvedStrokeEnabled(const CompiledShape& shape, const ResolvedEvaluation& resolved) noexcept {
+    const auto value = resolveParameter(shape.strokeEnabledParameterId, shape.strokeEnabled,
+                                        shape.drivenStrokeEnabled, resolved);
+    return value ? std::optional(value->value) : std::nullopt;
+}
+
 template <typename Value>
 [[nodiscard]] EvaluationSubject parameterSubject(EvaluationSubject subject,
                                                  const ResolvedParameter<Value>& parameter,

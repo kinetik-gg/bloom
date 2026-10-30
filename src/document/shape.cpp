@@ -38,6 +38,10 @@ NodeDefinition shapeDefinition() {
     add("strokeJoin", "stroke-join", ParameterValueKind::Integer, std::int64_t{0});
     add("strokeCap", "stroke-cap", ParameterValueKind::Integer, std::int64_t{0});
     add("fillRule", "fill-rule", ParameterValueKind::Integer, std::int64_t{0});
+    // The fill and stroke switches are not animatable (a switch has no midpoint), but a Boolean
+    // value node may drive them, so each has an optional Boolean socket.
+    node.inputs.push_back({"fillEnabled", SocketValueKind::Boolean, false});
+    node.inputs.push_back({"strokeEnabled", SocketValueKind::Boolean, false});
     return node;
 }
 bool shapeConstantMatchesSchema(std::string_view schema, const ParameterValue& value) {

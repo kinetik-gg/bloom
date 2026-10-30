@@ -2483,9 +2483,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(step.lineStart);
                             key.add(step.lineEnd);
                             key.add(step.path);
-                            key.add(step.fillEnabled);
+                            authored(step.fillEnabledParameterId, step.fillEnabled,
+                                     step.drivenFillEnabled);
                             parameter(step.fillColor);
-                            key.add(step.strokeEnabled);
+                            authored(step.strokeEnabledParameterId, step.strokeEnabled,
+                                     step.drivenStrokeEnabled);
                             parameter(step.strokeColor);
                             parameter(step.strokeWidth);
                             key.add(step.strokeAlign);
