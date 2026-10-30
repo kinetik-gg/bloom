@@ -387,7 +387,8 @@ def build_projects(args, root, selected, projects_dir, log):
                             else str(Path(entry["path"]).parent))
             plan.append({"assetId": asset_id, "entry": entry, "variant": variant,
                          "project": project})
-            if args.rebuild_projects or not project.is_file():
+            stamp = project.with_suffix(".jobs.json")
+            if args.rebuild_projects or not project.is_file() or not stamp.is_file():
                 jobs.append({"project": str(project), "variant": variant,
                              "media": str(media.resolve()),
                              "label": f"{entry['tier']} {entry['format']}".upper(),
