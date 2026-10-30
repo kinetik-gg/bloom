@@ -201,6 +201,42 @@ void testDuplicateMoveRemove(TestContext& test) {
     test.expect(third && third->value() > copyId->value(), "ids are not reused");
 }
 
+// The panel reads new ids from the command result (no queue diffing).
+void testAddedIds(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    auto job = jobTemplate();
+    job.outputs.push_back(job.outputs.front());
+    job.outputs.push_back(job.outputs.front());
+    const auto added = addedExportIds(run<AddExportJob>(stack, job));
+    const auto record = jobs(document).front();
+    test.expect(added.job == record.id && added.outputs.size() == 3 &&
+                    added.outputs[0] == record.outputs[0].id &&
+                    added.outputs[1] == record.outputs[1].id &&
+                    added.outputs[2] == record.outputs[2].id,
+                "add-job reports the job and every output id in order");
+    const auto output =
+        addedExportIds(run<AddExportOutput>(stack, record.id, jobTemplate().outputs[0]));
+    test.expect(!output.job && output.outputs.size() == 1 &&
+                    output.outputs[0] == jobs(document).front().outputs.back().id,
+                "add-output reports the new output id");
+    const auto copy = addedExportIds(run<DuplicateExportJob>(stack, record.id));
+    test.expect(copy.job == jobs(document)[1].id && copy.outputs.size() == 4 &&
+                    copy.outputs.front() == jobs(document)[1].outputs.front().id,
+                "duplicate-job reports the copy's ids");
+    Transaction transaction("Two jobs");
+    transaction.emplace<AddExportJob>(jobTemplate());
+    transaction.emplace<AddExportJob>(jobTemplate());
+    const auto both = stack.execute(std::move(transaction));
+    test.expect(addedExportIds(both, 0).job == jobs(document)[2].id &&
+                    addedExportIds(both, 1).job == jobs(document)[3].id,
+                "each operation of a transaction reports its own ids");
+    test.expect(!addedExportIds(run<SetExportJobName>(stack, record.id, "x")).job,
+                "other edits report no created ids");
+    test.expect(!addedExportIds(run<RemoveExportOutput>(stack, ExportOutputId::fromRaw(999))).job,
+                "a rejected edit reports no ids");
+}
+
 void testCompositionDeletionCascades(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
@@ -235,6 +271,7 @@ int main() {
     bloom::commands::test::testValidation(test);
     bloom::commands::test::testAddEditUndo(test);
     bloom::commands::test::testDuplicateMoveRemove(test);
+    bloom::commands::test::testAddedIds(test);
     bloom::commands::test::testCompositionDeletionCascades(test);
     bloom::commands::test::testQueueBound(test);
     return test.failures() == 0 ? 0 : 1;

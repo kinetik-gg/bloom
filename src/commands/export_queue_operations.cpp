@@ -273,4 +273,25 @@ OperationResult SetExportOutputImport::apply(document::Draft& draft) const {
                       [this](ExportOutput& output) { output.importIntoAssets = import_; });
 }
 
+AddedExportIds addedExportIds(const CommandResult& result, const std::size_t operationIndex) {
+    AddedExportIds ids;
+    if (!result.succeeded())
+        return ids;
+    for (const auto& item : result.outputs) {
+        if (item.operationIndex != operationIndex)
+            continue;
+        if (item.operationType != "bloom.export.add-job" &&
+            item.operationType != "bloom.export.duplicate-job" &&
+            item.operationType != "bloom.export.add-output")
+            continue;
+        if (const auto* job = std::get_if<document::ExportJobId>(&item.output.id);
+            job && item.output.name == kExportJobOutput && !ids.job)
+            ids.job = *job;
+        else if (const auto* output = std::get_if<document::ExportOutputId>(&item.output.id);
+                 output && item.output.name == kExportOutputOutput)
+            ids.outputs.push_back(*output);
+    }
+    return ids;
+}
+
 } // namespace bloom::commands

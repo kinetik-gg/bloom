@@ -24,6 +24,16 @@ namespace bloom::commands {
 inline constexpr std::string_view kExportJobOutput = "exportJob";
 inline constexpr std::string_view kExportOutputOutput = "exportOutput";
 
+// The ids an export queue edit created, read from its CommandResult so a caller never diffs the
+// queue: add-job and duplicate-job report their job and every output in order, add-output its
+// output. `operationIndex` selects the operation within the transaction.
+struct AddedExportIds final {
+    std::optional<document::ExportJobId> job;
+    std::vector<document::ExportOutputId> outputs;
+};
+[[nodiscard]] AddedExportIds addedExportIds(const CommandResult& result,
+                                            std::size_t operationIndex = 0);
+
 class ExportQueueOperation : public Operation {
   public:
     [[nodiscard]] bool renderAffecting() const noexcept final { return false; }
