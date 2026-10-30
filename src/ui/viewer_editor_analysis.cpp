@@ -204,6 +204,8 @@ CompositionPreviewState ViewerEditor::displayedPreviewState() const {
                       .arg(channels.value(static_cast<int>(actual->channel)))
                       .arg(actual->cover ? tr(" · CPU cover") : QString{})
                       .arg(current ? tr("Current") : tr("Previous display"));
+        state.viewerReadout = {true, shown.exposure, shown.gamma,
+                               channels.value(static_cast<int>(actual->channel)), current};
         state.message = tr("Shown EV %1, gamma %2 · %3 · %4%5 · %6")
                             .arg(shown.exposure, 0, 'g', 5)
                             .arg(shown.gamma, 0, 'g', 5)
