@@ -476,10 +476,12 @@ void testCapacityWait(Fixture& f, const std::filesystem::path& directory, const 
             check(provider->shutdownAndWait(std::chrono::seconds(3)), "capacity provider retires");
             return;
         }
-        // The Viewer's phase: a 2K preview frame whose source ceiling takes what is left.
-        auto viewer = runtime::reserveHostEvaluationPhase(
-            *policy, 2048ULL * 858, 4096 * mib, runtime::GpuProcessingPhaseOutput::FloatFinal,
-            false);
+        // The Viewer's phase: work that holds nearly all of the root's usable host memory.
+        auto viewer = policy->reserve({.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
+                                       .pixels = 0,
+                                       .metadataBytes = 760 * mib,
+                                       .sourceFree = true,
+                                       .native = false});
         check(viewer.lease != nullptr, route + " capacity wait: the Viewer phase is admitted");
         const auto path = directory / ("capacity-wait-" + route + ".mov");
         auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
@@ -506,9 +508,11 @@ void testCapacityWait(Fixture& f, const std::filesystem::path& directory, const 
     {
         auto policy = capacityPolicy(768 * mib);
         auto provider = capacityProvider(f.scheduler, policy, loader);
-        auto viewer = runtime::reserveHostEvaluationPhase(
-            *policy, 2048ULL * 858, 4096 * mib, runtime::GpuProcessingPhaseOutput::FloatFinal,
-            false);
+        auto viewer = policy->reserve({.output = runtime::GpuProcessingPhaseOutput::FloatFinal,
+                                       .pixels = 0,
+                                       .metadataBytes = 760 * mib,
+                                       .sourceFree = true,
+                                       .native = false});
         const auto path = directory / ("capacity-cancel-" + route + ".mov");
         auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
         request.gpuProvider = provider;

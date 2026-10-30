@@ -113,7 +113,8 @@ prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
                           .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
                           .requestedExecutorBytes = executorBudget,
                           .minimumExecutorBytes = pixels * 16,
-                          .deviceWorkingBytes = result.readbackByteAllowance};
+                          .deviceWorkingBytes = result.readbackByteAllowance,
+                          .admissionClass = GpuAdmissionClass::Export};
     }
     GpuSceneMediaContext mediaContext;
     try {

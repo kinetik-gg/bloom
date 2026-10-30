@@ -231,10 +231,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             const auto extent = frameResolved.imageDescriptor.dataWindow().extent();
             const auto frameBytes = static_cast<std::uint64_t>(extent.width()) * extent.height() *
                                     sizeof(render::Rgba32f);
-            envelope.minimumExecutorBytes =
-                std::min(*envelope.requestedExecutorBytes,
-                         std::max({envelope.minimumExecutorBytes, frameBytes,
-                                   static_cast<std::uint64_t>(frameResolved.peakPixelStorageBytes)}));
+            envelope.minimumExecutorBytes = std::min(
+                *envelope.requestedExecutorBytes,
+                std::max({envelope.minimumExecutorBytes, frameBytes,
+                          static_cast<std::uint64_t>(frameResolved.peakPixelStorageBytes)}));
         }
         const auto extent = frameResolved.imageDescriptor.dataWindow().extent();
         envelope.pixels = static_cast<std::uint64_t>(extent.width()) * extent.height();
@@ -251,6 +251,62 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 break;
             }
         }
+        // The phase claims its actual source need: every reachable decoded source as one float
+        // RGBA frame, or the preflight live-image peak when a source has no known extent (nested
+        // compositions, unprobed media). The caller's limit stays an unclaimed ceiling.
+        if (!envelope.sourceFree) {
+            std::uint64_t sourceNeed = 0;
+            bool unknownExtent = false;
+            // Nested compositions contribute their own media sources; only a source without a
+            // recorded extent (or a channel/cryptomatte read) falls back to the preflight peak.
+            std::vector<const CompiledCompositionPlan*> pending{plan.get()};
+            std::vector<const CompiledCompositionPlan*> visited;
+            while (!pending.empty()) {
+                const auto* current = pending.back();
+                pending.pop_back();
+                if (std::find(visited.begin(), visited.end(), current) != visited.end())
+                    continue;
+                visited.push_back(current);
+                const bool root = current == plan.get();
+                for (std::size_t index = 0; index < current->operations().size(); ++index) {
+                    if (root && !reachable[index])
+                        continue;
+                    const auto& operation = current->operations()[index];
+                    const document::AssetRecord* asset = nullptr;
+                    if (const auto* image = std::get_if<CompiledImageSource>(&operation))
+                        asset = image->asset ? &*image->asset : nullptr;
+                    else if (const auto* video = std::get_if<CompiledVideoSource>(&operation))
+                        asset = video->asset ? &*video->asset : nullptr;
+                    else if (const auto* nested =
+                                 std::get_if<CompiledCompositionSource>(&operation)) {
+                        if (nested->nestedPlanIndex < current->nestedPlans().size() &&
+                            current->nestedPlans()[nested->nestedPlanIndex])
+                            pending.push_back(
+                                current->nestedPlans()[nested->nestedPlanIndex].get());
+                        else
+                            unknownExtent = true;
+                        continue;
+                    } else if (std::holds_alternative<CompiledChannelShuffle>(operation) ||
+                               std::holds_alternative<CompiledCryptomatte>(operation)) {
+                        unknownExtent = true;
+                        continue;
+                    } else {
+                        continue;
+                    }
+                    if (asset == nullptr || asset->width == 0 || asset->height == 0) {
+                        unknownExtent = true;
+                        continue;
+                    }
+                    sourceNeed += static_cast<std::uint64_t>(asset->width) * asset->height *
+                                  sizeof(render::Rgba32f);
+                }
+            }
+            if (unknownExtent)
+                sourceNeed =
+                    std::max<std::uint64_t>(sourceNeed, frameResolved.peakPixelStorageBytes);
+            envelope.minimumSourceBytes = std::min(
+                envelope.requestedSourceBytes, std::max(envelope.minimumSourceBytes, sourceNeed));
+        }
         if (cancellation.isCancellationRequested()) {
             return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
         }
@@ -262,11 +318,20 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 refusalRetry = TaskAdmissionRetry{grant.admissionRevision, envelope.native};
                 if (grant.domain == render::GpuProcessingPhaseDomain::Host) {
                     return fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
-                                "GPU preparation is awaiting a fresh host-memory sample");
+                                "GPU preparation is awaiting host-memory capacity");
                 }
                 if (grant.domain == render::GpuProcessingPhaseDomain::Device) {
                     return fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
                                 "GPU preparation is awaiting device-memory capacity");
+                }
+                if (grant.domain == render::GpuProcessingPhaseDomain::RequestCount) {
+                    return fail(
+                        PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
+                        "GPU preparation is waiting for another processing request to finish");
+                }
+                if (grant.domain == render::GpuProcessingPhaseDomain::Viewer) {
+                    return fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
+                                "GPU preparation is waiting for the Viewer");
                 }
                 return fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
                             "GPU preparation is awaiting sampled processing capacity");

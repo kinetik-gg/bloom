@@ -60,7 +60,7 @@ void preparationRefusalFeedback(Expectations& checks) {
                       awaitingHost.diagnostic.code ==
                           runtime::PreparedGpuSceneDiagnosticCode::AwaitingCapacity &&
                       awaitingHost.diagnostic.message ==
-                          "GPU preparation is awaiting a fresh host-memory sample" &&
+                          "GPU preparation is awaiting host-memory capacity" &&
                       awaitingHost.diagnostic.admissionRetry.has_value(),
                   "missing host sample diagnoses readiness loss with the existing typed retry");
     auto sample = capacity(1, 0);
@@ -113,7 +113,7 @@ void preparationRefusalFeedback(Expectations& checks) {
     checks.expect(
         !refusedCount.scene &&
             refusedCount.diagnostic.code ==
-                runtime::PreparedGpuSceneDiagnosticCode::BudgetRefused &&
+                runtime::PreparedGpuSceneDiagnosticCode::AwaitingCapacity &&
             refusedCount.diagnostic.message ==
                 "GPU preparation is waiting for another processing request to finish" &&
             refusedCount.diagnostic.admissionRetry.has_value(),
@@ -546,7 +546,7 @@ void packedProvisionalRetry(Expectations& checks) {
             const auto revision = phase.lease->revisionAfterOwnRelease();
             arithmeticValid =
                 arithmeticValid &&
-                refused.status == render::GpuProcessingPhaseAdmission::BudgetRefused &&
+                refused.status == render::GpuProcessingPhaseAdmission::AwaitingCapacity &&
                 refused.domain == render::GpuProcessingPhaseDomain::RequestCount &&
                 policy->snapshot().reservations.ownedPackedHostBytes ==
                     before.ownedPackedHostBytes + allocated.value()->byteCost();

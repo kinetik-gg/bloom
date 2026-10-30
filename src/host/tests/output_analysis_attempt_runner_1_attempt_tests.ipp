@@ -84,9 +84,12 @@ void testProcessingAdmissionBeforeCpuFallback(Expectations& expectations) {
     };
     const auto refused = [&](const auto& outcome, const runtime::GpuProcessFrameDiagnosticCode code) {
         const auto* failure = outcome ? outcome->failure() : nullptr;
-        const auto* payload = failure ? failure->template payloadAs<runtime::GpuProcessFrameDiagnosticCode>() : nullptr;
-        expectations.expect(payload && *payload == code && ledger.chargedBytes() == 0,
-                            "phase admission: typed refusal without analyzed payload or ledger charge");
+        const auto* payload =
+            failure ? failure->template payloadAs<runtime::GpuProcessFrameDiagnosticCode>()
+                    : nullptr;
+        expectations.expect(
+            payload && *payload == code && ledger.chargedBytes() == 0,
+            "phase admission: typed refusal without analyzed payload or ledger charge");
     };
     refused(run(nullptr), runtime::GpuProcessFrameDiagnosticCode::InvalidRequest);
     refused(run(std::make_shared<runtime::GpuProcessingPhasePolicy>()),
@@ -103,7 +106,8 @@ void testProcessingAdmissionBeforeCpuFallback(Expectations& expectations) {
     auto held = runtime::reserveHostEvaluationPhase(*shared, 4, 4096,
                                                     runtime::GpuProcessingPhaseOutput::FloatFinal);
     expectations.expect(held.lease != nullptr, "phase admission: competing root lease held");
-    refused(run(shared), runtime::GpuProcessFrameDiagnosticCode::BudgetRefused);
+    // A held phase makes the attempt wait (typed); the export runner retries on release.
+    refused(run(shared), runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity);
     held.lease.reset();
     auto recovered = run(shared);
     expectations.expect(recovered && static_cast<bool>(*recovered),

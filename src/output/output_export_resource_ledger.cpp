@@ -129,7 +129,8 @@ std::shared_ptr<ExportResourceReservationV1> ExportResourceLedgerV1::reserveWith
                      .pixels = 0,
                      .metadataBytes = fixedHostBackingBytes,
                      .sourceFree = true,
-                     .native = false});
+                     .native = false,
+                     .admissionClass = runtime::GpuAdmissionClass::Export});
                 if (phase.status != render::GpuProcessingPhaseAdmission::Accepted || !phase.lease) {
                     status = ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded;
                     return {};

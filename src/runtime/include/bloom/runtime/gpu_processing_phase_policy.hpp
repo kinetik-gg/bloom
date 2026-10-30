@@ -8,12 +8,19 @@
 
 #include <array>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace bloom::runtime {
 enum class GpuProcessingPhaseOutput { PackedPreview, FloatFinal };
+// ADR 0033 section 9 classes. Viewer: the current Viewer frame, scrub, playback and RAM preview.
+// Export: final render (still, sequence, movie, headless). Background: thumbnails, audio, other
+// speculative work.
+enum class GpuAdmissionClass : std::uint8_t { Viewer, Export, Background };
 struct GpuProcessingPhaseEnvelope final {
     GpuProcessingPhaseOutput output = GpuProcessingPhaseOutput::PackedPreview;
     std::uint64_t pixels = 0;
@@ -30,12 +37,35 @@ struct GpuProcessingPhaseEnvelope final {
     std::uint64_t deviceWorkingBytes = 0;
     bool sourceFree = false;
     bool native = true;
+    GpuAdmissionClass admissionClass = GpuAdmissionClass::Viewer;
 };
 // Exact core-owned output overlap plus an explicitly reserved source/upload/scratch allowance.
 // These conservative phase estimates do not meter opaque codec/driver allocations or retained
 // products after publication. Source-free classification must use reachable compiled operations.
 [[nodiscard]] std::optional<render::GpuProcessingPhaseRequest>
 processingPhaseRequest(const GpuProcessingPhaseEnvelope&) noexcept;
+
+// Measured capacity minus the headroom preferences, and what admitted work holds of it now.
+struct UsableCapacity final {
+    bool hostReady = false;
+    bool deviceReady = false;
+    // Available RAM within real OS/process limits minus the RAM headroom.
+    std::uint64_t hostUsableBytes = 0;
+    // The driver's live device budget (Bloom's own backing credited back) minus the VRAM headroom.
+    std::uint64_t deviceUsableBytes = 0;
+    std::uint64_t hostClaimBytes = 0;
+    std::uint64_t deviceClaimBytes = 0;
+    std::uint64_t hostFreeBytes = 0;
+    std::uint64_t deviceFreeBytes = 0;
+    // Evictable cache retention inside hostClaimBytes (retained preview frames).
+    std::uint64_t hostRetentionBytes = 0;
+    std::size_t admittedPhases = 0;
+    std::uint64_t admissionRevision = 0;
+};
+
+// Readable record of one admission decision: status and domain names plus the counters.
+[[nodiscard]] std::string describeAdmission(const render::GpuProcessingPhaseGrant&,
+                                            const UsableCapacity&);
 
 struct GpuProcessingPhasePolicySnapshot final {
     render::GpuProcessingPhaseSnapshot reservations;
@@ -86,8 +116,38 @@ class GpuProcessingPhasePolicy final {
     reserve(const GpuProcessingPhaseEnvelope&, Clock::time_point now = Clock::now()) noexcept;
     [[nodiscard]] GpuProcessingPhasePolicySnapshot snapshot() const noexcept;
     // The RAM/VRAM headroom preferences: the only margins kept free of Bloom's work and caches.
+    // Applies at once to the current capacity and wakes waiters. Composition roots deliver the
+    // preference (MemoryHeadroom{} when none is saved); a root starts with no margin.
     void setHeadroom(MemoryHeadroom headroom) noexcept;
     [[nodiscard]] MemoryHeadroom headroom() const noexcept;
+    [[nodiscard]] UsableCapacity usableCapacity() const noexcept;
+    // How many more frames of this per-frame need fit the free capacity right now.
+    [[nodiscard]] std::size_t framesThatFit(std::uint64_t hostBytesPerFrame,
+                                            std::uint64_t deviceBytesPerFrame) const noexcept;
+    // Waits for a release or capacity change after `seenRevision`, cancellation or `maxWait`.
+    // True when admission state changed. Never call on the UI thread.
+    [[nodiscard]] bool waitForAdmissionChange(std::uint64_t seenRevision,
+                                              const CancellationToken& cancellation,
+                                              std::chrono::milliseconds maxWait) const;
+    // Evicts reusable retention (caches) when a request waits for capacity. Called outside every
+    // admission lock with the waiting domain and the bytes it needs; returns bytes released.
+    // Strict Viewer priority over the shared root (ADR 0033 section 9), the GpuAdmissionArbiter
+    // role: while a Viewer request waits for capacity, Export and Background requests wait with
+    // domain Viewer; while the Viewer is active (a Viewer frame admitted within the activity
+    // window), an Export/Background grant must leave the last Viewer need free. An idle Viewer
+    // holds nothing: exports run at full speed. A Viewer request never waits for an export rule.
+    static constexpr std::chrono::milliseconds kViewerActivityWindow{250};
+    struct ViewerPriority final {
+        bool waiting = false;
+        bool active = false;
+        std::uint64_t reserveHostBytes = 0;
+        std::uint64_t reserveDeviceBytes = 0;
+    };
+    [[nodiscard]] ViewerPriority
+    viewerPriority(Clock::time_point now = Clock::now()) const noexcept;
+    using RetentionReclaimer =
+        std::function<std::uint64_t(render::GpuProcessingPhaseDomain, std::uint64_t)>;
+    void addRetentionReclaimer(RetentionReclaimer reclaimer);
     [[nodiscard]] render::GpuProcessingRootIdentity rootIdentity() const noexcept {
         return budget_.rootIdentity();
     }
@@ -115,11 +175,28 @@ class GpuProcessingPhasePolicy final {
     };
     std::optional<HostSampleBackingCredit> pendingHostBackingCredit_;
     std::optional<HostSampleBackingCredit> appliedHostBackingCredit_;
-    MemoryHeadroom headroom_;
+    // No margin until the composition root delivers the preference (default 2 GiB each).
+    MemoryHeadroom headroom_{.ramBytes = 0, .vramBytes = 0};
+    std::optional<Clock::time_point> viewerWaitingAt_;
+    std::optional<Clock::time_point> viewerAdmittedAt_;
+    std::uint64_t viewerNeedHostBytes_ = 0;
+    std::uint64_t viewerNeedDeviceBytes_ = 0;
+    std::vector<RetentionReclaimer> reclaimers_;
+    mutable std::mutex reclaimerMutex_;
+    std::chrono::steady_clock::time_point lastAdmissionLog_{};
+    void logWaitOrRefusal(const render::GpuProcessingPhaseGrant&) noexcept;
     std::array<DeviceReport, 32> devices_{};
     std::size_t deviceCount_ = 0;
     void applyDeviceReportsLocked() noexcept;
 };
+
+// Preview frames (Viewer, RAM fill, playback) of `framePixels` that fit the free capacity now: a
+// packed output, one float source and preparation overlap on the host, the preview working set
+// plus one float frame on the device. Capped at one per hardware thread (decode and scene
+// preparation run on CPU workers); zero when even one frame does not fit right now.
+[[nodiscard]] std::size_t previewFramesThatFit(const GpuProcessingPhasePolicy&,
+                                               std::uint64_t framePixels,
+                                               std::uint64_t deviceWorkingBytes) noexcept;
 
 // Host-only CPU reference evaluation uses the same root/request-count quota. The granted S
 // bounds its existing pixel-storage ceiling; 3*S reserves preparation/temporary overlap, not
@@ -127,5 +204,6 @@ class GpuProcessingPhasePolicy final {
 [[nodiscard]] render::GpuProcessingPhaseGrant
 reserveHostEvaluationPhase(GpuProcessingPhasePolicy&, std::uint64_t pixels,
                            std::uint64_t requestedPixelBytes, GpuProcessingPhaseOutput output,
-                           bool encodedOutput = false) noexcept;
+                           bool encodedOutput = false,
+                           GpuAdmissionClass admissionClass = GpuAdmissionClass::Viewer) noexcept;
 } // namespace bloom::runtime

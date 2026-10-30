@@ -6,10 +6,12 @@
 #include <bloom/runtime/channel_layers.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <iostream>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -499,10 +501,26 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                             gpuOutcome.status == runtime::GpuProcessFrameStatus::Cancelled) {
                             return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                         }
+                        // A capacity wait or refusal returns to the export runner, which waits
+                        // at the frame boundary (ADR 0033 section 9) and retries; the root's
+                        // counters are logged so a refusal is diagnosable from the field.
                         if (gpuOutcome.diagnostic.code ==
                                 runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity ||
                             gpuOutcome.diagnostic.code ==
                                 runtime::GpuProcessFrameDiagnosticCode::BudgetRefused) {
+                            if (gpuOutcome.diagnostic.code ==
+                                runtime::GpuProcessFrameDiagnosticCode::BudgetRefused)
+                                std::clog
+                                    << "Bloom export: frame refused: "
+                                    << gpuOutcome.diagnostic.message << "; "
+                                    << runtime::describeAdmission(
+                                           {.status =
+                                                render::GpuProcessingPhaseAdmission::BudgetRefused,
+                                            .domain = render::GpuProcessingPhaseDomain::None,
+                                            .lease = {},
+                                            .admissionRevision = 0},
+                                           processingPolicy->usableCapacity())
+                                    << '\n';
                             return admissionFailure(gpuOutcome.diagnostic.code);
                         }
                         gpuProvenance.status = gpuOutcome.status;
@@ -584,7 +602,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     auto grant = runtime::reserveHostEvaluationPhase(
                         *processingPolicy, pixels, evaluation.pixelStorageByteLimit,
                         runtime::GpuProcessingPhaseOutput::FloatFinal,
-                        preset == output::OutputPresetV1::PngRgba8SrgbV1);
+                        preset == output::OutputPresetV1::PngRgba8SrgbV1,
+                        runtime::GpuAdmissionClass::Export);
                     if (grant.status != render::GpuProcessingPhaseAdmission::Accepted ||
                         !grant.lease) {
                         return admissionFailure(

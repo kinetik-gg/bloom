@@ -24,6 +24,8 @@ struct GpuExportProvider::State final {
             packedHostOwner = runtime::PackedHostRetirementOwner::create();
             options.processingPhasePolicy =
                 std::make_shared<runtime::GpuProcessingPhasePolicy>(32, packedHostOwner);
+            // A headless root (CLI, MCP, scripting) keeps the default RAM/VRAM headroom.
+            options.processingPhasePolicy->setHeadroom(runtime::MemoryHeadroom{});
         }
     }
 

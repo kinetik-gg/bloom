@@ -50,7 +50,8 @@ void require(const bool value, const char* message) {
 MemoryBudgetState sample(GpuProcessingPhasePolicy::Clock::time_point now);
 void headroomPreferenceRoundTrips() {
     GpuProcessingPhasePolicy policy;
-    require(policy.headroom() == MemoryHeadroom{}, "the root starts with the 2 GiB defaults");
+    require(policy.headroom() == MemoryHeadroom{.ramBytes = 0, .vramBytes = 0},
+            "a root has no margin until its composition root delivers the preference");
     policy.setHeadroom({.ramBytes = 4ULL << 30, .vramBytes = 0});
     require(policy.headroom().ramBytes == 4ULL << 30 && policy.headroom().vramBytes == 0,
             "the root keeps the delivered headroom preferences");
@@ -329,7 +330,7 @@ void rootedBackingReconcilesSampledHostHeadroom() {
     require(next.lease && next.lease->hostBytes() == 64,
             "new work uses measured free headroom after retained packing");
     require(policy.reserve({.pixels = 1, .sourceFree = true, .native = false}, scriptedSampleAt)
-                    .status == GpuProcessingPhaseAdmission::BudgetRefused,
+                    .status == GpuProcessingPhaseAdmission::AwaitingCapacity,
             "held phase claims still consume measured free headroom");
     next.lease.reset();
     backing.value()->reset();
@@ -339,11 +340,11 @@ void rootedBackingReconcilesSampledHostHeadroom() {
         std::this_thread::yield();
     require(policy.snapshot().reservations.totalHostClaimBytes == 0,
             "published charge clears only after worker frees its backing");
-    require(policy.snapshot().reservations.hostCapacityBytes == 70 &&
-                policy.reserve({.pixels = 20, .sourceFree = true, .native = false},
-                               scriptedSampleAt)
-                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
-            "retired backing revokes old sample credit even when allocator pages stay resident");
+    require(
+        policy.snapshot().reservations.hostCapacityBytes == 70 &&
+            policy.reserve({.pixels = 20, .sourceFree = true, .native = false}, scriptedSampleAt)
+                    .status == GpuProcessingPhaseAdmission::BudgetRefused,
+        "retired backing revokes old sample credit even when allocator pages stay resident");
     policy.applyHostSample(delivered, 4096, scriptedSampleAt);
     require(policy.snapshot().reservations.hostCapacityBytes == 70,
             "duplicate delivery cannot restore credit revoked by backing retirement");
@@ -389,7 +390,7 @@ void rootedBackingReconcilesSampledHostHeadroom() {
     policy.applyHostSample(delivered, 4096, scriptedSampleAt);
     require(policy.snapshot().reservations.hostCapacityBytes == 32 &&
                 policy.reserve({.pixels = 1, .sourceFree = true, .native = false}, scriptedSampleAt)
-                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
+                        .status == GpuProcessingPhaseAdmission::AwaitingCapacity,
             "late backing and reserve promises never inflate an older OS sample");
     late.value()->reset();
     const auto lateDeadline = GpuProcessingPhasePolicy::Clock::now() + std::chrono::seconds(2);
@@ -477,13 +478,13 @@ void adoptedHostBackingCreditsOnlyMaterializedBytes() {
     auto second = rooted.reserve(secondRequest, scriptedSampleAt);
     require(second.lease && second.lease->hostBytes() == 60 &&
                 rooted.reserve({.pixels = 1, .sourceFree = true, .native = false}, scriptedSampleAt)
-                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
-            "second track fits while further held claims still refuse overcommit");
+                        .status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+            "second track fits while further held claims make overcommit wait");
     held.reset();
     require(rooted.snapshot().reservations.hostCapacityBytes == 60 &&
                 rooted.snapshot().reservations.totalHostClaimBytes == 60 &&
                 rooted.reserve({.pixels = 1, .sourceFree = true, .native = false}, scriptedSampleAt)
-                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
+                        .status == GpuProcessingPhaseAdmission::AwaitingCapacity,
             "backing retirement revokes sample credit before another admission");
     second.lease.reset();
 
@@ -502,7 +503,7 @@ void adoptedHostBackingCreditsOnlyMaterializedBytes() {
     bare.applyHostSample(delivered, 200, scriptedSampleAt);
     require(bare.snapshot().reservations.hostCapacityBytes == 60 &&
                 bare.reserve(secondRequest, scriptedSampleAt).status ==
-                    GpuProcessingPhaseAdmission::BudgetRefused,
+                    GpuProcessingPhaseAdmission::AwaitingCapacity,
             "a bare fixed-host promise cannot receive materialized-backing sample credit");
     promise.lease.reset();
 
@@ -516,11 +517,8 @@ void adoptedHostBackingCreditsOnlyMaterializedBytes() {
     delivered.process.sampledAt = start;
     delivered.sampleSerial = 1;
     spare.applyHostSample(delivered, 3 * allocated, start);
-    auto sparePhase = spare.reserve({.pixels = 1,
-                                     .metadataBytes = allocated - 8,
-                                     .sourceFree = true,
-                                     .native = false},
-                                    start);
+    auto sparePhase = spare.reserve(
+        {.pixels = 1, .metadataBytes = allocated - 8, .sourceFree = true, .native = false}, start);
     require(sparePhase.lease && sparePhase.lease->hostBytes() == allocated,
             "fixed phase claims both initialized elements and unused vector capacity");
     auto spareHeld = adoptProcessingHostBacking(std::move(spareBacking), sparePhase.lease,
@@ -539,7 +537,7 @@ void adoptedHostBackingCreditsOnlyMaterializedBytes() {
     spare.applyHostSample(delivered, 3 * allocated, scriptedSampleAt);
     require(spare.snapshot().reservations.hostCapacityBytes == 60 + initialized &&
                 spare.reserve(secondRequest, scriptedSampleAt).status ==
-                    GpuProcessingPhaseAdmission::BudgetRefused,
+                    GpuProcessingPhaseAdmission::AwaitingCapacity,
             "unused reserved capacity does not manufacture reusable sampled headroom");
     spareHeld.reset();
     require(spare.snapshot().reservations.hostCapacityBytes == 60 &&
@@ -580,11 +578,11 @@ void newBackingCannotInflateAnOlderFiniteLimit() {
     delivered.process.sampledAt = scriptedSampleAt;
     ++delivered.sampleSerial;
     policy.applyHostSample(delivered, 4096, scriptedSampleAt);
-    require(policy.snapshot().reservations.hostCapacityBytes == 1024 &&
-                policy.reserve({.pixels = 112, .sourceFree = true, .native = false},
-                               scriptedSampleAt)
-                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
-            "current backing credit cannot enlarge older finite headroom that never counted it");
+    require(
+        policy.snapshot().reservations.hostCapacityBytes == 1024 &&
+            policy.reserve({.pixels = 112, .sourceFree = true, .native = false}, scriptedSampleAt)
+                    .status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+        "current backing credit cannot enlarge older finite headroom that never counted it");
     scriptedSampleAt = start + std::chrono::seconds(2);
     static_cast<void>(policy.sampleHostMemory({}, scriptedHostSample));
     backing.value()->reset();
@@ -651,7 +649,8 @@ void policy() {
                                     .available_bytes = 512ULL * 1024 * 1024}),
             "separate final generation joins common conservative quota");
     const auto snapshot = policy.snapshot();
-    require(snapshot.reservations.deviceCapacityBytes == 256ULL * 1024 * 1024 &&
+    // Without a live budget the capability fallback is the device-local heap minus the headroom.
+    require(snapshot.reservations.deviceCapacityBytes == 512ULL * 1024 * 1024 &&
                 snapshot.usesNominalDeviceEstimate && snapshot.deviceReports == 2,
             "all-device minimum is explicit and nominal provenance retained");
     auto half = preview();
@@ -730,10 +729,17 @@ void liveDeviceReportCreditsOnlyOwnedNativeBacking() {
             "only allocated root ownership is credited against VMA free, not the old phase claim");
     require(held > backing && policy.reserve(preview(), now).lease != nullptr,
             "retained backing does not permanently double-charge the recovered free bytes");
+    // Preview and export owners on the same GPU report the same process-wide live budget, which
+    // already excludes all of the root's backing: the credit applies once, not per owner.
     require(policy.reportDevice(92, report) &&
+                policy.snapshot().reservations.deviceCapacityBytes == gib,
+            "owners of the same GPU share the one exact ownership credit");
+    auto other = report;
+    other.device_local_bytes = 4 * gib;
+    require(policy.reportDevice(93, other) &&
                 policy.snapshot().reservations.deviceCapacityBytes == gib - backing,
-            "multiple owners never receive unproven cross-device ownership credit");
-    require(policy.retireDeviceReport(92, true) &&
+            "owners on different GPUs never receive unproven cross-device ownership credit");
+    require(policy.retireDeviceReport(93, true) && policy.retireDeviceReport(92, true) &&
                 policy.snapshot().reservations.deviceCapacityBytes == gib,
             "retiring the second owner restores exact single-owner accounting");
     image.token.reset();
