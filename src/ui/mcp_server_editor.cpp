@@ -8,6 +8,7 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/dialog_prompts.hpp>
+#include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/surfaces.hpp>
@@ -58,6 +59,20 @@ kit::KLabel* makeLabel(const QString& name, const kit::TypeRole role, const kit:
 }
 
 // An inline reason under a control: the style of the dialogs' field reasons.
+// Placed in the field column (label width + gutter), the way Preferences places its helper rows.
+QWidget* addReasonRow(QVBoxLayout* const layout, QWidget* const parent, kit::KLabel* const reason) {
+    auto* holder = new QWidget(parent);
+    auto* row = new QHBoxLayout(holder);
+    row->setContentsMargins(kit::px(kit::Spacing::RowPadding) +
+                                kit::px(kit::Size::PreferencesLabelWidth) +
+                                kit::px(kit::Spacing::PropertyGutter),
+                            0, kit::px(kit::Spacing::RowPadding), 0);
+    reason->setParent(holder);
+    row->addWidget(reason, 1);
+    layout->addWidget(holder);
+    return holder;
+}
+
 kit::KLabel* makeReason(const QString& name, QWidget* const parent) {
     auto* label = makeLabel(name, kit::TypeRole::UiSmall, kit::Color::Error, parent);
     label->setWordWrap(true);
@@ -129,6 +144,7 @@ void McpServerEditor::build() {
     // ---- Server.
     auto* server = properties::makeSection(content, surface, QStringLiteral("mcpServerSection"),
                                            tr("Server"), QStringLiteral("mcp/sections/server"));
+    server->setResetEnabled(false); // no editable defaults are wired to this section
     auto* body = server->bodyLayout();
     status_ = makeLabel(QStringLiteral("mcpStatus"), kit::TypeRole::Ui, kit::Color::Foreground,
                         server->body());
@@ -138,7 +154,7 @@ void McpServerEditor::build() {
     addRow(body, server->body(), tr("Status"), {status_});
     addRow(body, server->body(), QString{}, {startStop_});
     startReason_ = makeReason(QStringLiteral("mcpStartReason"), server->body());
-    body->addWidget(startReason_);
+    addReasonRow(body, server->body(), startReason_);
 
     port_ = new kit::KValueField(server->body());
     port_->setObjectName(QStringLiteral("mcpPortField"));
@@ -153,7 +169,7 @@ void McpServerEditor::build() {
             [this](const qint64 value) { commitPort(value); });
     addRow(body, server->body(), tr("Port"), {port_});
     portReason_ = makeReason(QStringLiteral("mcpPortReason"), server->body());
-    body->addWidget(portReason_);
+    addReasonRow(body, server->body(), portReason_);
 
     autoStart_ = new kit::KSwitch(server->body());
     autoStart_->setObjectName(QStringLiteral("mcpAutoStartSwitch"));
@@ -171,6 +187,7 @@ void McpServerEditor::build() {
     // ---- Access.
     auto* access = properties::makeSection(content, surface, QStringLiteral("mcpAccessSection"),
                                            tr("Access"), QStringLiteral("mcp/sections/access"));
+    access->setResetEnabled(false);
     auto* accessBody = access->bodyLayout();
     token_ = makeLabel(QStringLiteral("mcpToken"), kit::TypeRole::Value, kit::Color::Foreground,
                        access->body());
@@ -188,13 +205,20 @@ void McpServerEditor::build() {
     addRow(accessBody, access->body(), tr("Token"), {token_});
     addRow(accessBody, access->body(), QString{}, {reveal_, copyTokenButton_, regenerate_});
     tokenReason_ = makeReason(QStringLiteral("mcpTokenReason"), access->body());
-    accessBody->addWidget(tokenReason_);
+    addReasonRow(accessBody, access->body(), tokenReason_);
 
     configButton_ = new kit::KMenuButton(access->body());
     configButton_->setObjectName(QStringLiteral("mcpCopyConfigButton"));
     configButton_->setText(tr("Copy client config"));
     configButton_->setAccessibleName(tr("Copy client config"));
     configButton_->setPopupMode(QToolButton::InstantPopup);
+    // The Secondary look with a trailing caret, so it reads as a control like its row's buttons.
+    configButton_->setProperty("headerMenuButton", false);
+    configButton_->setProperty("secondaryMenuButton", true);
+    configButton_->setIcon(kit::icon(kit::IconId::CaretDown, kit::IconRole::Chrome));
+    configButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    configButton_->setLayoutDirection(Qt::RightToLeft);
+    configButton_->setAutoRaise(false);
     auto* menu = kit::makeMenu(configButton_);
     menu->setObjectName(QStringLiteral("mcpCopyConfigMenu"));
     for (const auto disclosure :
@@ -222,6 +246,7 @@ void McpServerEditor::build() {
     auto* clients =
         properties::makeSection(content, surface, QStringLiteral("mcpClientsSection"),
                                 tr("Connected clients"), QStringLiteral("mcp/sections/clients"));
+    clients->setResetEnabled(false);
     clientsBody_ = new QWidget(clients->body());
     clientsBody_->setObjectName(QStringLiteral("mcpClientsList"));
     clientsLayout_ = new QVBoxLayout(clientsBody_);
@@ -238,6 +263,7 @@ void McpServerEditor::build() {
     auto* activity =
         properties::makeSection(content, surface, QStringLiteral("mcpActivitySection"),
                                 tr("Activity"), QStringLiteral("mcp/sections/activity"));
+    activity->setResetEnabled(false);
     activity_ = new QListWidget(activity->body());
     activity_->setObjectName(QStringLiteral("mcpActivityList"));
     activity_->setAccessibleName(tr("MCP activity"));
@@ -248,6 +274,11 @@ void McpServerEditor::build() {
     activity_->setMinimumHeight(kit::px(kit::Size::NodeCardWidth));
     activity_->setTextElideMode(Qt::ElideRight);
     activity->bodyLayout()->addWidget(activity_);
+    activityEmpty_ = makeLabel(QStringLiteral("mcpNoActivity"), kit::TypeRole::UiSmall,
+                               kit::Color::Muted, activity->body());
+    activityEmpty_->setText(tr("Activity appears here while the server is running."));
+    activity->bodyLayout()->addWidget(activityEmpty_);
+    syncActivityEmpty();
     content->addStretch(1);
 
     revealTimer_ = new QTimer(this);
@@ -480,6 +511,13 @@ void McpServerEditor::refreshActivity() {
     lastActivityId_ = std::max(batch.lastId, lastActivityId_);
     if (atBottom)
         activity_->scrollToBottom();
+    syncActivityEmpty();
+}
+
+void McpServerEditor::syncActivityEmpty() {
+    const bool empty = activity_->count() == 0;
+    activity_->setVisible(!empty);
+    activityEmpty_->setVisible(empty);
 }
 
 void McpServerEditor::toggleServer() {

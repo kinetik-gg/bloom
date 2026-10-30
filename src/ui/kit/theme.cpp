@@ -298,6 +298,15 @@ QToolButton[headerMenuButton="true"]::menu-indicator {
     image: none;
     width: 0px;
 }
+QToolButton[secondaryMenuButton="true"] {
+    border: {border.Hairline}px solid transparent;
+    border-radius: {radius.Small}px;
+    padding: {space.XXS}px {space.MenuItemX}px;
+}
+QToolButton[secondaryMenuButton="true"]::menu-indicator {
+    image: none;
+    width: 0px;
+}
 QWidget#readOnlyPlaceholderPage {
     background: {color.Background};
 }
@@ -428,7 +437,10 @@ QScrollBar::add-page, QScrollBar::sub-page {
                     ButtonKind::MenuItem) +
         QStringLiteral("QToolButton[headerMenuButton=\"true\"]:open {\n") +
         buttonDeclarations(buttonColors(ButtonKind::MenuItem, State::Pressed, false)) +
-        QStringLiteral("}\n") + buttonRules(QStringLiteral("QPushButton"), ButtonKind::Secondary) +
+        QStringLiteral("}\n") +
+        buttonRules(QStringLiteral("QToolButton[secondaryMenuButton=\"true\"]"),
+                    ButtonKind::Secondary) +
+        buttonRules(QStringLiteral("QPushButton"), ButtonKind::Secondary) +
         buttonRules(QStringLiteral("QPushButton:default"), ButtonKind::Primary) + lineEditRules();
     return expandTokens(kTemplate) + kButtons;
 }

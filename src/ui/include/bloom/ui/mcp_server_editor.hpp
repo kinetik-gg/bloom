@@ -49,6 +49,7 @@ class McpServerEditor final : public QWidget {
     void refresh();
     void refreshClients(const mcp::McpServerSnapshot& snapshot);
     void refreshActivity();
+    void syncActivityEmpty();
     void refreshToken(const mcp::McpServerSnapshot& snapshot);
     void refreshConfigMenu(const mcp::McpServerSnapshot& snapshot);
     void toggleServer();
@@ -79,6 +80,7 @@ class McpServerEditor final : public QWidget {
     QVBoxLayout* clientsLayout_ = nullptr;
     kit::KLabel* project_ = nullptr;
     QListWidget* activity_ = nullptr;
+    kit::KLabel* activityEmpty_ = nullptr;
     QTimer* revealTimer_ = nullptr;
     QString revealedToken_;
     QString portError_;
