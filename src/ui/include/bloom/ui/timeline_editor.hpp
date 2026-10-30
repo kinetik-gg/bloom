@@ -296,8 +296,6 @@ class TimelineLayerStack final : public kit::KListSurface {
     void expansionRequested(document::LayerId layer);
     void groupExpansionRequested(document::LayerId layer, QString group);
     void parameterExpansionRequested(document::ParameterId parameter);
-    // A Shy switch changed outside the document's own change signals (handoff T2).
-    void shyChanged();
     void rowHighlightsChanged();
 
   protected:

@@ -42,9 +42,6 @@ using namespace bloom::ui::surface_test;
 
 namespace {
 
-template <typename Layer>
-constexpr bool kDocumentFollowsField = requires(const Layer& layer) { layer.nameFollowsSource; };
-
 core::RationalTime frame(const std::int64_t index) {
     return *core::RationalTime::create(index, 24);
 }
@@ -315,7 +312,9 @@ void testSwitches() {
     const auto shyLayer = table.layer(1);
     auto* shy = row->findChild<kit::KIconToggle*>("timelineLayerShy");
     click(shy);
-    expect(layer_fields::shy(table.session, shyLayer), "the Shy switch marks its layer shy");
+    expect(layer_fields::shy(table.session, shyLayer) &&
+               table.session.undoLabel() == QStringLiteral("Set Layer Shy"),
+           "the Shy switch marks its layer shy in one Set Layer Shy step");
     shy = table.layerRow(1)->findChild<kit::KIconToggle*>("timelineLayerShy");
     expect(shy && shy->isChecked(), "and shows the Shy glyph");
     auto* master = table.timeline->findChild<kit::KIconToggle*>("timelineHideShyToggle");
@@ -329,6 +328,10 @@ void testSwitches() {
            "a hidden shy layer stays in the composition");
     click(master);
     expect(!master->isChecked() && table.layerRowCount() == 3, "and shows them again");
+    expect(table.session.undo() && !layer_fields::shy(table.session, shyLayer),
+           "undo takes the Shy switch back");
+    QCoreApplication::processEvents();
+    click(table.layerRow(1)->findChild<kit::KIconToggle*>("timelineLayerShy"));
     // Solo and lock still commit from their cells.
     click(table.layerRow(0)->findChild<kit::KIconToggle*>("timelineLayerToggle2"));
     expect(table.record(table.layer(0))->solo, "Solo still commits");
@@ -599,7 +602,7 @@ void testSourceNames() {
     const auto nestedLayer = table.session.composition()->graph().layerOutputs().back().layerId;
     expect(layer_fields::displayName(table.session, nestedLayer) == QStringLiteral("Nested"),
            "a nested composition layer shows the composition's name");
-    if constexpr (kDocumentFollowsField<document::LayerOutputBoundary>) {
+    {
         commands::Transaction settings("Composition Settings", table.session.snapshot().revision());
         commands::CompositionSettingsChange change;
         change.name = "Renamed";

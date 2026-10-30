@@ -1276,8 +1276,7 @@ void TimelineLayerStack::openLabelMenu(const document::LayerId layer, QWidget* a
 }
 
 void TimelineLayerStack::toggleShy(const document::LayerId layer) {
-    if (layer_fields::setShy(session_, actionLayers(layer), !layer_fields::shy(session_, layer)))
-        Q_EMIT shyChanged();
+    (void)layer_fields::setShy(session_, actionLayers(layer), !layer_fields::shy(session_, layer));
 }
 
 void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
@@ -2357,7 +2356,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         loadHideShyLayers();
         rebuild();
     });
-    connect(stack_, &TimelineLayerStack::shyChanged, this, &TimelineEditor::rebuild);
     lanes_->setRowHighlight([this](const int row) { return stack_->rowHighlighted(row); });
     connect(stack_, &TimelineLayerStack::rowHighlightsChanged, lanes_,
             &TimelineLaneRegion::syncRowHighlights);

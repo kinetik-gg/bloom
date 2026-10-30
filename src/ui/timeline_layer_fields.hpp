@@ -1,13 +1,9 @@
 #pragma once
 
-// The Timeline's reads and writes of the two layer fields the layer table needs from the document
-// (handoff T2): Shy (layout only; never part of rendering or cache identity) and "name follows
-// source" (a layer made from an asset or a composition shows that source's name until the artist
-// renames the layer, as in After Effects).
-//
-// The document side is engine work. This adapter is the one place the Timeline touches either
-// field, so wiring the document's own field and command names is a change to this file only:
-// reads already pick the document field up the moment LayerOutputBoundary declares it.
+// The Timeline's reads and writes of the two document 1.30 layer fields the layer table needs:
+// Shy (presentation only; never part of rendering or cache identity) and "name follows source" (a
+// layer made from an asset or a composition shows that source's name until the artist renames
+// the layer, as in After Effects). The one place the Timeline touches either field.
 
 #include <bloom/document/ids.hpp>
 
@@ -21,7 +17,7 @@ class CompositionSession;
 namespace layer_fields {
 
 [[nodiscard]] bool shy(const CompositionSession& session, document::LayerId layer);
-// One undoable step setting Shy on every listed layer that differs. False when nothing changed.
+// One undoable Set Layer Shy step for every listed layer that differs. False when nothing changed.
 bool setShy(CompositionSession& session, const std::vector<document::LayerId>& layers, bool shy);
 
 // The name of the asset or composition the layer is made from, or an empty string for a layer
