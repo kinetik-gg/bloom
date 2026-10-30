@@ -305,7 +305,9 @@ void ViewerEditor::rebuildDisplayViewControl() {
         viewerDisplayView_->setItemToolTip(
             itemIndex, tr("Display / View: %1 · %2 (viewer display only, never export)")
                            .arg(full, QString::fromStdString(entry.colourSpaceId)));
-        if (entry.isDefault) {
+        // The Viewer starts on the config's untone-mapped pair, never its own default view (which
+        // under ACES CG is the ACES 1.0 SDR Video tone map).
+        if (entry.isViewerDefault) {
             defaultIndex = itemIndex;
         }
     }
@@ -313,11 +315,11 @@ void ViewerEditor::rebuildDisplayViewControl() {
     viewerDisplayView_->setFixedWidth(
         std::clamp(viewerDisplayView_->sizeHint().width(), kit::px(kit::Size::DropdownWidth),
                    kit::px(kit::Size::ViewerDisplayViewWidth)));
-    const auto saved = QSettings().value(displayViewSettingsKey()).toStringList();
+    const auto saved = session_.viewerDisplayViewMemory().recall(displayViewConfigRevision());
     int selectedIndex = defaultIndex;
-    if (saved.size() == 2) {
+    if (saved) {
         for (int index = 0; index < viewerDisplayView_->count(); ++index) {
-            if (viewerDisplayView_->itemData(index).toStringList() == saved) {
+            if (viewerDisplayView_->itemData(index).toStringList() == *saved) {
                 selectedIndex = index;
                 break;
             }
@@ -516,10 +518,14 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
                 if (selected.size() != 2) {
                     return;
                 }
-                QSettings().setValue(displayViewSettingsKey(), selected);
+                session_.viewerDisplayViewMemory().remember(displayViewConfigRevision(), selected);
                 previewController_.setViewerDisplayView(selected[0].toStdString(),
                                                         selected[1].toStdString());
             });
+    // Another project installed (New or Open) starts on its own remembered choice, or on the Viewer
+    // default, even when its color settings equal the previous project's.
+    connect(&session_, &CompositionSession::documentRebound, this,
+            [this] { rebuildDisplayViewControl(); });
 
     lookAction_ = new QAction(tr("Look"), this);
     lookAction_->setObjectName(QStringLiteral("viewerLookAction"));

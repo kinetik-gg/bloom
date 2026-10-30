@@ -128,6 +128,17 @@ int main(int argc, char* argv[]) try {
     if (const auto* settings = projectHost.colorSettings(); settings != nullptr) {
         compositionSession.setColorSettings(*settings);
     }
+    // The Viewer's Display / View is remembered per project file (session state). Save As moves the
+    // open project's choice to its new file; New and Open begin the installed project's below.
+    compositionSession.viewerDisplayViewMemory().beginProject(projectHost.displayPath());
+    QObject::connect(
+        &projectHost, &bloom::ui::ProjectHost::saveFinished, &compositionSession,
+        [&projectHost, &compositionSession](const bloom::ui::ProjectHostOperationOutcome outcome,
+                                            const QString&) {
+            if (outcome == bloom::ui::ProjectHostOperationOutcome::Published ||
+                outcome == bloom::ui::ProjectHostOperationOutcome::PublishedWithWarning)
+                compositionSession.viewerDisplayViewMemory().moveProject(projectHost.displayPath());
+        });
 
     // Projection rebinding (decision 2): every time ProjectHost replaces the live session content
     // (New or a successful Open install), rebind CompositionSession to whatever document/command-
@@ -168,6 +179,7 @@ int main(int argc, char* argv[]) try {
             if (document == nullptr || commandStack == nullptr) {
                 return;
             }
+            compositionSession.viewerDisplayViewMemory().beginProject(path);
             compositionSession.rebind(*document, *commandStack, projectHost.lowestCompositionId());
             if (const auto* settings = projectHost.colorSettings(); settings != nullptr) {
                 compositionSession.setColorSettings(*settings);
@@ -547,7 +559,6 @@ int main(int argc, char* argv[]) try {
     bloom::ui::H264EncoderService h264Encoder(taskScheduler, taskUiBridge);
     bloom::host::ExportEncoderStatus initialEncoders;
 #if defined(__linux__)
-    initialEncoders.exportPlatform = true;
 #endif
     const auto presetDirectory = std::filesystem::path(
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation).toStdString()) /

@@ -129,6 +129,15 @@ struct CompositionPreviewState final {
     // Compact selected-viewer status; message retains complete intent and diagnostics for
     // accessibility/tooltips. Empty in shared preparation state.
     QString viewerStatusText{};
+    // The same selected-viewer facts as structured values, for the status bar's labelled segments.
+    // Empty (valid false) in shared preparation state.
+    struct ViewerReadout final {
+        bool valid = false;
+        double exposure = 0.0;
+        double gamma = 1.0;
+        QString channel;
+        bool current = true;
+    } viewerReadout{};
 };
 
 class CompositionPreviewController final : public QObject {

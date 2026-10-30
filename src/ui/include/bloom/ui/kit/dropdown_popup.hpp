@@ -23,6 +23,7 @@ class KDropdownPopup final : public KPopupWindow {
 
     void setModel(QAbstractItemModel* model);
     void setSearchable(bool searchable);
+    void setUniformRows(bool uniform);
     [[nodiscard]] bool searchable() const noexcept { return searchable_; }
     [[nodiscard]] KPopupList* list() const noexcept { return list_; }
     [[nodiscard]] QListView* view() const noexcept;

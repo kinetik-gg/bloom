@@ -156,6 +156,9 @@ struct SequenceExportResultV1 {
     // ADR 0033 section 16: the worker wrote the container straight into the staged artifact
     // (Linux) instead of returning chunks for a copy.
     bool streamedPublication = false;
+    // ADR 0035: the media provider that encoded the artifact and every provider skipped or failed
+    // before it. Diagnostics and provenance only; never artist-facing text.
+    media::provider::MediaProviderProvenanceV1 mediaProvider;
     [[nodiscard]] bool published() const noexcept { return publication.targetWasPublished(); }
 };
 // Authoring-thread driver. poll() never blocks: it composes the existing attempt/approval stages.

@@ -6,6 +6,7 @@ target_sources(
         animation.cpp
         color_settings.cpp
         document.cpp
+        evaluation_inputs.cpp
         extension_records.cpp
         data_block.cpp
         graph.cpp
@@ -36,6 +37,7 @@ target_sources(
             include/bloom/document/color_settings.hpp
             include/bloom/document/composition_settings.hpp
             include/bloom/document/document.hpp
+            include/bloom/document/evaluation_inputs.hpp
             include/bloom/document/export_queue.hpp
             include/bloom/document/extension_records.hpp
             include/bloom/document/data_block.hpp

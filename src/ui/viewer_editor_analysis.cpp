@@ -23,14 +23,10 @@ QString ViewerEditor::analysisSettingsPrefix() const {
     return QStringLiteral("viewer/analysis/default/");
 }
 
-QString ViewerEditor::displayViewSettingsKey() const {
+QString ViewerEditor::displayViewConfigRevision() const {
     const auto digest =
         session_.colorSettings().ocioConfig.expectedRevision.digest.toLowercaseHex();
-    const auto revision = QString::fromLatin1(digest.data(), static_cast<int>(digest.size()));
-    for (const auto* ancestor = parentWidget(); ancestor; ancestor = ancestor->parentWidget())
-        if (const auto* area = qobject_cast<const EditorArea*>(ancestor))
-            return QStringLiteral("viewer/display-view/%1/%2").arg(revision).arg(area->areaId());
-    return QStringLiteral("viewer/display-view/%1/default").arg(revision);
+    return QString::fromLatin1(digest.data(), static_cast<int>(digest.size()));
 }
 
 QString ViewerEditor::lookSettingsKey() const {
@@ -204,6 +200,8 @@ CompositionPreviewState ViewerEditor::displayedPreviewState() const {
                       .arg(channels.value(static_cast<int>(actual->channel)))
                       .arg(actual->cover ? tr(" · CPU cover") : QString{})
                       .arg(current ? tr("Current") : tr("Previous display"));
+        state.viewerReadout = {true, shown.exposure, shown.gamma,
+                               channels.value(static_cast<int>(actual->channel)), current};
         state.message = tr("Shown EV %1, gamma %2 · %3 · %4%5 · %6")
                             .arg(shown.exposure, 0, 'g', 5)
                             .arg(shown.gamma, 0, 'g', 5)

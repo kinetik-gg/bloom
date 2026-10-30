@@ -334,8 +334,16 @@ bool ViewerEditor::anchorMove(QMouseEvent* event) {
         return true;
     }
     const auto inverse = gesture.target.toWorld.inverted();
-    const auto here = inverse.map(toolPoint(mapping->toComposition(event->position())));
-    const auto origin = inverse.map(toolPoint(mapping->toComposition(gesture.gesture.origin)));
+    const auto compositionOrigin = toolPoint(mapping->toComposition(gesture.gesture.origin));
+    auto compositionHere = toolPoint(mapping->toComposition(event->position()));
+    // Shift locks a point move to horizontal, vertical or a 45 degree diagonal, from the total
+    // drag vector so pressing or releasing Shift mid-drag recomputes from the press point.
+    const bool constrained =
+        gesture.kind == AnchorGesture::Kind::Move && event->modifiers().testFlag(Qt::ShiftModifier);
+    if (constrained)
+        compositionHere = compositionOrigin + constrainToAxis45(compositionHere - compositionOrigin);
+    const auto here = inverse.map(compositionHere);
+    const auto origin = inverse.map(compositionOrigin);
     auto next = gesture.base;
     switch (gesture.kind) {
     case AnchorGesture::Kind::Move:
@@ -479,9 +487,11 @@ void ViewerEditor::notifyAnchorModeState() { emit anchorModeStateChanged(); }
 ViewerEditor::AnchorModeState ViewerEditor::anchorModeState() const {
     const auto target = editablePath();
     const auto anchors = target ? anchorSelectionFor(*target) : path_editing::AnchorSet{};
-    if (anchors.empty())
+    if (!target)
         return {};
-    return {true, path_editing::commonMode(target->path, anchors)};
+    if (anchors.empty())
+        return {true, false, std::nullopt};
+    return {true, true, path_editing::commonMode(target->path, anchors)};
 }
 
 bool ViewerEditor::setAnchorHandleMode(const document::PathAnchorMode mode) {

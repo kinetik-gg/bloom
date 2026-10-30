@@ -13,7 +13,7 @@
 
 namespace bloom::ui::kit {
 
-// The Kinetik button. Four variants across three control sizes, with an optional leading icon.
+// The Kinetik button. Five variants across three control sizes, with an optional leading icon.
 //
 // A QAbstractButton subclass that paints itself rather than a QPushButton wearing a stylesheet:
 // the accent recipes, the surface-ladder hover step, the single focus border, and the exact
@@ -33,6 +33,10 @@ class KButton final : public QAbstractButton {
         Ghost,
         // Destructive: outlined in Error at rest, Error fill once the pointer commits.
         Danger,
+        // A value that opens something (a settings dialog, a file chooser) from a dense row, as a
+        // render queue's settings do: no plate, Accent ink, underlined under the pointer, the focus
+        // border only on keyboard focus. Long text elides in the middle, so a path keeps its file.
+        Link,
     };
 
     enum class ControlSize : std::uint8_t {

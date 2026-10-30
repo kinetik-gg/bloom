@@ -437,7 +437,7 @@ int testMainWindow(const EditorRegistry& registry,
                  71)) {
         return 71;
     }
-    if (!require(window.workspaceHost()->areaCount() == 5, 41)) {
+    if (!require(window.workspaceHost()->areaCount() == 4, 41)) {
         return 41;
     }
     if (!require(window.findChild<QStatusBar*>() == nullptr, 42)) {
@@ -475,7 +475,7 @@ int testMainWindow(const EditorRegistry& registry,
     if (!require(!projectHost.isDirty() && !projectHost.isBusy(), 68)) {
         return 68;
     }
-    if (!require(window.workspaceHost()->areaCount() == 5, 69)) {
+    if (!require(window.workspaceHost()->areaCount() == 4, 69)) {
         return 69;
     }
 
@@ -500,11 +500,11 @@ int testMainWindow(const EditorRegistry& registry,
     }
 
     splitAction->trigger();
-    if (!require(window.workspaceHost()->areaCount() == 6, 45)) {
+    if (!require(window.workspaceHost()->areaCount() == 5, 45)) {
         return 45;
     }
     closeAction->trigger();
-    if (!require(window.workspaceHost()->areaCount() == 5, 46)) {
+    if (!require(window.workspaceHost()->areaCount() == 4, 46)) {
         return 46;
     }
     maximizeAction->trigger();
@@ -520,7 +520,7 @@ int testMainWindow(const EditorRegistry& registry,
     }
     splitAction->trigger();
     resetAction->trigger();
-    if (!require(window.workspaceHost()->areaCount() == 5, 55)) {
+    if (!require(window.workspaceHost()->areaCount() == 4, 55)) {
         return 55;
     }
 

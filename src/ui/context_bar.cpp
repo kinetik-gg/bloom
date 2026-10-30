@@ -12,6 +12,7 @@
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/layer_alignment_actions.hpp>
 #include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/workspace_presets.hpp>
 
 #include <QAction>
 #include <QContextMenuEvent>
@@ -115,14 +116,18 @@ ContextBar::ContextBar(CompositionSession& session, CompositionPreviewController
     spec.setCollapse(textOptions_, 4, overflowGroup(textOverflow, tr("Text")));
     anchorOverflows_ = {anchorOptions_, anchorOverflow};
 
-    // Right: the selection's actions. Distribute goes first, then Align To, then Align.
-    spec.addStretch();
+    // Centre: the selection's actions. Distribute collapses first, then Align To, then Align.
+    spec.beginCentre();
     auto* align = buildAlignment(this, false);
     auto* distribute = buildAlignment(this, true);
     auto* target = buildAlignTarget(this);
     spec.addWidget(align);
     spec.addWidget(distribute);
     spec.addWidget(target);
+    // Right: the Workspace preset picker, against the edge.
+    spec.addStretch();
+    workspaceGroup_ = buildWorkspace(this);
+    spec.addWidget(workspaceGroup_);
     const auto submenu = [this](const QString& title, const std::vector<QAction*>& actions) {
         auto* menu = kit::makeMenu(title, this);
         for (auto* action : actions)
@@ -144,6 +149,8 @@ ContextBar::ContextBar(CompositionSession& session, CompositionPreviewController
                                            alignment_->action(A::AlignTop),
                                            alignment_->action(A::AlignVerticalMiddle),
                                            alignment_->action(A::AlignBottom)}));
+    workspaceOverflow_ = kit::makeMenu(tr("Workspace"), this);
+    spec.setCollapse(workspaceGroup_, 6, workspaceOverflow_->menuAction());
 
     // A Surface strip holding the row inside ChromePadding, and one Border hairline separating the
     // bar from the workspace below it (inside the bottom padding).
@@ -151,8 +158,10 @@ ContextBar::ContextBar(CompositionSession& session, CompositionPreviewController
     row_ = EditorArea::buildChromeRow(spec, strip);
     auto* rowLayout = new QHBoxLayout(strip);
     const int padding = kit::px(kit::Spacing::ChromePadding);
-    rowLayout->setContentsMargins(padding, padding, padding,
-                                  padding - kit::px(kit::Size::Hairline));
+    // Left and right the content lines up with the panels below, which sit one Gutter in from the
+    // window's edge.
+    const int edge = kit::px(kit::Spacing::Gutter);
+    rowLayout->setContentsMargins(edge, padding, edge, padding - kit::px(kit::Size::Hairline));
     rowLayout->setSpacing(0);
     rowLayout->addWidget(row_);
     auto* hairline = new kit::KSurface(this, kit::Color::Border);
@@ -175,6 +184,7 @@ ContextBar::ContextBar(CompositionSession& session, CompositionPreviewController
     refreshTools();
     refreshOptions();
     refreshAlignTarget();
+    refreshWorkspace();
 }
 
 ContextBar::~ContextBar() { disconnect(viewerConnection_); }
@@ -305,6 +315,99 @@ QWidget* ContextBar::buildAlignTarget(QWidget* parent) {
     return widget;
 }
 
+QWidget* ContextBar::buildWorkspace(QWidget* parent) {
+    auto* widget = group(parent, QStringLiteral("contextBarWorkspace"));
+    auto* layout = static_cast<QHBoxLayout*>(widget->layout());
+    layout->addSpacing(kit::px(kit::Spacing::ChromeGroupGap) - kit::px(kit::Spacing::ChromeGap));
+    auto* label = new kit::KLabel(tr("Workspace"), widget, kit::TypeRole::UiSmall);
+    label->setTone(kit::Color::Muted);
+    workspace_ = new kit::KDropdown(widget);
+    workspace_->setObjectName(QStringLiteral("contextBarWorkspaceDropdown"));
+    workspace_->setAccessibleName(tr("Workspace"));
+    workspace_->setFocusPolicy(Qt::ClickFocus);
+    workspace_->setWidthFloor(kit::px(kit::Size::DropdownWidthWorkspace));
+    workspace_->setFixedWidth(kit::px(kit::Size::DropdownWidthWorkspace));
+    layout->addWidget(label);
+    layout->addWidget(workspace_);
+    widget->setProperty("chromeSuppressed", true);
+    connect(workspace_, &kit::KDropdown::activated, this, [this](const int index) {
+        const auto choice = workspace_->itemData(index).toString();
+        if (presets_ != nullptr) {
+            if (choice == QStringLiteral("@save"))
+                presets_->promptSaveAs(*window());
+            else if (choice == QStringLiteral("@update"))
+                presets_->updateActive();
+            else if (choice == QStringLiteral("@delete"))
+                presets_->promptDeleteActive(*window());
+            else if (!choice.isEmpty())
+                presets_->apply(choice);
+        }
+        refreshWorkspace();
+        returnFocusToViewer();
+    });
+    return widget;
+}
+
+void ContextBar::setWorkspacePresets(WorkspacePresets* presets) {
+    if (presets_ != nullptr)
+        disconnect(presets_, nullptr, this, nullptr);
+    presets_ = presets;
+    if (presets != nullptr)
+        connect(presets, &WorkspacePresets::changed, this, &ContextBar::refreshWorkspace);
+    refreshWorkspace();
+}
+
+// Built-in presets, a separator, the artist's own, a separator, then the actions. The field shows
+// "Default", "Node (edited)" or "Custom"; "Custom" is a row of its own only while no preset is active.
+void ContextBar::refreshWorkspace() {
+    if (workspace_ == nullptr)
+        return;
+    workspaceGroup_->setProperty("chromeSuppressed", presets_ == nullptr);
+    if (presets_ == nullptr)
+        return;
+    const QSignalBlocker blocker(workspace_);
+    workspace_->clearItems();
+    int current = -1;
+    const auto add = [&](const WorkspacePreset& preset) {
+        const bool active = preset.name == presets_->activeName();
+        const int index = workspace_->addItem(active ? presets_->label() : preset.name, preset.name);
+        if (active)
+            current = index;
+    };
+    if (presets_->activeName().isEmpty()) {
+        current = workspace_->addItem(presets_->label(), QString{});
+        workspace_->addSeparator();
+    }
+    for (const auto& preset : presets_->builtInPresets())
+        add(preset);
+    if (!presets_->userPresets().empty()) {
+        workspace_->addSeparator();
+        for (const auto& preset : presets_->userPresets())
+            add(preset);
+    }
+    workspace_->addSeparator();
+    workspace_->addItem(tr("Save current layout as…"), QStringLiteral("@save"));
+    if (presets_->activeIsUser()) {
+        workspace_->addItem(tr("Update ‘%1’").arg(presets_->activeName()), QStringLiteral("@update"));
+        workspace_->addItem(tr("Delete ‘%1’…").arg(presets_->activeName()), QStringLiteral("@delete"));
+    }
+    if (current >= 0)
+        workspace_->setCurrentIndex(current);
+    workspace_->setToolTip(tr("The panel arrangement of the window"));
+    // The same list, as a submenu of the overflow menu when the bar is narrow.
+    workspaceOverflow_->clear();
+    for (const auto& preset : presets_->builtInPresets())
+        workspaceOverflow_->addAction(preset.name, this, [this, name = preset.name] {
+            presets_->apply(name);
+        });
+    if (!presets_->userPresets().empty())
+        workspaceOverflow_->addSeparator();
+    for (const auto& preset : presets_->userPresets())
+        workspaceOverflow_->addAction(preset.name, this, [this, name = preset.name] {
+            presets_->apply(name);
+        });
+}
+
 void ContextBar::setViewer(ViewerEditor* viewer) {
     if (viewer_ == viewer)
         return;
@@ -314,9 +417,11 @@ void ContextBar::setViewer(ViewerEditor* viewer) {
         viewerConnection_ = connect(viewer, &ViewerEditor::anchorModeStateChanged, this, [this] {
             for (auto* options : anchorOverflows_)
                 static_cast<AnchorModeOptions*>(options)->refresh();
+            refreshOptions();
         });
     for (auto* options : anchorOverflows_)
         static_cast<AnchorModeOptions*>(options)->refresh();
+    refreshOptions();
 }
 
 kit::KIconToggle* ContextBar::toolButtonForTest(const ViewerTool tool) const {
@@ -345,7 +450,11 @@ void ContextBar::refreshOptions() {
     const auto show = [](QWidget* options, const bool shown) {
         options->setProperty("chromeSuppressed", !shown);
     };
-    show(anchorOptions_, tool == ViewerTool::Select || tool == ViewerTool::Pen);
+    // The handle modes act on anchors, so they are in the row only while there are editable points:
+    // Select or Pen, with a path or mask selected in the Viewer. (Owner, 2026-10-30: hidden, not
+    // disabled, for this strip.)
+    const bool editing = viewer_ != nullptr && viewer_->anchorModeState().available;
+    show(anchorOptions_, (tool == ViewerTool::Select || tool == ViewerTool::Pen) && editing);
     show(shapeOptions_, drawsShape(tool));
     show(textOptions_, tool == ViewerTool::Text);
 }

@@ -367,6 +367,9 @@ class ViewerEditor final : public QWidget,
     // bar's handle-mode switcher shows: no anchors selected (not editing), one common mode, or a
     // mixed selection (no common mode). setAnchorHandleMode() is the switcher's command.
     struct AnchorModeState final {
+        // A path or mask is selected for editing: the handle-mode strip is in the context bar (it is
+        // enabled once anchors are selected). False hides the strip.
+        bool available = false;
         bool editing = false;
         std::optional<document::PathAnchorMode> common;
         friend bool operator==(const AnchorModeState&, const AnchorModeState&) = default;
@@ -415,6 +418,9 @@ class ViewerEditor final : public QWidget,
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void keyReleaseEvent(QKeyEvent* event) override;
+    [[nodiscard]] bool refreshAnchorDrag(QKeyEvent* event);
+    void refreshDrag(QPointF pointer, Qt::KeyboardModifiers modifiers);
     void resizeEvent(QResizeEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
 
@@ -603,6 +609,7 @@ class ViewerEditor final : public QWidget,
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
     bool dragActive_ = false;
+    QPointF dragPointer_;
     std::optional<ViewerMapping> activeMapping_;
     std::optional<runtime::PreviewRequestIdentity> activeGestureIdentity_;
     QRectF activeGestureViewport_;
@@ -655,7 +662,7 @@ class ViewerEditor final : public QWidget,
     void paintRoi(QPainter& painter) const;
     void publishRoi();
     [[nodiscard]] QString analysisSettingsPrefix() const;
-    [[nodiscard]] QString displayViewSettingsKey() const;
+    [[nodiscard]] QString displayViewConfigRevision() const;
     [[nodiscard]] QString lookSettingsKey() const;
     void rebuildDisplayViewControl();
     void updateLookControl();

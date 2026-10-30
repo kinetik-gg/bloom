@@ -3,6 +3,8 @@
 #include "assets_editor_internal.hpp"
 
 #include <QCoreApplication>
+#include <QLocale>
+#include <QStringList>
 
 #include <algorithm>
 #include <ranges>
@@ -89,22 +91,19 @@ StatusText jobStatus(const host::ExportJobView& job) {
     case ExportJobState::Ready: {
         const auto& start = job.commands[host::ExportCommand::Start];
         if (start.available)
-            return {tr("Ready"), {}, StatusTone::Neutral};
+            return {tr("Queued"), {}, StatusTone::Neutral};
         switch (start.code) {
         case host::ExportUnavailableCode::DestinationCheckPending:
             return {tr("Checking where it saves\u2026"), qs(start.reason), StatusTone::Neutral};
         case host::ExportUnavailableCode::NeedsReplaceConfirmation:
             return {tr("Waiting for your OK"), qs(start.reason), StatusTone::Neutral};
-        case host::ExportUnavailableCode::PlatformNotSupported:
-            // Editing works everywhere; only running is a Linux feature in this version.
-            return {tr("Ready"), qs(start.reason), StatusTone::Neutral};
         default:
-            return {needsLocation(job) ? tr("Needs a location") : tr("Needs attention"),
+            return {needsLocation(job) ? tr("Needs output") : tr("Needs attention"),
                     qs(start.reason), StatusTone::Neutral};
         }
     }
     case ExportJobState::Waiting:
-        return {tr("Up next"), {}, StatusTone::Neutral};
+        return {tr("Queued"), {}, StatusTone::Neutral};
     case ExportJobState::Preparing:
         return {tr("Getting ready"), {}, StatusTone::Active};
     case ExportJobState::Rendering:
@@ -158,7 +157,7 @@ StatusText outputStatus(const host::ExportOutputView& output, const host::Export
                     return {tr("Waiting for your OK"), qs(issue.reason), StatusTone::Neutral};
                 if (issue.severity == host::ExportPreflightSeverity::Blocking)
                     return {issue.target == host::ExportPreflightTarget::Destination
-                                ? tr("Needs a location")
+                                ? tr("Needs output")
                                 : tr("Needs attention"),
                             qs(issue.reason), StatusTone::Neutral};
             }
@@ -221,6 +220,63 @@ QString remainingText(const host::ExportJobProgress& progress) {
         return {};
     return QCoreApplication::translate("ExportPanel", "about %1 left")
         .arg(clockText(*progress.remaining));
+}
+
+QString leftText(const std::chrono::milliseconds remaining) {
+    const auto seconds = std::max<std::int64_t>(1, (remaining.count() + 999) / 1000);
+    if (seconds < 60)
+        return QCoreApplication::translate("ExportPanel", "about %1 s left").arg(seconds);
+    const auto minutes = (seconds + 30) / 60;
+    if (minutes < 60)
+        return QCoreApplication::translate("ExportPanel", "about %1 min left").arg(minutes);
+    return QCoreApplication::translate("ExportPanel", "about %1 h %2 min left")
+        .arg(minutes / 60)
+        .arg(minutes % 60);
+}
+
+QString currentRenderText(const host::ExportJobView* job) {
+    if (job == nullptr || !isActive(job->state))
+        return tr("Idle");
+    const auto& progress = job->progress;
+    QStringList parts;
+    parts.push_back(QCoreApplication::translate("ExportPanel", "Rendering %1").arg(qs(job->displayName)));
+    if (isWaitingForViewer(*job))
+        parts.push_back(tr("paused while you work in the Viewer"));
+    else if (job->state != ExportJobState::Rendering)
+        parts.push_back(jobStatus(*job).text.toLower());
+    if (progress.framesTotal > 0)
+        parts.push_back(QCoreApplication::translate("ExportPanel", "frame %1 of %2")
+                            .arg(std::min(progress.framesCompleted + 1, progress.framesTotal))
+                            .arg(progress.framesTotal));
+    parts.push_back(QCoreApplication::translate("ExportPanel", "%1 elapsed").arg(clockText(progress.elapsed)));
+    if (progress.remaining.has_value() && !isWaitingForViewer(*job))
+        parts.push_back(leftText(*progress.remaining));
+    return parts.join(QStringLiteral(" \u00b7 "));
+}
+
+QString startedText(const QDateTime& started) {
+    const QLocale locale;
+    return started.date() == QDate::currentDate() ? locale.toString(started.time(), QLocale::ShortFormat)
+                                                  : locale.toString(started, QLocale::ShortFormat);
+}
+
+QString renderTimeText(const host::ExportJobView& job) {
+    if (!job.run.has_value())
+        return {};
+    return clockText(job.progress.elapsed);
+}
+
+QString spanText(const std::optional<host::ExportResolvedRange>& range, const document::FrameRate rate) {
+    if (!range.has_value())
+        return {};
+    const auto frames = range->last - range->first + 1;
+    const auto first = assets::timecodeForFrames(range->first, rate);
+    const auto count = frames == 1 ? tr("1 frame")
+                                   : QCoreApplication::translate("ExportPanel", "%1 frames").arg(frames);
+    if (frames == 1)
+        return QStringLiteral("%1 \u00b7 %2").arg(first, count);
+    return QCoreApplication::translate("ExportPanel", "%1 to %2 \u00b7 %3")
+        .arg(first, assets::timecodeForFrames(range->last, rate), count);
 }
 
 QString rangeText(const host::ExportJobView& job) {

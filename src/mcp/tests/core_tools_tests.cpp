@@ -296,6 +296,13 @@ void liveSeams() {
     result = server.call("project.set-color-settings", R"({"config":"aces"})");
     expect(contains(result, R"("code":"updated")") && colour.has_value(),
            "project.set-color-settings reaches the port: " + result);
+    expect(contains(result, R"("workingSpace":"ACEScg")") &&
+               contains(result, R"("workingSpaceLabel":"ACEScg")"),
+           "project.set-color-settings reads back the working space id and label: " + result);
+    result = server.call("project.set-color-settings", R"({"config":"neutral"})");
+    expect(contains(result, R"("workingSpace":"lin_rec709_scene")") &&
+               contains(result, R"json("workingSpaceLabel":"Linear Rec.709 (sRGB)")json"),
+           "Bloom Neutral reads back lin_rec709_scene labelled Linear Rec.709 (sRGB): " + result);
     result = server.call("events", R"({"sinceRevision":0})");
     expect(contains(result, R"("kind":"project.saved")"), "events list project.saved: " + result);
 }
@@ -338,7 +345,6 @@ void retiredTransientJobs() {
         }
     } release{queue, captures};
     host::ExportEncoderStatus encoders;
-    encoders.exportPlatform = true;
     encoders.probed = true;
     queue = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
         .session = *server.session->hostSession(),

@@ -54,7 +54,6 @@ HeadlessExportQueue::HeadlessExportQueue(Session& session) : state_(std::make_un
     s.gpu = host::GpuExportProvider::create(std::move(gpuOptions));
     s.gpu->prepare(s.scheduler);
     host::ExportEncoderStatus encoders;
-    encoders.exportPlatform = host::exportPlatformSupported();
     s.presets = host::ExportPresetCatalogue::create(
         {.userDataDirectory = platform::userDataDirectory(), .initialEncoders = encoders});
     s.presets->refreshEncoders(s.scheduler);

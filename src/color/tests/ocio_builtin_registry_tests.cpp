@@ -1,10 +1,12 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/color/ocio_cpu_display_processor.hpp>
 
 #include <bloom/color/display_processor_identity.hpp>
 #include <bloom/color/ocio_content_revision.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -63,6 +65,40 @@ void testAcesCgBuiltIn(Expectations& expectations) {
                             "ACES CG exposes the sRGB SDR Video pair");
         expectations.expect(!resolved->displays().empty() && resolved->displays()[0].isDefault,
                             "the first ACES CG display/view pair is the config default");
+        // Exports, thumbnails and the color picker keep the config's own default pair.
+        expectations.expect(resolved->displayName() == "sRGB - Display" &&
+                                resolved->viewName() == "ACES 1.0 - SDR Video",
+                            "the ACES CG config default pair is unchanged (sRGB, ACES SDR Video)");
+        // The Viewer starts on the plain sRGB view: no ACES tone mapping until the artist asks.
+        const auto viewerDefaults = std::ranges::count_if(
+            resolved->displays(), [](const auto& entry) { return entry.isViewerDefault; });
+        const auto viewer = std::ranges::find_if(
+            resolved->displays(), [](const auto& entry) { return entry.isViewerDefault; });
+        expectations.expect(viewerDefaults == 1 && viewer != resolved->displays().end() &&
+                                viewer->display == "sRGB - Display" &&
+                                viewer->view == "Un-tone-mapped",
+                            "the ACES CG Viewer default is sRGB - Display / Un-tone-mapped");
+        if (viewer != resolved->displays().end()) {
+            // Scene-linear 18% grey through Un-tone-mapped is the plain sRGB encoding (0.4614);
+            // ACES 1.0 SDR Video would tone-map it darker.
+            auto built = bloom::color::buildCpuDisplayProcessorForView(*resolved, viewer->display,
+                                                                       viewer->view);
+            auto handle = std::move(built).takeHandle();
+            const auto grey =
+                handle ? handle->referenceToDisplay({0.18, 0.18, 0.18, 1.0}) : std::nullopt;
+            expectations.expect(grey.has_value() && std::abs(grey->red - 0.4614) < 0.005 &&
+                                    std::abs(grey->green - 0.4614) < 0.005 &&
+                                    std::abs(grey->blue - 0.4614) < 0.005,
+                                "Un-tone-mapped shows linear 18% grey as sRGB code 0.4614");
+            auto tone = bloom::color::buildCpuDisplayProcessorForView(
+                *resolved, resolved->displayName(), resolved->viewName());
+            auto toneHandle = std::move(tone).takeHandle();
+            const auto toned =
+                toneHandle ? toneHandle->referenceToDisplay({0.18, 0.18, 0.18, 1.0}) : std::nullopt;
+            expectations.expect(toned.has_value() && grey.has_value() &&
+                                    std::abs(toned->green - grey->green) > 0.02,
+                                "the ACES SDR Video view differs from Un-tone-mapped (tone map)");
+        }
     }
 
     auto aces2065 =
@@ -106,6 +142,10 @@ void testReadyExactDigest(Expectations& expectations) {
             resolved->rec709VideoColorSpaceId() == bloom::color::kBloomRec709CameraColorSpaceId &&
             !resolved->colorSpaces().empty(),
         "the resolved config exposes its sRGB, Rec.709 camera, and non-data space inventory");
+    expectations.expect(
+        resolved->displays().size() == 1 && resolved->displays()[0].isDefault &&
+            resolved->displays()[0].isViewerDefault,
+        "Bloom Neutral's single sRGB pair is both the config and the Viewer default");
 }
 
 void testChangedPerturbedRevision(Expectations& expectations) {

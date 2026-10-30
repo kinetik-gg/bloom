@@ -888,6 +888,158 @@ void testPickingAtZoomAndPan(Expectations& expectations) {
     reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler, expectations);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Shift-constrained move (horizontal, vertical, 45 degree diagonals)
+// ---------------------------------------------------------------------------------------------
+
+void sendMouseWith(QWidget& widget, const QEvent::Type type, const QPointF& local,
+                   const Qt::KeyboardModifiers modifiers) {
+    const auto button = type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+    const auto buttons = type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton;
+    QMouseEvent event(type, local, local, button, buttons, modifiers);
+    QCoreApplication::sendEvent(&widget, &event);
+}
+
+QPointF polar(const QPointF& origin, const double degrees, const double length) {
+    const double radians = degrees * 3.14159265358979323846 / 180.0;
+    return origin + QPointF(length * std::cos(radians), length * std::sin(radians));
+}
+
+bool near(const double a, const double b, const double tolerance = 1e-6) {
+    return std::abs(a - b) <= tolerance;
+}
+
+void testShiftConstrainsMoveToAxes(Expectations& expectations) {
+    using namespace bloom;
+    GestureFixture fixture(makeTestProject("Viewer Shift Axis"));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "frame ready");
+    expectations.expect(
+        fixture.session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.3, 0.4, 1.0}),
+        "add layer");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "frame re-ready");
+    const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
+    if (position == nullptr) {
+        expectations.expect(false, "layer exposes position");
+        return;
+    }
+    const auto positionId = position->id;
+    const auto base = fixture.session.constantVec2Value(positionId);
+    if (!base) {
+        expectations.expect(false, "position resolvable");
+        return;
+    }
+    const QRectF display = expectedDisplayRect(fixture.viewer, fixture.controller);
+    const QPointF press = display.center() + QPointF(30.0, 20.0); // off the anchor handle
+    const auto drag = [&](const double angle, const Qt::KeyboardModifiers modifiers) {
+        sendPress(fixture.viewer, press);
+        sendMouseWith(fixture.viewer, QEvent::MouseMove, polar(press, angle, 60), modifiers);
+        sendMouseWith(fixture.viewer, QEvent::MouseButtonRelease, polar(press, angle, 60),
+                      modifiers);
+        const auto now = *fixture.session.constantVec2Value(positionId);
+        const document::Vec2d delta{now.x - base->x, now.y - base->y};
+        expectations.expect(fixture.session.undo(), "constrained drag undoes");
+        expectations.expect(fixture.session.constantVec2Value(positionId) == *base,
+                            "one undo restores the pre-drag position");
+        // A fresh Ready frame for the post-undo revision must own the next press.
+        expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                            "frame ready after undo");
+        return delta;
+    };
+    const auto revision = fixture.session.snapshot().revision().value();
+    const auto horizontal = drag(10, Qt::ShiftModifier);
+    expectations.expect(near(horizontal.y, 0.0) && horizontal.x > 0.0,
+                        "Shift at ~10 degrees moves purely horizontally");
+    expectations.expect(fixture.session.snapshot().revision().value() == revision + 2,
+                        "a constrained drag is one transaction (plus its undo)");
+    const auto vertical = drag(80, Qt::ShiftModifier);
+    expectations.expect(near(vertical.x, 0.0) && vertical.y > 0.0,
+                        "Shift at ~80 degrees moves purely vertically");
+    const auto diagonal = drag(40, Qt::ShiftModifier);
+    expectations.expect(near(diagonal.x, diagonal.y, 1e-6) && diagonal.x > 0.0,
+                        "Shift at ~40 degrees moves along an exact 45 degree diagonal");
+    const auto free = drag(40, Qt::NoModifier);
+    expectations.expect(!near(free.x, free.y, 1e-3), "without Shift the 40 degree delta is free");
+    const auto freeShallow = drag(10, Qt::NoModifier);
+
+    // Shift pressed and released mid-drag recomputes from the press point (no accumulation).
+    const QPointF end = polar(press, 10, 60);
+    sendPress(fixture.viewer, press);
+    sendMouseWith(fixture.viewer, QEvent::MouseMove, end, Qt::NoModifier);
+    sendMouseWith(fixture.viewer, QEvent::MouseMove, end, Qt::ShiftModifier);
+    sendMouseWith(fixture.viewer, QEvent::MouseMove, end, Qt::NoModifier);
+    sendMouseWith(fixture.viewer, QEvent::MouseButtonRelease, end, Qt::NoModifier);
+    const auto after = *fixture.session.constantVec2Value(positionId);
+    expectations.expect(near(after.x - base->x, freeShallow.x) &&
+                            near(after.y - base->y, freeShallow.y),
+                        "releasing Shift restores the free delta");
+    expectations.expect(fixture.session.undo(), "mid-drag toggled drag undoes once");
+    expectations.expect(fixture.session.constantVec2Value(positionId) == *base,
+                        "a single undo entry covers the toggled drag");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "frame ready after undo");
+
+    // Pressing Shift mid-drag snaps, with the same result as Shift from the start.
+    sendPress(fixture.viewer, press);
+    sendMouseWith(fixture.viewer, QEvent::MouseMove, end, Qt::NoModifier);
+    sendMouseWith(fixture.viewer, QEvent::MouseMove, end, Qt::ShiftModifier);
+    sendMouseWith(fixture.viewer, QEvent::MouseButtonRelease, end, Qt::ShiftModifier);
+    const auto snapped = *fixture.session.constantVec2Value(positionId);
+    expectations.expect(near(snapped.y, base->y) && snapped.x > base->x,
+                        "Shift pressed mid-drag snaps to the horizontal axis without a jump");
+    expectations.expect(fixture.session.undo(), "snapped drag undoes");
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "shift-axis fixture reaches quiescence");
+}
+
+void testShiftConstrainFollowsRotatedParent(Expectations& expectations) {
+    using namespace bloom;
+    GestureFixture fixture(makeTestProject("Viewer Shift Parent"));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "frame ready");
+    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Parent"), {1, 0, 0, 1}),
+                        "add parent");
+    const auto parentId = *std::get_if<document::LayerId>(&fixture.session.selection().primary);
+    const auto* rotation = fixture.session.parameterForSelection(document::kRotationParameterRole);
+    expectations.expect(rotation != nullptr &&
+                            fixture.session.setParameterValue(rotation->id, 30.0, "Rotate"),
+                        "rotate parent");
+    expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Child"), {0, 1, 0, 1}),
+                        "add child");
+    const auto childId = *std::get_if<document::LayerId>(&fixture.session.selection().primary);
+    expectations.expect(fixture.session.setLayerParent(childId, parentId), "parent the child");
+    fixture.session.selectLayer(childId);
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "frame re-ready");
+    const auto* position = fixture.session.parameterForSelection(document::kPositionParameterRole);
+    if (position == nullptr) {
+        expectations.expect(false, "child exposes position");
+        return;
+    }
+    const auto positionId = position->id;
+    const auto base = *fixture.session.constantVec2Value(positionId);
+    const QPointF press =
+        expectedDisplayRect(fixture.viewer, fixture.controller).center() + QPointF(30.0, 20.0);
+    const QPointF end = polar(press, 10, 60);
+    sendPress(fixture.viewer, press);
+    sendMouseWith(fixture.viewer, QEvent::MouseMove, end, Qt::ShiftModifier);
+    sendMouseWith(fixture.viewer, QEvent::MouseButtonRelease, end, Qt::ShiftModifier);
+    const auto now = *fixture.session.constantVec2Value(positionId);
+    const double dx = now.x - base.x;
+    const double dy = now.y - base.y;
+    constexpr double radians = 30.0 * 3.14159265358979323846 / 180.0;
+    const double worldX = dx * std::cos(radians) - dy * std::sin(radians);
+    const double worldY = dx * std::sin(radians) + dy * std::cos(radians);
+    expectations.expect(worldX > 0.0 && near(worldY, 0.0, 1e-6),
+                        "a rotated parent still ends on the constrained screen axis");
+    expectations.expect(fixture.session.undo(), "parented drag undoes");
+
+    fixture.controller.beginShutdown();
+    fixture.bridge.beginShutdown();
+    expectations.expect(waitUntil([&] { return fixture.scheduler.isQuiescent(); }),
+                        "shift-parent fixture reaches quiescence");
+}
+
 void testKeyboardNudgeAndDelete(Expectations& expectations) {
     using namespace bloom;
     GestureFixture fixture(makeTestProject("Keyboard"));
@@ -1291,6 +1443,8 @@ int main(int argc, char** argv) {
     testDragAtNonIdentityZoomAndPanLandsExactlyUnderCursor(expectations);
     testPickingAtZoomAndPan(expectations);
     testKeyboardNudgeAndDelete(expectations);
+    testShiftConstrainsMoveToAxes(expectations);
+    testShiftConstrainFollowsRotatedParent(expectations);
     testDragOnEmptyOrUnselectedDoesNothing(expectations);
     testSelectionCallbackInvalidatesPress(expectations);
     testMidDragResizeCancelsWithNoCommitAndNoOverrideLeft(expectations);

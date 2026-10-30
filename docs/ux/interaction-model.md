@@ -45,7 +45,7 @@ hosts reach with a modifier — bare letters belong to tools.
 | `Ctrl+Alt+N` | New Composition… |
 | `Ctrl+Alt+K` | Composition Settings… for the active composition (After Effects' `Ctrl+K` splits layers here) |
 | `Space` | Play/pause immediately from cache in any panel; focused text entry keeps Space |
-| `Ctrl+Shift+Space` | RAM Preview: cache this composition's range, then play it |
+| `Ctrl+Shift+Space`, `Numpad 0` | RAM Preview: cache this composition's range, then play it; press again, or `Esc`, to cancel (never fires while typing in a field) |
 | `Esc` | Cancel the RAM preview being cached (bound only while one is) |
 | `F11` | Full screen |
 | `` ` `` | Maximize or restore the panel under the pointer |
@@ -241,6 +241,16 @@ A right-click on a layer in the canvas offers Select, Duplicate Layer and Delete
 layer. A pixel grid
 is suppressed below 400% even when enabled. Guides follow the viewer's active zoom/pan transform;
 they are not part of the display buffer or any export.
+
+Shift-constrained move. While a Select-tool drag moves a layer, or a Pen/Select drag moves path
+points, holding Shift locks the motion to the nearest of horizontal, vertical or either 45 degree
+diagonal, as in other DCC tools. The axis comes from the total drag vector since the press, snapped
+to the nearest multiple of 45 degrees in composition space (what the artist sees at any zoom or
+pan), and the result converts to each layer's parent space through the ordinary move code, so a
+parented or rotated layer still travels along the screen axis. Pressing or releasing Shift mid-drag
+recomputes from the press point, so there is no jump. It is the same single undo entry and commit
+as a free move. A Shift-press that starts a selection add, proportional scale on handles and 15 degree rotation steps keep their
+meanings; the constraint applies only to a move that is already dragging.
 
 Cryptomatte (#364). Selecting a Cryptomatte shows its ID-colour preview in the Viewer: every object
 in its own colour, the selected mattes brightened (Properties "Preview", on by default, turns it
@@ -584,7 +594,7 @@ shared layer-stack/lane vertical scroll.
 
 RAM Preview sits in the transport cluster as a button, but its KEYS are declared by the Composition
 menu, not here: one `Qt::WindowShortcut` owner per sequence, or Qt reports an ambiguous overload and
-fires neither. The button, the menu item, and `Ctrl+Shift+Space` all call the one
+fires neither. The button (which reads "Cancel" with the fill progress while caching), the menu item, `Ctrl+Shift+Space` and `Numpad 0` all call the one
 `RamPreviewController::toggle()`, per **Ownership Boundary** below.
 
 Bar gestures follow [layer-owned time](../architecture/animation-and-time.md#layer-time)

@@ -18,6 +18,17 @@
 #if defined(__unix__) || defined(__APPLE__)
 #include <sys/resource.h>
 #include <unistd.h>
+#elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <cstdint>
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>
 #endif
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -312,6 +323,14 @@ std::uint64_t workerAddressSpace() {
     if (::getrlimit(RLIMIT_AS, &limit) == 0 && limit.rlim_cur != RLIM_INFINITY &&
         limit.rlim_cur >= kWorkerAddressSpaceFloor)
         return std::min<std::uint64_t>(limit.rlim_cur, kWorkerAddressSpaceCeiling);
+#elif defined(_WIN32)
+    // The host's job object carries the per-process committed-memory limit.
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION job{};
+    if (QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &job, sizeof(job),
+                                  nullptr) &&
+        (job.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY) != 0 &&
+        job.ProcessMemoryLimit >= kWorkerAddressSpaceFloor)
+        return std::min<std::uint64_t>(job.ProcessMemoryLimit, kWorkerAddressSpaceCeiling);
 #endif
     return kWorkerAddressSpaceFloor;
 }

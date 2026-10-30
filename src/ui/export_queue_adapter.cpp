@@ -31,6 +31,7 @@ void ExportQueueAdapter::attach(TaskUiBridge& bridge) {
 
 void ExportQueueAdapter::rebind() {
     pendingSelection_.reset();
+    started_.clear();
     const auto snapshot = port_.snapshot();
     revision_ = snapshot ? snapshot->revision : 0;
     lastEventSequence_ = port_.events(0).lastSequence;
@@ -50,7 +51,21 @@ void ExportQueueAdapter::observe() {
     if (revision == revision_)
         return;
     revision_ = revision;
+    for (const auto& job : snapshot->jobs) {
+        if (!job.run.has_value())
+            continue;
+        auto& seen = started_[job.id.value()];
+        if (seen.run != job.run->run || !seen.at.isValid())
+            seen = {job.run->run, QDateTime::currentDateTime().addMSecs(-job.progress.elapsed.count())};
+    }
     Q_EMIT queueChanged();
+}
+
+std::optional<QDateTime> ExportQueueAdapter::startedAt(const document::ExportJobId job) const {
+    const auto found = started_.find(job.value());
+    if (found == started_.end())
+        return std::nullopt;
+    return found->second.at;
 }
 
 void ExportQueueAdapter::handleEvents() {

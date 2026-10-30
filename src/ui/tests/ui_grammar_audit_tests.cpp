@@ -4,6 +4,7 @@
 #include <QGraphicsView>
 #include <QMenu>
 #include <bloom/ui/editor_area.hpp>
+#include <bloom/ui/workspace_host.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -235,7 +236,11 @@ int run(int argc, char** argv) {
     auto* status = fixture.window->statusStrip();
     expect(status && status->isVisible(), fixture.window.get(), "status remains visible");
     for (auto* cell : status->findChildren<kit::KLabel*>()) {
-        expect(cell->font() == kit::font(kit::TypeRole::UiSmall), cell, "status UiSmall role");
+        // Labels are UiSmall (the group titles UiSmallStrong); values are the mono Value role.
+        expect(cell->font() == kit::font(kit::TypeRole::UiSmall) ||
+                   cell->font() == kit::font(kit::TypeRole::UiSmallStrong) ||
+                   cell->font() == kit::font(kit::TypeRole::Value),
+               cell, "status label and value roles");
         expect(cell->height() == kit::px(kit::Size::Control), cell, "status row height");
     }
     expect(!status->colorChipTextForTest().isEmpty(), status, "color state is always explicit");

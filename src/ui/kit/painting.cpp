@@ -195,6 +195,13 @@ ButtonColors buttonColors(const ButtonKind kind, const State state, const bool k
         result.ink = inkForState(Color::Muted, state);
         break;
     }
+    case ButtonKind::Link: {
+        const Color ink = state == State::Hover     ? Color::AccentHover
+                          : state == State::Pressed ? Color::AccentPressed
+                                                    : Color::Accent;
+        result.ink = disabled ? disabledInk(color(Color::Muted)) : color(ink);
+        break;
+    }
     case ButtonKind::MenuItem:
         if (state == State::Hover || state == State::Pressed) {
             result.fill = color(state == State::Pressed ? Color::AccentPressed : Color::Accent);

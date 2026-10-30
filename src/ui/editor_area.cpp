@@ -595,6 +595,7 @@ void EditorArea::rebuildEditor(int editorIndex) {
     // The materialized editor now matches this picker index; setEditorId()'s pending/revert logic
     // uses this as the last-committed selection truth.
     appliedEditorIndex_ = editorIndex;
+    emit editorChanged(this);
 }
 
 int EditorArea::addUnavailableEditor(std::string_view editorId) {

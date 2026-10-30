@@ -82,11 +82,15 @@ class ParityOperations(unittest.TestCase):
         result = self.host.set_color_settings('aces', 'Linear Rec.2020')
         self.assertEqual((result['code'], result['config'], result['working_space']),
                          ('updated', 'aces', 'Linear Rec.2020'))
+        self.assertEqual(result['working_space_label'], 'Linear Rec.2020')
         self.assertEqual(self.host.set_color_settings('aces')['code'], 'no-change')
         with self.assertRaises(RuntimeError):
             self.host.set_color_settings('aces', 'lin_rec709_scene')
         with self.assertRaises(RuntimeError):
             self.host.set_color_settings('srgb')
+        neutral = self.host.set_color_settings('neutral')
+        self.assertEqual((neutral['working_space'], neutral['working_space_label']),
+                         ('lin_rec709_scene', 'Linear Rec.709 (sRGB)'))
 
     def test_new_composition_from_assets_and_delete(self):
         root = pathlib.Path(self.directory.name)

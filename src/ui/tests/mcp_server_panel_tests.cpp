@@ -529,6 +529,7 @@ void testIndicatorAndSound() {
     bloom::commands::CommandStack stack(document);
     ui::CompositionSession session(document, stack, compositionId);
     ui::WindowStatusBar bar(session, nullptr);
+    bar.resize(1600, bar.height());
     bar.show();
 
     ScriptedMcpPort port;
@@ -539,8 +540,10 @@ void testIndicatorAndSound() {
     expect(bar.mcpIndicatorVisibleForTest() && bar.mcpIndicatorTextForTest().contains(QStringLiteral("6767")),
            "running: indicator with the port");
     QSignalSpy reveal(&adapter, &ui::McpServerAdapter::revealRequested);
-    bar.findChild<ui::kit::KButton*>(QStringLiteral("windowStatusBarMcp"))->click();
-    expect(reveal.count() == 1, "the indicator asks for the panel");
+    expect(bar.findChild<ui::kit::KButton*>(QStringLiteral("windowStatusBarMcp")) == nullptr,
+           "no MCP button in the status bar");
+    bar.clickMcpIndicatorForTest();
+    expect(reveal.count() == 1, "the MCP text segment asks for the panel");
     show(port, adapter, makeSnapshot(m::McpServerState::Stopped));
     expect(!bar.mcpIndicatorVisibleForTest(), "stopped again: hidden");
     auto failed = makeSnapshot(m::McpServerState::Failed);

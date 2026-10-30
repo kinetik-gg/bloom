@@ -53,8 +53,11 @@ class WorkspaceHost final : public QFrame {
                               std::string_view assetsEditorId, std::string_view timelineEditorId,
                               std::string_view propertiesEditorId, std::size_t activeIndex = 0);
 
-    // Shows the editor `editorId` and makes its area active: the area that already hosts it, or a
-    // new area split off the Timeline's (otherwise the active one), below it. A maximized area is
+    // Shows the editor `editorId` and makes its area active (and focused): the area that already
+    // hosts it, or a new area split off the Timeline's (otherwise the active one), below it.
+    // Per-editor policy: "bloom.export" is never split off -- with no Export open it replaces the
+    // Timeline's editor in place, and with no Timeline either it takes a new panel along the
+    // bottom of the workspace. A maximized area is
     // restored first so the revealed editor is visible. Returns the area, or nullptr when none could
     // be shown (the area limit, or a native surface still retiring).
     EditorArea* revealEditor(std::string_view editorId, Qt::Orientation orientation = Qt::Vertical,
@@ -71,6 +74,12 @@ class WorkspaceHost final : public QFrame {
 
     [[nodiscard]] QByteArray saveLayoutState() const;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreLayoutState(const QByteArray& state);
+    // Rearranges the panels into `layoutState` (the saveLayoutState() format) WITHOUT rebuilding the
+    // ones it keeps: each area of the new tree is taken from the current tree when one hosts the
+    // same editor type (so that editor's session state -- zoom, scroll, selection -- survives),
+    // and created otherwise; areas the new tree has no place for close. Validation runs before any
+    // widget moves, so an invalid state changes nothing.
+    [[nodiscard]] WorkspaceLayoutRestoreResult applyArrangement(const QByteArray& layoutState);
     void persistLayout(QSettings& settings, const QString& key) const;
     [[nodiscard]] WorkspaceLayoutRestoreResult restorePersistedLayout(QSettings& settings,
                                                                       const QString& key);
@@ -93,9 +102,13 @@ class WorkspaceHost final : public QFrame {
     void activeAreaChanged(EditorArea* area);
     void areaCountChanged(int count);
     void maximizeStateChanged(bool maximized);
+    // The arrangement changed: a split, close, divider drag, editor swap or a restored layout.
+    // Emitted for artist edits and for programmatic changes alike; the preset picker compares.
+    void layoutChanged();
 
   private:
     EditorArea* createArea(std::string_view initialEditorId = {}, QString areaId = {});
+    EditorArea* spawnBottomArea(std::string_view editorId, double fraction);
     QSplitter* createSplitter(Qt::Orientation orientation) const;
     void replaceRoot(QWidget* newRoot);
     void updateAreaControls();
@@ -109,7 +122,8 @@ class WorkspaceHost final : public QFrame {
                            NativeSurfaceRetirementGate::Finish finish);
     [[nodiscard]] std::vector<EditorNativeSurface*> collectNativeSurfaces() const;
     void onWorkspaceMutationFinished(const NativeSurfaceRetirementGate::Result& result);
-    [[nodiscard]] WorkspaceLayoutRestoreResult restoreLayoutStateNow(const QByteArray& state);
+    [[nodiscard]] WorkspaceLayoutRestoreResult restoreLayoutStateNow(const QByteArray& state,
+                                                                     bool reuseAreas = false);
 
     const EditorRegistry& editorRegistry_;
     QVBoxLayout* rootLayout_ = nullptr;

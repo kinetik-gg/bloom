@@ -7,6 +7,7 @@
 
 #include <bloom/document/animation.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>

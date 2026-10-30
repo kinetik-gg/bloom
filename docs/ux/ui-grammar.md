@@ -169,70 +169,125 @@ ruler, lanes, graph editor, work area and navigator. Other surfaces compose kit 
 
 ## Export panel
 
-The Export panel (`exportEditor`, editor id `bloom.export`) is one scrolling list of collapsible job
-rows (`exportJobList`). There is no detail pane, no splitter, no run strip and no table: a job's
-settings sit under the job, so selection is never hidden state. The header (`exportHeader`) has
-**Add composition** (`exportAddCompositionButton`, Secondary, shown once the list has a job),
-**Remove finished** (Secondary, shown only when something finished), **Stop All** (Danger, shown only
-while something runs) and **Start All** (`exportStartAllButton`). Start All is the only Primary of
-the panel and exists only while a job is ready, so a list with nothing ready has no Primary; the
-empty state's own Primary is **Add composition** (`exportAddActiveButton`) over "Nothing to render
-yet." and how else to add one. A note (`exportPlatformNote`) says where export cannot run, and
-`exportStartNote` says what a Start All started and what waits for the artist's OK.
+The Export panel (`exportEditor`, editor id `bloom.export`) is the After Effects Render Queue in
+Bloom's components. The panel header (`exportHeader`) holds the editor picker and **Add
+composition** (`exportAddCompositionButton`, Secondary, shown once the list has a job); on the right
+**Stop All** (`exportStopAllButton`, Danger, shown only while something renders) and **Start All**
+(`exportStartAllButton`), then the maximize button. Start All is the only Primary of the panel and
+is Primary and enabled only while a checked job is ready; otherwise it is a disabled Secondary with
+its reason. The empty state's own Primary is **Add composition** (`exportAddActiveButton`) under
+"Nothing to render yet." and "Or drag compositions here from Assets."
 
-A job row (`exportJobRow`) is a `kit::KRow` header on the Assets row recipe (Size::ListRow, hover,
-selection ring): caret, label colour chip, the **Include in Start All** switch, name (edited in
-place with `kit::KInlineEdit`, by double click or F2), composition, range chip, status, a fixed
-`KProgressBar` with the frame count and time left while it runs, **one job button** and the
-overflow menu. The job button is Secondary and shows the one verb that fits the state: Start,
-Pause, Resume, Stop or Retry; the rest (and Duplicate, Move, Remove, Copy as command) are in the
-menu with their reasons as tooltips. Below about 880 px the header folds onto two lines. The body
-holds the **Render** group (`exportRenderSection`), one output row each (`exportOutputRow`), **Add
-output** (Secondary, with a format menu) and, only once the job has run, **Result** and a folded
-**Log** (`exportResults`). Every row inside is a `KPropertyRow`, so labels and fields line up on
-the Properties label column across the Render group and every output.
+**Current Render** (`exportCurrentRender`) is a strip on the Surface fill above the list, folded by
+default (a per-user setting): caret, the UiSmallStrong title and one Muted line, "Rendering SC020 ·
+frame 404 of 2156 · 0:28 elapsed · about 2 min left" or "Idle" (with the platform's reason where
+export cannot run). Opened, it adds a `KProgressBar` no wider than `Size::DialogWideWidth`.
 
-An output row has its own header (caret, switch, format, where it saves, state, menu) over a body
-with **Format**, **Save to** (a `KPathField` with browse inside it and a small Secondary **?**
-for the name tokens), **If a file is there**, a folded **Quality** group with only the settings of
-the chosen format (Colour space, Display and View are `KDropdown`s of what the project offers)
-and **After render**. The question "A file called X is already in Y." is an inline row at the top
-of the output with **Replace it** and **Choose another name** (both Secondary), and the job opens
-itself when it asks; Start All never opens a second dialog.
+The render list (`exportRenderList`) is the Assets row system: a `QTreeWidget` with real column
+headers, rows of `Size::AssetRow`, one `Size::AssetIndent` per level (the caret column), text one
+header padding in from its cell, and the row background painted across the viewport. A job and its
+lines share one band and the bands alternate, so each job reads as a block. Columns, sized to their
+content: **Render** (the row's caret, then a `KCheckBox` centred in its cell: include in Start All),
+**#**, **Composition** (Foreground), **Status**, **Started**, **Render Time** (Muted), then an
+untitled cell that takes the slack and holds the row's ⋯ button (`exportJobMenuButton`), so no
+column stretches across a wide panel. Below the panel's width for them, Started and then Render
+Time hide, and Composition and Status narrow. Status words are plain: Queued, Needs output, Needs
+attention, Waiting for your OK, Getting ready, Rendering 25%, Paused while you work in the Viewer,
+Checking the file, Done, Done, with a note, Failed, Stopped. Every status is Muted ink; only Failed
+uses Error. While a job runs, a thin `KProgressBar` sits after its words in the Status cell. There
+is no label colour and no switch. A job row drags to a new place (an Accent line shows where), and
+compositions dropped from Assets become jobs at that line, as one undo entry.
 
-Status words are plain (Ready, Needs a location, Needs attention, Waiting for your OK, Up next,
-Getting ready, Rendering 32%, Paused while you work in the Viewer, Checking the file, Done, Done,
-with a note, Failed, Stopped). Every status is Muted ink; only Failed uses Error, and a finished
-job or a note gets a check or info glyph in Muted ink, never green or amber. A reason a control
-cannot run is a visible Muted line in the job or output it concerns; the tooltip repeats it.
-Failure lines never carry stage, code or facet numbers: the raw text is behind **Show details** and
-**Copy details**.
+An open job shows one line per setting, each a spanned child row with its own caret:
+
+- `Render Settings:` (`exportRenderSettingsLine`): ▾ (`exportRangePicks`: Work area, Whole
+  composition, Current frame) and the range as a `KButton::Variant::Link`
+  (`exportRenderSettingsLink`), which opens **Render Settings**.
+- `Output Module:` (`exportOutputModuleLine`), one per output: ▾ (`exportPresetPicks`: the formats,
+  video first, then image sequences), the preset as a Link (`exportOutputModuleLink`) that opens
+  **Output Module**, **+** and **−** (`exportAddOutputButton`, `exportRemoveOutputButton`; − is
+  disabled with its reason on the last output), and `Output To:` with ▾ (`exportDestinationPicks`:
+  Default name and recent folders) and the resolved destination as a Link (`exportOutputToLink`)
+  that opens `kit::chooseFile` in Save mode. On a narrow panel Output To folds onto a second row
+  under its own right-aligned label.
+
+The line labels are right-aligned in one shared column, so every value starts at one x; the
+module links share one width, so +, − and Output To line up across outputs. A line's caret opens
+one Muted summary (`exportSummaryLine`) under its values: the frames and timecode, the first and
+last file, the estimated size and free space, and what blocks it. A Link is plate-less Accent text,
+AccentHover and underlined under the pointer, Muted when disabled, with the focus border only on
+keyboard focus; the ▾ quick picks are plate-less carets.
+
+**Render Settings** (`exportRenderSettingsDialog`) and **Output Module**
+(`exportOutputModuleDialog`) are `KDialog`s of `Width::Wide` built from `KSection` groups holding
+two `KForm` columns side by side, as After Effects groups them; fields keep their content width.
+Render Settings has one group, `Composition “SC020”`: Range (Work area, Whole composition, Custom,
+One frame) on the left; Start, End (frame `KValueField`s with their timecode for Custom and One
+frame, readouts otherwise) and Duration on the right. Output Module has the preset's own group
+(`“ProRes 422 HQ”`: Format, If a file is there | Post-render, Cached frames), **Quality** (Profile,
+Compression, Look, Audio | Color space, or Display and View; only what applies to the format) and,
+for image sequences, **Numbering** (Start number or Use the frame numbers | Digits). OK writes
+every change as one undoable edit; Cancel writes nothing.
+
+When an output's file exists under Ask first, the job reads **Waiting for your OK**, and Start
+(in the ⋯ menu) or Start All asks once with `kit::confirm` (`exportReplaceConfirm`): "Replace
+SC020.mov?" with Replace (Danger), Choose another name and Cancel (the default). The ⋯ menu holds
+the verbs that fit the state (Start; Pause and Stop; Resume and Stop; Stop; Render again),
+**Details…**, Duplicate, Remove, Move up, Move down, Copy as bloom-cli command and Copy as Python.
+**Details…** (`exportJobDetailsDialog`) holds the result sentence, the plain verification lines, a
+Show in folder per saved output and the log, with **Copy details** for bug reports; raw codes and
+the host's own wording appear only in what Copy details copies.
 
 ## Status bar, context bar and tools
 
 The existing native window frame and application menu bar remain unchanged. No branding,
 workspace tabs or custom title bar are part of this grammar revision.
 
-`WindowStatusBar` composes a single `Control`-height `UiSmall` row: version, colour state,
-readiness, dropped frames when measured, cache when populated, and transient/persistent messages.
-The cache cell combines RAM-preview frames with operation-cache hits, misses, retained bytes and
-effective budgets; its tooltip names those two cache accounts when the compact cell is dense, and
-states the rule the budgets came from: Bloom reserves `max(8 GiB, 40%)` of memory for the rest of
-the machine and its default caches never exceed half of physical memory. The tooltip explains where
-a number came from; it never becomes a second place to read the numbers themselves.
-Colour state is tinted text with no filled badge. It remains visible on every central page,
-and reports unavailable colour state when no preview controller exists. Readiness and cache
-use muted ink; a colour-state failure remains explicit. `UiSmall` preserves mixed case with
-natural tracking. `KSurface` owns neutral surface backgrounds.
+`WindowStatusBar` is one `Control`-height row of labelled segments, left to right, separated by
+`Border` hairlines (`StatusSeparatorHeight`) and `Spacing::M` gaps. Every value has a short visible
+label in the UI font (`UiSmall`, Muted ink) and the value itself in the mono face (`TypeRole::Value`,
+Geist Mono) in a cell whose minimum width is that of its widest text, so a changing number never
+moves its neighbours. No value appears without its label, and no bare number. Plain words only: the
+render path reads GPU or CPU, never "GPU-prepared / CPU-painted", and caches are never "Ops". The
+segments:
+
+- **Viewer**: Render (GPU or CPU, tinted Ok, Warn or Error by the colour state), Exposure, Channel,
+  Dropped (a dash outside a playback run), and Decode while the composition reads video. The full
+  colour-state and readiness sentences ("Qualified · Bloom Neutral", "Shown EV 0 · RGBA · Current")
+  are the tooltips. A previous display shows Muted values.
+- **Activity**: the transient or persistent notice, else RAM-preview progress (a `KProgressBar` and
+  "Caching frames for RAM preview · 12 of 386"), else a preview that is rendering, failed,
+  unsupported or cancelled, else the Faint placeholder "Idle". The compile-failure Details button
+  is at the end of this segment. It takes the free width and elides.
+- **Pixel** (`windowStatusBarProbe`): the Viewer's probe readout; shown only while it has one.
+- **RAM**: used/budget of the preview and operation caches together ("2.5/7.7 GB") and Cache, the
+  preview cache's frame count ("385 f"). The tooltip keeps the budget explanation (Bloom reserves
+  `max(8 GiB, 40%)` of memory for the rest of the machine; default caches never exceed half of
+  physical memory) and the hit and miss counters of each cache; it explains where a number came
+  from and never becomes a second place to read the numbers themselves.
+- **Disk cache**: "12% hit · 536.3 MB", "off", or a dash before the first lookup; hits, misses and
+  entries in the tooltip.
+- **MCP**: a small text segment, "MCP :6767" in the mono face and Muted ink, only while the server
+  runs ("MCP failed" in Error ink after a failure); there is no button. Clicking it, or Return or
+  Space with it focused, opens the MCP Server panel. Nothing shows while the server is stopped.
+- **Version**: Faint, at the far right.
+
+A segment that has nothing to report keeps its place with a dash so the layout does not jump. In a
+narrow window whole segments collapse by priority, never their labels: Version, MCP, Disk cache,
+Pixel, then RAM; Activity keeps `StatusActivityMinWidth`. `KSurface` owns neutral surface
+backgrounds.
 
 **The context bar** ([ADR 0031](../decisions/0031-contextual-tool-bar.md)) is the second fixed
 surface: one `ContextBarHeight` (32) row directly under the menu bar, a `Control` row inside
-`ChromePadding`, on `Surface` with one `Border` hairline below it. It is a row of the window's
+`ChromePadding` vertically and one `Spacing::Gutter` at its left and right edges (the outer margin
+the workspace panels use, so the bar's content lines up with them), on `Surface` with one `Border`
+hairline below it. It is a row of the window's
 central column, not a `QToolBar`, so it cannot be docked, floated or moved and the native macOS
 menu bar is untouched; Window > Context Bar hides it, and that choice persists with the workspace
 UI state (`workspace/context-bar-visible`), never in the project. While the read-only placeholder
 is showing, the bar is disabled. It is a kit priority row (`EditorArea::buildChromeRow`) in three
-regions:
+regions: tools and their options on the left, the selection actions in the centre, and the
+Workspace field on the right:
 
 - **Tools**, on the left: eleven tools in eight `KIconToggle` slots in three groups separated by a
   `ChromeGroupGap`: navigation (Select V, Hand H, Zoom Z), creation (the shape slot, Line, Pen P,
@@ -251,15 +306,27 @@ regions:
   new shapes and new text start with, which is session state in the `ToolController` and authors
   nothing until something is drawn. Hand, Zoom and the eyedropper have no options. There is no
   transform-gizmo mode and no snapping in the Viewer, so Select has no slot for them.
-- **Selection actions**, against the right edge: Align (left edges, horizontal centres, right
+- **Selection actions**, in the centre of the row: Align (left edges, horizontal centres, right
   edges; top edges, vertical middles, bottom edges), Distribute (horizontally, vertically) and
-  an "Align To" dropdown (Composition, Selection, Key Object). Key Object is the primary selected
+  an "Align To" dropdown (Composition, Selection, Key Object). Align To starts on Composition
+  (`ToolController`'s session default). Key Object is the primary selected
   layer, named in the dropdown ("Key Object (Title)") and its tooltip. These are the same actions as
   Composition > Align.
 
+- **Workspace**, against the right edge: a `KDropdown` styled like Align To (`DropdownWidthWorkspace`)
+  with a "Workspace" label. Its list is the built-in presets (Default, Node, Export, Animation), a
+  separator, the artist's saved presets, a separator, then "Save current layout as…" (a
+  `kit::promptText` for the name) and, while a saved preset is active, "Update ‘name’" and
+  "Delete ‘name’…" (a `kit::confirm`). The field reads the active preset, "Node (edited)" after the
+  arrangement changed by hand, or "Custom".
+  It is the last group to fold into the overflow menu, where it is a Workspace submenu.
+
 Slots are stable within a tool: an option or action that cannot apply stays where it is, disabled,
-with the reason in its tooltip (no anchors selected, a line has no fill, fewer than three layers to
-distribute, one layer aligned to its own selection, a Viewer frame that is not yet current). A
+with the reason in its tooltip (a line has no fill, fewer than three layers to
+distribute, one layer aligned to its own selection, a Viewer frame that is not yet current). The one
+exception (owner, 2026-10-30) is the handle-mode strip: with no path or mask selected, or with a
+tool that does not edit points, it is hidden rather than disabled; with a path selected but no
+anchors it is shown disabled. A
 narrow window collapses groups right to left into one overflow button (`Overflow`, a double caret)
 at the end of the tool options: Distribute first, then Align To, then Align, then the fill/stroke
 and text options, then the handle modes. The menu offers each collapsed group whole: the action
@@ -328,7 +395,8 @@ a key at the playhead), and follows the Escape-confirms rule above.
   leaves the anchor Free.
 - The anchor mode strip -- a kit segmented control with Corner, Mirrored, Aligned, Free and Auto --
   is the Select and Pen tools' option in the context bar (`contextBarAnchorMode`), and acts on the
-  anchors selected in the Viewer that last had focus; with none selected it stays, disabled. It shows the selection's mode, or no option for a mixed selection,
+  anchors selected in the Viewer that last had focus; it is hidden while no path or mask is selected
+  and disabled while none of its anchors is. It shows the selection's mode, or no option for a mixed selection,
   and choosing one converts every selected anchor. A curved mode on a Corner pulls handles sized
   from its neighbours; Mirrored and Aligned straighten existing handles onto their common tangent.
 - Right-click on an anchor or the selection offers the same five modes, Delete Point(s) and, for a
@@ -579,16 +647,17 @@ inside its `ValueFieldLabelColumn` cap. `KListSurface` paints the common flat em
 
 ## Layout and specialized metrics
 
-The default is five editors in two rows. The full-width top row is Assets, Viewer, Nodes,
-Properties at 16% / 31% / 32% / 19%; the full-width bottom row is Timeline. The rows are 68% / 32%
-of the content height. These weights are authored in `WorkspaceHost` as per-mille values and are
-applied after the complete split tree receives window geometry, so early minimum-size clamping
-cannot change the intended proportions.
+The default is the Default workspace preset: Assets, Viewer and Properties side by side, with the
+Timeline under Assets and Viewer. The workspace splits 80% / 20% (left region, Properties), the left
+region 66% / 34% (Assets/Viewer row, Timeline), and the row 25% / 75%. These weights are authored in
+`WorkspacePresets`, kept in the host's own splitters, and applied after the complete split tree
+receives window geometry, so early minimum-size clamping cannot change the intended proportions.
 
 | Layout token | Value |
 | --- | --- |
-| `WorkspaceHost` top-row weights | 160 / 310 / 320 / 190 |
-| `WorkspaceHost` row weights | 680 / 320 |
+| Default preset column weights | 800 / 200 |
+| Default preset left-region weights | 660 / 340 |
+| Default preset top-row weights | 250 / 750 |
 | `TimelineEditor` layer-table share | 0.37 of the Timeline width |
 | `Layout::WorkspaceVersion` | 2 |
 
@@ -605,6 +674,9 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `TimelineLeftColumn` | 576 | Four 24px toggles + name + two 100px dropdown columns |
 | `GizmoHandle / GizmoRotateZone` | 8 / 16 | Viewer transform handles / outside-corner rotation radius |
 | `ViewerWorkPadding` | 48 | Padded image work area |
+| `StatusSeparatorHeight` | 12 | The hairline between two status bar segments. |
+| `StatusActivityMinWidth` | 160 | The least room the status bar's Activity text keeps before whole segments collapse. |
+| `DropdownWidthWorkspace` | 160 | The context bar's Workspace field. |
 | `ContextBarHeight` | 32 | The context bar under the menu bar: `Control` + 2 × `ChromePadding` |
 | `ViewerChannelWidth` | 80 | Channel dropdown |
 | `ViewerModeWidth` | 108 | RAM Preview command floor (widened to its widest label) |
@@ -952,7 +1024,7 @@ colour space by its plain name, then the alpha, then the colour note once; a not
 or an unshowable one turns that part Warn, with the detail in its tooltip
 (`Colour: sRGB · Straight alpha · Colour tags missing — assumed Rec.709 with the sRGB transfer.
 Change in Assets → Input Colour`). Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene`
-is **Linear Rec.709**, `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space
+is **Linear Rec.709 (sRGB)** (the working-space label, `host::workingColorSpaceLabel`), `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space
 **Rec.709 video**); another config's spaces show the names the config gives them. A space Auto read
 from the file's own tags adds `(from the file)` in the tooltip; an assumed one is explained by the
 note alone. Several items: `3 items selected` and their kinds (`2 sequences · 1 composition`). None:

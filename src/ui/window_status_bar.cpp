@@ -1,15 +1,20 @@
 #include <bloom/ui/mcp_server_text.hpp>
 
+#include "window_status_bar_segments.hpp"
+
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/progress_bar.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/popup_window.hpp>
 #include <bloom/ui/compile_failure.hpp>
 #include <bloom/ui/mcp_server_adapter.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
 
+#include <bloom/host/project_color_choice.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/operation_cache.hpp>
@@ -36,185 +41,9 @@ namespace {
 // a stale notice never sits beside live state and gets read as current.
 constexpr int kTransientMessageMs = 5'000;
 
-// Mebibytes, one decimal place: the cache budget is set in whole MiB, so a finer reading would
-// imply a precision the setting itself does not have.
-// Bytes with the unit that keeps the number readable: MB below one gibibyte, GB from there on,
-// one decimal either way, so a machine-sized budget reads "45.3 GB" rather than "46370.2 MB".
-[[nodiscard]] QString formatBytes(const std::size_t bytes) {
-    constexpr double kMebibyte = 1024.0 * 1024.0;
-    constexpr double kGibibyte = kMebibyte * 1024.0;
-    const auto value = static_cast<double>(bytes);
-    return value >= kGibibyte ? WindowStatusBar::tr("%1 GB").arg(value / kGibibyte, 0, 'f', 1)
-                              : WindowStatusBar::tr("%1 MB").arg(value / kMebibyte, 0, 'f', 1);
-}
-
-class StatusColorChip final : public kit::KLabel {
-  public:
-    explicit StatusColorChip(QWidget* parent) : KLabel(QString{}, parent, kit::TypeRole::UiSmall) {
-        setObjectName("windowStatusBarColorChip");
-    }
-    void setState(const PreviewColorState& state) {
-        setText(state.text);
-        setAccessibleName(state.text);
-        setToolTip(state.text);
-        setTone(state.colorToken);
-    }
-};
-
-kit::KLabel* makeCell(const QString& objectName, const kit::TypeRole role, const kit::Color ink,
-                      QWidget* parent) {
-    auto* label = new kit::KLabel(parent);
-    label->setObjectName(objectName);
-    label->setTypeRole(role);
-    label->setTone(ink);
-    return label;
-}
+using statusbar::formatBytes;
 
 } // namespace
-
-PreviewColorState previewColorState(const CompositionPreviewState& preview) {
-    if (preview.activity == PreviewActivity::Failed &&
-        (!preview.viewerDisplayState || !preview.frame)) {
-        return {preview.message.isEmpty() ? WindowStatusBar::tr("Color state unavailable")
-                                          : preview.message,
-                kit::Color::Error};
-    }
-    const auto bufferView =
-        preview.frame != nullptr ? preview.frame->displayBufferView() : std::nullopt;
-    if (preview.frame != nullptr) {
-        const auto provider = preview.frame->provenance().provider;
-        // The resident arm keeps no CPU display buffer by construction (its pixels never crossed
-        // the host boundary), so `bufferView` can never classify it and the reference fallback
-        // below would falsely report the CPU "Reference (unqualified)" state. Read the immutable
-        // provenance instead. A valid admission lease or an exact known owner-applied descriptor
-        // identifies GPU pixels. Lease invalidation alone does not erase that applied metadata;
-        // uncorrelated/blank displays remain unavailable and can never become CPU reference.
-        if (provider == runtime::PreviewDisplayProvider::GpuResident) {
-            const auto& resident = preview.frame->residentFrame();
-            if (preview.ownerAppliedDisplay ||
-                (resident != nullptr && resident->isDisplayValid())) {
-                return {WindowStatusBar::tr("GPU resident"), kit::Color::Ok};
-            }
-            return {WindowStatusBar::tr("Color state unavailable"), kit::Color::Warn};
-        }
-        // GPU provenance is reported honestly on the existing color chip: a display-only frame the
-        // fixed GPU Neutral operation produced says so, and the qualification report it carries is
-        // PreviewOnly (RGB tolerance), so this never claims reference parity. CPU reference and
-        // qualified-CPU frames keep their exact existing text.
-        if (provider == runtime::PreviewDisplayProvider::GpuNeutral) {
-            return {WindowStatusBar::tr("GPU display"), kit::Color::Ok};
-        }
-        if (provider == runtime::PreviewDisplayProvider::GpuPreparedPacked) {
-            return {WindowStatusBar::tr("GPU-prepared / CPU-painted"), kit::Color::Ok};
-        }
-    }
-    if (bufferView.has_value() && bufferView->isOcioQualified) {
-        return {WindowStatusBar::tr("Qualified · Bloom Neutral"), kit::Color::Ok};
-    }
-    return {preview.frame ? WindowStatusBar::tr("Reference (unqualified)")
-                          : WindowStatusBar::tr("No displayed frame"),
-            kit::Color::Warn};
-}
-
-QString previewActivityText(const CompositionPreviewState& preview) {
-    if (preview.viewerDisplayState && !preview.viewerStatusText.isEmpty())
-        return preview.viewerStatusText;
-    if (preview.viewerDisplayState && !preview.message.isEmpty())
-        return preview.message;
-    if (!preview.message.isEmpty() && (preview.activity == PreviewActivity::Failed ||
-                                       preview.freshness != FrameFreshness::Current))
-        return preview.message;
-    const bool stale = preview.freshness == FrameFreshness::Stale;
-    switch (preview.activity) {
-    case PreviewActivity::Rendering:
-        return stale ? WindowStatusBar::tr("Rendering current frame · Previous frame shown")
-                     : WindowStatusBar::tr("Rendering current frame");
-    case PreviewActivity::Ready:
-        if (!preview.diagnostics.empty() && !preview.diagnostics.front().summary.empty())
-            return QString::fromStdString(preview.diagnostics.front().summary);
-        return WindowStatusBar::tr("Current frame ready");
-    case PreviewActivity::Unsupported:
-        return stale ? WindowStatusBar::tr("Preview unsupported · Previous frame shown")
-                     : WindowStatusBar::tr("Preview unsupported");
-    case PreviewActivity::Cancelled:
-        return stale ? WindowStatusBar::tr("Preview cancelled · Previous frame shown")
-                     : WindowStatusBar::tr("Preview cancelled");
-    case PreviewActivity::Failed:
-        return stale ? WindowStatusBar::tr("Preview failed · Previous frame shown")
-                     : WindowStatusBar::tr("Preview failed");
-    }
-    return WindowStatusBar::tr("Preview unavailable");
-}
-
-kit::Color previewActivityColor(const CompositionPreviewState& preview) {
-    switch (preview.activity) {
-    case PreviewActivity::Rendering:
-        return kit::Color::Accent;
-    case PreviewActivity::Ready:
-        return kit::Color::Ok;
-    case PreviewActivity::Unsupported:
-        return kit::Color::Warn;
-    case PreviewActivity::Cancelled:
-        return kit::Color::Muted;
-    case PreviewActivity::Failed:
-        return kit::Color::Error;
-    }
-    return kit::Color::Muted;
-}
-
-QString droppedFrameText(const CompositionPreviewController& previewController) {
-    if (!previewController.isCountingDroppedFrames()) {
-        return {};
-    }
-    return WindowStatusBar::tr("%1 dropped").arg(previewController.droppedFrameCount());
-}
-
-QString previewCacheText(const CompositionPreviewController& previewController) {
-    const auto& progress = previewController.ramPreviewProgress();
-    if (progress.has_value()) {
-        return WindowStatusBar::tr("Caching %1/%2")
-            .arg(progress->cachedFrames)
-            .arg(progress->totalFrames);
-    }
-    // No run is caching. What is left to report is what the cache actually holds -- which is also
-    // the only honest account of BACKGROUND cache fill available: BackgroundPreviewController
-    // publishes no progress signal, so a "filling in the background" claim would be invented.
-    const auto& cache = previewController.frameCache();
-    if (cache.size() == 0) {
-        return {};
-    }
-    return WindowStatusBar::tr("Cache %1 frames · %2 / %3")
-        .arg(cache.size())
-        .arg(formatBytes(cache.residentBytes()), formatBytes(cache.byteBudget()));
-}
-
-QString operationCacheText(const runtime::OperationCache& operationCache) {
-    const auto statistics = operationCache.statistics();
-    if (statistics.hits == 0 && statistics.misses == 0 && operationCache.retainedBytes() == 0)
-        return {};
-    return WindowStatusBar::tr("Ops %1 hits · %2 misses · %3 / %4")
-        .arg(statistics.hits)
-        .arg(statistics.misses)
-        .arg(formatBytes(operationCache.retainedBytes()), formatBytes(operationCache.byteBudget()));
-}
-
-// CACHE-2 (docs/architecture/media-io.md "Disk cache"): kept as its own free function, separate
-// hunk and separate cell from previewCacheText() above -- the RAM preview cell reports the
-// in-memory frame cache, this one the on-disk decoded-frame store, and the two are independent
-// budgets an artist can reason about separately.
-QString mediaDiskCacheStatusText(const media::cache::MediaDiskCacheStatistics& stats,
-                                 const bool enabled) {
-    if (!enabled) {
-        return WindowStatusBar::tr("Disk cache off");
-    }
-    const auto total = stats.hits + stats.misses;
-    if (total == 0 && stats.entryCount == 0) {
-        return {};
-    }
-    return WindowStatusBar::tr("Disk %1% hit · %2")
-        .arg(static_cast<int>(std::lround(stats.hitRate() * 100.0)))
-        .arg(formatBytes(stats.storedBytes));
-}
 
 WindowStatusBar::WindowStatusBar(CompositionSession& session,
                                  CompositionPreviewController* const previewController,
@@ -228,64 +57,7 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     setAccessibleName(tr("Application status"));
     setFixedHeight(kit::px(kit::Size::Control));
 
-    auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(kit::px(kit::Spacing::S), 0, kit::px(kit::Spacing::S), 0);
-    layout->setSpacing(kit::px(kit::Spacing::M));
-
-    auto* chip = new StatusColorChip(this);
-    colorChip_ = chip;
-    previewState_ = makeCell(QStringLiteral("windowStatusBarPreviewState"), kit::TypeRole::UiSmall,
-                             kit::Color::Muted, this);
-    droppedFrames_ = makeCell(QStringLiteral("windowStatusBarDroppedFrames"),
-                              kit::TypeRole::UiSmall, kit::Color::Warn, this);
-    video_ = makeCell(QStringLiteral("windowStatusBarVideo"), kit::TypeRole::UiSmall,
-                      kit::Color::Muted, this);
-    video_->setAccessibleName(tr("Video decode"));
-    video_->hide();
-    cache_ = makeCell(QStringLiteral("windowStatusBarCache"), kit::TypeRole::UiSmall,
-                      kit::Color::Muted, this);
-    // CACHE-2: the on-disk decoded-frame cache's own cell, kept as its own makeCell() call rather
-    // than folded into `cache_` above so the two budgets stay independently readable.
-    mediaDiskCacheCell_ = makeCell(QStringLiteral("windowStatusBarMediaDiskCache"),
-                                   kit::TypeRole::UiSmall, kit::Color::Muted, this);
-    probe_ = makeCell(QStringLiteral("windowStatusBarProbe"), kit::TypeRole::UiSmall,
-                      kit::Color::Muted, this);
-    probe_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    probe_->installEventFilter(this);
-    probe_->hide();
-    message_ = makeCell(QStringLiteral("windowStatusBarMessage"), kit::TypeRole::UiSmall,
-                        kit::Color::Foreground, this);
-    message_->setAccessibleName(tr("Status message"));
-    version_ = makeCell(QStringLiteral("windowStatusBarVersion"), kit::TypeRole::UiSmall,
-                        kit::Color::Faint, this);
-    version_->setAccessibleName(tr("Bloom version"));
-    version_->setText(QCoreApplication::applicationVersion());
-
-    layout->addWidget(version_);
-    layout->addWidget(colorChip_);
-    layout->addWidget(previewState_);
-    compileDetails_ = new kit::KButton(tr("Details"), this);
-    compileDetails_->setObjectName(QStringLiteral("windowStatusBarCompileDetails"));
-    compileDetails_->setVariant(kit::KButton::Variant::Secondary);
-    compileDetails_->setControlSize(kit::KButton::ControlSize::Compact);
-    compileDetails_->setAccessibleName(tr("Why the composition cannot render"));
-    compileDetails_->hide();
-    connect(compileDetails_, &QAbstractButton::clicked, this, [this] { openCompileFailure(); });
-    layout->addWidget(compileDetails_);
-    layout->addWidget(droppedFrames_);
-    layout->addWidget(video_);
-    layout->addWidget(cache_);
-    // CACHE-2: placed right beside the RAM preview cache cell it complements.
-    layout->addWidget(mediaDiskCacheCell_);
-    layout->addWidget(probe_, 1);
-    layout->addWidget(message_, 1);
-    mcpIndicator_ = new kit::KButton(this);
-    mcpIndicator_->setObjectName(QStringLiteral("windowStatusBarMcp"));
-    mcpIndicator_->setVariant(kit::KButton::Variant::Secondary);
-    mcpIndicator_->setControlSize(kit::KButton::ControlSize::Compact);
-    mcpIndicator_->setAccessibleName(tr("MCP server"));
-    mcpIndicator_->hide();
-    layout->addWidget(mcpIndicator_);
+    buildSegments();
 
     transientTimer_ = new QTimer(this);
     transientTimer_->setSingleShot(true);
@@ -313,7 +85,7 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     connect(&session_, &CompositionSession::commandRejected, this,
             [this](const QString& reason) { showTransientMessage(reason); });
     // A blank project (no active composition) has no colour or preview truth to report, so the
-    // chip/cells switch to a neutral status the moment a composition is created or removed.
+    // cells switch to a neutral status the moment a composition is created or removed.
     connect(&session_, &CompositionSession::compositionChanged, this,
             &WindowStatusBar::refreshPreviewCells);
 
@@ -336,12 +108,211 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
         connect(&previewController_->frameCache(), &PreviewFrameCache::byteBudgetChanged, this,
                 &WindowStatusBar::refreshPreviewCells);
     }
-    if (operationCache_ != nullptr) {
-        cache_->setAccessibleName(tr("Cache statistics"));
-    }
     refreshMemoryToolTip();
     refreshPreviewCells();
     refreshMessage();
+    refreshMcpIndicator();
+}
+
+// The bar is a row of labelled segments: a short Muted label in the UI font, then its value in the
+// mono face at a fixed width, so a changing number never moves its neighbours. Detailed counters
+// live in each segment's tooltip, never inline.
+void WindowStatusBar::buildSegments() {
+    using statusbar::ClickableValue;
+    using statusbar::Segment;
+    using statusbar::ValueLabel;
+    auto* layout = new QHBoxLayout(this);
+    layout->setContentsMargins(kit::px(kit::Spacing::S), 0, kit::px(kit::Spacing::S), 0);
+    layout->setSpacing(kit::px(kit::Spacing::M));
+    const auto separator = [this, layout] {
+        auto* line = new kit::KSurface(this, kit::Color::Border);
+        line->setObjectName(QStringLiteral("windowStatusBarSeparator"));
+        line->setFixedSize(kit::px(kit::Size::Hairline), kit::px(kit::Size::StatusSeparatorHeight));
+        layout->addWidget(line);
+        separators_.push_back(line);
+    };
+
+    // Viewer: how the shown frame was produced and presented.
+    viewerSegment_ = new Segment(QStringLiteral("windowStatusBarViewer"), this);
+    auto* viewerTitle = viewerSegment_->addLabel(tr("Viewer"));
+    viewerTitle->setTypeRole(kit::TypeRole::UiSmallStrong);
+    viewerSegment_->addGap();
+    viewerSegment_->addLabel(tr("Render"));
+    renderPath_ = new ValueLabel(QStringLiteral("windowStatusBarColorChip"), QStringLiteral("GPU"),
+                                 kit::Color::Muted, viewerSegment_);
+    viewerSegment_->add(renderPath_);
+    viewerSegment_->addGap();
+    viewerSegment_->addLabel(tr("Exposure"));
+    exposure_ = new ValueLabel(QStringLiteral("windowStatusBarExposure"), QStringLiteral("-00.00"),
+                               kit::Color::Foreground, viewerSegment_);
+    viewerSegment_->add(exposure_);
+    viewerSegment_->addGap();
+    viewerSegment_->addLabel(tr("Channel"));
+    channel_ = new ValueLabel(QStringLiteral("windowStatusBarChannel"), QStringLiteral("RGBA"),
+                              kit::Color::Foreground, viewerSegment_);
+    viewerSegment_->add(channel_);
+    viewerSegment_->addGap();
+    viewerSegment_->addLabel(tr("Dropped"));
+    droppedFrames_ = new ValueLabel(QStringLiteral("windowStatusBarDroppedFrames"),
+                                    QStringLiteral("0000"), kit::Color::Muted, viewerSegment_);
+    viewerSegment_->add(droppedFrames_);
+    // Video decode: only while the composition reads video sources.
+    videoGroup_ = new Segment(QStringLiteral("windowStatusBarVideoGroup"), viewerSegment_);
+    auto* videoGroup = static_cast<Segment*>(videoGroup_);
+    videoGroup->addGap();
+    videoGroup->addLabel(tr("Decode"));
+    video_ = new ValueLabel(QStringLiteral("windowStatusBarVideo"), QString{}, kit::Color::Muted,
+                            videoGroup);
+    video_->setAccessibleName(tr("Video decode"));
+    videoGroup->add(video_);
+    videoGroup_->hide();
+    viewerSegment_->add(videoGroup_);
+    viewerSegment_->setSegmentToolTip(
+        tr("The Viewer's frame: whether the GPU or the CPU produced it, the exposure and channel "
+           "it is shown with, and the frames playback dropped."));
+    layout->addWidget(viewerSegment_);
+    separator();
+
+    // Activity: the current job or progress, or idle. The compile-failure Details button lives here.
+    activitySegment_ = new Segment(QStringLiteral("windowStatusBarActivity"), this);
+    activitySegment_->addLabel(tr("Activity"));
+    activityText_ = new kit::KLabel(QString{}, this, kit::TypeRole::UiSmall);
+    activityText_->setObjectName(QStringLiteral("windowStatusBarMessage"));
+    activityText_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    activityText_->setMinimumWidth(kit::px(kit::Size::StatusActivityMinWidth) / 2);
+    activityText_->setAccessibleName(tr("Status message"));
+    activityProgress_ = new kit::KProgressBar(activitySegment_);
+    activityProgress_->setObjectName(QStringLiteral("windowStatusBarActivityProgress"));
+    activityProgress_->setFixedWidth(kit::px(kit::Size::ViewerResolutionWidth));
+    activityProgress_->hide();
+    compileDetails_ = new kit::KButton(tr("Details"), this);
+    compileDetails_->setObjectName(QStringLiteral("windowStatusBarCompileDetails"));
+    compileDetails_->setVariant(kit::KButton::Variant::Secondary);
+    compileDetails_->setControlSize(kit::KButton::ControlSize::Compact);
+    compileDetails_->setAccessibleName(tr("Why the composition cannot render"));
+    compileDetails_->hide();
+    connect(compileDetails_, &QAbstractButton::clicked, this, [this] { openCompileFailure(); });
+    activitySegment_->add(activityProgress_);
+    activitySegment_->add(activityText_, 1);
+    activitySegment_->add(compileDetails_);
+    layout->addWidget(activitySegment_, 1);
+
+    // Pixel: the Viewer's colour readout under the pointer; empty and hidden until it has one.
+    probeSegment_ = new Segment(QStringLiteral("windowStatusBarPixel"), this);
+    probeSegment_->addLabel(tr("Pixel"));
+    probe_ = new kit::KLabel(QString{}, this, kit::TypeRole::Value);
+    probe_->setObjectName(QStringLiteral("windowStatusBarProbe"));
+    probe_->setTone(kit::Color::Muted);
+    probe_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    probe_->setMinimumWidth(kit::px(kit::Size::ViewerDisplayViewWidth));
+    probe_->installEventFilter(this);
+    probeSegment_->add(probe_);
+    probeSegment_->hide();
+    layout->addWidget(probeSegment_, 2);
+    separator();
+
+    // RAM: what the caches hold, against what they may hold; the frame count of the preview cache.
+    memorySegment_ = new Segment(QStringLiteral("windowStatusBarMemory"), this);
+    memorySegment_->addLabel(tr("RAM"));
+    memory_ = new ValueLabel(QStringLiteral("windowStatusBarCache"),
+                             QStringLiteral("000.0/000.0 GB"), kit::Color::Foreground,
+                             memorySegment_);
+    memory_->setAccessibleName(tr("Cache statistics"));
+    memorySegment_->add(memory_);
+    memorySegment_->addGap();
+    memorySegment_->addLabel(tr("Cache"));
+    memoryFrames_ = new ValueLabel(QStringLiteral("windowStatusBarCacheFrames"),
+                                   QStringLiteral("00000 f"), kit::Color::Foreground,
+                                   memorySegment_);
+    memorySegment_->add(memoryFrames_);
+    layout->addWidget(memorySegment_);
+    separator();
+
+    diskSegment_ = new Segment(QStringLiteral("windowStatusBarDisk"), this);
+    diskSegment_->addLabel(tr("Disk cache"));
+    mediaDiskCacheCell_ = new ValueLabel(QStringLiteral("windowStatusBarMediaDiskCache"),
+                                         QStringLiteral("000% hit · 0000.0 MB"),
+                                         kit::Color::Foreground, diskSegment_);
+    diskSegment_->add(mediaDiskCacheCell_);
+    layout->addWidget(diskSegment_);
+
+    // MCP: text, only while the server runs (or has failed); a click opens the MCP Server panel.
+    mcpSegment_ = new Segment(QStringLiteral("windowStatusBarMcpSegment"), this);
+    mcpIndicator_ = new ClickableValue(QStringLiteral("windowStatusBarMcp"),
+                                       QStringLiteral(":00000"), kit::Color::Muted, mcpSegment_);
+    mcpIndicator_->setAccessibleName(tr("MCP server"));
+    mcpIndicator_->setCursor(Qt::PointingHandCursor);
+    mcpIndicator_->setFocusPolicy(Qt::TabFocus);
+    mcpSegment_->addLabel(tr("MCP"));
+    mcpSegment_->add(mcpIndicator_);
+    mcpSegment_->hide();
+    layout->addSpacing(kit::px(kit::Spacing::S));
+    layout->addWidget(mcpSegment_);
+
+    versionSegment_ = new Segment(QStringLiteral("windowStatusBarVersionSegment"), this);
+    auto* versionLabel = versionSegment_->addLabel(tr("Version"));
+    versionLabel->setTone(kit::Color::Faint);
+    version_ = new ValueLabel(QStringLiteral("windowStatusBarVersion"), QString{},
+                              kit::Color::Faint, versionSegment_);
+    version_->setAccessibleName(tr("Bloom version"));
+    version_->setText(QCoreApplication::applicationVersion());
+    versionSegment_->add(version_);
+    versionSegment_->setSegmentToolTip(tr("The version of Bloom that is running."));
+    layout->addSpacing(kit::px(kit::Spacing::S));
+    layout->addWidget(versionSegment_);
+
+    diskSegment_->setSegmentToolTip(tr("The on-disk cache of decoded frames."));
+    memorySegment_->setSegmentToolTip(tr("The memory the caches hold."));
+}
+
+QSize WindowStatusBar::minimumSizeHint() const {
+    return {0, kit::px(kit::Size::Control)};
+}
+
+void WindowStatusBar::resizeEvent(QResizeEvent* event) {
+    KSurface::resizeEvent(event);
+    applyNarrowLayout();
+}
+
+// Whole segments collapse by priority (never their labels): the version first, then MCP, the disk
+// cache, the pixel readout and last the RAM segment. Activity keeps its minimum width.
+void WindowStatusBar::applyNarrowLayout() {
+    const int gap = kit::px(kit::Spacing::M) + kit::px(kit::Size::Hairline);
+    const int margins = kit::px(kit::Spacing::S) + kit::px(kit::Spacing::S);
+    struct Entry {
+        QWidget* widget;
+        bool wanted;
+    };
+    const std::array<Entry, 5> byPriority{{{versionSegment_, true},
+                                           {mcpSegment_, mcpWanted_},
+                                           {diskSegment_, true},
+                                           {probeSegment_, probeReadout_.valid},
+                                           {memorySegment_, true}}};
+    int needed = margins + viewerSegment_->sizeHint().width() + gap +
+                 kit::px(kit::Size::StatusActivityMinWidth);
+    std::array<int, 5> widths{};
+    for (std::size_t index = 0; index < byPriority.size(); ++index) {
+        if (byPriority[index].wanted) {
+            widths[index] = byPriority[index].widget->sizeHint().width() + gap;
+            needed += widths[index];
+        }
+    }
+    std::array<bool, 5> shown{};
+    for (std::size_t index = 0; index < byPriority.size(); ++index)
+        shown[index] = byPriority[index].wanted;
+    for (std::size_t index = 0; index < byPriority.size() && needed > width(); ++index) {
+        if (!shown[index])
+            continue;
+        shown[index] = false;
+        needed -= widths[index];
+    }
+    for (std::size_t index = 0; index < byPriority.size(); ++index)
+        byPriority[index].widget->setVisible(shown[index]);
+    // A separator stays only between two shown groups: hide the ones next to a collapsed segment.
+    if (separators_.size() >= 3) {
+        separators_[1]->setVisible(shown[4]);
+        separators_[2]->setVisible(shown[4] && shown[2]);
+    }
 }
 
 void WindowStatusBar::observeMemoryBudget() {
@@ -414,7 +385,7 @@ void WindowStatusBar::refreshMemoryToolTip() {
     }
     if (current.isEmpty())
         current = tr("No active caches");
-    auto tooltip = tr("RAM preview and operation-cache statistics.\n"
+    auto tooltip = tr("The RAM the preview and operation caches hold, against their budgets.\n"
                       "Current cache budget: %1\n"
                       "Requested cache total: %2 · Available memory: %3\n%4")
                        .arg(current, formatBytes(state.configuredBytes), available, reason);
@@ -428,12 +399,29 @@ void WindowStatusBar::refreshMemoryToolTip() {
                            .arg(progress->playableFrames);
         }
     }
-    cache_->setToolTip(tooltip);
+    // The detailed counters live here, not in the bar.
+    if (previewController_ != nullptr) {
+        const auto& frames = previewController_->frameCache();
+        tooltip += tr("\n\nPreview cache: %1 frames · %2 of %3")
+                       .arg(frames.size())
+                       .arg(formatBytes(frames.residentBytes()), formatBytes(frames.byteBudget()));
+    }
+    if (operationCache_ != nullptr) {
+        const auto statistics = operationCache_->statistics();
+        tooltip += tr("\nOperation cache: %1 hits · %2 misses · %3 of %4")
+                       .arg(statistics.hits)
+                       .arg(statistics.misses)
+                       .arg(formatBytes(operationCache_->retainedBytes()),
+                            formatBytes(operationCache_->byteBudget()));
+    }
+    memoryToolTip_ = tooltip;
+    memorySegment_->setSegmentToolTip(tooltip);
+    memory_->setToolTip(tooltip);
 }
 
-QString WindowStatusBar::cacheToolTipForTest() const { return cache_->toolTip(); }
+QString WindowStatusBar::cacheToolTipForTest() const { return memoryToolTip_; }
 
-QString WindowStatusBar::videoTextForTest() const { return video_->text(); }
+QString WindowStatusBar::videoTextForTest() const { return videoText_; }
 QString WindowStatusBar::videoToolTipForTest() const { return video_->toolTip(); }
 
 void WindowStatusBar::refreshVideoCell() {
@@ -488,65 +476,174 @@ void WindowStatusBar::refreshVideoCell() {
     }
     if (!note.isEmpty())
         text += tr(" · ") + note;
-    video_->setText(text);
+    videoText_ = text;
+    // The value beside the "Decode" label is the route alone ("software"); the note rides after it.
+    auto value = text;
+    value.remove(0, std::min<qsizetype>(value.size(), tr("Video: ").size()));
+    video_->setText(value);
     video_->setToolTip(lines.join(QLatin1Char('\n')));
     video_->setTone(note.isEmpty() ? kit::Color::Muted : kit::Color::Warn);
-    video_->setVisible(!text.isEmpty());
+    videoGroup_->setVisible(!text.isEmpty());
+}
+
+void WindowStatusBar::setPreviewNotice(const CompositionPreviewState& preview) {
+    previewStateText_ = previewActivityText(preview);
+    previewNotice_.clear();
+    previewNoticeTone_ = kit::Color::Muted;
+    const bool stale = preview.freshness == FrameFreshness::Stale;
+    switch (preview.activity) {
+    case PreviewActivity::Rendering:
+        previewNotice_ = stale ? tr("Rendering frame · previous frame shown") : tr("Rendering frame");
+        previewNoticeTone_ = kit::Color::Accent;
+        break;
+    case PreviewActivity::Failed:
+        previewNotice_ = previewStateText_;
+        previewNoticeTone_ = kit::Color::Error;
+        break;
+    case PreviewActivity::Unsupported:
+        previewNotice_ = previewStateText_;
+        previewNoticeTone_ = kit::Color::Warn;
+        break;
+    case PreviewActivity::Cancelled:
+        previewNotice_ = previewStateText_;
+        break;
+    case PreviewActivity::Ready:
+        break;
+    }
+}
+
+void WindowStatusBar::setViewerCells(const PreviewColorState& state,
+                                     const CompositionPreviewState* preview) {
+    colorStateText_ = state.text;
+    renderPath_->setText(state.pathLabel.isEmpty() ? tr("—") : state.pathLabel);
+    renderPath_->setTone(state.colorToken);
+    renderPath_->setAccessibleName(state.text);
+    renderPath_->setToolTip(tr("Render: how the shown frame was produced. %1.").arg(state.text));
+    const bool shown = preview != nullptr && preview->viewerReadout.valid;
+    const auto dim = shown && preview->viewerReadout.current ? kit::Color::Foreground
+                                                             : kit::Color::Muted;
+    exposure_->setText(shown ? QString::number(preview->viewerReadout.exposure, 'f', 2) : tr("—"));
+    exposure_->setTone(dim);
+    exposure_->setToolTip(
+        shown ? tr("Exposure: the view adjustment the Viewer shows, in stops. %1")
+                    .arg(previewStateText_)
+              : tr("Exposure: the view adjustment the Viewer shows, in stops. No frame is shown."));
+    channel_->setText(shown ? preview->viewerReadout.channel : tr("—"));
+    channel_->setTone(dim);
+    channel_->setToolTip(tr("Channel: which channels of the frame the Viewer shows."));
+}
+
+void WindowStatusBar::refreshActivity() {
+    QString text = transientMessage_.isEmpty() ? persistentMessage_ : transientMessage_;
+    auto tone = kit::Color::Foreground;
+    bool progress = false;
+    QString tip = tr("What Bloom is doing now: a saved or exported file, an import, a RAM preview "
+                     "run, or a problem with the preview.");
+    if (text.isEmpty() && previewController_ != nullptr) {
+        if (const auto& run = previewController_->ramPreviewProgress(); run.has_value()) {
+            text = tr("Caching frames for RAM preview · %1 of %2")
+                       .arg(run->cachedFrames)
+                       .arg(run->totalFrames);
+            activityProgress_->setProgress(run->cachedFrames, run->totalFrames);
+            progress = true;
+            tone = kit::Color::Accent;
+        }
+    }
+    if (text.isEmpty() && !previewNotice_.isEmpty()) {
+        text = previewNotice_;
+        tone = previewNoticeTone_;
+        tip = tr("The preview's state. %1").arg(previewStateText_);
+    }
+    const bool idle = text.isEmpty();
+    if (idle) {
+        text = tr("Idle");
+        tone = kit::Color::Faint;
+    }
+    activityProgress_->setVisible(progress);
+    activityText_->setTone(tone);
+    activityText_->setElidedText(text);
+    activityText_->setAccessibleName(idle ? tr("Status message") : text);
+    activitySegment_->setSegmentToolTip(idle ? tip : tip + QLatin1Char('\n') + text);
+}
+
+void WindowStatusBar::refreshMemoryCell() {
+    std::size_t resident = 0;
+    std::size_t budget = 0;
+    bool any = false;
+    if (previewController_ != nullptr) {
+        resident += previewController_->frameCache().residentBytes();
+        budget += previewController_->frameCache().byteBudget();
+        any = true;
+    }
+    if (operationCache_ != nullptr) {
+        resident += operationCache_->retainedBytes();
+        budget += operationCache_->byteBudget();
+        any = true;
+    }
+    constexpr double kGibibyte = 1024.0 * 1024.0 * 1024.0;
+    constexpr double kMebibyte = 1024.0 * 1024.0;
+    QString value = tr("—");
+    if (any && budget != 0) {
+        const bool gigabytes = static_cast<double>(budget) >= kGibibyte;
+        const double unit = gigabytes ? kGibibyte : kMebibyte;
+        value = QStringLiteral("%1/%2 %3")
+                    .arg(static_cast<double>(resident) / unit, 0, 'f', 1)
+                    .arg(static_cast<double>(budget) / unit, 0, 'f', 1)
+                    .arg(gigabytes ? tr("GB") : tr("MB"));
+    }
+    memory_->setText(value);
+    memoryFrames_->setText(previewController_ != nullptr
+                               ? tr("%1 f").arg(previewController_->frameCache().size())
+                               : tr("—"));
 }
 
 void WindowStatusBar::refreshPreviewCells() {
     refreshMemoryToolTip();
     refreshVideoCell();
+    refreshMemoryCell();
     if (!displayedViewer_)
         refreshProbeCell({});
-    if (previewController_ == nullptr) {
-        static_cast<StatusColorChip*>(colorChip_)
-            ->setState({tr("Color state unavailable"), kit::Color::Warn});
-        previewState_->clear();
+    const auto dropped = [this](const bool counting) {
+        droppedFrames_->setText(counting ? QString::number(previewController_->droppedFrameCount())
+                                         : tr("—"));
+        droppedFrames_->setTone(counting && previewController_->droppedFrameCount() != 0
+                                    ? kit::Color::Warn
+                                    : kit::Color::Muted);
+        droppedFrames_->setToolTip(
+            tr("Dropped: frames playback skipped to keep up. A dash means no playback is being "
+               "measured."));
+    };
+    if (previewController_ == nullptr || session_.composition() == nullptr) {
+        // No preview pipeline or no active composition: there is no colour or preview truth to
+        // report, and the ordinary "Reference (unqualified)" / "Preview unsupported" cells would read
+        // as a failure of a project that simply has not been authored yet.
+        setViewerCells(previewController_ == nullptr
+                           ? PreviewColorState{tr("Color state unavailable"), kit::Color::Warn,
+                                               tr("None")}
+                           : PreviewColorState{tr("No composition"), kit::Color::Muted, tr("None")},
+                       nullptr);
+        previewStateText_.clear();
+        previewNotice_.clear();
         applyCompileFailure(std::nullopt);
-        droppedFrames_->clear();
-        cache_->setText(operationCache_ == nullptr ? QString{}
-                                                   : operationCacheText(*operationCache_));
-        return;
-    }
-    if (session_.composition() == nullptr) {
-        // No active composition: there is no colour or preview truth to report, and the ordinary
-        // "Reference (unqualified)" / "Preview unsupported" cells would read as a failure of a
-        // project that simply has not been authored yet. Show the neutral no-composition status and
-        // omit the preview/colour badges until a composition exists.
-        static_cast<StatusColorChip*>(colorChip_)
-            ->setState({tr("No composition"), kit::Color::Muted});
-        previewState_->clear();
-        applyCompileFailure(std::nullopt);
-        droppedFrames_->clear();
-        cache_->setText(operationCache_ == nullptr ? QString{}
-                                                   : operationCacheText(*operationCache_));
+        droppedFrames_->setTone(kit::Color::Muted);
+        dropped(false);
+        refreshActivity();
         return;
     }
     const auto preview =
         displayedViewer_ ? displayedViewer_->displayedPreviewState() : CompositionPreviewState{};
-    static_cast<StatusColorChip*>(colorChip_)
-        ->setState(displayedViewer_
+    setPreviewNotice(preview);
+    if (!displayedViewer_) {
+        previewStateText_.clear();
+        previewNotice_.clear();
+    }
+    setViewerCells(displayedViewer_
                        ? previewColorState(preview)
-                       : PreviewColorState{tr("No visible viewer"), kit::Color::Muted});
-
-    previewState_->setText(displayedViewer_ ? previewActivityText(preview) : QString{});
-    previewState_->setTone(preview.activity == PreviewActivity::Failed ? kit::Color::Error
-                                                                       : kit::Color::Muted);
-    previewState_->setToolTip(displayedViewer_ ? preview.message : QString{});
+                       : PreviewColorState{tr("No visible viewer"), kit::Color::Muted, tr("None")},
+                   displayedViewer_ ? &preview : nullptr);
     applyCompileFailure(displayedViewer_ ? compileFailureFromPreview(preview) : std::nullopt);
-
-    const QString dropped = droppedFrameText(*previewController_);
-    droppedFrames_->setText(dropped);
-    droppedFrames_->setTone(previewController_->droppedFrameCount() == 0 ? kit::Color::Muted
-                                                                         : kit::Color::Warn);
-
-    const auto previewText = previewCacheText(*previewController_);
-    const auto operationText =
-        operationCache_ == nullptr ? QString{} : operationCacheText(*operationCache_);
-    cache_->setText(previewText.isEmpty()     ? operationText
-                    : operationText.isEmpty() ? previewText
-                                              : previewText + tr(" · ") + operationText);
+    dropped(previewController_->isCountingDroppedFrames());
+    refreshActivity();
 }
 
 void WindowStatusBar::applyCompileFailure(std::optional<CompileFailure> failure) {
@@ -574,7 +671,8 @@ void WindowStatusBar::openCompileFailure() {
 }
 
 void WindowStatusBar::applyPreviewStateForTest(const CompositionPreviewState& preview) {
-    previewState_->setText(previewActivityText(preview));
+    setPreviewNotice(preview);
+    refreshActivity();
     applyCompileFailure(compileFailureFromPreview(preview));
 }
 
@@ -607,10 +705,30 @@ void WindowStatusBar::setDisplayedViewer(ViewerEditor* viewer) {
 // CACHE-2: independent of refreshPreviewCells() above -- the disk cache is unrelated to the
 // preview pipeline and stays live even in a window built without one (previewController_ null).
 void WindowStatusBar::refreshMediaDiskCacheCell() {
-    mediaDiskCacheCell_->setText(mediaDiskCacheStatusText(
-        mediaDiskCache_ != nullptr ? mediaDiskCache_->statistics()
-                                   : media::cache::MediaDiskCacheStatistics{},
-        mediaDiskCache_ != nullptr && mediaDiskCache_->enabled()));
+    const auto stats = mediaDiskCache_ != nullptr ? mediaDiskCache_->statistics()
+                                                  : media::cache::MediaDiskCacheStatistics{};
+    const bool enabled = mediaDiskCache_ != nullptr && mediaDiskCache_->enabled();
+    diskStatusText_ = mediaDiskCacheStatusText(stats, enabled);
+    QString value = tr("—");
+    QString detail = tr("The disk cache has not served a lookup yet.");
+    if (!enabled) {
+        value = tr("off");
+        detail = tr("The disk cache is switched off in Preferences.");
+    } else if (!diskStatusText_.isEmpty()) {
+        value = tr("%1% hit · %2")
+                    .arg(static_cast<int>(std::lround(stats.hitRate() * 100.0)))
+                    .arg(formatBytes(stats.storedBytes));
+        detail = tr("%1 hits · %2 misses · %3 entries · %4 stored")
+                     .arg(stats.hits)
+                     .arg(stats.misses)
+                     .arg(stats.entryCount)
+                     .arg(formatBytes(stats.storedBytes));
+    }
+    mediaDiskCacheCell_->setText(value);
+    diskSegment_->setSegmentToolTip(tr("The on-disk cache of decoded frames: how often a lookup "
+                                       "found its frame, and how much it stores.\n%1")
+                                        .arg(detail));
+    mediaDiskCacheCell_->setToolTip(diskSegment_->toolTip());
 }
 
 void WindowStatusBar::showTransientMessage(const QString& message) {
@@ -639,23 +757,54 @@ void WindowStatusBar::setPersistentMessage(const QString& message) {
 }
 
 void WindowStatusBar::refreshMessage() {
-    message_->setText(transientMessage_.isEmpty() ? persistentMessage_ : transientMessage_);
+    refreshActivity();
 }
 
-QString WindowStatusBar::colorChipTextForTest() const {
-    return static_cast<const StatusColorChip*>(colorChip_)->text();
-}
+// The full colour-state sentence ("Qualified · Bloom Neutral", "GPU-prepared / CPU-painted"): the
+// bar shows a plain GPU or CPU, and this is the detail its tooltip carries.
+QString WindowStatusBar::colorChipTextForTest() const { return colorStateText_; }
 
-QString WindowStatusBar::previewStateTextForTest() const { return previewState_->text(); }
+// The preview's full status sentence ("Shown EV 0 · RGBA · Current"), which the Viewer segment's
+// tooltips carry; empty while no viewer's state is displayed.
+QString WindowStatusBar::previewStateTextForTest() const { return previewStateText_; }
 
 QString WindowStatusBar::droppedFrameTextForTest() const { return droppedFrames_->text(); }
 
-QString WindowStatusBar::cacheTextForTest() const { return cache_->text(); }
+QString WindowStatusBar::mediaDiskCacheTextForTest() const { return diskStatusText_; }
 
-QString WindowStatusBar::mediaDiskCacheTextForTest() const { return mediaDiskCacheCell_->text(); }
+QString WindowStatusBar::messageTextForTest() const {
+    return transientMessage_.isEmpty() ? persistentMessage_ : transientMessage_;
+}
 
+QString WindowStatusBar::renderPathTextForTest() const { return renderPath_->text(); }
+QString WindowStatusBar::exposureTextForTest() const { return exposure_->text(); }
+QString WindowStatusBar::channelTextForTest() const { return channel_->text(); }
+QString WindowStatusBar::activityTextForTest() const { return activityText_->text(); }
+QString WindowStatusBar::memoryTextForTest() const {
+    return tr("RAM %1 · cache %2").arg(memory_->text(), memoryFrames_->text());
+}
+QString WindowStatusBar::diskTextForTest() const { return mediaDiskCacheCell_->text(); }
+QString WindowStatusBar::diskToolTipForTest() const { return diskSegment_->toolTip(); }
 
-QString WindowStatusBar::messageTextForTest() const { return message_->text(); }
+QStringList WindowStatusBar::segmentLabelsForTest() const {
+    QStringList rows;
+    for (const auto* segment : {viewerSegment_, activitySegment_, probeSegment_, memorySegment_,
+                                diskSegment_, mcpSegment_, versionSegment_}) {
+        QStringList labels;
+        for (const auto* label : segment->findChildren<kit::KLabel*>())
+            if (label->tone() == kit::Color::Muted && label->objectName().isEmpty())
+                labels << label->text();
+            else if (label->tone() == kit::Color::Faint && label->objectName().isEmpty())
+                labels << label->text();
+        rows << labels.join(QLatin1Char('|'));
+    }
+    return rows;
+}
+
+bool WindowStatusBar::segmentVisibleForTest(const QString& objectName) const {
+    const auto* widget = findChild<QWidget*>(objectName);
+    return widget != nullptr && !widget->isHidden();
+}
 
 QString WindowStatusBar::versionTextForTest() const { return version_->text(); }
 
@@ -664,9 +813,10 @@ ViewerEditor* WindowStatusBar::displayedViewerForTest() const noexcept { return 
 void WindowStatusBar::refreshProbeCell(const ProbeReadout& readout) {
     probeReadout_ = readout;
     if (!readout.valid) {
-        static_cast<kit::KLabel*>(probe_)->setElidedText({});
+        probe_->setElidedText({});
         probe_->setAccessibleName({});
-        probe_->hide();
+        probeSegment_->hide();
+        applyNarrowLayout();
         return;
     }
     const auto rgba = [](core::Color4d value) {
@@ -696,12 +846,15 @@ void WindowStatusBar::refreshProbeCell(const ProbeReadout& readout) {
                           .arg(readout.coordinate.x, 0, 'f', 2)
                           .arg(readout.coordinate.y, 0, 'f', 2)
                           .arg(working, display);
-    probe_->show();
-    static_cast<kit::KLabel*>(probe_)->setElidedText(text);
+    probe_->setElidedText(text);
     probe_->setAccessibleName(text);
     probe_->setToolTip(tr("Working space: %1\nDisplay: %2\nCtrl-click to show %3 values")
-                           .arg(readout.workingColorSpaceId, readout.displayName,
+                           .arg(QString::fromUtf8(host::workingColorSpaceLabel(
+                                    readout.workingColorSpaceId.toStdString())),
+                                readout.displayName,
                                 probeFloatFormat_ ? tr("float pre-encode") : tr("8-bit encoded")));
+    probeSegment_->setVisible(true);
+    applyNarrowLayout();
 }
 
 bool WindowStatusBar::eventFilter(QObject* watched, QEvent* event) {
@@ -725,12 +878,13 @@ void WindowStatusBar::setMcpServer(McpServerAdapter* const adapter) {
         return;
     if (mcpServer_ != nullptr)
         disconnect(mcpServer_, nullptr, this, nullptr);
-    disconnect(mcpIndicator_, nullptr, this, nullptr);
     mcpServer_ = adapter;
-    if (adapter != nullptr) {
+    mcpIndicator_->onClick = [this] {
+        if (mcpServer_ != nullptr)
+            mcpServer_->requestReveal();
+    };
+    if (adapter != nullptr)
         connect(adapter, &McpServerAdapter::changed, this, &WindowStatusBar::refreshMcpIndicator);
-        connect(mcpIndicator_, &QAbstractButton::clicked, adapter, &McpServerAdapter::requestReveal);
-    }
     refreshMcpIndicator();
 }
 
@@ -738,18 +892,32 @@ void WindowStatusBar::refreshMcpIndicator() {
     const auto snapshot = mcpServer_ != nullptr ? mcpServer_->snapshot() : nullptr;
     const bool running = snapshot && snapshot->state == mcp::McpServerState::Running;
     const bool failed = snapshot && !running && snapshot->failure.has_value();
-    mcpIndicator_->setVisible(running || failed);
+    mcpWanted_ = running || failed;
     if (running) {
         const auto port = snapshot->endpoint ? snapshot->endpoint->port : snapshot->preferences.port;
-        mcpIndicator_->setText(tr("MCP :%1").arg(port));
-        mcpIndicator_->setToolTip(mcppanel::statusText(*snapshot));
+        mcpIndicator_->setText(tr(":%1").arg(port));
+        mcpIndicator_->setTone(kit::Color::Muted);
+        mcpIndicator_->setToolTip(tr("MCP: the server is running; click to open the MCP Server "
+                                     "panel.\n%1")
+                                      .arg(mcppanel::statusText(*snapshot)));
     } else if (failed) {
-        mcpIndicator_->setText(tr("MCP failed"));
-        mcpIndicator_->setToolTip(mcppanel::statusText(*snapshot));
+        mcpIndicator_->setText(tr("failed"));
+        mcpIndicator_->setTone(kit::Color::Error);
+        mcpIndicator_->setToolTip(tr("MCP: the server stopped; click to open the MCP Server "
+                                     "panel.\n%1")
+                                      .arg(mcppanel::statusText(*snapshot)));
     }
+    mcpSegment_->setVisible(mcpWanted_);
+    applyNarrowLayout();
 }
 
-QString WindowStatusBar::mcpIndicatorTextForTest() const { return mcpIndicator_->text(); }
-bool WindowStatusBar::mcpIndicatorVisibleForTest() const { return !mcpIndicator_->isHidden(); }
+QString WindowStatusBar::mcpIndicatorTextForTest() const {
+    return tr("MCP %1").arg(mcpIndicator_->text());
+}
+bool WindowStatusBar::mcpIndicatorVisibleForTest() const { return !mcpSegment_->isHidden(); }
+void WindowStatusBar::clickMcpIndicatorForTest() {
+    if (mcpIndicator_->onClick)
+        mcpIndicator_->onClick();
+}
 
 } // namespace bloom::ui

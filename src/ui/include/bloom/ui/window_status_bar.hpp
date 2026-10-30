@@ -10,11 +10,15 @@
 #include <QString>
 
 #include <optional>
+#include <vector>
+
+#include <QStringList>
 
 #include <bloom/ui/kit/surfaces.hpp>
 #include <cstddef>
 
 class QLabel;
+class QResizeEvent;
 class QTimer;
 class QToolButton;
 
@@ -26,8 +30,15 @@ struct MediaDiskCacheStatistics;
 namespace bloom::ui::kit {
 class KButton;
 class KLabel;
+class KProgressBar;
 class KPopupWindow;
 }
+
+namespace bloom::ui::statusbar {
+class Segment;
+class ValueLabel;
+class ClickableValue;
+} // namespace bloom::ui::statusbar
 
 namespace bloom::ui {
 
@@ -57,6 +68,8 @@ struct CompositionPreviewState;
 struct PreviewColorState final {
     QString text;
     kit::Color colorToken = kit::Color::Warn;
+    // The plain-word render path the Render value shows: "GPU", "CPU" or "None".
+    QString pathLabel;
 };
 
 [[nodiscard]] PreviewColorState previewColorState(const CompositionPreviewState& preview);
@@ -133,12 +146,24 @@ class WindowStatusBar final : public kit::KSurface {
     [[nodiscard]] QWidget* compileFailurePopupForTest() const;
     [[nodiscard]] QString mcpIndicatorTextForTest() const;
     [[nodiscard]] bool mcpIndicatorVisibleForTest() const;
+    // Clicks the MCP text segment (it asks the adapter to reveal the MCP Server panel).
+    void clickMcpIndicatorForTest();
+    // The labelled segments, left to right: each one's visible label texts, joined by " | ".
+    [[nodiscard]] QStringList segmentLabelsForTest() const;
+    [[nodiscard]] bool segmentVisibleForTest(const QString& objectName) const;
+    [[nodiscard]] QString renderPathTextForTest() const;
+    [[nodiscard]] QString exposureTextForTest() const;
+    [[nodiscard]] QString channelTextForTest() const;
+    [[nodiscard]] QString activityTextForTest() const;
+    [[nodiscard]] QString memoryTextForTest() const;
+    [[nodiscard]] QString diskTextForTest() const;
+    [[nodiscard]] QString diskToolTipForTest() const;
 
     // Test/diagnostic surface only, mirroring ViewerEditor's own *ForTest precedent.
     [[nodiscard]] QString colorChipTextForTest() const;
     [[nodiscard]] QString previewStateTextForTest() const;
     [[nodiscard]] QString droppedFrameTextForTest() const;
-    [[nodiscard]] QString cacheTextForTest() const;
+    // The disk cache's plain status sentence (also the head of the Disk cache tooltip).
     [[nodiscard]] QString mediaDiskCacheTextForTest() const;
     [[nodiscard]] QString videoTextForTest() const;
     [[nodiscard]] QString videoToolTipForTest() const;
@@ -150,8 +175,16 @@ class WindowStatusBar final : public kit::KSurface {
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    [[nodiscard]] QSize minimumSizeHint() const override;
 
   private:
+    void buildSegments();
+    void refreshActivity();
+    void setPreviewNotice(const CompositionPreviewState& preview);
+    void setViewerCells(const PreviewColorState& state, const CompositionPreviewState* preview);
+    void refreshMemoryCell();
+    void applyNarrowLayout();
     void refreshPreviewCells();
     void refreshProbeCell(const ProbeReadout& readout);
     void refreshMediaDiskCacheCell();
@@ -179,20 +212,41 @@ class WindowStatusBar final : public kit::KSurface {
     QMetaObject::Connection displayedViewerDestroyedConnection_;
     runtime::OperationCache* operationCache_ = nullptr;
     media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
-    QWidget* colorChip_ = nullptr;
-    kit::KLabel* previewState_ = nullptr;
-    kit::KLabel* droppedFrames_ = nullptr;
-    kit::KLabel* video_ = nullptr;
-    QLabel* cache_ = nullptr;
-    QLabel* mediaDiskCacheCell_ = nullptr;
-    QLabel* message_ = nullptr;
-    kit::KButton* mcpIndicator_ = nullptr;
+    // Segments, left to right: Viewer | Activity | Pixel | Memory | Disk cache | MCP | Version.
+    statusbar::Segment* viewerSegment_ = nullptr;
+    statusbar::Segment* activitySegment_ = nullptr;
+    statusbar::Segment* probeSegment_ = nullptr;
+    statusbar::Segment* memorySegment_ = nullptr;
+    statusbar::Segment* diskSegment_ = nullptr;
+    statusbar::Segment* mcpSegment_ = nullptr;
+    statusbar::Segment* versionSegment_ = nullptr;
+    std::vector<QWidget*> separators_;
+    statusbar::ValueLabel* renderPath_ = nullptr;
+    statusbar::ValueLabel* exposure_ = nullptr;
+    statusbar::ValueLabel* channel_ = nullptr;
+    statusbar::ValueLabel* droppedFrames_ = nullptr;
+    statusbar::ValueLabel* video_ = nullptr;
+    QWidget* videoGroup_ = nullptr;
+    kit::KLabel* activityText_ = nullptr;
+    kit::KProgressBar* activityProgress_ = nullptr;
+    statusbar::ValueLabel* memory_ = nullptr;
+    statusbar::ValueLabel* memoryFrames_ = nullptr;
+    QString previewNotice_;
+    kit::Color previewNoticeTone_ = kit::Color::Muted;
+    statusbar::ValueLabel* mediaDiskCacheCell_ = nullptr;
+    statusbar::ClickableValue* mcpIndicator_ = nullptr;
     kit::KButton* compileDetails_ = nullptr;
+    QString colorStateText_;
+    QString previewStateText_;
+    QString videoText_;
+    QString memoryToolTip_;
+    QString diskStatusText_;
+    bool mcpWanted_ = false;
     std::optional<CompileFailure> compileFailure_;
     QPointer<kit::KPopupWindow> compileFailurePopup_;
     QPointer<McpServerAdapter> mcpServer_;
-    QLabel* version_ = nullptr;
-    QLabel* probe_ = nullptr;
+    statusbar::ValueLabel* version_ = nullptr;
+    kit::KLabel* probe_ = nullptr;
     QTimer* transientTimer_ = nullptr;
     QTimer* cacheRefreshTimer_ = nullptr;
     QTimer* mediaDiskCacheTimer_ = nullptr;

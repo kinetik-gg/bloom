@@ -28,6 +28,7 @@
 #include <bloom/ui/h264_encoder_flow.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/licenses_window.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/playback_controller.hpp>
@@ -37,13 +38,22 @@
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
+#include <bloom/ui/workspace_presets.hpp>
 
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDialog>
+#include <QAbstractSpinBox>
+#include <QGraphicsProxyWidget>
+#include <QGraphicsScene>
+#include <QGraphicsView>
+#include <QKeyEvent>
 #include <QKeySequence>
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QTextEdit>
 #include <QLabel>
 #include <QLatin1StringView>
 #include <QMenu>
@@ -227,6 +237,7 @@ WorkspaceLayoutRestoreResult MainWindow::restoreApplicationState(QSettings& sett
     contextBarAction_->setChecked(barVisible);
 
     const auto result = workspaceHost_->restorePersistedLayout(settings, workspaceLayoutKey);
+    workspacePresets_->load();
     if (result == WorkspaceLayoutRestoreResult::Deferred) {
         // A live native surface must retire before the restored tree may replace the current one.
         // Nothing was replaced and no version migration is claimed; the restore completes
@@ -422,7 +433,12 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     // would give one key two owners.
     ramPreviewAction_ = compositionMenu.addAction("&RAM Preview");
     ramPreviewAction_->setObjectName("compositionRamPreviewAction");
-    ramPreviewAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space));
+    // Numpad 0 is After Effects' RAM Preview key. With Num Lock off the same key reports Insert, so
+    // both keypad forms are bound. A keypad digit typed into a text or value field is text input,
+    // which Qt delivers as a ShortcutOverride to the field first, so it never fires here.
+    ramPreviewAction_->setShortcuts({QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space),
+                                     QKeySequence(Qt::KeypadModifier | Qt::Key_0),
+                                     QKeySequence(Qt::KeypadModifier | Qt::Key_Insert)});
     ramPreviewAction_->setShortcutContext(Qt::WindowShortcut);
     ramPreviewAction_->setEnabled(ramPreview_ != nullptr);
     // Escape ends a run that is caching. Enabled only while one is, so Escape keeps meaning
@@ -855,6 +871,7 @@ void MainWindow::updateContentSurface() {
 
 void MainWindow::createEditorLayout(const EditorRegistry& editorRegistry) {
     workspaceHost_ = new WorkspaceHost(editorRegistry, this);
+    workspacePresets_ = new WorkspacePresets(*workspaceHost_, this);
     resetCompositingLayout();
 }
 
@@ -887,6 +904,7 @@ void MainWindow::createCentralStack() {
     contextBar_ = new ContextBar(compositionSession_, previewController_, central);
     connect(contextBar_, &ContextBar::notice, statusStrip_,
             [this](const QString& message) { statusStrip_->showTransientMessage(message); });
+    contextBar_->setWorkspacePresets(workspacePresets_);
     column->addWidget(contextBar_);
     column->addWidget(centralStack_, 1);
     column->addWidget(statusStrip_);
@@ -930,8 +948,9 @@ void MainWindow::resetCompositingLayout(const bool persist) {
         settings.remove(QLatin1StringView(timelineLayerColumnWidthKey));
     }
 
-    workspaceHost_->resetToDefaultLayout("bloom.viewer", "bloom.nodes", "bloom.assets",
-                                         "bloom.timeline", "bloom.properties");
+    // The first-run and Reset Workspace arrangement is the Default preset (owner, 2026-10-31). The
+    // startup and migration paths do not overwrite the stored active preset; Reset does.
+    workspacePresets_->apply(QStringLiteral("Default"), persist);
     workspaceLayoutWritable_ = true;
 
     // The Timeline's 37% divider default is applied at show time, but the Timeline is nested inside
@@ -1089,7 +1108,65 @@ ViewerEditor* MainWindow::displayedViewer() {
     return selected;
 }
 
+namespace {
+
+// True when the keypad 0 / keypad Insert key produced this press. Qt's Wayland/xkb path does not
+// reliably set KeypadModifier for KP_0 (it can arrive as plain Key_0, or as Key_Insert with Num
+// Lock off), so the declared KeypadModifier shortcuts never match there. On Linux the xkb keycode
+// 90 (evdev 82 + 8) is the physical keypad 0 key whatever Num Lock or the modifier says; elsewhere
+// KeypadModifier is reliable.
+bool isKeypadZeroPress(const QKeyEvent& key) {
+    if (key.isAutoRepeat() || (key.modifiers() & ~Qt::KeypadModifier) != Qt::NoModifier)
+        return false;
+#if defined(Q_OS_LINUX)
+    if (key.nativeScanCode() == 90)
+        return true;
+#endif
+    return (key.modifiers() & Qt::KeypadModifier) &&
+           (key.key() == Qt::Key_0 || key.key() == Qt::Key_Insert);
+}
+
+// Digits typed into a text-entry widget stay digits: a line edit, spin box, text area, anything
+// that takes input-method text, an editing KValueField, or a field proxied into a graphics scene
+// (the node canvas).
+bool textEntryHasFocus() {
+    const QWidget* focus = QApplication::focusWidget();
+    if (focus == nullptr)
+        return false;
+    if (const auto* view = qobject_cast<const QGraphicsView*>(focus)) {
+        if (view->scene() != nullptr &&
+            dynamic_cast<QGraphicsProxyWidget*>(view->scene()->focusItem()) != nullptr)
+            return true;
+    }
+    for (const QWidget* w = focus; w != nullptr; w = w->parentWidget()) {
+        if (const auto* value = qobject_cast<const kit::KValueField*>(w);
+            value != nullptr && value->isEditing())
+            return true;
+    }
+    return qobject_cast<const QLineEdit*>(focus) != nullptr ||
+           qobject_cast<const QAbstractSpinBox*>(focus) != nullptr ||
+           qobject_cast<const QTextEdit*>(focus) != nullptr ||
+           qobject_cast<const QPlainTextEdit*>(focus) != nullptr ||
+           focus->testAttribute(Qt::WA_InputMethodEnabled);
+}
+
+// Whether `widget` lives in `owner` or in a floating window owned by it.
+bool belongsToWindow(const QWidget* widget, const QWidget* owner) {
+    const QWidget* top = widget != nullptr ? widget->window() : nullptr;
+    while (top != nullptr && top != owner)
+        top = top->parentWidget() != nullptr ? top->parentWidget()->window() : nullptr;
+    return top == owner;
+}
+
+} // namespace
+
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::KeyPress && ramPreviewAction_ != nullptr &&
+        ramPreviewAction_->isEnabled() && isKeypadZeroPress(*static_cast<QKeyEvent*>(event)) &&
+        belongsToWindow(qobject_cast<QWidget*>(watched), this) && !textEntryHasFocus()) {
+        ramPreviewAction_->trigger();
+        return true;
+    }
     if (workspaceHost_ &&
         (event->type() == QEvent::Show || event->type() == QEvent::Hide ||
          event->type() == QEvent::ChildAdded || event->type() == QEvent::ChildRemoved)) {

@@ -404,9 +404,9 @@ must not starve an explicit export. The CPU and I/O scheduler keeps that rule.
 Every command has an availability with a typed `ExportUnavailableCode` and a tooltip-ready reason,
 so no control is disabled silently. Project-truth commands are `src/commands` operations submitted
 on the ordinary command path (the panel through the session, scripts in transactions). Session
-commands are `ExportQueueService` methods. On macOS and Windows, Start, Start All and Retry answer
-`PlatformNotSupported` ("Export runs on Linux in this version"); every other command behaves as on
-Linux.
+commands are `ExportQueueService` methods. Every command behaves the same on Linux, macOS and
+Windows; [ADR 0035](0035-media-provider-fallback-chain.md) removed the former `PlatformNotSupported`
+refusal of Start, Start All and Retry off Linux.
 
 | Command | Kind | Available when (otherwise the stated reason) | Script / MCP |
 | --- | --- | --- | --- |
@@ -487,16 +487,16 @@ saved on any platform opens on every other.
 | Capability | Linux | macOS | Windows |
 | --- | --- | --- | --- |
 | Queue, panel, persistence, presets, scripting edits | yes | yes | yes |
-| Start, Start All, Retry, `bloom-cli export`, `render` | yes | `PlatformNotSupported` (#371) | `PlatformNotSupported` (#370) |
-| H.264 | OpenH264 after consent, or VA-API | — | — |
+| Start, Start All, Retry, `bloom-cli export`, `render` | yes | yes (ADR 0035) | yes (ADR 0035); file publication needs the Windows staged-artifact provider |
+| Media provider chain (ADR 0035) | FFmpeg VA-API → FFmpeg software | VideoToolbox → FFmpeg | Media Foundation (slot, no provider yet) → FFmpeg |
+| H.264 | OpenH264 after consent, or VA-API | VideoToolbox | — (needs Media Foundation or a bundled encoder) |
 | HEVC | VA-API only; otherwise `HardwareEncoderMissing` | — | — |
 | GPU low priority for export | global priority where the driver exposes it; batch yield otherwise | — | — |
 
-On macOS and Windows every preset's platform availability is `PlatformNotSupported` with the reason
-"Export runs on Linux in this version". This is the explicit supported fallback AGENTS.md requires:
-nothing is hidden, nothing fails silently, and a project prepared there exports unchanged on Linux.
-The Windows publication provider and encode worker, and macOS export qualification, are not part of
-this release; #370 and #371 track them.
+Superseded by ADR 0035: no preset is refused for its operating system. Each platform's media
+provider chain ends in the bundled FFmpeg worker, and a platform-framework refusal falls back to it
+silently with the fallback recorded as provenance. The Windows staged-publication provider and a
+Media Foundation provider remain open under #370; macOS export qualification under #371.
 
 ### 16. Issue #369 inside this release (Linux)
 

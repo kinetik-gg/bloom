@@ -3,9 +3,7 @@
 #include <bloom/media/image.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/openh264_runtime.hpp>
-#if defined(__APPLE__)
-#include <bloom/media/provider/videotoolbox_manifest.hpp>
-#endif
+#include <bloom/media/provider/provider_chain.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/output/composition_output_stream.hpp>
 #include <bloom/render/processing_host_storage.hpp>
@@ -308,8 +306,15 @@ Result<EncodedChunkV1> CompositionOutputStreamV1::read(std::uint64_t offset) {
     return state_->encoder->read(offset);
 }
 std::optional<Unavailable> CompositionOutputStreamV1::close() { return state_->encoder->close(); }
+const Handshake& CompositionOutputStreamV1::handshake() const {
+    return state_->encoder->handshake();
+}
+const MediaProviderProvenanceV1& CompositionOutputStreamV1::provenance() const {
+    return state_->encoder->provenance();
+}
 Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& analysis,
-                                                const EncodeQcV1& qc, core::Sha256Digest approval) {
+                                                const EncodeQcV1& qc, core::Sha256Digest approval,
+                                                const Handshake* served) {
     try {
         MediaQcEvidenceV1 evidence;
         evidence.artifact = qc.artifact;
@@ -323,14 +328,13 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
             analysis.settings.videoCodec == "h264" &&
             analysis.implementationNote.find("encoder=vaapi") != std::string::npos;
         const bool openh264 = analysis.settings.videoCodec == "h264" && !hardware;
-#if defined(__APPLE__)
-        (void)hardware;
-        (void)openh264;
-        const auto hello = videoToolboxHandshake();
-#else
-        const auto hello = ffmpegHandshake(hardware, openh264, OpenH264Runtime::version(),
-                                           OpenH264Runtime::libraryDigest());
-#endif
+        // The provider that actually served the attempt (ADR 0035); without one, the FFmpeg
+        // worker's declaration for the analysed route.
+        const auto hello = served != nullptr && !served->declarations.empty()
+                               ? *served
+                               : ffmpegHandshake(hardware, openh264, OpenH264Runtime::version(),
+                                                 OpenH264Runtime::libraryDigest());
+        const bool videotoolbox = hello.execution.provider == "bloom.videotoolbox";
         evidence.execution = checked(digest(hello.execution));
         // Bind all declared ordered export components; no delivery or independent-reader claim.
         PipelineQualificationV1 pipeline;
@@ -350,7 +354,8 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
             const auto found = std::ranges::find_if(hello.declarations, [&](const auto& d) {
                 return d.capability.role == role &&
                        (role == Role::VideoEncode
-                            ? d.capability.codec == analysis.settings.videoCodec &&
+                            ? mediaCodecFamilyV1(d.capability.codec) ==
+                                      mediaCodecFamilyV1(analysis.settings.videoCodec) &&
                                   d.capability.profile == analysis.settings.profile
                         : role == Role::AudioEncode
                             ? d.capability.codec == analysis.settings.audioCodec
@@ -363,13 +368,8 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
                                       checked(digest(found->evidence))});
         }
         evidence.pipeline = checked(digest(pipeline));
-#if defined(__APPLE__)
-        evidence.tool = "bloom.videotoolbox";
-        evidence.version = "VideoToolbox";
-#else
-        evidence.tool = "bloom.ffmpeg";
-        evidence.version = "FFmpeg-8.1.2";
-#endif
+        evidence.tool = hello.execution.provider;
+        evidence.version = videotoolbox ? std::string("VideoToolbox") : hello.execution.sdk;
         evidence.profile = "media4-export-v1";
         evidence.coverage = "all frame timestamps/count; stream layout; duration; first/last "
                             "pixels; every PCM sample; staged digest";
@@ -383,6 +383,10 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
         evidence.determinism = analysis.determinism;
         evidence.toleranceProfile = analysis.toleranceProfile;
         evidence.implementationNote = analysis.implementationNote;
+        // The ProRes note names the implementation that actually encoded the artifact.
+        if (mediaCodecFamilyV1(analysis.settings.videoCodec) == "prores")
+            evidence.implementationNote =
+                videotoolbox ? kProResVideoToolboxExportNote : kProResFfmpegExportNote;
         evidence.maximumError = qc.maximumError;
         evidence.meanError = qc.meanError;
         (void)checked(digest(evidence));

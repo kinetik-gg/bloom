@@ -104,22 +104,24 @@ void showProjectColorSettingsDialog(ProjectHost& host, QWidget& owner) {
     dialog->contentLayout()->addWidget(hint);
     dialog->contentLayout()->addStretch(1);
 
-    const auto populate = [config, working, summary, original, currentKey] {
+    // The label an artist reads ("Linear Rec.709 (sRGB)"); the item data stays the stored id.
+    const auto addSpace = [working](const std::string_view id) {
+        const auto label = host::workingColorSpaceLabel(id);
+        working->addItem(QString::fromUtf8(label.data(), static_cast<qsizetype>(label.size())),
+                         QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())));
+    };
+    const auto populate = [config, working, summary, original, currentKey, addSpace] {
         const auto selected = config->currentData().toString();
-        const std::array<std::string_view, 5> acesSpaces{
-            "ACEScg", "ACES2065-1", "Linear Rec.709 (sRGB)", "Linear P3-D65", "Linear Rec.2020"};
         working->clearItems();
         core::Sha256Digest digest = original.ocioConfig.expectedRevision.digest;
         QString name;
         QString displays;
         if (selected == QStringLiteral("current")) {
-            working->addItem(QString::fromStdString(original.processColorSpaceId),
-                             QString::fromStdString(original.processColorSpaceId));
+            addSpace(original.processColorSpaceId);
             name = QObject::tr("External configuration");
         } else if (selected == QStringLiteral("aces")) {
-            for (const auto id : acesSpaces)
-                working->addItem(QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())),
-                                 QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size())));
+            for (const auto id : host::projectWorkingColorSpaces(host::ProjectColorConfig::AcesCg))
+                addSpace(id);
             if (selected != currentKey)
                 if (const auto revision = color::ocioBuiltInContentRevision(
                         color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri))
@@ -127,8 +129,9 @@ void showProjectColorSettingsDialog(ProjectHost& host, QWidget& owner) {
             name = QObject::tr("ACES 1.3 CG (cg-config v1.0.0, OCIO 2.1)");
             displays = QObject::tr("sRGB - Display: ACES 1.0 - SDR Video, Un-tone-mapped, Raw");
         } else {
-            working->addItem(QStringLiteral("lin_rec709_scene"),
-                             QStringLiteral("lin_rec709_scene"));
+            for (const auto id :
+                 host::projectWorkingColorSpaces(host::ProjectColorConfig::BloomNeutral))
+                addSpace(id);
             if (selected != currentKey)
                 digest = color::kBloomNeutralV1ConfigDigest;
             name = QObject::tr("Bloom Neutral v1");
@@ -143,7 +146,7 @@ void showProjectColorSettingsDialog(ProjectHost& host, QWidget& owner) {
         if (selected == currentKey) {
             const auto previous = QString::fromStdString(original.processColorSpaceId);
             if (working->findData(previous) < 0)
-                working->addItem(previous, previous);
+                addSpace(original.processColorSpaceId);
             working->setCurrentIndex(working->findData(previous));
         } else {
             working->setCurrentIndex(0);

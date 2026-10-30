@@ -183,6 +183,8 @@ class EditorArea final : public QFrame {
     void splitRequested(EditorArea* area, Qt::Orientation orientation);
     void closeRequested(EditorArea* area);
     void maximizeRequested(EditorArea* area);
+    // The hosted editor type was replaced (also while the area is first built).
+    void editorChanged(EditorArea* area);
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;

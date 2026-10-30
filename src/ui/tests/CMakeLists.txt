@@ -4,6 +4,9 @@ add_executable(bloom_editor_area_chrome_test
 add_executable(bloom_kinetik_baseline_test
     kinetik_baseline_tests.cpp
 )
+add_executable(bloom_workspace_presets_test
+    workspace_presets_tests.cpp
+)
 add_executable(bloom_kit_button_test
     kit_button_tests.cpp
 )
@@ -194,6 +197,7 @@ add_executable(bloom_node_editor_test
 
 target_link_libraries(bloom_editor_area_chrome_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_kinetik_baseline_test PRIVATE bloom_ui Qt6::Test)
+target_link_libraries(bloom_workspace_presets_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_kit_button_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_choice_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_color_test PRIVATE bloom_ui_kit)
@@ -373,6 +377,7 @@ target_include_directories(bloom_timeline_editor_style_test PRIVATE ..)
 target_link_libraries(bloom_node_editor_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_editor_area_chrome_test)
 bloom_enable_warnings(bloom_kinetik_baseline_test)
+bloom_enable_warnings(bloom_workspace_presets_test)
 bloom_enable_warnings(bloom_kit_button_test)
 bloom_enable_warnings(bloom_kit_choice_test)
 bloom_enable_warnings(bloom_kit_color_test)
@@ -462,6 +467,14 @@ bloom_add_test(
     COMMAND bloom_kinetik_baseline_test
     LABELS ui integration kit
     TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.workspace_presets
+    COMMAND bloom_workspace_presets_test
+    LABELS ui integration
+    TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
@@ -796,6 +809,17 @@ bloom_add_test(
     NAME bloom.ui.viewer_editor
     COMMAND bloom_viewer_editor_test
     LABELS ui unit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+add_executable(bloom_viewer_display_view_test viewer_display_view_tests.cpp)
+target_link_libraries(bloom_viewer_display_view_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_viewer_display_view_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_display_view
+    COMMAND bloom_viewer_display_view_test
+    LABELS ui unit color
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
@@ -1373,6 +1397,13 @@ foreach(scale IN ITEMS 1 1.5)
         LABELS "ui;grammar" TIMEOUT 120)
 endforeach()
 
+add_executable(bloom_chrome_capture chrome_capture.cpp)
+target_include_directories(bloom_chrome_capture PRIVATE ..)
+target_link_libraries(bloom_chrome_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_chrome_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_chrome_capture)
+
 add_executable(bloom_viewer_chrome_capture viewer_chrome_capture.cpp)
 target_link_libraries(bloom_viewer_chrome_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_viewer_chrome_capture PRIVATE
@@ -1470,6 +1501,13 @@ bloom_enable_warnings(bloom_audio_transport_test)
 add_test(NAME bloom.ui.audio-transport COMMAND bloom_audio_transport_test)
 set_tests_properties(bloom.ui.audio-transport PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
+
+# #400: looped playback keeps the mixer and the transport on one work-area period.
+add_executable(bloom_ui_audio_loop_transport_test audio_loop_transport_tests.cpp)
+target_link_libraries(bloom_ui_audio_loop_transport_test PRIVATE bloom_ui bloom_runtime_compiler)
+bloom_enable_warnings(bloom_ui_audio_loop_transport_test)
+bloom_add_test(NAME bloom.ui.audio-loop-transport COMMAND bloom_ui_audio_loop_transport_test
+    LABELS ui audio TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(bloom_ui_audio_device_control_test audio_device_control_tests.cpp)
 target_link_libraries(bloom_ui_audio_device_control_test PRIVATE bloom_ui)

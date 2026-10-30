@@ -29,6 +29,8 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
+#include <bloom/ui/viewer_editor.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 
@@ -617,6 +619,41 @@ void testRamPreviewWorkArea(Expectations& expectations) {
         expectations.expect(key && fixture.frameCache->contains(*key) == (frame >= 2 && frame < 5),
                             "RAM uses half-open work-area frame bounds");
     }
+    ram.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
+// The Viewer footer's RAM Preview button: it toggles the controller, reads Cancel with progress
+// while it fills, and returns to "RAM Preview" when cancelled.
+void testRamPreviewButtonReflectsFillingAndCancels(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM button", time(24, 25)));
+    expectations.expect(animateSolidLayer(fixture.session), "animated composition");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "frame ready");
+    ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
+                                 fixture.bridge, fixture.countingPipeline());
+    ui::ViewerEditor viewer(fixture.session, fixture.controller, &ram);
+    auto* button = viewer.findChild<ui::kit::KButton*>(QStringLiteral("timelineRamPreviewButton"));
+    expectations.expect(button != nullptr, "the footer owns the RAM Preview button");
+    if (button == nullptr) {
+        ram.beginShutdown();
+        finishFixture(fixture, expectations);
+        return;
+    }
+    expectations.expect(button->text() == QStringLiteral("RAM Preview") && !button->isChecked(),
+                        "idle: the button reads RAM Preview");
+    fixture.gateAtCall = fixture.preparationCount.load();
+    button->click();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }) && ram.isCaching(),
+                        "clicking the button starts the fill");
+    QCoreApplication::processEvents();
+    expectations.expect(button->text().startsWith(QStringLiteral("Cancel")) && button->isChecked(),
+                        "filling: the button reads Cancel with progress");
+    button->click();
+    expectations.expect(!ram.isCaching(), "clicking again cancels the fill");
+    fixture.gate.release();
+    QCoreApplication::processEvents();
+    expectations.expect(button->text() == QStringLiteral("RAM Preview") && !button->isChecked(),
+                        "cancelled: the button returns to RAM Preview");
     ram.beginShutdown();
     finishFixture(fixture, expectations);
 }
@@ -1512,6 +1549,7 @@ int main(int argc, char** argv) {
         testCachingReleasesTheProcessImage(expectations);
         testFrameCacheEvictsUnderBudgetAndDropsStaleRevisions(expectations);
         testRamPreviewWorkArea(expectations);
+        testRamPreviewButtonReflectsFillingAndCancels(expectations);
         testRamPreviewCachesTheRangeThenPlaysEveryFrame(expectations);
         testLargeIndexedCoverageMetadata(expectations);
         testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(expectations);

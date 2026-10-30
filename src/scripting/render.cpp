@@ -138,8 +138,6 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         missing.diagnosticCode = RenderDiagnosticCode::MissingProcessingRoot;
         return missing;
     }
-    if (!host::exportPlatformSupported())
-        return failed("Export runs on Linux in this version");
     const auto source = session.renderSourceSnapshot();
     const auto& snapshot = source.snapshot;
     const auto* composition = snapshot.project().findComposition(request.composition);
@@ -206,7 +204,6 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     const bool media = !document::isImageExportFormat(*format);
     const auto retirement = media ? host::SequenceExportRetirementOwnerV1::create() : nullptr;
     host::ExportEncoderStatus encoders;
-    encoders.exportPlatform = true;
     encoders.probed = true;
     encoders.mediaWorker = media;
     host::ExportJobRunRequest runRequest{

@@ -35,6 +35,10 @@ class CompositionOutputStreamV1 final {
     [[nodiscard]] media::provider::Result<media::provider::EncodedChunkV1>
     read(std::uint64_t offset);
     [[nodiscard]] std::optional<media::provider::Unavailable> close();
+    // The provider that serves this stream once the first frame began it, and how it was
+    // selected (ADR 0035; diagnostics and provenance only).
+    [[nodiscard]] const media::provider::Handshake& handshake() const;
+    [[nodiscard]] const media::provider::MediaProviderProvenanceV1& provenance() const;
 
   private:
     struct State;
@@ -42,5 +46,6 @@ class CompositionOutputStreamV1 final {
 };
 [[nodiscard]] media::provider::Result<media::provider::MediaQcEvidenceV1>
 makeMediaQcEvidenceV1(const MediaOutputAnalysisV1&, const media::provider::EncodeQcV1&,
-                      core::Sha256Digest approval);
+                      core::Sha256Digest approval,
+                      const media::provider::Handshake* served = nullptr);
 } // namespace bloom::output

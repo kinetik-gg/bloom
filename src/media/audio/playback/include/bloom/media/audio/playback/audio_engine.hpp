@@ -87,6 +87,14 @@ struct AudioClip final {
     std::function<std::optional<core::RationalTime>(core::RationalTime)> mapTime{};
 };
 
+// A transport loop in timeline time, half-open: [start, end).
+struct LoopRange final {
+    core::RationalTime start{};
+    core::RationalTime end{};
+
+    friend constexpr bool operator==(const LoopRange&, const LoopRange&) noexcept = default;
+};
+
 class AudioEngine final {
   public:
     using ClipId = std::size_t;
@@ -124,6 +132,19 @@ class AudioEngine final {
     void stopAfterSilenceRequest() noexcept;
     AudioStatus seek(core::RationalTime at);
     [[nodiscard]] bool setRate(double rate) noexcept;
+    // Loops the mix inside [start, end): an unwrapped position p at or past `end` plays the
+    // timeline at start + (p - start) mod (end - start). The wrap is exact rational arithmetic on
+    // the mixer thread, so it is sample-accurate, gapless, and never drifts from a frame-modulo
+    // video wrap of the same range. positionNow() stays unwrapped and monotonic across wraps.
+    // Positions before `end` play unchanged, so a run that starts before the loop enters it.
+    //
+    // Safe while playing, without a device restart: frames already queued for the device but not
+    // yet heard are discarded at the next callback and re-mixed under the new range. Clearing the
+    // loop while playing keeps the pass the run is in, so the run continues from that pass exactly
+    // like one that never looped. Returns false (and changes nothing) for an empty, negative, or
+    // unrepresentable range.
+    [[nodiscard]] bool setLoopRange(std::optional<LoopRange> range) noexcept;
+    [[nodiscard]] std::optional<LoopRange> loopRange() const;
     // Safe on the UI thread: the callback zeros output immediately while device stop is queued.
     void requestSilence() noexcept {
         auto current = silenceState_.load(std::memory_order_acquire);
@@ -138,6 +159,10 @@ class AudioEngine final {
     // Pulls exactly `frames` through a NullBackend. It is deliberately unavailable for a device
     // backend so production playback always has the asynchronous mixer/callback boundary.
     AudioStatus renderForTesting(std::size_t frames);
+
+    // Frames mixed and waiting for the device. Diagnostic; it lets tests pull a threaded mixer
+    // without racing it into an underrun.
+    [[nodiscard]] std::size_t queuedFramesForTesting() const noexcept;
 
     [[nodiscard]] core::RationalTime positionNow() const noexcept;
     // Existing configured playback speed, independent of sample rate. No new rate policy.
@@ -158,11 +183,27 @@ class AudioEngine final {
         std::int64_t rateDenominator = 1;
     };
 
+    // The loop in units of 1/scale output frames, so its bounds are exact integers.
+    struct LoopFrames final {
+        std::int64_t scale = 1;
+        std::int64_t start = 0;
+        std::int64_t end = 0;
+    };
+    // Mid-play rewind handshake. The control side requests it under controlMutex_ (so the mixer
+    // stops pushing), the device callback (or the mixer, when the ring is already empty) claims
+    // it, discards the queued frames, and the mixer rewinds by exactly that many frames.
+    enum class Rewind : std::uint8_t { Idle, Requested, Claimed, Done };
+
     static constexpr std::size_t kMixerBlockFrames = 512;
 
     static void backendCallback(void* userData, std::span<float> output) noexcept;
     void mixerLoop() noexcept;
     bool produceBlock(std::size_t frames) noexcept;
+    // Both require controlMutex_.
+    [[nodiscard]] bool settleRewind() noexcept;
+    void applyLoop(std::uint64_t producedFrame) noexcept;
+    [[nodiscard]] std::int64_t loopedFrame(std::int64_t absoluteFrame) const noexcept;
+    void resetTransportLocked() noexcept;
     void mixBlock(std::uint64_t firstProducedFrame, std::span<float> output) noexcept;
     void joinMixer() noexcept;
 
@@ -186,6 +227,19 @@ class AudioEngine final {
     double playbackRate_ = 1.0;
     std::int64_t playbackRateNumerator_ = 1;
     std::int64_t playbackRateDenominator_ = 1;
+    // Guarded by controlMutex_. requestedLoop_ is what the caller asked for; loopFrames_ is what
+    // the mixer applies, updated once a mid-play rewind has settled.
+    std::optional<LoopRange> requestedLoop_;
+    std::optional<LoopFrames> requestedLoopFrames_;
+    std::optional<LoopFrames> loopFrames_;
+    bool loopDirty_ = false;
+    // Whole output frames subtracted from the unwrapped position after a loop was cleared mid-run.
+    std::int64_t heldPassFrames_ = 0;
+    std::atomic<Rewind> rewind_{Rewind::Idle};
+    std::atomic<std::uint64_t> rewindDiscarded_{0};
+    // Frames the device consumed while the ring was empty. The mixer skips them so the mix stays
+    // on the device clock instead of lagging it for the rest of the run.
+    std::atomic<std::uint64_t> underrunFrames_{0};
 };
 
 } // namespace bloom::media::audio::playback
