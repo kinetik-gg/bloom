@@ -175,6 +175,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/folder-open.svg
         kit/third_party/phosphor-icons/regular/lightning.svg
         kit/third_party/phosphor-icons/regular/export.svg
+        kit/third_party/phosphor-icons/regular/broom.svg
         kit/third_party/phosphor-icons/regular/plugs-connected.svg
         kit/third_party/phosphor-icons/regular/terminal-window.svg
         kit/third_party/phosphor-icons/regular/cursor.svg
@@ -199,7 +200,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/film-strip.svg
         kit/third_party/phosphor-icons/regular/folder.svg
         kit/third_party/phosphor-icons/regular/gear.svg
-        kit/third_party/phosphor-icons/regular/graph.svg
+        kit/third_party/phosphor-icons/regular/tree-structure.svg
         kit/third_party/phosphor-icons/regular/hand-grabbing.svg
         kit/third_party/phosphor-icons/regular/hand.svg
         kit/third_party/phosphor-icons/regular/image.svg
@@ -256,6 +257,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/folder-open-bold.svg
         kit/third_party/phosphor-icons/bold/lightning-bold.svg
         kit/third_party/phosphor-icons/bold/export-bold.svg
+        kit/third_party/phosphor-icons/bold/broom-bold.svg
         kit/third_party/phosphor-icons/bold/plugs-connected-bold.svg
         kit/third_party/phosphor-icons/bold/terminal-window-bold.svg
         kit/third_party/phosphor-icons/bold/cursor-bold.svg
@@ -280,7 +282,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/film-strip-bold.svg
         kit/third_party/phosphor-icons/bold/folder-bold.svg
         kit/third_party/phosphor-icons/bold/gear-bold.svg
-        kit/third_party/phosphor-icons/bold/graph-bold.svg
+        kit/third_party/phosphor-icons/bold/tree-structure-bold.svg
         kit/third_party/phosphor-icons/bold/hand-bold.svg
         kit/third_party/phosphor-icons/bold/hand-grabbing-bold.svg
         kit/third_party/phosphor-icons/bold/image-bold.svg
@@ -325,6 +327,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/folder-open-fill.svg
         kit/third_party/phosphor-icons/fill/lightning-fill.svg
         kit/third_party/phosphor-icons/fill/export-fill.svg
+        kit/third_party/phosphor-icons/fill/broom-fill.svg
         kit/third_party/phosphor-icons/fill/plugs-connected-fill.svg
         kit/third_party/phosphor-icons/fill/terminal-window-fill.svg
         kit/third_party/phosphor-icons/fill/cursor-fill.svg
@@ -349,7 +352,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/film-strip-fill.svg
         kit/third_party/phosphor-icons/fill/folder-fill.svg
         kit/third_party/phosphor-icons/fill/gear-fill.svg
-        kit/third_party/phosphor-icons/fill/graph-fill.svg
+        kit/third_party/phosphor-icons/fill/tree-structure-fill.svg
         kit/third_party/phosphor-icons/fill/hand-fill.svg
         kit/third_party/phosphor-icons/fill/hand-grabbing-fill.svg
         kit/third_party/phosphor-icons/fill/image-fill.svg

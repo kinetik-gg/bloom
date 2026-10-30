@@ -63,7 +63,7 @@ constexpr auto kHeaderIconRole = kit::IconRole::Chrome;
         return kit::IconId::SlidersHorizontal;
     }
     if (editorId == "bloom.nodes") {
-        return kit::IconId::Graph;
+        return kit::IconId::Nodes;
     }
     if (editorId == "bloom.script") {
         return kit::IconId::ScriptEditor;

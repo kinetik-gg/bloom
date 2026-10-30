@@ -76,7 +76,7 @@ const auto& iconAssets() {
         {IconId::Stack, QLatin1StringView("stack")},
         {IconId::Clock, QLatin1StringView("clock")},
         {IconId::SlidersHorizontal, QLatin1StringView("sliders-horizontal")},
-        {IconId::Graph, QLatin1StringView("graph")},
+        {IconId::Nodes, QLatin1StringView("tree-structure")},
         {IconId::Reset, QLatin1StringView("arrow-counter-clockwise")},
         {IconId::Handle, QLatin1StringView("dots-six-vertical")},
         {IconId::Jump, QLatin1StringView("arrow-square-out")},
@@ -111,6 +111,7 @@ const auto& iconAssets() {
         {IconId::ScriptEditor, QLatin1StringView("terminal-window")},
         {IconId::McpServer, QLatin1StringView("plugs-connected")},
         {IconId::ExportPanel, QLatin1StringView("export")},
+        {IconId::Arrange, QLatin1StringView("broom")},
     });
     return entries;
 }

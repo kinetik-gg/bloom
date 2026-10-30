@@ -334,7 +334,7 @@ void testThePanelSwitcherPinsTheIconMapping(Expectations& expectations) {
          {Mapping{"bloom.assets", kit::IconId::Folder}, Mapping{"bloom.viewer", kit::IconId::Stack},
           Mapping{"bloom.timeline", kit::IconId::Clock},
           Mapping{"bloom.properties", kit::IconId::SlidersHorizontal},
-          Mapping{"bloom.nodes", kit::IconId::Graph}}) {
+          Mapping{"bloom.nodes", kit::IconId::Nodes}}) {
         const int index = picker->findData(QString::fromLatin1(id));
         expectations.expect(index >= 0, std::string{id} + " is a panel-switcher entry");
         if (index < 0) {

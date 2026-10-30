@@ -81,7 +81,8 @@ enum class IconId : std::uint8_t {
     Stack,
     Clock,
     SlidersHorizontal,
-    Graph,
+    // The Node editor (Phosphor tree-structure).
+    Nodes,
     Reset,
     Handle,
     Jump,
@@ -125,6 +126,8 @@ enum class IconId : std::uint8_t {
     McpServer,
     // The Export panel (a box with an outgoing arrow).
     ExportPanel,
+    // The Node editor footer's Arrange (a broom: tidy the graph).
+    Arrange,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add
