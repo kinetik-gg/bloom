@@ -198,6 +198,7 @@ bool gAppScheduler = false;
 // Cache qualification reuses the explicit retirement teardown guard above.
 #include "gpu_packed_cache100_proof.ipp"
 #include "gpu_packed_playing_proof.ipp"
+#include "gpu_packed_bench_project.ipp"
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     bool cache100 = false, half = false, partial = false, playing = false, animatedDrag = false;
@@ -235,6 +236,20 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             gColdFootage = true;
         } else if (argument == "--app-scheduler") {
             gAppScheduler = true;
+        } else if (argument == "--bench-project") {
+            if (++index >= argc)
+                return 2;
+            gBenchProject = argv[index];
+        } else if (argument == "--bench-playback") {
+            gBenchPlayback = true;
+        } else if (argument == "--bench-play-seconds") {
+            if (++index >= argc)
+                return 2;
+            gBenchPlaySeconds = std::stod(argv[index]);
+        } else if (argument == "--bench-timeout-seconds") {
+            if (++index >= argc)
+                return 2;
+            gBenchTimeout = std::chrono::seconds(std::stoll(argv[index]));
         } else if (argument == "--cache100-half") {
             cache100 = true;
             half = true;
@@ -265,12 +280,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     QCoreApplication::setApplicationName("PackedViewer");
     QSettings().setValue("viewer/resolution", "Full");
     // The cache100 RAM-fill harness uses no presentation surface and also runs offscreen.
-    const bool offscreenCache = cache100 && QApplication::platformName() == "offscreen";
+    const bool offscreenCache =
+        (cache100 || !gBenchProject.empty()) && QApplication::platformName() == "offscreen";
     if (options.loader_path.empty() ||
         (!offscreenCache && !QApplication::platformName().startsWith("wayland"))) {
         std::cout << "Unsupported: private Wayland and genuine Vulkan device are required\n";
         return options.require_device ? 1 : 77;
     }
+    if (!gBenchProject.empty())
+        return runPackedBenchProject(options, half);
     if (cache100)
         return runPackedCache100(options, temporary, half, partial, sequenceManifest, sustained,
                                  preparationWidth, deliveredDefaults);
