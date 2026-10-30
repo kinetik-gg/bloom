@@ -99,6 +99,10 @@ class MemoryBudgetLedger final {
     [[nodiscard]] std::size_t setCacheCeiling(const void* owner, std::size_t ceiling);
     [[nodiscard]] std::size_t cacheByteBudget(const void* owner) const;
     void setConfiguredTotal(std::size_t bytes);
+    // The RAM headroom preference. Once set, each reusable pool may hold what it retains now plus
+    // all measured available memory beyond the headroom: caches fill usable memory and are evicted
+    // on demand (admission reclaimers, the next sample). An observed OS limit still applies.
+    void setRamHeadroom(std::size_t bytes);
     [[nodiscard]] MemoryBudgetState poll(MachineMemorySample sample,
                                          Clock::time_point now = Clock::now());
     [[nodiscard]] MemoryBudgetState applySample(MemoryBudgetSample sample,
@@ -169,6 +173,7 @@ class MemoryBudgetLedger final {
     std::optional<Clock::time_point> lastSwapSampleTime_;
     bool hasPolled_ = false;
     bool processSampling_ = false;
+    std::optional<std::size_t> ramHeadroom_;
     bool defaultsResolved_ = false;
     bool configuredTotalSet_ = false;
     std::optional<Clock::time_point> lastProcessSample_;

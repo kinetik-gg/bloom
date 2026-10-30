@@ -381,6 +381,5 @@ cacheMemoryBudgetAllocationFromSettings(const QSettings& settings,
 [[nodiscard]] runtime::MemoryBudgetAllocation applyCacheMemoryBudgetsFromSettings(
     const QSettings& settings, runtime::OperationCache& operations, PreviewFrameCache& preview,
     runtime::MemoryBudgetLedger& ledger = runtime::processMemoryBudgetLedger());
-void setRamPreviewByteBudgetInSettings(QSettings& settings, std::size_t bytes);
 
 } // namespace bloom::ui

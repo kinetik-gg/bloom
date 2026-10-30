@@ -26,7 +26,8 @@ using PreviewPreparationResultHandle = runtime::PreviewPreparationResultHandle;
 // exercised with real scheduler handles and no UI at all.
 class RamPreviewPipeline final {
   public:
-    // A hard maximum of two, independent of the selected production or qualification width.
+    // The CPU route's default width. The GPU route's width comes from measured capacity (see
+    // RamPreviewController::setFillWidthProvider); no constant caps it.
     static constexpr std::size_t kMaxInFlight = 2;
 
     struct InFlight final {
@@ -43,14 +44,15 @@ class RamPreviewPipeline final {
         runtime::TaskResult<PreviewPreparationResultHandle> result;
     };
 
-    // The paired width experiment uses the same production pipeline. Width is clamped to
-    // the existing hard bound; no setting can admit a third simultaneous preparation.
     explicit RamPreviewPipeline(std::size_t width = kMaxInFlight) noexcept
-        : width_(width == 1 ? 1 : kMaxInFlight) {}
+        : width_(width == 0 ? 1 : width) {}
     RamPreviewPipeline(const RamPreviewPipeline&) = delete;
     RamPreviewPipeline& operator=(const RamPreviewPipeline&) = delete;
 
     [[nodiscard]] bool hasCapacity() const noexcept { return slots_.size() < width_; }
+    // Frames already in flight keep running when the width shrinks; new ones wait for room.
+    void setWidth(const std::size_t width) noexcept { width_ = width == 0 ? 1 : width; }
+    [[nodiscard]] std::size_t width() const noexcept { return width_; }
     [[nodiscard]] std::size_t inFlightCount() const noexcept { return slots_.size(); }
     [[nodiscard]] bool empty() const noexcept { return slots_.empty(); }
     // The high-water mark since construction, so a test can prove the bound held even after the

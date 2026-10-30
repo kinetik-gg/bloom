@@ -166,8 +166,9 @@ void liveSettingsAndDeliveredCapacity() {
     runtime::MemoryBudgetLedger ledger(60 * gib, 22 * gib);
     QTemporaryDir directory;
     QSettings settings(directory.filePath("live-budgets.ini"), QSettings::IniFormat);
-    settings.setValue("playback/operation-cache-bytes", QString::number(18 * gib));
-    ui::setRamPreviewByteBudgetInSettings(settings, 12 * gib);
+    // Retired cache-target keys: present in old settings files, ignored by the headroom model.
+    settings.setValue("playback/operation-cache-bytes", QString::number(5 * gib));
+    settings.setValue("playback/ram-preview-memory-bytes", QString::number(3 * gib));
     ledger.beginProcessSampling();
     runtime::OperationCache operations(1, ledger);
     ui::PreviewFrameCache preview(1, ledger);
@@ -190,7 +191,7 @@ void liveSettingsAndDeliveredCapacity() {
                 operations.byteBudget() == 18 * gib && preview.byteBudget() == 12 * gib &&
                 applied.processingEffectiveBytes == 60 * gib && applied.retentionPercent == 100 &&
                 !applied.memoryPressure,
-            "delivered free-memory changes preserve exact settings and independent pool budgets");
+            "delivered free-memory changes keep the automatic pool budgets; retired keys ignored");
         policy.applyHostSample(applied, ledger.physicalByteBudget(), allocation, now);
         const auto published = view->load();
         expect(
@@ -206,16 +207,13 @@ void liveSettingsAndDeliveredCapacity() {
     deliver(2, 40 * gib);
     const auto deliveredSerial = ledger.state().sampleSerial;
     settings.setValue("playback/operation-cache-bytes", QString::number(3 * gib));
-    ui::setRamPreviewByteBudgetInSettings(settings, 2 * gib);
+    settings.setValue("playback/ram-preview-memory-bytes", QString::number(2 * gib));
     const auto changed =
         ui::applyCacheMemoryBudgetsFromSettings(settings, operations, preview, ledger);
-    expect(changed.operationCacheByteBudget == 3 * gib &&
-               changed.previewFrameCacheByteBudget == 2 * gib &&
-               operations.byteBudget() == 3 * gib && preview.byteBudget() == 2 * gib &&
-               ledger.state().configuredBytes == 5 * gib &&
+    expect(changed == configured && operations.byteBudget() == 18 * gib &&
+               preview.byteBudget() == 12 * gib && ledger.state().configuredBytes == 30 * gib &&
                ledger.state().sampleSerial == deliveredSerial,
-           "applying edited preferences changes both owners immediately without another sample or "
-           "restart");
+           "edited retired cache-target keys do not change either owner");
     settings.remove("playback/operation-cache-bytes");
     settings.remove("playback/ram-preview-memory-bytes");
     const auto automatic =
@@ -408,7 +406,7 @@ void coldForegroundAndSettings() {
            "cold reusable zero does not invalidate foreground CPU/GPU processing admission");
     QTemporaryDir directory;
     QSettings settings(directory.filePath("budgets.ini"), QSettings::IniFormat);
-    ui::setRamPreviewByteBudgetInSettings(settings, 8 * gib);
+    settings.setValue("playback/ram-preview-memory-bytes", QString::number(8 * gib));
     settings.setValue("playback/operation-cache-bytes", QString::number(16 * gib));
     static_cast<void>(ui::cacheMemoryBudgetsFromSettings(settings));
     runtime::TaskScheduler scheduler(config());
@@ -465,16 +463,14 @@ void coldForegroundAndSettings() {
                settings.value("playback/ram-preview-memory-bytes").toULongLong() == 8 * gib &&
                cache->byteBudget() < requested.previewFrameCacheByteBudget,
            "many status surfaces share one sampler; settings remain requested while cache clamps");
-    ui::setRamPreviewByteBudgetInSettings(settings, 20 * gib);
+    settings.setValue("playback/ram-preview-memory-bytes", QString::number(20 * gib));
     settings.setValue("playback/operation-cache-bytes", QString::number(20 * gib));
     const auto oversized = ui::cacheMemoryBudgetsFromSettings(settings);
     first.pollMemoryPressureForTest({.availableBytes = 60 * gib},
                                     runtime::MemoryBudgetLedger::Clock::now());
     expect(settings.value("playback/operation-cache-bytes").toULongLong() == 20 * gib &&
                settings.value("playback/ram-preview-memory-bytes").toULongLong() == 20 * gib &&
-               oversized.operationCacheByteBudget == 20 * gib &&
-               oversized.previewFrameCacheByteBudget == 20 * gib &&
-               ledger.state().configuredBytes == 40 * gib &&
+               oversized == requested &&
                first.cacheToolTipForTest().contains(QStringLiteral("Requested cache total:")) &&
                first.cacheToolTipForTest().contains(QStringLiteral("Current cache budget:")) &&
                first.cacheToolTipForTest().contains(QStringLiteral("combined cache budgets")),

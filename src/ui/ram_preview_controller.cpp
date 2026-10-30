@@ -7,8 +7,10 @@
 #include <bloom/document/project.hpp>
 
 #include <QThread>
+#include <QTimer>
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <new>
 #include <utility>
@@ -279,6 +281,14 @@ void RamPreviewController::requestFrames() {
         return;
     }
     const auto serial = runSerial_;
+    if (fillWidthProvider_) {
+        if (const auto* composition = session_.composition()) {
+            const auto pixels = static_cast<std::uint64_t>(composition->format().width()) *
+                                composition->format().height();
+            // Everything already in flight holds its own claim; add what still fits on top.
+            pipeline_.setWidth(pipeline_.inFlightCount() + fillWidthProvider_(pixels));
+        }
+    }
     while (caching_ && serial == runSerial_ && pipeline_.hasCapacity()) {
         const auto* composition = session_.composition();
         if (composition == nullptr) {
@@ -380,6 +390,23 @@ bool RamPreviewController::drainResults() {
     for (auto& ready : pipeline_.takeReady()) {
         if (!caching_ || shuttingDown_ || serial != runSerial_) {
             return false;
+        }
+        if (ready.result.state() == runtime::TaskState::Failed &&
+            std::ranges::any_of(ready.result.diagnostics(), [](const auto& diagnostic) {
+                return diagnostic.code == "bloom.preview.gpu-scene.awaiting-capacity";
+            })) {
+            // Other work (the Viewer, an export) holds the capacity this frame needs: a wait,
+            // not a failure. Rescan from this frame and retry once capacity is released.
+            nextFrameIndex_ = std::min(nextFrameIndex_, ready.frameIndex);
+            if (!capacityRetryScheduled_) {
+                capacityRetryScheduled_ = true;
+                QTimer::singleShot(std::chrono::milliseconds(20), this, [this, serial] {
+                    capacityRetryScheduled_ = false;
+                    if (caching_ && serial == runSerial_)
+                        advance();
+                });
+            }
+            continue;
         }
         if (ready.result.state() != runtime::TaskState::Succeeded) {
             // Cancelled or failed: the run ends and keeps whatever already reached the cache. A

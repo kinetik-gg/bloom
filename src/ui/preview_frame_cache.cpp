@@ -20,8 +20,6 @@
 namespace bloom::ui {
 namespace {
 
-constexpr auto ramPreviewByteBudgetKey = "playback/ram-preview-memory-bytes";
-
 // What the cache retains for one frame: the packed display buffer and the identity, never the
 // Float32 process image (task PERF1, FORMAL AMENDMENT 1). Production CPU preparation supplies an
 // already-stripped product from its worker. A legacy direct CPU insertion still copies here; the
@@ -672,25 +670,14 @@ std::size_t defaultPreviewFrameCacheByteBudget() noexcept {
     return runtime::processMemoryBudgetLedger().allocate().previewFrameCacheByteBudget;
 }
 
-namespace {
-
-[[nodiscard]] std::optional<std::size_t> budgetOverride(const QSettings& settings,
-                                                        const QLatin1StringView key) {
-    bool parsed = false;
-    const auto bytes = settings.value(key).toString().toULongLong(&parsed);
-    if (!parsed || bytes == 0 || bytes > std::numeric_limits<std::size_t>::max())
-        return std::nullopt;
-    return static_cast<std::size_t>(bytes);
-}
-
-} // namespace
-
 runtime::MemoryBudgetAllocation
 cacheMemoryBudgetAllocationFromSettings(const QSettings& settings,
                                         const runtime::MemoryBudgetLedger& ledger) {
-    return ledger.allocate(
-        budgetOverride(settings, QLatin1StringView("playback/operation-cache-bytes")),
-        budgetOverride(settings, QLatin1StringView(ramPreviewByteBudgetKey)));
+    // The playback/operation-cache-bytes and playback/ram-preview-memory-bytes targets are
+    // retired: reusable caches fill measured available memory beyond the RAM headroom preference
+    // (MemoryBudgetLedger::setRamHeadroom) and are evicted on demand. Saved values are ignored.
+    static_cast<void>(settings);
+    return ledger.allocate();
 }
 
 runtime::MemoryBudgetAllocation cacheMemoryBudgetsFromSettings(const QSettings& settings) {
@@ -725,11 +712,6 @@ std::size_t ramPreviewByteBudgetFromSettings(const QSettings& settings) {
 
 std::size_t operationCacheByteBudgetFromSettings(const QSettings& settings) {
     return cacheMemoryBudgetsFromSettings(settings).operationCacheByteBudget;
-}
-
-void setRamPreviewByteBudgetInSettings(QSettings& settings, const std::size_t bytes) {
-    settings.setValue(QLatin1StringView(ramPreviewByteBudgetKey),
-                      QString::number(static_cast<qulonglong>(bytes)));
 }
 
 } // namespace bloom::ui

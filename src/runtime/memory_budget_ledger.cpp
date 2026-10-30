@@ -318,6 +318,15 @@ std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) 
         return participant.ceiling;
     if (state_.awaitingProcessSample)
         return 0;
+    if (ramHeadroom_ && state_.machine.availableBytes) {
+        // Usable-capacity retention: what this pool holds plus the free memory beyond headroom.
+        const auto available = *state_.machine.availableBytes;
+        const auto free = available > *ramHeadroom_ ? available - *ramHeadroom_ : 0;
+        auto bytes = saturatedAdd(participant.retained ? participant.retained() : 0, free);
+        if (state_.processCacheCeilingBytes)
+            bytes = std::min(bytes, *state_.processCacheCeilingBytes);
+        return bytes;
+    }
     if (!state_.processCacheCeilingBytes)
         return participant.ceiling;
     const auto absoluteLimit = *state_.processCacheCeilingBytes;
@@ -422,6 +431,14 @@ MemoryBudgetState MemoryBudgetLedger::pollHostLocked(MachineMemorySample sample,
     return state_;
 }
 
+void MemoryBudgetLedger::setRamHeadroom(const std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
+    if (ramHeadroom_ == bytes)
+        return;
+    ramHeadroom_ = bytes;
+    applyBudgetsLocked();
+}
+
 void MemoryBudgetLedger::applyBudgetsLocked() {
     for (const auto& [owner, cache] : caches_)
         cache.applyBudget(cacheByteBudgetLocked(cache));
@@ -460,13 +477,14 @@ void MemoryBudgetLedger::applyProcessCeilingLocked() {
         state_.effectiveBytes = std::min(state_.effectiveBytes, *state_.processCacheCeilingBytes);
     if (state_.awaitingProcessSample)
         state_.effectiveBytes = 0;
-    state_.memoryPressure = !state_.awaitingProcessSample && state_.processCacheCeilingBytes &&
-                            (state_.configuredBytes > *state_.processCacheCeilingBytes ||
-                             std::any_of(caches_.begin(), caches_.end(), [this](const auto& entry) {
-                                 const auto& cache = entry.second;
-                                 return cache.kind == MemoryBudgetOwnerKind::ReusableRetention &&
-                                        cacheByteBudgetLocked(cache) < cache.ceiling;
-                             }));
+    state_.memoryPressure =
+        !state_.awaitingProcessSample && state_.processCacheCeilingBytes &&
+        (state_.configuredBytes > *state_.processCacheCeilingBytes ||
+         (!ramHeadroom_ && std::any_of(caches_.begin(), caches_.end(), [this](const auto& entry) {
+             const auto& cache = entry.second;
+             return cache.kind == MemoryBudgetOwnerKind::ReusableRetention &&
+                    cacheByteBudgetLocked(cache) < cache.ceiling;
+         })));
     state_.memoryNotice = state_.memoryPressure && !wasPressure;
 }
 

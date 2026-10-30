@@ -956,9 +956,14 @@ void testOperationCacheUnderRamPreview(Expectations& expectations) {
                                 defaultAllocation.operationCacheByteBudget,
                             "invalid operation budget uses the default");
     }
+    // The retired cache-target keys are ignored: caches fill usable memory beyond the RAM headroom.
     settings.setValue(QStringLiteral("playback/operation-cache-bytes"), QStringLiteral("4096"));
-    expectations.expect(ui::operationCacheByteBudgetFromSettings(settings) == 4096,
-                        "saved budget is honored");
+    settings.setValue(QStringLiteral("playback/ram-preview-memory-bytes"), QStringLiteral("4096"));
+    expectations.expect(ui::operationCacheByteBudgetFromSettings(settings) ==
+                                defaultAllocation.operationCacheByteBudget &&
+                            ui::ramPreviewByteBudgetFromSettings(settings) ==
+                                defaultAllocation.previewFrameCacheByteBudget,
+                        "retired cache-target keys no longer select budgets");
 }
 
 // LAYOUT-2: a RAM preview run keeps ONE retained evaluation snapshot across a layout-only edit,

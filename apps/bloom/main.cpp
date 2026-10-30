@@ -22,6 +22,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/acceleration_status.hpp>
+#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/audio_device_control.hpp>
@@ -39,6 +40,7 @@
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
 #include <bloom/ui/h264_encoder_service.hpp>
+#include <bloom/ui/interaction_sounds.hpp>
 #include <bloom/ui/jobs_editor.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/mcp/server_service.hpp>
@@ -56,13 +58,11 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
-#include <bloom/ui/interaction_sounds.hpp>
 #include <bloom/ui/system_notifier.hpp>
-#include <bloom/ui/ui_feedback.hpp>
-#include <bloom/ui/ui_sound_engine.hpp>
-#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/ui_feedback.hpp>
+#include <bloom/ui/ui_sound_engine.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
@@ -415,13 +415,14 @@ int main(int argc, char* argv[]) try {
                                                          node, cpuEvaluator.assetBaseDirectory(),
                                                          time, colorIntent, cancellation);
         },
-        [&snapshotCompiler, &cpuEvaluator](
-            const bloom::document::Snapshot& snapshot,
-            const bloom::document::CompositionId composition, const bloom::document::NodeId node,
-            const bloom::core::RationalTime time,
-            const bloom::runtime::EvaluationColorIntent& colorIntent,
-            const std::optional<bloom::runtime::ChannelInspection>& inspection, const std::int64_t x,
-            const std::int64_t y, const bloom::runtime::CancellationToken& cancellation) {
+        [&snapshotCompiler,
+         &cpuEvaluator](const bloom::document::Snapshot& snapshot,
+                        const bloom::document::CompositionId composition,
+                        const bloom::document::NodeId node, const bloom::core::RationalTime time,
+                        const bloom::runtime::EvaluationColorIntent& colorIntent,
+                        const std::optional<bloom::runtime::ChannelInspection>& inspection,
+                        const std::int64_t x, const std::int64_t y,
+                        const bloom::runtime::CancellationToken& cancellation) {
             return bloom::runtime::pickCryptomatte(snapshotCompiler, snapshot, composition, node,
                                                    cpuEvaluator.assetBaseDirectory(), time,
                                                    colorIntent, inspection, x, y, cancellation);
@@ -432,6 +433,17 @@ int main(int argc, char* argv[]) try {
     bloom::ui::RamPreviewController ramPreviewController(
         compositionSession, previewController, taskScheduler, taskUiBridge, previewPipeline,
         nullptr, gpuPreviewDisplaySubmitter);
+    // RAM preview keeps as many frames in flight as the measured free capacity holds (usable RAM
+    // and VRAM minus the headroom preferences), up to one per hardware thread for
+    // decode/preparation.
+    ramPreviewController.setFillWidthProvider(
+        [processingPhasePolicy,
+         deviceWorkingBytes =
+             512ULL * 1024 * 1024 + gpuPreviewDisplayOptions.packedTransferByteAllowance](
+            const std::uint64_t framePixels) {
+            return bloom::runtime::previewFramesThatFit(*processingPhasePolicy, framePixels,
+                                                        deviceWorkingBytes);
+        });
     // #380: the Assets header's composition frames, prepared on a worker by the same pipeline.
     bloom::ui::CompositionThumbnailController compositionThumbnails(
         compositionSession, taskScheduler, taskUiBridge, previewPipeline,
@@ -717,8 +729,11 @@ int main(int argc, char* argv[]) try {
     const auto applyHeadroom = [processingPhasePolicy] {
         const QSettings settings;
         const auto preferences = bloom::ui::loadApplicationPreferences(settings);
-        processingPhasePolicy->setHeadroom({.ramBytes = preferences.ramHeadroomBytes,
-                                            .vramBytes = preferences.vramHeadroomBytes});
+        processingPhasePolicy->setHeadroom(
+            {.ramBytes = preferences.ramHeadroomBytes, .vramBytes = preferences.vramHeadroomBytes});
+        // Reusable caches fill available memory beyond the same RAM headroom.
+        bloom::runtime::processMemoryBudgetLedger().setRamHeadroom(
+            static_cast<std::size_t>(preferences.ramHeadroomBytes));
     };
     applyHeadroom();
     QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window, applyHeadroom);
@@ -726,11 +741,11 @@ int main(int argc, char* argv[]) try {
                      [&uiFeedback](const bloom::ui::ApplicationPreferences& draft) {
                          uiFeedback.playTest(bloom::ui::feedbackSettingsFrom(draft));
                      });
-    QObject::connect(&frameExportController, &bloom::ui::FrameExportController::exportFinished,
-                     &window, [&uiFeedback](const bloom::ui::FrameExportOutcome outcome,
-                                            const QString& message) {
-                         uiFeedback.announceExport(outcome, message);
-                     });
+    QObject::connect(
+        &frameExportController, &bloom::ui::FrameExportController::exportFinished, &window,
+        [&uiFeedback](const bloom::ui::FrameExportOutcome outcome, const QString& message) {
+            uiFeedback.announceExport(outcome, message);
+        });
     QObject::connect(&assetController, &bloom::ui::AssetController::importFinished, &window,
                      [&uiFeedback](const bloom::ui::AssetController::ImportReport& report) {
                          if (const auto event = bloom::ui::importFeedbackEvent(
@@ -739,10 +754,9 @@ int main(int argc, char* argv[]) try {
                              uiFeedback.play(*event);
                          }
                      });
-    QObject::connect(&compositionSession, &bloom::ui::CompositionSession::commandRejected, &window,
-                     [&uiFeedback](const QString&) {
-                         uiFeedback.play(bloom::ui::FeedbackEvent::Refused);
-                     });
+    QObject::connect(
+        &compositionSession, &bloom::ui::CompositionSession::commandRejected, &window,
+        [&uiFeedback](const QString&) { uiFeedback.play(bloom::ui::FeedbackEvent::Refused); });
     QObject::connect(&playback, &bloom::ui::PlaybackController::stateChanged, &window,
                      [&uiFeedback](const bloom::ui::PlaybackState state) {
                          uiFeedback.setInteractionSuppressed(

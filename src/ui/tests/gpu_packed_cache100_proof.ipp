@@ -151,12 +151,18 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
             return 2;
         }
     } else {
+        if (gFootage2k) {
+            compositionWidth = 2048;
+            compositionHeight = 858;
+            sequence.width = 2048;
+            sequence.height = 858;
+        }
         for (std::int64_t index = 0; index < 100; ++index) {
             const auto path = std::filesystem::path(temporary.path().toStdString()) /
                               ("packed." + std::to_string(index) + ".exr");
-            writeExrRgba(path, 1920, 1080,
+            writeExrRgba(path, static_cast<int>(sequence.width), static_cast<int>(sequence.height),
                          std::vector<ExrPixel>(
-                             1920ULL * 1080,
+                             static_cast<std::size_t>(sequence.width) * sequence.height,
                              ExrPixel{static_cast<float>(index + 1) / 128.0F, 0.3F, 0.7F, 1.0F}));
             const auto member = imageAsset(path, "Distinct packed member", 901);
             sequence.manifest.members.push_back({index, member.locator, member.contentDigest});
@@ -187,6 +193,17 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     commands::Transaction add("Add packed sequence");
     add.emplace<commands::AddImageLayer>(project.initialCompositionId, sequence.id);
     checks.expect(commands.execute(std::move(add)).succeeded(), "real sequence layer is authored");
+    if (gFootage2k) {
+        // Several transformed layers over the footage, as in an ordinary 2K shot.
+        for (int layer = 0; layer < 3; ++layer) {
+            checks.expect(session.addSolidLayer(QString("Layer %1").arg(layer),
+                                                {0.2 * layer, 0.4, 0.8 - 0.2 * layer, 1.0}) &&
+                              session.setSelectedScale(0.3 + 0.1 * layer, 0.25 + 0.1 * layer) &&
+                              session.setSelectedRotation(15.0 * (layer + 1)) &&
+                              session.setSelectedOpacity(0.6),
+                          "a transformed solid layer is authored over the footage");
+        }
+    }
     std::atomic<std::uint64_t> preparations{0};
     runtime::CpuReferenceDisplayPreparer displayPreparer;
     const auto taskBudgetView =
@@ -339,7 +356,13 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                                                 cache, nullptr, submitter, nullptr,
                                                 processingPolicy);
     ui::RamPreviewController ram(session, controller, scheduler, bridge, pipeline, nullptr,
-                                 submitter, preparationWidth);
+                                 submitter, preparationWidth == 0 ? 1 : preparationWidth);
+    if (preparationWidth == 0) {
+        ram.setFillWidthProvider([processingPolicy, transferBudget](const std::uint64_t pixels) {
+            return runtime::previewFramesThatFit(*processingPolicy, pixels,
+                                                 (512ULL << 20) + transferBudget);
+        });
+    }
     if (deliveredDefaults) {
         const auto delivered = taskBudgetView->load();
         checks.expect(
@@ -559,16 +582,17 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
         fromCompletion == ram.preparedFrameCount() && outsideCompletion == 0,
         "every actual RAM result/refill is driven by completion, not Jobs snapshot polling");
     std::ranges::sort(terminalDeliveryMicros);
-    std::cout << "PACKED_COMPLETION_REFILL width=" << preparationWidth
-              << " peakInFlight=" << ram.peakInFlightFrames()
-              << " prepared=" << ram.preparedFrameCount() << " insideCompletion=" << fromCompletion
-              << " outsideCompletion=" << outsideCompletion
-              << " completionSignals=" << completionSignals
-              << " bridgeWakes=" << bridge.completionWakeCount() << " jobsPolls=" << jobsPolls
-              << " fillWallMs="
-              << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
-                                                           fillStarted)
-                     .count();
+    std::cout
+        << "PACKED_COMPLETION_REFILL width="
+        << (preparationWidth == 0 ? std::string("capacity") : std::to_string(preparationWidth))
+        << " composition=" << compositionWidth << 'x' << compositionHeight
+        << " peakInFlight=" << ram.peakInFlightFrames() << " prepared=" << ram.preparedFrameCount()
+        << " insideCompletion=" << fromCompletion << " outsideCompletion=" << outsideCompletion
+        << " completionSignals=" << completionSignals
+        << " bridgeWakes=" << bridge.completionWakeCount() << " jobsPolls=" << jobsPolls
+        << " fillWallMs="
+        << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - fillStarted)
+               .count();
     if (!terminalDeliveryMicros.empty())
         std::cout << " measuredTerminals=" << terminalDeliveryMicros.size()
                   << " terminalToUiMedianMicros="

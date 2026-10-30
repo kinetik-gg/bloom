@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -130,8 +132,16 @@ class RamPreviewController final : public QObject {
     };
     [[nodiscard]] MetadataWork metadataWork() const noexcept { return metadataWork_; }
     void resetMetadataWorkForTesting() noexcept { metadataWork_ = {}; }
+    // Frames in flight are sized from measured capacity: the provider answers how many frames of
+    // `framePixels` fit the processing root's free capacity now (at least one is always tried).
+    // Without a provider the constructor's width applies.
+    using FillWidthProvider = std::function<std::size_t(std::uint64_t framePixels)>;
+    void setFillWidthProvider(FillWidthProvider provider) {
+        fillWidthProvider_ = std::move(provider);
+    }
+    [[nodiscard]] std::size_t fillWidth() const noexcept { return pipeline_.width(); }
     // The high-water mark of frames ever preparing at once for this controller (across its runs).
-    // Never exceeds kMaxInFlight; exposed so a test can pin the bound without racing the workers.
+    // Exposed so a test can pin the bound without racing the workers.
     [[nodiscard]] std::uint32_t peakInFlightFrames() const noexcept {
         return pipeline_.peakInFlight();
     }
@@ -205,6 +215,8 @@ class RamPreviewController final : public QObject {
     PreviewPreparationSubmitter submitter_;
 
     // At most TWO frames preparing at once; the bound and cancellation live in the helper.
+    FillWidthProvider fillWidthProvider_;
+    bool capacityRetryScheduled_ = false;
     RamPreviewPipeline pipeline_;
     // TEMPORAL-2B: the run no longer pins one snapshot. Each submitted time resolves the session's
     // genuine snapshot for that time, so a finite clip-range edit can leave several retained

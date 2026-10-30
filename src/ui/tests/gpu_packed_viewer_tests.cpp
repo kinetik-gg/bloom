@@ -178,6 +178,12 @@ void observe(const char* name, ui::ViewerEditor& viewer, QSplitter& splitter, QW
 #include "gpu_packed_animation_proof.ipp"
 #include "gpu_packed_host_retirement_proof.ipp"
 #include "gpu_packed_stress_proof.ipp"
+// RAM-fill throughput measurement switches (cache100 only): --width-capacity sizes frames in flight
+// from the shared root's measured free capacity, as the application does; --footage-2k uses a
+// 2048x858 composition with 2048x858 footage and three transformed solid layers.
+namespace {
+bool gFootage2k = false;
+} // namespace
 // Cache qualification reuses the explicit retirement teardown guard above.
 #include "gpu_packed_cache100_proof.ipp"
 #include "gpu_packed_playing_proof.ipp"
@@ -203,6 +209,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             preparationWidth = 1;
         } else if (argument == "--width-two") {
             preparationWidth = ui::RamPreviewPipeline::kMaxInFlight;
+        } else if (argument == "--width-capacity") {
+            preparationWidth = 0;
+        } else if (argument == "--footage-2k") {
+            gFootage2k = true;
         } else if (argument == "--cache100-half") {
             cache100 = true;
             half = true;
