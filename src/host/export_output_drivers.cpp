@@ -4,6 +4,7 @@
 // replaced by the AnalysisPolicy check against the preset's declared preservation (section 10).
 #include "export_output_drivers.hpp"
 
+#include <bloom/host/export_capacity_wait.hpp>
 #include <bloom/host/frame_export_publication.hpp>
 #include <bloom/host/frame_range_runner.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -335,7 +336,10 @@ class ImageDriver final : public DriverBase {
         if (holding_ && !pauseRequested_) {
             holding_ = false;
             advance();
+            return;
         }
+        if (capacity_.waiting() && std::holds_alternative<std::monostate>(inFlight_))
+            pollCapacityWait();
     }
 
     void stop() override {
@@ -348,8 +352,10 @@ class ImageDriver final : public DriverBase {
             preparing->cancel();
         else if (auto* publishing = std::get_if<PublishHandle>(&inFlight_))
             publishing->handle.cancel();
-        else if (!done_)
+        else if (!done_) {
+            capacity_.succeeded();
             finishStopped();
+        }
     }
 
     void setPaused(const bool paused) override { pauseRequested_ = paused; }
@@ -451,7 +457,71 @@ class ImageDriver final : public DriverBase {
         inFlight_.emplace<OutputAnalysisAttemptRunnerV1>(std::move(begin).takeHandle());
     }
 
+    [[nodiscard]] const runtime::GpuProcessingPhasePolicy* processingPolicy() const {
+        return dependencies_.gpu ? dependencies_.gpu->processingPhasePolicy().get() : nullptr;
+    }
+
+    // ADR 0033 section 9: the frame waits at its boundary (route WaitingForViewer, no ETA) and is
+    // retried with bounded backoff; it stays stoppable and pausable.
+    void pollCapacityWait() {
+        if (stopRequested_) {
+            capacity_.succeeded();
+            return finishStopped();
+        }
+        if (pauseRequested_) {
+            capacity_.succeeded();
+            holding_ = true;
+            return;
+        }
+        const auto now = OutputAnalysisCapacityWaitV1::Clock::now();
+        if (capacity_.stalled(now, processingPolicy())) {
+            log(runtime::DiagnosticSeverity::Error, "export.capacity.stalled",
+                "No processing phase was admitted for " +
+                    std::to_string(OutputAnalysisCapacityWaitV1::kStallAfter.count()) +
+                    " s while waiting; " + describeProcessingReservationsV1(processingPolicy()),
+                next_);
+            capacity_.succeeded();
+            return fail(failure(ExportFailureCode::ResourceRefused, "export.capacity.stalled",
+                                "Bloom waited for memory to export frame " + std::to_string(next_) +
+                                    ", but other work kept holding it, so the export stopped. "
+                                    "Close a RAM preview or other exports and try again; the "
+                                    "details are in the log.",
+                                next_));
+        }
+        if (capacity_.retryDue(now))
+            advance();
+    }
+
     void handleAttempt(OutputAnalysisAttemptOutcomeV1 outcome) {
+        if (!stopRequested_) {
+            switch (outputAnalysisCapacityRefusalV1(outcome, processingPolicy())) {
+            case OutputAnalysisCapacityRefusalV1::Wait:
+                if (!capacity_.waiting())
+                    log(runtime::DiagnosticSeverity::Information, "export.capacity.waiting",
+                        describeOutputAnalysisAttemptV1(outcome) + "; " +
+                            describeProcessingReservationsV1(processingPolicy()),
+                        next_);
+                capacity_.refused(OutputAnalysisCapacityWaitV1::Clock::now(), processingPolicy());
+                route_ = ExportDeviceRoute::WaitingForViewer;
+                return;
+            case OutputAnalysisCapacityRefusalV1::NeverFits:
+                log(runtime::DiagnosticSeverity::Error, "export.capacity.never-fits",
+                    describeOutputAnalysisAttemptV1(outcome) + "; " +
+                        describeProcessingReservationsV1(processingPolicy()),
+                    next_);
+                capacity_.succeeded();
+                return fail(failure(ExportFailureCode::ResourceRefused,
+                                    "export.capacity.never-fits",
+                                    "Frame " + std::to_string(next_) +
+                                        " needs more memory than this computer can give the "
+                                        "export, so the export stopped. Try a smaller "
+                                        "resolution; the details are in the log.",
+                                    next_));
+            case OutputAnalysisCapacityRefusalV1::None:
+                capacity_.succeeded();
+                break;
+            }
+        }
         if (const auto& provenance = outcome.gpuProvenance();
             provenance && provenance->gpuEvaluated()) {
             auto& counters = report_.verification.provenance;
@@ -688,6 +758,7 @@ class ImageDriver final : public DriverBase {
     bool stopRequested_ = false;
     bool pauseRequested_ = false;
     bool holding_ = false;
+    OutputAnalysisCapacityWaitV1 capacity_;
     std::variant<std::monostate, CompileHandle, OutputAnalysisAttemptRunnerV1, PrepareHandle,
                  PublishHandle>
         inFlight_;
@@ -842,7 +913,10 @@ class MediaDriver final : public DriverBase {
             return std::nullopt;
         return input_.range.first + runner_->encodedFrames();
     }
-    [[nodiscard]] ExportDeviceRoute route() const override { return route_; }
+    [[nodiscard]] ExportDeviceRoute route() const override {
+        return runner_ && runner_->waitingForCapacity() ? ExportDeviceRoute::WaitingForViewer
+                                                        : route_;
+    }
 
   private:
     void finish(const SequenceExportResultV1& result) {

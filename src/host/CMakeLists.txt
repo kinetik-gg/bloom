@@ -20,6 +20,7 @@ target_sources(
         gpu_export_provider.cpp
         layer_alignment.cpp
         sequence_export_runner.cpp
+        export_capacity_wait.cpp
         output_analysis_attempt_runner.cpp
         output_analysis_attempt_color_private.cpp
         project_session.cpp

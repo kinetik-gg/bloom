@@ -151,6 +151,10 @@ class SequenceExportRunnerV1 final {
     void setPaused(bool paused);
     // True once a pause request has reached a frame boundary (nothing is in flight).
     [[nodiscard]] bool pausedAtBoundary() const;
+    // ADR 0033 section 9: the current frame was refused for capacity (the Viewer, a RAM preview
+    // or another export holds it) and waits at the frame boundary for a retry. Cancellable and
+    // pausable; time spent here counts toward no deadline.
+    [[nodiscard]] bool waitingForCapacity() const;
     [[nodiscard]] SequenceExportStageV1 stage() const;
     [[nodiscard]] const output::MediaOutputAnalysisV1* analysis() const;
     [[nodiscard]] std::optional<core::Sha256Digest> frameApprovalDigest() const;

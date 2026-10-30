@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <atomic>
+#include <bloom/host/export_capacity_wait.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/composition_output_stream.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -81,6 +82,10 @@ struct detail::SequenceExportWorkV1 {
     std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
     std::unique_ptr<output::MediaOutputAnalysisV1> analysis;
     std::shared_ptr<output::ExportResourceReservationV1> queueReservation;
+    // ADR 0033 section 9: the frame queue reservation was refused because the shared processing
+    // root is held by other work; the owner waits and retries reserveQueue().
+    bool queueAwaitingCapacity = false;
+    std::uint64_t queueBytes = 0;
     std::unique_ptr<output::CompositionOutputStreamV1> encoder;
     std::unique_ptr<FrameExportRequestV1> approvedFrame;
     std::atomic<bool> cancelled{false};
@@ -271,11 +276,30 @@ struct detail::SequenceExportWorkV1 {
                            std::uint64_t{8} * kEncodeChunkBytes;
         require(!request.queueByteLimit || bytes <= *request.queueByteLimit,
                 "Frame queue byte budget exceeded", Error::Oversized);
+        queueBytes = bytes;
+        reserveQueue(ledger, context);
+    }
+
+    void reserveQueue(output::ExportResourceLedgerV1& ledger, runtime::TaskContext& context) {
         output::ExportResourceAdmissionStatusV1 status{};
+        queueAwaitingCapacity = false;
         queueReservation = detail::reserveSequenceExportQueueV1(
-            ledger, bytes, request.queueByteLimit, request.gpuProvider, context.cancellation(),
+            ledger, queueBytes, request.queueByteLimit, request.gpuProvider, context.cancellation(),
             status);
-        require(queueReservation != nullptr, "Frame queue ledger reservation refused",
+        if (!queueReservation &&
+            status == output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded &&
+            request.gpuProvider) {
+            // Wait only while other work holds the shared root; with nothing else reserved the
+            // queue can never fit and the export fails below.
+            if (otherProcessingPhasesAdmittedV1(request.gpuProvider->processingPhasePolicy().get(),
+                                                0)) {
+                queueAwaitingCapacity = true;
+                return;
+            }
+        }
+        require(queueReservation != nullptr,
+                "This export needs more memory than this computer can give it, so it stopped. "
+                "Try a smaller resolution.",
                 Error::Oversized);
     }
 
@@ -531,6 +555,19 @@ struct SequenceExportRunnerV1::State {
     // Technical detail of the last failure, for logs only.
     std::string diagnostic;
     bool holding = false;
+    // ADR 0033 section 9: a frame refused for capacity waits at the frame boundary.
+    OutputAnalysisCapacityWaitV1 capacity;
+    bool capacityLogged = false;
+    [[nodiscard]] const runtime::GpuProcessingPhasePolicy* processingPolicy() const {
+        if (!work || !work->request.gpuProvider)
+            return nullptr;
+        return work->request.gpuProvider->processingPhasePolicy().get();
+    }
+    // The movie frame queue's reservation is this export's own admitted phase.
+    [[nodiscard]] std::size_t ownPhases() const { return work && work->queueReservation ? 1 : 0; }
+    [[nodiscard]] std::uint64_t currentFrame() const {
+        return work->request.range.firstFrame + visibleEncoded;
+    }
     std::uint64_t visibleEncoded = 0;
     std::optional<SequenceExportResultV1> outcome;
     State(runtime::TaskScheduler& s, PublicationCoordinator& p,
@@ -725,8 +762,11 @@ void SequenceExportRunnerV1::cancel() {
 }
 void SequenceExportRunnerV1::setPaused(const bool paused) { state_->pauseRequested = paused; }
 bool SequenceExportRunnerV1::pausedAtBoundary() const {
-    return state_->pauseRequested && state_->holding;
+    const auto& s = *state_;
+    const bool queueWait = s.stage == Stage::Compiling && !s.task.isValid() && s.capacity.waiting();
+    return s.pauseRequested && (s.holding || queueWait);
 }
+bool SequenceExportRunnerV1::waitingForCapacity() const { return state_->capacity.waiting(); }
 void SequenceExportRunnerV1::poll() {
     auto& s = *state_;
     if (s.stage == Stage::Complete)
@@ -744,6 +784,71 @@ void SequenceExportRunnerV1::poll() {
     if (s.stage == Stage::AwaitingApproval) {
         if (s.work->isCancelled())
             s.fail({Error::Cancelled, "Composition export cancelled"});
+        return;
+    }
+    if (s.stage == Stage::Compiling && !s.task.isValid() && s.capacity.waiting()) {
+        // Waiting for the frame queue reservation (nothing in flight).
+        if (s.work->isCancelled()) {
+            s.capacity.succeeded();
+            s.fail({Error::Cancelled, "Composition export cancelled"});
+            return;
+        }
+        const auto now = OutputAnalysisCapacityWaitV1::Clock::now();
+        if (s.pauseRequested) {
+            // Paused while waiting: nothing is in flight, so this is the boundary.
+            s.capacity.paused(now);
+            return;
+        }
+        if (s.capacity.stalled(now, s.processingPolicy())) {
+            s.diagnostic = "frame queue capacity wait stalled; no processing phase was admitted "
+                           "for " +
+                           std::to_string(OutputAnalysisCapacityWaitV1::kStallAfter.count()) +
+                           " s; " + describeProcessingReservationsV1(s.processingPolicy());
+            std::cerr << "Bloom export: " << s.diagnostic << '\n';
+            s.capacity.succeeded();
+            s.fail({Error::Busy,
+                    "Bloom waited for memory to start the export, but other work kept holding "
+                    "it, so the export stopped. Close a RAM preview or other exports and try "
+                    "again; the details are in the log."});
+            return;
+        }
+        if (s.capacity.retryDue(now)) {
+            auto& ledger = s.ledger;
+            s.submit(Stage::Compiling, [&ledger](Work& work, runtime::TaskContext& context) {
+                work.reserveQueue(ledger, context);
+            });
+        }
+        return;
+    }
+    if (s.stage == Stage::Analyzing && !s.attemptRunner && s.capacity.waiting()) {
+        if (s.work->isCancelled()) {
+            s.capacity.succeeded();
+            s.fail({Error::Cancelled, "Composition export cancelled"});
+            return;
+        }
+        if (s.pauseRequested) {
+            // Paused while waiting: nothing is in flight, so this is the frame boundary.
+            s.capacity.succeeded();
+            s.holding = true;
+            return;
+        }
+        const auto now = OutputAnalysisCapacityWaitV1::Clock::now();
+        if (s.capacity.stalled(now, s.processingPolicy(), s.ownPhases())) {
+            const auto frame = s.currentFrame();
+            s.diagnostic = "frame " + std::to_string(frame) +
+                           " capacity wait stalled; no processing phase was admitted for " +
+                           std::to_string(OutputAnalysisCapacityWaitV1::kStallAfter.count()) +
+                           " s; " + describeProcessingReservationsV1(s.processingPolicy());
+            std::cerr << "Bloom export: " << s.diagnostic << '\n';
+            s.capacity.succeeded();
+            s.fail({Error::Busy,
+                    "Bloom waited for memory to export frame " + std::to_string(frame) +
+                        ", but other work kept holding it, so the export stopped. Close a RAM "
+                        "preview or other exports and try again; the details are in the log."});
+            return;
+        }
+        if (s.capacity.retryDue(now))
+            s.nextAttempt();
         return;
     }
     if (s.stage == Stage::Analyzing) {
@@ -771,6 +876,34 @@ void SequenceExportRunnerV1::poll() {
         if (s.work->isCancelled()) {
             s.fail({Error::Cancelled, "Composition export cancelled"});
             return;
+        }
+        switch (outputAnalysisCapacityRefusalV1(*outcome, s.processingPolicy(), s.ownPhases())) {
+        case OutputAnalysisCapacityRefusalV1::Wait:
+            // Hold at this frame boundary and retry the same frame when capacity frees.
+            s.capacity.refused(OutputAnalysisCapacityWaitV1::Clock::now(), s.processingPolicy(),
+                               s.ownPhases());
+            if (!std::exchange(s.capacityLogged, true))
+                std::cerr << "Bloom export: frame " << s.currentFrame() << " waiting for capacity; "
+                          << describeOutputAnalysisAttemptV1(*outcome) << "; "
+                          << describeProcessingReservationsV1(s.processingPolicy()) << '\n';
+            return;
+        case OutputAnalysisCapacityRefusalV1::NeverFits: {
+            const auto frame = s.currentFrame();
+            s.diagnostic = "frame " + std::to_string(frame) + " never fits; " +
+                           describeOutputAnalysisAttemptV1(*outcome) + "; " +
+                           describeProcessingReservationsV1(s.processingPolicy());
+            std::cerr << "Bloom export: " << s.diagnostic << '\n';
+            s.capacity.succeeded();
+            s.fail({Error::Oversized,
+                    "Frame " + std::to_string(frame) +
+                        " needs more memory than this computer can give the export, so the "
+                        "export stopped. Try a smaller resolution; the details are in the log."});
+            return;
+        }
+        case OutputAnalysisCapacityRefusalV1::None:
+            s.capacity.succeeded();
+            s.capacityLogged = false;
+            break;
         }
         if (!*outcome || !outcome->attempt() || !outcome->attempt()->approvable()) {
             // The artist reads a sentence; the stage, codes and facets go to the diagnostic log.
@@ -820,6 +953,18 @@ void SequenceExportRunnerV1::poll() {
         s.fail({Error::Cancelled, "Composition export cancelled"});
         return;
     }
+    if (s.stage == Stage::Compiling && s.work->queueAwaitingCapacity) {
+        // ADR 0033 section 9: the export has not started yet; it waits, never fails, while the
+        // Viewer or other work holds the shared processing root.
+        s.task = {};
+        s.capacity.refused(OutputAnalysisCapacityWaitV1::Clock::now(), s.processingPolicy());
+        if (!std::exchange(s.capacityLogged, true))
+            std::cerr << "Bloom export: frame queue waiting for capacity; "
+                      << describeProcessingReservationsV1(s.processingPolicy()) << '\n';
+        return;
+    }
+    if (s.stage == Stage::Compiling)
+        s.capacity.succeeded();
     s.visibleEncoded = s.work->encoded;
     if (s.pauseRequested) {
         s.holding = true;

@@ -113,6 +113,53 @@ OutputAnalysisAttemptOutcomeV1::failure(OutputAnalysisAttemptFailureV1 failureVa
     return outcome;
 }
 
+namespace {
+
+template <typename> struct PayloadName;
+template <> struct PayloadName<runtime::TaskSubmissionStatus> {
+    static constexpr std::string_view value = "TaskSubmissionStatus";
+};
+template <> struct PayloadName<platform::StagedArtifactError> {
+    static constexpr std::string_view value = "StagedArtifactError";
+};
+template <> struct PayloadName<runtime::EvaluationDiagnosticCode> {
+    static constexpr std::string_view value = "EvaluationDiagnosticCode";
+};
+template <> struct PayloadName<runtime::GpuProcessFrameDiagnosticCode> {
+    static constexpr std::string_view value = "GpuProcessFrameDiagnosticCode";
+};
+template <> struct PayloadName<output::ProcessFrameSemanticIdentityErrorCode> {
+    static constexpr std::string_view value = "ProcessFrameSemanticIdentityErrorCode";
+};
+template <> struct PayloadName<output::OutputAnalysisAnalyzerErrorCodeV1> {
+    static constexpr std::string_view value = "OutputAnalysisAnalyzerErrorCodeV1";
+};
+template <> struct PayloadName<output::OutputAnalysisAttemptErrorCodeV1> {
+    static constexpr std::string_view value = "OutputAnalysisAttemptErrorCodeV1";
+};
+
+std::string_view gpuCodeName(const runtime::GpuProcessFrameDiagnosticCode code) noexcept {
+    using C = runtime::GpuProcessFrameDiagnosticCode;
+    switch (code) {
+    case C::AwaitingCapacity:
+        return "AwaitingCapacity";
+    case C::BudgetRefused:
+        return "BudgetRefused";
+    case C::OverBudget:
+        return "OverBudget";
+    case C::DeviceUnavailable:
+        return "DeviceUnavailable";
+    case C::DeviceLost:
+        return "DeviceLost";
+    case C::InvalidRequest:
+        return "InvalidRequest";
+    default:
+        return {};
+    }
+}
+
+} // namespace
+
 std::string describeOutputAnalysisAttemptV1(const OutputAnalysisAttemptOutcomeV1& outcome) {
     static constexpr std::array<std::string_view, 5> stages{
         "resolving", "color-preparing", "evaluating", "identifying", "analyzing"};
@@ -128,8 +175,15 @@ std::string describeOutputAnalysisAttemptV1(const OutputAnalysisAttemptOutcomeV1
                (stage < stages.size() ? std::string(stages[stage]) : std::to_string(stage)));
         std::visit(
             [&](const auto& value) {
-                if constexpr (!std::is_same_v<std::decay_t<decltype(value)>, std::monostate>)
-                    append("code=" + std::to_string(static_cast<unsigned>(value)));
+                using Value = std::decay_t<decltype(value)>;
+                if constexpr (!std::is_same_v<Value, std::monostate>) {
+                    std::string text = "code=" + std::string(PayloadName<Value>::value) + ":" +
+                                       std::to_string(static_cast<unsigned>(value));
+                    if constexpr (std::is_same_v<Value, runtime::GpuProcessFrameDiagnosticCode>)
+                        if (const auto name = gpuCodeName(value); !name.empty())
+                            text += " (" + std::string(name) + ")";
+                    append(text);
+                }
             },
             failure->payload());
         if (failure->cancelled())

@@ -8,6 +8,7 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/host/export_capacity_wait.hpp>
 #include <bloom/host/frame_range_runner.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
@@ -15,6 +16,7 @@
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/session.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <chrono>
 #include <condition_variable>
@@ -23,6 +25,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -369,8 +372,9 @@ struct Fixture {
             r.profile = "dnxhr_hq";
         return r;
     }
-    host::SequenceExportResultV1 run(host::SequenceExportRequestV1 request, bool cancel = false,
-                                     bool crash = false) {
+    host::SequenceExportResultV1
+    run(host::SequenceExportRequestV1 request, bool cancel = false, bool crash = false,
+        const std::function<void(host::SequenceExportRunnerV1&)>& each = {}) {
         std::atomic<std::int64_t> pid{0};
         request.worker.launched = [&](auto value) { pid.store(value); };
         host::SequenceExportRunnerV1 runner(scheduler, compiler, publications, artifacts, ledger,
@@ -387,6 +391,8 @@ struct Fixture {
                 check(runner.approve(analysis->digest, need(runner.frameApprovalDigest())),
                       "approve captured identities");
             }
+            if (each)
+                each(runner);
             if (!injected && runner.encodedFrames() >= 8) {
                 if (cancel)
                     runner.cancel();
@@ -406,6 +412,132 @@ struct Fixture {
         return need(runner.result());
     }
 };
+// The application's packed-host retirement owner for the capacity fixtures' shared roots.
+const std::shared_ptr<render::PackedHostRetirementOwner>& capacityRetirement() {
+    static const auto owner = render::PackedHostRetirementOwner::create();
+    return owner;
+}
+
+// A shared processing root with `headroom` bytes of host capacity, as the application samples it.
+std::shared_ptr<runtime::GpuProcessingPhasePolicy> capacityPolicy(const std::uint64_t headroom) {
+    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(32, capacityRetirement());
+    constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+    runtime::MemoryBudgetState sample;
+    sample.machine.availableBytes = 60 * gib;
+    sample.process.status = runtime::ProcessMemoryStatus::Finite;
+    sample.process.source = runtime::ProcessMemorySource::LinuxCgroupV2;
+    sample.process.sampledAt = runtime::GpuProcessingPhasePolicy::Clock::now();
+    sample.process.domains.push_back({.path = "/fixture",
+                                      .kind = runtime::ProcessMemoryLimitKind::Finite,
+                                      .limitBytes = 8 * gib,
+                                      .currentBytes = 8 * gib - headroom});
+    sample.sampleSerial = 1;
+    sample.processSampleFresh = true;
+    policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    return policy;
+}
+
+std::shared_ptr<host::GpuExportProvider>
+capacityProvider(runtime::TaskScheduler& scheduler,
+                 std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy, const char* loader) {
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.processingPhasePolicy = std::move(policy);
+    options.enabled = loader != nullptr;
+    if (loader != nullptr)
+        options.loaderPath = std::filesystem::path(loader);
+    auto provider = host::GpuExportProvider::create(std::move(options));
+    provider->prepare(scheduler);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!provider->prepared() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    return provider;
+}
+
+// ADR 0033 section 9: a capacity refusal during export means wait, not fail. A Viewer-like phase
+// holds the shared root's host capacity; the export waits at the frame boundary, then finishes
+// after the phase is released. Waiting is cancellable, and a frame that cannot fit with nothing
+// else reserved fails with a readable sentence.
+void testCapacityWait(Fixture& f, const std::filesystem::path& directory, const char* loader) {
+    const std::string route = loader != nullptr ? "GPU" : "CPU";
+    constexpr std::uint64_t mib = 1024ULL * 1024;
+    {
+        auto policy = capacityPolicy(768 * mib);
+        auto provider = capacityProvider(f.scheduler, policy, loader);
+        if (loader != nullptr && !provider->deviceAvailable()) {
+            std::cout << "NOTE: no compatible Vulkan device; skipping the GPU capacity wait\n";
+            check(provider->shutdownAndWait(std::chrono::seconds(3)), "capacity provider retires");
+            return;
+        }
+        // The Viewer's phase: a 2K preview frame whose source ceiling takes what is left.
+        auto viewer = runtime::reserveHostEvaluationPhase(
+            *policy, 2048ULL * 858, 4096 * mib, runtime::GpuProcessingPhaseOutput::FloatFinal,
+            false);
+        check(viewer.lease != nullptr, route + " capacity wait: the Viewer phase is admitted");
+        const auto path = directory / ("capacity-wait-" + route + ".mov");
+        auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
+        request.gpuProvider = provider;
+        bool sawWaiting = false;
+        const auto started = std::chrono::steady_clock::now();
+        const auto result = f.run(std::move(request), false, false, [&](auto& runner) {
+            if (runner.waitingForCapacity())
+                sawWaiting = true;
+            // Release the Viewer once the export has visibly waited for a moment.
+            if (viewer.lease && sawWaiting &&
+                std::chrono::steady_clock::now() - started > std::chrono::milliseconds(300))
+                viewer.lease.reset();
+        });
+        check(sawWaiting, route + " capacity wait: the export waits while the Viewer holds "
+                                  "capacity");
+        check(result.published(), route + " capacity wait: the export finishes after release: " +
+                                      (result.failure ? result.failure->detail : ""));
+        if (loader != nullptr)
+            check(result.gpuEvaluatedFrames > 0,
+                  "GPU capacity wait: frames are evaluated on the GPU after the wait");
+        check(provider->shutdownAndWait(std::chrono::seconds(3)), "capacity provider retires");
+    }
+    {
+        auto policy = capacityPolicy(768 * mib);
+        auto provider = capacityProvider(f.scheduler, policy, loader);
+        auto viewer = runtime::reserveHostEvaluationPhase(
+            *policy, 2048ULL * 858, 4096 * mib, runtime::GpuProcessingPhaseOutput::FloatFinal,
+            false);
+        const auto path = directory / ("capacity-cancel-" + route + ".mov");
+        auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
+        request.gpuProvider = provider;
+        bool cancelled = false;
+        const auto result = f.run(std::move(request), false, false, [&](auto& runner) {
+            if (!cancelled && runner.waitingForCapacity()) {
+                runner.cancel();
+                cancelled = true;
+            }
+        });
+        check(cancelled && !result.published() && result.failure &&
+                  result.failure->reason == media::provider::Error::Cancelled &&
+                  !std::filesystem::exists(path),
+              route + " capacity wait: cancelling while waiting stops without publishing");
+        viewer.lease.reset();
+        check(provider->shutdownAndWait(std::chrono::seconds(3)), "capacity provider retires");
+    }
+    if (loader != nullptr)
+        return;
+    {
+        // Nothing else is reserved and the frame still does not fit.
+        auto policy = capacityPolicy(24 * mib);
+        auto provider = capacityProvider(f.scheduler, policy, nullptr);
+        const auto path = directory / "capacity-never-fits.mov";
+        auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
+        request.gpuProvider = provider;
+        const auto result = f.run(std::move(request));
+        check(!result.published() && result.failure &&
+                  result.failure->detail.find("needs more memory") != std::string::npos &&
+                  result.failure->detail.find("code=") == std::string::npos,
+              "capacity: a frame that never fits fails with a readable sentence: " +
+                  (result.failure ? result.failure->detail : std::string()) + " / " +
+                  result.diagnostic);
+        check(provider->shutdownAndWait(std::chrono::seconds(3)), "capacity provider retires");
+    }
+}
+
 void verify(const host::SequenceExportResultV1& r, const std::filesystem::path& path, bool video) {
     check(r.published(), r.failure ? r.failure->detail : "composition was not published");
     const auto qc = need(r.evidence);
@@ -625,8 +757,8 @@ void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::pa
             break;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    if (runner->stage() != host::SequenceExportStageV1::Analyzing ||
-        runner->encodedFrames() != 1 || pid.load() <= 0 || f.ledger.chargedBytes() == 0) {
+    if (runner->stage() != host::SequenceExportStageV1::Analyzing || runner->encodedFrames() != 1 ||
+        pid.load() <= 0 || f.ledger.chargedBytes() == 0) {
         std::cerr << "Held encoder fixture: stage=" << static_cast<int>(runner->stage())
                   << " encoded=" << runner->encodedFrames() << " pid=" << pid.load()
                   << " charged=" << f.ledger.chargedBytes();
@@ -794,6 +926,17 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
     const auto refused = f.run(std::move(oversized));
     check(refused.failure && refused.failure->reason == media::provider::Error::Oversized,
           "frame queue budget enforced");
+    testCapacityWait(f, directory, nullptr);
+    if (const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER"); loader && *loader)
+        testCapacityWait(f, directory, loader);
+    {
+        const auto& owner = capacityRetirement();
+        owner->beginShutdown();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!owner->exitAcknowledged() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        check(owner->collect(), "capacity fixtures' packed-host retirement owner collects");
+    }
     const auto proof =
         testGpuVideoProvenance(f, directory, cpuProResPath, proofDirectory, requireDevice);
     testRejectedRetirementWithLiveEncoder(f, directory);
