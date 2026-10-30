@@ -5,6 +5,12 @@ integration)
 
 Date: 2026-10-30
 
+Amendment (2026-10-31): [ADR 0035](0035-media-provider-fallback-chain.md) made export work on every
+platform. The `PlatformNotSupported` codes (`ExportAvailabilityCode` 7, `ExportUnavailableCode` 23)
+and `ExportEncoderStatus::exportPlatform` no longer exist, and render, export, capture and
+`export.start*` are no longer refused on macOS and Windows. The statements below that say
+otherwise are kept as history.
+
 ## Context
 
 `apps/bloom-mcp` is a Qt-free MCP 2025-11-25 server on stdio. It opens its own headless session
@@ -275,9 +281,9 @@ the registry with no MCP change.
 - **GPU coverage is unchanged.** MCP adds no operation, kernel, lowering or route. Capture is the
   still-export route, with its one readback at the PNG encoder boundary. No opt-out is created.
 - **Platforms.** Render, export, capture and `export.start*` follow export availability
-  (ADR 0033 section 15). On macOS and Windows they answer `bloom.mcp.export-unavailable` carrying
-  `PlatformNotSupported` and its reason, as the Export panel does. Every other tool behaves
-  identically on all three platforms.
+  (ADR 0033 section 15). On macOS and Windows they answered `bloom.mcp.export-unavailable` carrying
+  `PlatformNotSupported`; superseded by ADR 0035, see the amendment note below. Every other tool
+  behaves identically on all three platforms.
 
 ### 6. Lifecycle and state ownership
 
@@ -437,7 +443,7 @@ project.
 | Token file | 0600 in a 0700 folder under the XDG data home | 0600 in a 0700 folder under Application Support | protected DACL for the current user under `%LOCALAPPDATA%` |
 | CSPRNG | `getrandom` | `getentropy` | `BCryptGenRandom` (system-preferred RNG) |
 | Server, panel, clients, token, activity, query, transact, history, events | yes | yes | yes |
-| Render, export, capture, `export.start*` | yes | `PlatformNotSupported`, as ADR 0033 section 15 | `PlatformNotSupported`, as ADR 0033 section 15 |
+| Render, export, capture, `export.start*` | yes | yes (ADR 0035; was `PlatformNotSupported`) | yes (ADR 0035; was `PlatformNotSupported`) |
 | Port-in-use detection | `EADDRINUSE` | `EADDRINUSE` | `WSAEADDRINUSE` or `WSAEACCES` under an exclusive bind |
 
 Binding only the loopback address is what keeps the Windows Defender Firewall and the macOS
@@ -597,9 +603,9 @@ The owner accepted every default below on 2026-10-30.
     to it.
 11. **Stopping the server or quitting stops MCP-started transient jobs** but never queue jobs
     started with `export.start`. Quitting does not prompt for MCP work.
-12. **Render, export and capture on macOS and Windows** answer `PlatformNotSupported`, exactly as
-    the Export panel does (ADR 0033 section 15). Every other MCP capability works on all three
-    platforms.
+12. **Render, export and capture on macOS and Windows** answered `PlatformNotSupported`, exactly as
+    the Export panel did (ADR 0033 section 15); superseded by ADR 0035, see the amendment note
+    below. Every other MCP capability works on all three platforms.
 
 ## Owning documents the implementation updates
 
