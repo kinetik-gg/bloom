@@ -62,14 +62,12 @@ constexpr auto kStripKey = "export/current-render/expanded";
     return (kind == RowKind::RenderSettings ? QStringLiteral("r%1") : QStringLiteral("o%1")).arg(id);
 }
 
-// A job Start All would start now, or would start once the artist says yes to a replace. A
-// platform that cannot render yet still shows its jobs as ready to run when it can.
+// A job Start All would start now, or would start once the artist says yes to a replace.
 [[nodiscard]] bool isReady(const host::ExportJobView& job) {
     if (!job.record.enabled || job.state != host::ExportJobState::Ready)
         return false;
     const auto& start = job.commands[host::ExportCommand::Start];
-    return start.available || start.code == host::ExportUnavailableCode::PlatformNotSupported ||
-           start.code == host::ExportUnavailableCode::NeedsReplaceConfirmation;
+    return start.available || start.code == host::ExportUnavailableCode::NeedsReplaceConfirmation;
 }
 
 [[nodiscard]] const host::ExportJobView* findView(const host::ExportQueueSnapshot* snapshot,
@@ -646,10 +644,6 @@ void ExportEditor::updateStrip() {
                                                          : nullptr;
     auto text = exportpanel::currentRenderText(active);
     const bool running = active != nullptr && host::isActive(active->state);
-    const auto& start = snapshot->commands[host::ExportCommand::StartAll];
-    // Where export cannot run in this version, the strip says so instead of a silent Idle.
-    if (!running && start.code == host::ExportUnavailableCode::PlatformNotSupported)
-        text += QStringLiteral(" · ") + qs(start.reason);
     stripText_->setElidedText(text);
     stripText_->setProperty("fullText", text);
     stripText_->setToolTip(text);

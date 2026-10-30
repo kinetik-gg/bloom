@@ -97,9 +97,6 @@ StatusText jobStatus(const host::ExportJobView& job) {
             return {tr("Checking where it saves\u2026"), qs(start.reason), StatusTone::Neutral};
         case host::ExportUnavailableCode::NeedsReplaceConfirmation:
             return {tr("Waiting for your OK"), qs(start.reason), StatusTone::Neutral};
-        case host::ExportUnavailableCode::PlatformNotSupported:
-            // Editing works everywhere; only running is a Linux feature in this version.
-            return {tr("Queued"), qs(start.reason), StatusTone::Neutral};
         default:
             return {needsLocation(job) ? tr("Needs output") : tr("Needs attention"),
                     qs(start.reason), StatusTone::Neutral};

@@ -118,8 +118,7 @@ Nothing replaces a file silently: an unattended script sets the output's overwri
 `replace` or calls `export.confirm-replace`. `bloom-cli export` renders a saved project's queue
 headlessly, prints the verification and import results as JSON and exits non-zero unless every
 selected job succeeds; `--replace` confirms existing destinations and `--save` writes asset imports
-back to the project. Export runs on Linux in this version; elsewhere the session calls answer
-`bloom.export.platform-not-supported`.
+back to the project. Export runs on Linux, macOS and Windows.
 
 `bloom-cli render`, the Python render call and MCP render keep their request shapes but run as
 transient, unsaved export jobs on the same runner as the queue, so every rendered frame passes the

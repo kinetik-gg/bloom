@@ -100,7 +100,6 @@ int main(int argc, char** argv) {
     backend->push(quick);
     backend->push(script);
     host::ExportEncoderStatus encoders;
-    encoders.exportPlatform = true;
     auto presets = host::ExportPresetCatalogue::create(
         {.userDataDirectory = std::nullopt, .initialEncoders = encoders});
     QTemporaryDir scratch;

@@ -168,8 +168,8 @@ menu produce a script that recreates the job and starts it.
 
 ## Platforms
 
-Export runs on Linux in this version. On macOS and Windows the queue, presets, saving and script
-edits work the same, and **Start**, **Start All**, **Retry** and `bloom-cli export` say "Export runs
-on Linux in this version". A project prepared there exports unchanged on Linux. The
+Export runs on Linux, macOS and Windows. Each system uses its own media framework where it is
+present and falls back to Bloom's bundled FFmpeg otherwise, so every preset works everywhere and
+a project prepared on one system exports unchanged on another. The
 [media I/O contract](../architecture/media-io.md#time-based-export-media-4) describes preservation
 bounds.
