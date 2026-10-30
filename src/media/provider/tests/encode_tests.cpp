@@ -275,7 +275,14 @@ void tests(const std::filesystem::path& directory) {
     ok(crashed.begin(settings));
     ok(crashed.video(image(settings, 0)));
     test::check(::kill(static_cast<pid_t>(pid), SIGKILL) == 0, "kill encode worker");
-    const auto failure = crashed.video(image(settings, 1));
+    // Acknowledgements are collected lazily: the crash is reported by the frame write if the pipe
+    // is already closed, otherwise by the next call that collects acknowledgements.
+    auto failure = crashed.video(image(settings, 1));
+    if (!failure) {
+        const auto finished = crashed.finish();
+        if (const auto* error = std::get_if<Unavailable>(&finished))
+            failure = *error;
+    }
     test::check(failure && failure->reason == Error::Crashed, "typed encode crash");
     EncodeSessionV1 retry({});
     ok(retry.begin(settings));
