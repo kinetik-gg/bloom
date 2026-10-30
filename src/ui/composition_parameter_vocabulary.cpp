@@ -1,8 +1,10 @@
 #include "composition_editor_support.hpp"
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
+#include <QCoreApplication>
 #include <QSignalBlocker>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/parameter_enums.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
@@ -271,202 +273,15 @@ PropertiesRowControl propertiesRowControl(std::string_view schemaKey) {
     return PropertiesRowControl::Automatic;
 }
 
+// The labels come from the document's one enum table (document::parameterEnumOptions), the same
+// members scripting, MCP and the CLI accept by name; only the translation is applied here, at
+// display time. Properties, the Nodes cards and the Timeline rows cannot offer a member the table
+// does not have, nor spell one differently.
 QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view schemaKey) {
-    if (schemaKey == document::kGradientRepeatParameterSchemaKey)
-        return {{QObject::tr("Clamp"), 0}, {QObject::tr("Repeat"), 1}, {QObject::tr("Mirror"), 2}};
-    if (schemaKey == "bloom.blur.edge")
-        return {{QObject::tr("Transparent"), 0}, {QObject::tr("Clamp"), 1}};
-    // #361: the closed matte selector (render::MatteSelection) in track-matte order.
-    if (schemaKey == "bloom.set-alpha.channel" || schemaKey == "bloom.multiply-alpha.channel")
-        return {{QObject::tr("Alpha"), 0},         {QObject::tr("Red"), 1},
-                {QObject::tr("Green"), 2},         {QObject::tr("Blue"), 3},
-                {QObject::tr("Luma"), 4},          {QObject::tr("Alpha Inverted"), 5},
-                {QObject::tr("Red Inverted"), 6},  {QObject::tr("Green Inverted"), 7},
-                {QObject::tr("Blue Inverted"), 8}, {QObject::tr("Luma Inverted"), 9}};
     QList<std::pair<QString, std::int64_t>> items;
-    const auto add = [&items](const QString& text, const std::int64_t stored) {
-        items.append({text, stored});
-    };
-    if (schemaKey == "bloom.resize-fit.filter") {
-        add(QObject::tr("Bilinear"), 0);
-        return items;
-    }
-    if (schemaKey == "bloom.resize-fit.policy") {
-        add(QObject::tr("Fit"), 0);
-        add(QObject::tr("Fill"), 1);
-        return items;
-    }
-    if (schemaKey == "bloom.ocio-file.interpolation") {
-        add(QObject::tr("Linear"), 0);
-        add(QObject::tr("Tetrahedral"), 1);
-        add(QObject::tr("Best"), 2);
-        return items;
-    }
-    if (schemaKey == "bloom.ocio-file.direction") {
-        add(QObject::tr("Forward"), 0);
-        add(QObject::tr("Inverse"), 1);
-        return items;
-    }
-    if (schemaKey == "bloom.shape.kind") {
-        for (std::int64_t i = 0; i <= 6; ++i)
-            add(QString::fromUtf8(
-                    document::shapeKindName(static_cast<document::ShapeKind>(i)).data()),
-                i);
-        return items;
-    }
-    if (schemaKey == "bloom.shape.stroke-align") {
-        add(QObject::tr("Center"), 0);
-        add(QObject::tr("Inside"), 1);
-        add(QObject::tr("Outside"), 2);
-        return items;
-    }
-    if (schemaKey == "bloom.shape.stroke-join") {
-        add(QObject::tr("Miter"), 0);
-        add(QObject::tr("Round"), 1);
-        add(QObject::tr("Bevel"), 2);
-        return items;
-    }
-    if (schemaKey == "bloom.shape.stroke-cap") {
-        add(QObject::tr("Butt"), 0);
-        add(QObject::tr("Round"), 1);
-        add(QObject::tr("Square"), 2);
-        return items;
-    }
-    if (schemaKey == "bloom.shape.fill-rule") {
-        add(QObject::tr("Nonzero"), 0);
-        add(QObject::tr("Even-odd"), 1);
-        return items;
-    }
-    if (schemaKey == "bloom.image.loop-mode" || schemaKey == "bloom.video.loop-mode" ||
-        schemaKey == "bloom.composition-source.loop-mode") {
-        add(QObject::tr("Hold"), 0);
-        add(QObject::tr("Loop"), 1);
-        add(QObject::tr("Ping-pong"), 2);
-        return items;
-    }
-    if (schemaKey == "bloom.image.color-space" || schemaKey == "bloom.video.color-space") {
-        add(QObject::tr("Auto"), 0);
-        add(QObject::tr("sRGB"), 1);
-        add(QObject::tr("Linear"), 2);
-        add(QObject::tr("Raw"), 3);
-        return items;
-    }
-    if (schemaKey == document::kBlendModeParameterSchemaKey) {
-        for (const auto mode : core::kBlendModes)
-            add(blendModeDisplayName(mode), core::blendModeStoredValue(mode));
-        return items;
-    }
-    if (schemaKey == document::kTextAlignmentParameterSchemaKey) {
-        add(QObject::tr("Left"), 0);
-        add(QObject::tr("Center"), 1);
-        add(QObject::tr("Right"), 2);
-        return items;
-    }
-    if (schemaKey == document::kTextFontParameterSchemaKey) {
-        add(QObject::tr("DejaVu Sans"), document::kTextFontDejaVuSans);
-        add(QObject::tr("Inter Regular"), document::kTextFontInterRegular);
-        add(QObject::tr("Inter Medium"), document::kTextFontInterMedium);
-        add(QObject::tr("Inter SemiBold"), document::kTextFontInterSemiBold);
-        return items;
-    }
-    if (schemaKey == document::kScalarOperationParameterSchemaKey) {
-        for (const auto operation : document::kScalarOperations) {
-            const auto* signature = core::primitives::scalarPrimitiveSignature(operation);
-            // The frozen signature's own id is the name, with its namespace trimmed: the card
-            // must not invent a second spelling for an operation the kernel already names.
-            const auto id = signature == nullptr ? std::string_view{} : signature->id;
-            add(node_editor::displayTypeName(id.substr(id.rfind('.') + 1)),
-                document::scalarOperationStoredValue(operation));
-        }
-        return items;
-    }
-    if (schemaKey == document::kVectorOperationParameterSchemaKey) {
-        static constexpr std::array kNames{"Add",   "Subtract",  "Multiply",     "Divide",
-                                           "Scale", "Normalize", "Cross Product"};
-        for (std::size_t index = 0; index < document::kVectorOperations.size(); ++index) {
-            add(QString::fromUtf8(kNames[index]),
-                document::vectorOperationStoredValue(document::kVectorOperations[index]));
-        }
-        return items;
-    }
-    if (schemaKey == document::kVectorReductionParameterSchemaKey) {
-        static constexpr std::array kNames{"Length", "Dot Product", "Distance"};
-        for (std::size_t index = 0; index < document::kVectorReductions.size(); ++index) {
-            add(QString::fromUtf8(kNames[index]),
-                document::vectorReductionStoredValue(document::kVectorReductions[index]));
-        }
-        return items;
-    }
-    if (schemaKey == document::kRangeInterpolationParameterSchemaKey) {
-        static constexpr std::array kNames{"Linear", "Smoothstep", "Smootherstep"};
-        for (std::size_t index = 0; index < document::kRangeInterpolations.size(); ++index) {
-            add(QString::fromUtf8(kNames[index]),
-                document::rangeInterpolationStoredValue(document::kRangeInterpolations[index]));
-        }
-        return items;
-    }
-    // Task UTIL-1's selectors. Each offers its own closed vocabulary in the order the document
-    // numbers it, so the card cannot offer a member the schema would refuse.
-    if (schemaKey == document::kRoundingModeParameterSchemaKey) {
-        static constexpr std::array kNames{"Round", "Floor", "Ceiling", "Truncate"};
-        for (std::size_t index = 0; index < document::kRoundingModes.size(); ++index) {
-            add(QString::fromUtf8(kNames[index]),
-                document::selectorStoredValue(document::kRoundingModes[index]));
-        }
-        return items;
-    }
-    if (schemaKey == document::kIntegerOperationParameterSchemaKey) {
-        static constexpr std::array kNames{"Add",    "Subtract", "Multiply", "Divide",
-                                           "Modulo", "Minimum",  "Maximum"};
-        for (std::size_t index = 0; index < document::kIntegerOperations.size(); ++index) {
-            add(QString::fromUtf8(kNames[index]),
-                document::selectorStoredValue(document::kIntegerOperations[index]));
-        }
-        return items;
-    }
-    if (schemaKey == document::kBooleanOperationParameterSchemaKey) {
-        static constexpr std::array kNames{"And", "Or", "Xor", "Nand", "Nor"};
-        for (std::size_t index = 0; index < document::kBooleanOperations.size(); ++index) {
-            add(QString::fromUtf8(kNames[index]),
-                document::selectorStoredValue(document::kBooleanOperations[index]));
-        }
-        return items;
-    }
-    if (schemaKey == document::kStringCaseParameterSchemaKey) {
-        static constexpr std::array kNames{"Upper", "Lower", "Title"};
-        for (std::size_t index = 0; index < document::kStringCaseModes.size(); ++index) {
-            add(QString::fromUtf8(kNames[index]),
-                document::selectorStoredValue(document::kStringCaseModes[index]));
-        }
-        return items;
-    }
-    if (schemaKey == document::kStringPadSideParameterSchemaKey) {
-        static constexpr std::array kNames{"Start", "End"};
-        for (std::size_t index = 0; index < document::kStringPadSides.size(); ++index) {
-            add(QString::fromUtf8(kNames[index]),
-                document::selectorStoredValue(document::kStringPadSides[index]));
-        }
-        return items;
-    }
-    if (schemaKey == document::kNumberRadixParameterSchemaKey) {
-        // The stored value IS the radix, so the offered list is a convenience rather than a
-        // mapping: a document carrying base 36 keeps it, and this dropdown simply has no row
-        // for it.
-        static constexpr std::array kNames{"Binary", "Octal", "Decimal", "Hexadecimal"};
-        for (std::size_t index = 0; index < document::kOfferedRadices.size(); ++index) {
-            add(QString::fromUtf8(kNames[index]), document::kOfferedRadices[index]);
-        }
-        return items;
-    }
-    if (schemaKey == document::kCompareOperationParameterSchemaKey) {
-        static constexpr std::array kNames{"Equal",         "Not Equal", "Less",
-                                           "Less Or Equal", "Greater",   "Greater Or Equal"};
-        for (std::size_t index = 0; index < document::kCompareOperations.size(); ++index) {
-            add(QString::fromUtf8(kNames[index]),
-                document::compareOperationStoredValue(document::kCompareOperations[index]));
-        }
-        return items;
-    }
+    for (const auto& option : document::parameterEnumOptions(schemaKey))
+        items.append({QCoreApplication::translate("PropertiesSelector", option.label.c_str()),
+                      option.value});
     return items;
 }
 
