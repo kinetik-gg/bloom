@@ -516,6 +516,29 @@ change, and follows `positionNow()` through `FrameTimeMapping` while audio is ac
 decoded sample is owned by the evaluator, and the wall-clock transport remains the fallback for an
 empty mix or unavailable device.
 
+Looped playback wraps inside the mixer. `setLoopRange({start, end})` holds a half-open loop in
+timeline time; the mixer maps each unwrapped output position p at or past `end` to
+`start + (p - start) mod (end - start)` with exact integer arithmetic in units of
+1/lcm(denominators) output frames, so a wrap is sample-accurate and gapless and a loop that is not a
+whole number of samples long alternates pass lengths instead of drifting. Clip start/end checks,
+mute, solo and per-clip time mappers all evaluate at the wrapped position. `positionNow()` stays
+unwrapped and monotonic, so the transport's frame-modulo video wrap and the mixer's rational wrap
+derive from one clock. `PlaybackController` hands the mixer the work area's frame grid,
+[first valid frame, last valid frame + 1), whenever a run starts, the work area or frame rate
+changes, or looping is toggled; with looping off there is no loop and a run plays past the end
+exactly as before.
+
+A loop change while playing needs no device restart. The mixer stops pushing, the next device
+callback plays what it already took from the ring and discards the rest, and the mixer rewinds by
+exactly the discarded frame count and re-mixes them under the new range (the mixer settles the
+request itself when nothing is queued). The change is therefore audible after at most one device
+buffer. Clearing the loop mid-run keeps the pass the run is in: the offset of that pass stays
+fixed, so the run continues to the work-area end like one that never looped. A work-area change
+still relocates the run with a seek, because the transport re-anchors its playhead; a wrap never
+seeks. Frames the device consumes while the ring is empty are counted, and the mixer skips them so
+the mix stays on the device clock after an underrun (most visibly the first callbacks after start)
+instead of lagging it for the rest of the run.
+
 Composition sources retain the evaluator's ordered offset, scale and loop mappings on each leaf
 clip. The application attaches a time mapper alongside the shared decoded buffer; the mixer worker
 applies it per output sample before the leaf clip's start/end checks and sample-rate conversion. An

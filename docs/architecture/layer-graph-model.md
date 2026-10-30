@@ -1140,7 +1140,23 @@ and offscreen event tests apply to Linux, macOS and Windows; this change's execu
 ## Layer Timeline Contract
 
 A `LayerOutputBoundary` owns range, visibility (`enabled`, default true), `solo` (false),
-`locked` (false), and optional RGB `labelColor`. Its `inPoint` defaults to zero. A zero stored
+`locked` (false), optional RGB `labelColor`, and the two document 1.30 presentation flags `shy`
+(false) and `nameFollowsSource`. Neither flag is an evaluation input; their commands
+(`SetLayerShy`, `SetLayerNameFollowsSource`) declare `renderAffecting() == false`, and
+`document::evaluationView(LayerOutputBoundary)` resets both alongside `name`, so the command stack's
+evaluation-input proof (#399) agrees and an edit keeps every compiled plan, RAM-preview frame and
+operation-cache entry valid.
+
+`shy` is After Effects' Shy switch: the layer table hides a shy layer while its shy filter is on.
+`nameFollowsSource` makes the layer show its source's name. A layer's source is the node feeding its
+Layer Output's content input -- walking up through effects' content inputs -- or else its audio
+input: an image, video or audio source names an asset (its Assets name), a composition source a
+composition (`document::layerSourceName`). Layers made from a source (`AddImageLayer`,
+`AddAudioLayer`, a nested composition layer) are named after it and follow it; generated content
+(solid, text, shape) has no source and never follows. Renaming the asset or composition, or pointing
+the source node at another one, renames every following layer in the same undo step; renaming the
+layer (`RenameLayer`) turns following off, and `SetLayerNameFollowsSource(true)` turns it back on
+and shows the source's current name (refused for a layer without a source). Its `inPoint` defaults to zero. A zero stored
 `outPoint` is the full-duration sentinel; `endPoint(duration)` resolves it to the composition
 end. An explicit range satisfies `0 <= in < out <= duration`. Commands snap to the composition
 frame grid; the exact composition end is also a valid endpoint. Existing documents therefore

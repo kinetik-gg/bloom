@@ -1,6 +1,9 @@
 # Bloom Project Format
 
-The current document schema is 1.29. It adds the export queue: the required last project member
+The current document schema is 1.30. It adds Blender's keyframe easing equations (ten interpolation
+tokens and the optional keyframe `easing` member) and the optional presentation-only layer members
+`shy` and `nameFollowsSource` (see "Easing And Layer Flags In Document 1.30"). Document 1.29 added
+the export queue: the required last project member
 `exportQueue` and the `exportJob`/`exportOutput` allocator namespaces (see "Export Queue In Document
 1.29"). Document 1.28 changed no member: it marks projects saved after ordinary
 and untagged SDR video in Auto began to be shown through the sRGB texture space (see "Video Colour
@@ -657,9 +660,11 @@ A scalar key has `id`, `time`, `value`, `outgoingInterpolation`, then the two OP
 handles described under **Ease Handles In Document 1.12**; a `vec2` key replaces `value`
 with an object containing `x`, then `y`; a `color4` key replaces it with an object containing `red`,
 `green`, `blue`, then `alpha` -- the same authoring order and straight-alpha meaning a constant
-`color4` parameter value already uses, with `alpha` confined to `[0, 1]`. Interpolation is exactly
-`hold`, `linear`, or `ease-in-out`. The `color4` curve kind and the `ease-in-out` token both arrive in
-document `1.3`; see **Animation Breadth In Document 1.3**.
+`color4` parameter value already uses, with `alpha` confined to `[0, 1]`. Interpolation is
+`hold`, `linear`, `ease-in-out`, or from document `1.30` one of `sine`, `quad`, `cubic`, `quart`,
+`quint`, `expo`, `circ`, `back`, `bounce`, `elastic`, and a key may end with the optional `1.30`
+`easing` object (see **Easing And Layer Flags In Document 1.30**). The `color4` curve kind and the
+`ease-in-out` token both arrive in document `1.3`; see **Animation Breadth In Document 1.3**.
 
 Keys are written in strictly increasing exact rational time. Equal normalized times are invalid, so
 `KeyframeId` never breaks a tie. Curves are non-empty; the final key's interpolation is canonical
@@ -1385,9 +1390,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.29`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.30`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.29.schema.json` and `manifest-1.29.schema.json`; the
+The current artifacts are `document-1.30.schema.json` and `manifest-1.30.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1531,6 +1536,36 @@ it differs from the default (start 0, non-drop), so a composition without it kee
 The decoder reads it only at `1.26` or later, refuses a negative start as a domain violation, and
 preserves unknown trailing members like any composition attachment.
 
+## Easing And Layer Flags In Document 1.30
+
+Document `1.30` adds Blender's easing equations
+([animation-and-time.md](animation-and-time.md#easing-equations)) and two presentation-only layer
+flags. Every addition is optional or a new value, so the `1.29` → `1.30` DOM step
+`migrateEasingAndLayerFlagsV1_29` only advances the version, and a re-saved older project changes
+only its version unless a layer infers `nameFollowsSource` (below).
+
+- Interpolation tokens `sine`, `quad`, `cubic`, `quart`, `quint`, `expo`, `circ`, `back`, `bounce`
+  and `elastic` (ids 3-12; `hold`, `linear` and `ease-in-out` keep ids 0-2).
+- A scalar, component or Path key may end, after its handles, with a closed `easing` object
+  `{"mode", "back", "amplitude", "period"}`: `mode` is `auto`, `in`, `out` or `in-out`, and the
+  three numbers are canonical Float64 (`amplitude` zero or more, all finite; `period` in seconds).
+  It is written only when it differs bitwise from the default (`auto`, `1.70158`, `0.8`, `4.1/24`),
+  so a key that never had its easing edited gains no member.
+- A Layer Output may end, after `masks`/`trackMatte` and before retained unknown members, with
+  `"shy": true` and then `"nameFollowsSource": true`; each is written only when true.
+
+The decoder accepts the tokens and all three members only at `1.30` or later; a file claiming an
+older minor that carries one is refused, and a newer minor keeps them. Neither flag is an evaluation
+input: `shy` only filters the layer table, and `nameFollowsSource` only decides whether renaming or
+replacing the layer's source renames the layer.
+
+A document older than `1.30` has no `nameFollowsSource`. Archive loading decodes older minors
+directly, so the decoded envelope carries `inferLayerNameFollowsSource`, and reconstruction sets the
+flag on exactly the layers whose name already equals their source's current name (an image, video or
+audio source's asset name, or a nested composition's name; see
+[layer-graph-model.md](layer-graph-model.md#layer-timeline-contract)). Following the source therefore
+changes no visible name. The DOM step, which archive loading does not run, leaves the flag absent.
+
 ## Export Queue In Document 1.29
 
 Document `1.29` persists the export queue ([ADR 0033](../decisions/0033-export-queue.md)): the jobs,
@@ -1633,15 +1668,15 @@ advances the version: every new member is optional, so no record is inserted or 
 
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.29.schema.json` and
-`manifest-1.29.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The current document and manifest schema artifacts are `document-1.30.schema.json` and
+`manifest-1.30.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
 The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
 likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
 defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step,
 1.20 → 1.21 LUT step, 1.21 → 1.22 locator version step, 1.22 → 1.23 layer-time step,
 1.23 → 1.24 layer-mask version step, 1.24 → 1.25 video-metadata step, 1.25 → 1.26 channel-set step,
-1.26 → 1.27 composition-folder version step, 1.27 → 1.28 video-colour-default version step and
-1.28 → 1.29 export-queue step.
+1.26 → 1.27 composition-folder version step, 1.27 → 1.28 video-colour-default version step,
+1.28 → 1.29 export-queue step and 1.29 → 1.30 easing and layer-flags version step.
 
 `AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
 interpretation, dimensions and organization envelope, with a closed `video` member before

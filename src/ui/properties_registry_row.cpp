@@ -20,6 +20,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/host/font_catalogue.hpp>
+#include <bloom/host/project_color_choice.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -663,8 +664,8 @@ void PropertiesRegistryRow::refresh() {
                 selector_->setItemText(0, automatic);
                 selector_->setItemToolTip(
                     0, effect ? tr("Composition working colour space: %1")
-                                    .arg(QString::fromStdString(
-                                        std::string(session_.colorIntent().workingColorSpaceId)))
+                                    .arg(QString::fromUtf8(host::workingColorSpaceLabel(
+                                        session_.colorIntent().workingColorSpaceId)))
                        : sourceLegacyInputColorSpace(session_, node) != 0
                            ? tr("The source's legacy Color Space choice overrides the "
                                 "asset input colour space")

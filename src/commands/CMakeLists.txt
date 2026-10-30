@@ -4,6 +4,7 @@ target_sources(
     bloom_commands
     PRIVATE
         animation_operations.cpp
+        keyframe_easing_operations.cpp
         command_stack.cpp
         operations.cpp
         parameter_source.cpp

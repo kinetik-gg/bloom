@@ -5,8 +5,11 @@
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/memory_pressure_monitor.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <stdexcept>
@@ -27,10 +30,29 @@ struct GpuExportProvider::State final {
                 std::make_shared<runtime::GpuProcessingPhasePolicy>(32, packedHostOwner);
             // A headless root (CLI, MCP, scripting) keeps the default RAM/VRAM headroom.
             options.processingPhasePolicy->setHeadroom(runtime::MemoryHeadroom{});
+            // Evict-on-demand: a frame waiting for host memory makes the process ledger's
+            // reusable pools give back the shortfall at once (headless pools evict on any
+            // thread), returns the pages to the OS and forces the next capacity sample.
+            options.processingPhasePolicy->addRetentionReclaimer(
+                [resample = resampleNow](const render::GpuProcessingPhaseDomain domain,
+                                         const std::uint64_t shortfall) -> std::uint64_t {
+                    if (domain != render::GpuProcessingPhaseDomain::Host)
+                        return 0;
+                    constexpr std::uint64_t minimum = 256ULL * 1024 * 1024;
+                    const auto released = runtime::processMemoryBudgetLedger().reclaim(
+                        static_cast<std::size_t>(std::max(shortfall, minimum)));
+                    if (released != 0) {
+                        runtime::releaseFreedHostMemory();
+                        resample->store(true);
+                    }
+                    return released;
+                });
         }
     }
 
     runtime::GpuProcessFrameEvaluatorOptions options;
+    // Set by the retention reclaimer: the next capacity probe skips its five-second throttle.
+    const std::shared_ptr<std::atomic<bool>> resampleNow = std::make_shared<std::atomic<bool>>(false);
     const bool ownsProcessSampling;
     const std::shared_ptr<std::timed_mutex> bootstrapGate;
     std::shared_ptr<runtime::PackedHostRetirementOwner> packedHostOwner;
@@ -70,7 +92,8 @@ struct GpuExportProvider::State final {
         // evaluator coordination and publication never acquire this mutex.
         const std::lock_guard samplingLock(samplingMutex);
         const auto now = std::chrono::steady_clock::now();
-        if (sampledAt && now >= *sampledAt && now - *sampledAt < std::chrono::seconds(5)) {
+        if (!resampleNow->exchange(false) && sampledAt && now >= *sampledAt &&
+            now - *sampledAt < std::chrono::seconds(5)) {
             return;
         }
         auto sample = options.processingPhasePolicy->sampleHostMemory(cancellation);

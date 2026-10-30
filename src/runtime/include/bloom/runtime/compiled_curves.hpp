@@ -21,10 +21,22 @@
 
 namespace bloom::runtime {
 
+// Mirrors document::KeyframeInterpolation value for value; curve compilation maps each mode
+// deliberately. The ten easing equations sample through runtime/keyframe_easing.hpp.
 enum class CompiledKeyframeInterpolation : std::uint8_t {
     Hold,
     Linear,
     EaseInOut,
+    Sine,
+    Quad,
+    Cubic,
+    Quart,
+    Quint,
+    Expo,
+    Circ,
+    Back,
+    Bounce,
+    Elastic,
 };
 
 struct CompiledScalarKeyframe final {
@@ -39,6 +51,9 @@ struct CompiledScalarKeyframe final {
     // afford.
     document::KeyframeHandle outgoingHandle{};
     document::KeyframeHandle incomingHandle{};
+    // The easing equation's parameters, copied like the handles so an edit reaches a memoized
+    // frame.
+    document::KeyframeEasingParameters easing{};
 
     friend bool operator==(const CompiledScalarKeyframe&, const CompiledScalarKeyframe&) = default;
 };
@@ -87,6 +102,7 @@ struct CompiledPathKeyframe final {
     CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
     document::KeyframeHandle outgoingHandle{};
     document::KeyframeHandle incomingHandle{};
+    document::KeyframeEasingParameters easing{};
 
     friend bool operator==(const CompiledPathKeyframe&, const CompiledPathKeyframe&) = default;
 };

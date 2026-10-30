@@ -145,6 +145,27 @@ interpolationDisplayName(const document::KeyframeInterpolation interpolation) {
         return QStringLiteral("Linear");
     case document::KeyframeInterpolation::EaseInOut:
         return QStringLiteral("Ease In-Out");
+    // Document 1.30 easing equations (labels as in Blender).
+    case document::KeyframeInterpolation::Sine:
+        return QStringLiteral("Sinusoidal");
+    case document::KeyframeInterpolation::Quad:
+        return QStringLiteral("Quadratic");
+    case document::KeyframeInterpolation::Cubic:
+        return QStringLiteral("Cubic");
+    case document::KeyframeInterpolation::Quart:
+        return QStringLiteral("Quartic");
+    case document::KeyframeInterpolation::Quint:
+        return QStringLiteral("Quintic");
+    case document::KeyframeInterpolation::Expo:
+        return QStringLiteral("Exponential");
+    case document::KeyframeInterpolation::Circ:
+        return QStringLiteral("Circular");
+    case document::KeyframeInterpolation::Back:
+        return QStringLiteral("Back");
+    case document::KeyframeInterpolation::Bounce:
+        return QStringLiteral("Bounce");
+    case document::KeyframeInterpolation::Elastic:
+        return QStringLiteral("Elastic");
     }
     return QStringLiteral("Linear");
 }

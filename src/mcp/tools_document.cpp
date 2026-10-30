@@ -538,8 +538,9 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
     const bool parameterPage =
         kind == "parameters" && (member(arguments, "pageSize") || member(arguments, "cursor"));
     const bool individualParameter = kind == "parameter" || kind == "parameter-value";
-    if (member(arguments, "composition") && kind != "nodes" && kind != "parameters" &&
-        !individualParameter)
+    const bool compositionRecords =
+        kind == "nodes" || kind == "parameters" || kind == "layers" || kind == "keyframes";
+    if (member(arguments, "composition") && !compositionRecords && !individualParameter)
         throw InvalidInput("This query kind does not accept a composition");
     if ((member(arguments, "pageSize") || member(arguments, "cursor")) && kind != "parameters")
         throw InvalidInput("Paging applies only to parameters");
@@ -666,6 +667,19 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
                     out.text("sha256:" + std::string(digest.data(), digest.size())));
             out.append(records, record);
         }
+    } else if (kind == "enums") {
+        appendAnimationEnums(out, records);
+    } else if (kind == "layers" || kind == "keyframes") {
+        const auto id = integer(member(arguments, "composition"));
+        const auto* composition =
+            snapshot.project().findComposition(document::CompositionId::fromRaw(id));
+        if (!composition)
+            throw InvalidInput("Stale composition ID at revision " +
+                               std::to_string(snapshot.revision().value()));
+        if (kind == "layers")
+            appendLayerRecords(out, records, snapshot.project(), *composition);
+        else
+            appendKeyframeRecords(out, records, *composition);
     } else if (kind == "nodes" || kind == "parameters") {
         const auto id = integer(member(arguments, "composition"));
         const auto* composition =

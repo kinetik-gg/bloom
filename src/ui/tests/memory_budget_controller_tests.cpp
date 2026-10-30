@@ -31,6 +31,7 @@
 #include <iostream>
 #include <latch>
 #include <memory>
+#include <optional>
 #include <thread>
 
 namespace {
@@ -525,17 +526,63 @@ void pressureAppliesOnUiThread() {
     const auto settleEnd = std::chrono::steady_clock::now() + 150ms;
     while (std::chrono::steady_clock::now() < settleEnd)
         QCoreApplication::processEvents();
-    expect(held == 4 * gib - (gib + gib / 2) && appliedOnUi,
+    expect(held == 4 * gib - (gib + gib / 4) && appliedOnUi,
            "the cache gives back the deficit plus the margin, on the UI thread, then holds");
     owner.beginShutdown();
     scheduler.beginShutdown();
     expect(spin([&] { return scheduler.isQuiescent(); }), "pressure scheduler retires");
     ledger.unregisterCache(&held);
 }
+// Evict-on-demand: a processing-phase reclaimer on a worker thread makes the UI-owned pools give
+// back the shortfall on the UI thread and takes a fresh sample at once; after shutdown a kept
+// reclaimer is a no-op.
+void reclaimForWorkOnUiThread() {
+    runtime::MemoryBudgetLedger ledger(60 * gib, 60 * gib);
+    std::size_t held = 4 * gib;
+    const auto uiThread = std::this_thread::get_id();
+    bool appliedOnUi = true;
+    ledger.registerCache(
+        &held, 30 * gib, [&] { return held; },
+        [&](const std::size_t value) {
+            appliedOnUi = appliedOnUi && std::this_thread::get_id() == uiThread;
+            held = std::min(held, value);
+        });
+    runtime::TaskScheduler scheduler(config());
+    ui::TaskUiBridge bridge(scheduler);
+    std::optional<runtime::MemoryPressureMonitor::Options> noMonitor;
+    ui::MemoryBudgetController owner(scheduler, bridge, ledger, [](const auto&) { return sample(); },
+                                     nullptr, noMonitor);
+    expect(spin([&] { return owner.admittedSampleCount() >= 1 && !owner.sampleActive(); }),
+           "the initial sample settles");
+    const auto samplesBefore = owner.admittedSampleCount();
+    auto reclaim = owner.workReclaimer();
+    std::thread worker([&] {
+        reclaim(gib);
+        reclaim(gib / 2); // Coalesced with the first while it is queued.
+    });
+    worker.join();
+    expect(spin([&] { return owner.reclaimApplications() == 1; }),
+           "the reclaim is applied once on the UI thread");
+    expect(held == 3 * gib && appliedOnUi,
+           "the pools gave back the shortfall, on the UI thread");
+    expect(owner.admittedSampleCount() > samplesBefore,
+           "a fresh sample is taken at once so waiting work sees the released memory");
+    owner.beginShutdown();
+    reclaim(gib);
+    const auto end = std::chrono::steady_clock::now() + 50ms;
+    while (std::chrono::steady_clock::now() < end)
+        QCoreApplication::processEvents();
+    expect(held == 3 * gib && owner.reclaimApplications() == 1,
+           "a reclaimer kept past shutdown does nothing");
+    scheduler.beginShutdown();
+    expect(spin([&] { return scheduler.isQuiescent(); }), "reclaim scheduler retires");
+    ledger.unregisterCache(&held);
+}
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     heldSampling();
     pressureAppliesOnUiThread();
+    reclaimForWorkOnUiThread();
     teardown();
     liveSettingsAndDeliveredCapacity();
     sampledPressurePreviewRecovery();

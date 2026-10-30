@@ -48,6 +48,12 @@ ProjectColorConfig projectColorConfigOf(const document::ColorSettings& settings)
     return ProjectColorConfig::Current;
 }
 
+std::string_view workingColorSpaceLabel(const std::string_view id) noexcept {
+    if (id == document::kProcessColorSpaceIdV1)
+        return "Linear Rec.709 (sRGB)";
+    return id;
+}
+
 std::span<const std::string_view> projectWorkingColorSpaces(const ProjectColorConfig config) {
     switch (config) {
     case ProjectColorConfig::BloomNeutral:

@@ -2,6 +2,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
@@ -1904,6 +1905,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 }
 
 #include "snapshot_compiler_effect_tests.ipp"
+#include "snapshot_compiler_layout_tests.ipp"
 #include "snapshot_compiler_mute_tests.ipp"
 
 } // namespace
@@ -1922,6 +1924,7 @@ int main() {
         testLayerFlagsAndRangeLowering(expectations);
         testMuteKindsAndPixels(expectations);
         testMuteFirstImageInput(expectations);
+        testPresentationEditKeepsPlanAndOperationCache(expectations);
         testParentOrder(expectations);
         testNestedMergeCompilation(expectations);
         testRegistryMustBeFrozen(expectations);

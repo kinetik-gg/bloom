@@ -611,6 +611,7 @@ target_sources(
         viewer_overlays.cpp
         viewer_overlays_text.cpp
         viewer_editor.cpp
+        viewer_display_view_memory.cpp
         viewer_editor_chrome.cpp
         viewer_editor_controls.cpp
         viewer_editor_menus.cpp
@@ -660,6 +661,7 @@ target_sources(
             include/bloom/ui/composition_preview_gpu_scene_stage.hpp
             include/bloom/ui/composition_preview_pipeline.hpp
             include/bloom/ui/composition_session.hpp
+            include/bloom/ui/viewer_display_view_memory.hpp
             include/bloom/ui/editor_area.hpp
             include/bloom/ui/editor_registry.hpp
             include/bloom/ui/editor_native_surface.hpp

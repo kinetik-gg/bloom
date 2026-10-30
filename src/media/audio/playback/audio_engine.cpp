@@ -90,6 +90,26 @@ using bloom::media::audio::playback::AudioStatus;
     return AudioStatus{AudioError::codeOnly(code)};
 }
 
+[[nodiscard]] std::optional<std::int64_t> checkedProduct(const std::int64_t lhs,
+                                                         const std::int64_t rhs) noexcept {
+    constexpr auto max = std::numeric_limits<std::int64_t>::max();
+    constexpr auto min = std::numeric_limits<std::int64_t>::min();
+    if (lhs == 0 || rhs == 0)
+        return std::int64_t{0};
+    const bool overflow = lhs > 0 ? (rhs > 0 ? lhs > max / rhs : rhs < min / lhs)
+                                  : (rhs > 0 ? lhs < min / rhs : rhs < max / lhs);
+    if (overflow)
+        return std::nullopt;
+    return lhs * rhs;
+}
+
+// `time` in units of 1/scale output frames, exactly; nullopt when it is not representable.
+[[nodiscard]] std::optional<std::int64_t>
+scaledFrames(const RationalTime time, const std::int64_t scale, const std::uint32_t rate) noexcept {
+    const auto numerator = checkedProduct(time.numerator(), scale / time.denominator());
+    return numerator ? checkedProduct(*numerator, static_cast<std::int64_t>(rate)) : std::nullopt;
+}
+
 } // namespace
 
 namespace bloom::media::audio::playback {
@@ -170,9 +190,29 @@ class AudioEngine::SpscRing final {
         return frames;
     }
 
+    // Producer side, only while the consumer is stopped.
     void clear() noexcept {
         const auto write = writeFrame_.load(std::memory_order_acquire);
         readFrame_.store(write, std::memory_order_release);
+    }
+
+    [[nodiscard]] std::size_t queued() const noexcept {
+        return writeFrame_.load(std::memory_order_acquire) -
+               readFrame_.load(std::memory_order_acquire);
+    }
+
+    // Producer side: true when nothing is queued, so no frame can be in flight to the consumer.
+    [[nodiscard]] bool empty() const noexcept {
+        return writeFrame_.load(std::memory_order_relaxed) ==
+               readFrame_.load(std::memory_order_acquire);
+    }
+
+    // Consumer side: drops every queued frame and returns how many were dropped.
+    [[nodiscard]] std::size_t discardQueued() noexcept {
+        const auto read = readFrame_.load(std::memory_order_relaxed);
+        const auto write = writeFrame_.load(std::memory_order_acquire);
+        readFrame_.store(write, std::memory_order_release);
+        return write - read;
     }
 
   private:
@@ -250,13 +290,12 @@ AudioStatus AudioEngine::play(const RationalTime at, const std::uint64_t silence
     {
         std::scoped_lock lock(controlMutex_);
         clockOrigin_ = at;
-        framesProduced_ = 0;
         writtenAtOrigin_ = framesWritten_.load(std::memory_order_acquire);
         clockState_.store(std::make_shared<const ClockState>(
                               ClockState{clockOrigin_, writtenAtOrigin_, playbackRate_,
                                          playbackRateNumerator_, playbackRateDenominator_}),
                           std::memory_order_release);
-        ring_->clear();
+        resetTransportLocked();
     }
     ringWakeEpoch_.fetch_add(1, std::memory_order_release);
     ringWakeEpoch_.notify_all();
@@ -303,12 +342,11 @@ AudioStatus AudioEngine::seek(const RationalTime at) {
     {
         std::scoped_lock lock(controlMutex_);
         clockOrigin_ = at;
-        framesProduced_ = 0;
         writtenAtOrigin_ = framesWritten_.load(std::memory_order_acquire);
         *nextClock = ClockState{clockOrigin_, writtenAtOrigin_, playbackRate_,
                                 playbackRateNumerator_, playbackRateDenominator_};
         clockState_.store(std::move(nextClock), std::memory_order_release);
-        ring_->clear();
+        resetTransportLocked();
     }
     ringWakeEpoch_.fetch_add(1, std::memory_order_release);
     ringWakeEpoch_.notify_all();
@@ -349,6 +387,126 @@ bool AudioEngine::setRate(const double rate) noexcept {
     return true;
 }
 
+bool AudioEngine::setLoopRange(const std::optional<LoopRange> range) noexcept {
+    std::optional<LoopFrames> frames;
+    if (range) {
+        if (range->start < RationalTime{} || range->end <= range->start)
+            return false;
+        const auto startDenominator = range->start.denominator();
+        const auto endDenominator = range->end.denominator();
+        const auto scale = checkedProduct(
+            startDenominator / std::gcd(startDenominator, endDenominator), endDenominator);
+        if (!scale)
+            return false;
+        const auto start = scaledFrames(range->start, *scale, config_.rate);
+        const auto end = scaledFrames(range->end, *scale, config_.rate);
+        if (!start || !end || *end <= *start)
+            return false;
+        frames = LoopFrames{*scale, *start, *end};
+    }
+    {
+        std::scoped_lock lock(controlMutex_);
+        if (requestedLoop_ == range)
+            return true;
+        requestedLoop_ = range;
+        requestedLoopFrames_ = frames;
+        if (!playing_.load(std::memory_order_acquire)) {
+            loopFrames_ = frames;
+            loopDirty_ = false;
+            heldPassFrames_ = 0;
+            return true;
+        }
+        loopDirty_ = true;
+        // A rewind already in progress covers this change too: the mixer has pushed nothing since
+        // it was requested, and applies the newest requested loop once it settles.
+        auto idle = Rewind::Idle;
+        (void)rewind_.compare_exchange_strong(idle, Rewind::Requested, std::memory_order_acq_rel);
+    }
+    ringWakeEpoch_.fetch_add(1, std::memory_order_release);
+    ringWakeEpoch_.notify_all();
+    return true;
+}
+
+std::optional<LoopRange> AudioEngine::loopRange() const {
+    std::scoped_lock lock(controlMutex_);
+    return requestedLoop_;
+}
+
+void AudioEngine::resetTransportLocked() noexcept {
+    framesProduced_ = 0;
+    heldPassFrames_ = 0;
+    if (loopDirty_) {
+        loopFrames_ = requestedLoopFrames_;
+        loopDirty_ = false;
+    }
+    rewind_.store(Rewind::Idle, std::memory_order_release);
+    rewindDiscarded_.store(0, std::memory_order_relaxed);
+    underrunFrames_.store(0, std::memory_order_relaxed);
+    ring_->clear();
+}
+
+bool AudioEngine::settleRewind() noexcept {
+    auto state = rewind_.load(std::memory_order_acquire);
+    if (state == Rewind::Requested && ring_->empty() &&
+        rewind_.compare_exchange_strong(state, Rewind::Done, std::memory_order_acq_rel)) {
+        // Nothing queued, so nothing to discard: the mixer settles the request itself.
+        rewindDiscarded_.store(0, std::memory_order_relaxed);
+        state = Rewind::Done;
+    }
+    if (state == Rewind::Done) {
+        const auto discarded = rewindDiscarded_.load(std::memory_order_relaxed);
+        framesProduced_ = framesProduced_ >= discarded ? framesProduced_ - discarded : 0;
+        rewind_.store(Rewind::Idle, std::memory_order_release);
+        state = Rewind::Idle;
+    }
+    if (state != Rewind::Idle)
+        return false;
+    if (loopDirty_)
+        applyLoop(framesProduced_);
+    return true;
+}
+
+void AudioEngine::applyLoop(const std::uint64_t producedFrame) noexcept {
+    if (requestedLoopFrames_) {
+        heldPassFrames_ = 0;
+    } else if (loopFrames_) {
+        // Keep the pass this run is in: the offset that pass applies stays fixed, so the run plays
+        // on through that pass's end like one that never looped, rather than jumping to the
+        // unwrapped timeline.
+        const auto absolute = timeToFrames(clockOrigin_, config_.rate) +
+                              saturatingFrameOffset(producedFrame, playbackRate_);
+        heldPassFrames_ = absolute - loopedFrame(absolute);
+    }
+    loopFrames_ = requestedLoopFrames_;
+    loopDirty_ = false;
+}
+
+std::int64_t AudioEngine::loopedFrame(const std::int64_t absoluteFrame) const noexcept {
+    if (!loopFrames_) {
+        return absoluteFrame >= std::numeric_limits<std::int64_t>::min() + heldPassFrames_
+                   ? absoluteFrame - heldPassFrames_
+                   : std::numeric_limits<std::int64_t>::min();
+    }
+    const auto& loop = *loopFrames_;
+    const auto length = loop.end - loop.start;
+    if (const auto scaled = checkedProduct(absoluteFrame, loop.scale); scaled) {
+        if (*scaled < loop.end)
+            return absoluteFrame;
+        // start >= 0 and scaled >= end > start, so every term is non-negative and the division
+        // floors.
+        return (loop.start + (*scaled - loop.start) % length) / loop.scale;
+    }
+    // Only reachable after centuries of looping at an ordinary frame-grid scale.
+    const auto scaled =
+        static_cast<long double>(absoluteFrame) * static_cast<long double>(loop.scale);
+    if (scaled < static_cast<long double>(loop.end))
+        return absoluteFrame;
+    const auto wrapped =
+        static_cast<long double>(loop.start) +
+        std::fmod(scaled - static_cast<long double>(loop.start), static_cast<long double>(length));
+    return static_cast<std::int64_t>(std::floor(wrapped / static_cast<long double>(loop.scale)));
+}
+
 AudioStatus AudioEngine::renderForTesting(const std::size_t frames) {
     auto* nullBackend = dynamic_cast<NullBackend*>(backend_.get());
     if (nullBackend == nullptr) {
@@ -368,6 +526,8 @@ AudioStatus AudioEngine::renderForTesting(const std::size_t frames) {
     }
     return std::nullopt;
 }
+
+std::size_t AudioEngine::queuedFramesForTesting() const noexcept { return ring_->queued(); }
 
 RationalTime AudioEngine::playbackRateRatio() const noexcept {
     const auto state = clockState_.load(std::memory_order_acquire);
@@ -411,14 +571,25 @@ RationalTime AudioEngine::positionNow() const noexcept {
 
 void AudioEngine::backendCallback(void* userData, const std::span<float> output) noexcept {
     auto& engine = *static_cast<AudioEngine*>(userData);
+    const auto requested = output.size() / engine.config_.channels;
     const auto frames = engine.ring_->pop(output);
     const auto samplesWritten = frames * engine.config_.channels;
     std::fill(output.begin() + static_cast<std::ptrdiff_t>(samplesWritten), output.end(), 0.0F);
     if ((engine.silenceState_.load(std::memory_order_acquire) & 1U) != 0)
         std::fill(output.begin(), output.end(), 0.0F);
-    engine.framesWritten_.fetch_add(output.size() / engine.config_.channels,
-                                    std::memory_order_release);
-    if (frames != 0) {
+    bool rewound = false;
+    if (auto state = engine.rewind_.load(std::memory_order_acquire);
+        state == Rewind::Requested &&
+        engine.rewind_.compare_exchange_strong(state, Rewind::Claimed, std::memory_order_acq_rel)) {
+        // The frames just played stay played; everything still queued is re-mixed.
+        engine.rewindDiscarded_.store(engine.ring_->discardQueued(), std::memory_order_relaxed);
+        engine.rewind_.store(Rewind::Done, std::memory_order_release);
+        rewound = true;
+    }
+    if (frames < requested)
+        engine.underrunFrames_.fetch_add(requested - frames, std::memory_order_relaxed);
+    engine.framesWritten_.fetch_add(requested, std::memory_order_release);
+    if (frames != 0 || rewound) {
         engine.ringWakeEpoch_.fetch_add(1, std::memory_order_release);
         engine.ringWakeEpoch_.notify_one();
     }
@@ -435,7 +606,10 @@ void AudioEngine::mixerLoop() noexcept {
         }
         if (!produceBlock(frames)) {
             const auto epoch = ringWakeEpoch_.load(std::memory_order_acquire);
-            if (playing_.load(std::memory_order_acquire) && ring_->freeFrames() == 0)
+            const auto rewind = rewind_.load(std::memory_order_acquire);
+            if (playing_.load(std::memory_order_acquire) &&
+                (ring_->freeFrames() == 0 || rewind == Rewind::Requested ||
+                 rewind == Rewind::Claimed))
                 ringWakeEpoch_.wait(epoch, std::memory_order_acquire);
         }
     }
@@ -449,6 +623,10 @@ bool AudioEngine::produceBlock(const std::size_t frames) noexcept {
     const std::span<float> output{mixScratch_.data(), sampleCount};
     {
         std::scoped_lock lock(controlMutex_);
+        if (!settleRewind())
+            return false;
+        // Frames the device played while the ring was empty already passed on the clock.
+        framesProduced_ += underrunFrames_.exchange(0, std::memory_order_relaxed);
         mixBlock(framesProduced_, output);
         if (!ring_->push(output)) {
             return false;
@@ -468,13 +646,13 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
     };
     const auto firstAbsoluteFrame = timeToFrames(clockOrigin_, config_.rate) +
                                     saturatingFrameOffset(firstProducedFrame, playbackRate_);
+    const auto anySolo = std::any_of(clips_.begin(), clips_.end(), [](const AudioClip& clip) {
+        return clip.solo && !clip.muted;
+    });
     for (std::size_t outputFrame = 0; outputFrame < output.size() / config_.channels;
          ++outputFrame) {
         const auto absoluteFrame =
-            firstAbsoluteFrame + saturatingFrameOffset(outputFrame, playbackRate_);
-        const auto anySolo = std::any_of(clips_.begin(), clips_.end(), [](const AudioClip& clip) {
-            return clip.solo && !clip.muted;
-        });
+            loopedFrame(firstAbsoluteFrame + saturatingFrameOffset(outputFrame, playbackRate_));
         for (const auto& clip : clips_) {
             if (anySolo && !clip.solo)
                 continue;

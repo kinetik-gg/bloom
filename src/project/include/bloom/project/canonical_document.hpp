@@ -25,8 +25,10 @@ namespace bloom::project {
 // that merely names a CanonicalDocumentV1.
 class RoundTripState;
 
-inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 29};
+inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 30};
 inline constexpr document::SchemaVersion kMinimumDocumentSchemaVersionV1{1, 15};
+// The first document minor that stores the layer `nameFollowsSource` flag; an older one infers it.
+inline constexpr std::uint32_t kLayerNameFollowsSourceMinor = 30;
 // ADR 0032: the first document version saved after Auto began showing ordinary and untagged SDR
 // video through the sRGB texture space. Opening an older project that relied on the previous
 // Auto default shows a one-time note.

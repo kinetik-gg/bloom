@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QTimer>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -79,6 +80,9 @@ class BackgroundPreviewController final : public QObject {
     std::vector<InFlight> inFlight_;
     ReadAheadWidthProvider widthProvider_;
     std::size_t readAheadWidth_ = 1;
+    // Average time from submitting a read-ahead frame to its landing; sets the playback lead.
+    std::chrono::steady_clock::duration landedLatency_{};
+    std::uint64_t passAnchor_ = 0;
     std::uint64_t generation_ = 0;
     std::uint64_t cursor_ = 0;
     std::uint64_t considered_ = 0;

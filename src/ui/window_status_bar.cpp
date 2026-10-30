@@ -14,6 +14,7 @@
 #include <cmath>
 #include <memory>
 
+#include <bloom/host/project_color_choice.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/operation_cache.hpp>
@@ -848,7 +849,9 @@ void WindowStatusBar::refreshProbeCell(const ProbeReadout& readout) {
     probe_->setElidedText(text);
     probe_->setAccessibleName(text);
     probe_->setToolTip(tr("Working space: %1\nDisplay: %2\nCtrl-click to show %3 values")
-                           .arg(readout.workingColorSpaceId, readout.displayName,
+                           .arg(QString::fromUtf8(host::workingColorSpaceLabel(
+                                    readout.workingColorSpaceId.toStdString())),
+                                readout.displayName,
                                 probeFloatFormat_ ? tr("float pre-encode") : tr("8-bit encoded")));
     probeSegment_->setVisible(true);
     applyNarrowLayout();

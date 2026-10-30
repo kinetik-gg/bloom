@@ -10,6 +10,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 
 namespace bloom::ui {
@@ -36,6 +37,16 @@ class MemoryBudgetController final : public QObject {
     [[nodiscard]] std::uint64_t pressureApplications() const noexcept { return pressureApplied_; }
     // Samples pressure now (a headroom preference change).
     void wakePressureMonitor();
+    // Evict-on-demand, callable from any thread (a GpuProcessingPhasePolicy retention reclaimer):
+    // queues MemoryBudgetLedger::reclaim of `bytes` (at least kMinimumReclaimBytes) to this
+    // object's thread, then requests a host-memory sample at once so the waiting work sees the
+    // released memory. Requests arriving while one is queued are coalesced to the largest.
+    static constexpr std::size_t kMinimumReclaimBytes = std::size_t{256} * 1024U * 1024U;
+    void reclaimForWork(std::size_t bytes);
+    // The same as a std::function that is safe to keep beyond this object (it becomes a no-op at
+    // shutdown), for GpuProcessingPhasePolicy::addRetentionReclaimer.
+    [[nodiscard]] std::function<void(std::size_t)> workReclaimer() const;
+    [[nodiscard]] std::uint64_t reclaimApplications() const noexcept { return reclaimApplied_; }
 
   signals:
     void sampleApplied();
@@ -55,6 +66,17 @@ class MemoryBudgetController final : public QObject {
     bool closed_ = false;
     std::uint64_t admitted_ = 0;
     std::uint64_t pressureApplied_ = 0;
+    std::uint64_t reclaimApplied_ = 0;
+    struct ReclaimRequest final {
+        std::mutex mutex;
+        std::size_t bytes = 0;
+        bool queued = false;
+        // Cleared at shutdown under `mutex`, so a reclaimer kept by another owner never touches
+        // a destroyed controller.
+        MemoryBudgetController* owner = nullptr;
+    };
+    static void queueReclaim(const std::shared_ptr<ReclaimRequest>& request, std::size_t bytes);
+    std::shared_ptr<ReclaimRequest> reclaimRequest_ = std::make_shared<ReclaimRequest>();
     // Coalesces queued pressure applications: at most one waits for the UI thread at a time.
     std::shared_ptr<std::atomic<bool>> pressureQueued_ = std::make_shared<std::atomic<bool>>(false);
     std::unique_ptr<runtime::MemoryPressureMonitor> pressureMonitor_;

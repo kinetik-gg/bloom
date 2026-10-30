@@ -145,6 +145,11 @@ enum class ExportDeviceRoute : std::uint8_t {
     RecoveringGpu = 3,
     // Explicit CPU reference fallback (no device, or recovery failed). Recorded in provenance.
     CpuReference = 4,
+    // Waiting for memory: the frame does not fit what is free after reusable caches gave back
+    // theirs, because other active work holds it. Not the Viewer (that is WaitingForViewer, only
+    // while the Viewer is rendering). ExportJobProgress::memoryNeededBytes carries the need.
+    // Time spent here does not count toward the export's deadlines.
+    WaitingForMemory = 5,
 };
 
 enum class ExportRunnerState : std::uint8_t {
@@ -176,6 +181,8 @@ struct ExportJobProgress final {
     // while the route is WaitingForViewer (no honest estimate exists then).
     std::optional<std::chrono::milliseconds> remaining;
     ExportDeviceRoute route = ExportDeviceRoute::None;
+    // While the route is WaitingForMemory: the memory the waiting frame needs.
+    std::optional<std::uint64_t> memoryNeededBytes;
 };
 
 // One entry of a run's bounded log. Structured first; `message` is the human wording of `code`.

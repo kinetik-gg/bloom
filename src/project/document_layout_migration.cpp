@@ -152,7 +152,8 @@ enum class Step {
     LayerMasks,
     CompositionFolders,
     VideoColourDefault,
-    ExportQueue
+    ExportQueue,
+    EasingAndLayerFlags
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -172,6 +173,12 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // The SDR video colour default (1.27 -> 1.28, ADR 0032) is version-only: no member changes.
     // The source version tells the open path that the project was saved under the old default.
     if (step == Step::VideoColourDefault)
+        return false;
+    // Easing equations and layer flags (1.29 -> 1.30) are version-only: the new interpolation
+    // tokens are new values and every new member (keyframe `easing`, layer `shy` and
+    // `nameFollowsSource`) is optional. The open path infers nameFollowsSource for a decoded
+    // document older than 1.30 during reconstruction, where the source names are known.
+    if (step == Step::EasingAndLayerFlags)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -354,6 +361,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::CompositionFolders   ? "{\"major\":1,\"minor\":27}"
                            : step == Step::VideoColourDefault   ? "{\"major\":1,\"minor\":28}"
                            : step == Step::ExportQueue          ? "{\"major\":1,\"minor\":29}"
+                           : step == Step::EasingAndLayerFlags  ? "{\"major\":1,\"minor\":30}"
                                                                 : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -891,6 +899,13 @@ MigrationStepOutcome migrateVideoColourDefaultV1_27(const JsonValue& root,
                                                     std::pmr::memory_resource*, Buffer& output) {
     if (!sourceVersionIs(root, "27") ||
         !transform(root, Scope::Root, Step::VideoColourDefault, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateEasingAndLayerFlagsV1_29(const JsonValue& root,
+                                                     std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "29") ||
+        !transform(root, Scope::Root, Step::EasingAndLayerFlags, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

@@ -662,7 +662,7 @@ class ViewerEditor final : public QWidget,
     void paintRoi(QPainter& painter) const;
     void publishRoi();
     [[nodiscard]] QString analysisSettingsPrefix() const;
-    [[nodiscard]] QString displayViewSettingsKey() const;
+    [[nodiscard]] QString displayViewConfigRevision() const;
     [[nodiscard]] QString lookSettingsKey() const;
     void rebuildDisplayViewControl();
     void updateLookControl();

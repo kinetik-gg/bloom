@@ -19,6 +19,7 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/ui/kit/color.hpp>
+#include <bloom/ui/viewer_display_view_memory.hpp>
 #include <bloom/ui/viewer_overlays.hpp>
 
 #include <QObject>
@@ -195,6 +196,12 @@ class CompositionSession final : public QObject {
     [[nodiscard]] runtime::EvaluationColorIntent colorIntent() const noexcept;
     void setColorSettings(document::ColorSettings settings);
     [[nodiscard]] bool setWorkingColorSpaceOverride(std::optional<std::string> colorSpaceId);
+    // The Viewer's remembered Display / View per project (session state, never document truth).
+    // The application begins it for every installed project before rebind() and moves it on Save
+    // As; Viewers read and write it.
+    [[nodiscard]] ViewerDisplayViewMemory& viewerDisplayViewMemory() noexcept {
+        return viewerDisplayViewMemory_;
+    }
 
     void setAssetController(AssetController* controller) noexcept { assetController_ = controller; }
     [[nodiscard]] AssetController* assetController() const noexcept { return assetController_; }
@@ -926,6 +933,7 @@ class CompositionSession final : public QObject {
     // and by rebind(), and are never null while this object is alive.
     std::shared_ptr<SessionColorConverterState> colorConverterState_;
     document::ColorSettings colorSettings_;
+    ViewerDisplayViewMemory viewerDisplayViewMemory_;
     document::Document* document_;
     commands::CommandStack* commandStack_;
     commands::CommandObserverId commandObserverId_ = 0;

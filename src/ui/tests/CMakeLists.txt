@@ -813,6 +813,17 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+add_executable(bloom_viewer_display_view_test viewer_display_view_tests.cpp)
+target_link_libraries(bloom_viewer_display_view_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_viewer_display_view_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_display_view
+    COMMAND bloom_viewer_display_view_test
+    LABELS ui unit color
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 bloom_add_test(
     NAME bloom.ui.timeline_frame_math
     COMMAND bloom_timeline_frame_math_test
@@ -1480,6 +1491,13 @@ bloom_enable_warnings(bloom_audio_transport_test)
 add_test(NAME bloom.ui.audio-transport COMMAND bloom_audio_transport_test)
 set_tests_properties(bloom.ui.audio-transport PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
+
+# #400: looped playback keeps the mixer and the transport on one work-area period.
+add_executable(bloom_ui_audio_loop_transport_test audio_loop_transport_tests.cpp)
+target_link_libraries(bloom_ui_audio_loop_transport_test PRIVATE bloom_ui bloom_runtime_compiler)
+bloom_enable_warnings(bloom_ui_audio_loop_transport_test)
+bloom_add_test(NAME bloom.ui.audio-loop-transport COMMAND bloom_ui_audio_loop_transport_test
+    LABELS ui audio TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(bloom_ui_audio_device_control_test audio_device_control_tests.cpp)
 target_link_libraries(bloom_ui_audio_device_control_test PRIVATE bloom_ui)
