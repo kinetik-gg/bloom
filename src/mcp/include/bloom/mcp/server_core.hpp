@@ -60,7 +60,8 @@ struct McpCoreDependencies final {
     runtime::TaskScheduler& scheduler;
     // Where capture publishes its PNG before embedding it: a per-user cache folder (desktop:
     // <user cache>/mcp-captures; stdio: the same). Empty makes capture answer ExportUnavailable
-    // with the reason "No capture folder". At most kMcpRetainedCaptures files are kept.
+    // with the reason "Bloom can't find a folder for captures." At most kMcpRetainedCaptures files
+    // are kept.
     std::filesystem::path captureDirectory;
     // serverInfo.version in initialize.
     std::string serverVersion;

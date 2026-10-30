@@ -55,7 +55,8 @@ struct LoopbackBindResult final {
     std::uint16_t port = 0;
     // errno or WSAGetLastError() value; 0 when not applicable. Never shown alone to a user.
     int systemCode = 0;
-    // Plain-language, names the port ("Port 6767 is in use by another program").
+    // Plain sentence case naming the port, no system vocabulary ("Port 6767 is in use."). The
+    // MCP service builds its own field reason from `status` and `port`.
     std::string message;
     [[nodiscard]] bool bound() const noexcept { return status == LoopbackBindStatus::Bound; }
 };

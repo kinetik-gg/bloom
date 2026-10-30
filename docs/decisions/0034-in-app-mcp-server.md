@@ -290,8 +290,8 @@ Failed  --setPort--> Stopped
 
 - **Start** binds `127.0.0.1:<port>` synchronously. Binding a loopback port is one bounded system
   call with no filesystem or network I/O, which lets the command refuse a taken port on the spot
-  with `PortInUse` naming the port ("Port 6767 is in use by another program. Choose another port or
-  close the program using it."). The refusal is also kept as the snapshot's `failure`, so the status
+  with `PortInUse` naming the port ("Port 6767 is in use. Choose another port or stop the other
+  program."). The refusal is also kept as the snapshot's `failure`, so the status
   line keeps showing it. Bloom **never tries another port**: a client configured for 6767 must
   never reach a server that silently moved. Start needs the token loaded (`TokenLoading`,
   `TokenUnavailable`).
@@ -303,8 +303,13 @@ Failed  --setPort--> Stopped
 
   The state is Stopped when the request workers are idle.
 - **Port** changes only while the server is stopped (`ServerRunning`: "Stop the server to change
-  the port"). Restarting silently on a new port would drop clients without telling them. A value
-  outside 1024–65535 is `PortOutOfRange` naming the value. The value is remembered.
+  the port."). Restarting silently on a new port would drop clients without telling them. A value
+  outside 1024–65535 is `PortOutOfRange` naming the value ("Port 80 can't be used. Choose a port
+  from 1024 to 65535."). The free, non-blocking `validateMcpPort(value)` returns exactly that
+  refusal (code, field, value and reason), so the Port field can show it while the artist types.
+  `setPort()` stays the authority: it checks ShuttingDown, Stopping and ServerRunning from the
+  server's state first, then returns `*validateMcpPort(value)` for an out-of-range value. The value
+  is remembered.
 - **Auto-start** is a preference, off by default. When on, the composition root calls
   `requestAutoStart()` once at launch, and `pump()` starts the server as soon as the token has
   loaded. A refused auto-start (port taken) leaves the server Stopped with the failure shown in
@@ -312,7 +317,7 @@ Failed  --setPort--> Stopped
 - **Clients.** Up to 8 concurrent protocol sessions, which allows several agents and tools at once
   while bounding memory and the panel list. At the limit, initialize evicts the least recently used
   client that has nothing in flight and has been idle for 5 minutes. Otherwise it is refused (503,
-  -32002, "Bloom accepts at most 8 MCP clients"). A client idle for 60 minutes expires. Its next
+  -32002, "Bloom accepts at most 8 MCP clients."). A client idle for 60 minutes expires. Its next
   request gets 404 and it re-initializes.
 - **Shutdown.** `ApplicationShutdownCoordinator` gains an MCP participant. `beginShutdown()` acts as
   stop with cause Shutdown and refuses every subsequent command; the coordinator keeps pumping until
@@ -350,11 +355,25 @@ composition root, holds the `McpServerService`.
 | # | Guarantee | API | Rule |
 | --- | --- | --- | --- |
 | 1 | The snapshot is read on the UI thread without blocking; changes arrive as main-thread events from one application-lifetime adapter | `snapshot()`, `pump()`, `McpServerAdapter::changed()` | `pump()` is the only publisher. `snapshot()` returns an immutable `shared_ptr` with no lock held across I/O. The adapter drains on its waiter and on `TaskUiBridge::resultsAvailable`. Panels never pump. |
-| 2 | Start, stop and port change are commands with typed refusals shown as inline field reasons | `start()`, `stop()`, `setPort()`, `setAutoStart()`, `regenerateToken()`; `McpCommandResult`, `McpCommandAvailability{code, field, port, reason}` | Codes: `AlreadyRunning`, `NotRunning`, `Stopping`, `PortOutOfRange`, `PortInUse` (naming the port), `PermissionDenied`, `AddressUnavailable`, `ResourceExhausted`, `ServerRunning`, `TokenLoading`, `TokenUnavailable`, `ShuttingDown`, `SystemError`. `field` names the control: Status, Port, AutoStart, Token or Clients. Every refusal has a reason; nothing is disabled silently. |
-| 3 | The token never appears in log, activity or diagnostic text; the snapshot shows it masked; only an explicit call returns it | `McpTokenView::masked`, `revealToken()`, `clientConfig(kind, IncludeToken)` | `maskToken()` shows the prefix and the last four characters. Activity summaries are built from typed facts (tool, operation ids, outcome, rejection kind), never from bodies, headers or arguments. A reveal is logged without the value. |
-| 4 | The activity log is a bounded ring with monotonically increasing ids, read incrementally | `activity(afterId)` → `McpActivityBatch{entries, gap, lastId}`; `snapshot().lastActivityId` | 512 entries; ids start at 1 and are never reused; `gap` reports overflow; repeated identical rejections within one second fold into one entry with `repeat`. |
+| 2 | Start, stop and port change are commands with typed refusals shown as inline field reasons | `start()`, `stop()`, `setPort()`, `setAutoStart()`, `regenerateToken()`; `McpCommandResult`, `McpCommandAvailability{code, field, port, reason}`; `validateMcpPort(value)` for the Port field while typing | Codes: `AlreadyRunning`, `NotRunning`, `Stopping`, `PortOutOfRange`, `PortInUse` (naming the port), `PermissionDenied`, `AddressUnavailable`, `ResourceExhausted`, `ServerRunning`, `TokenLoading`, `TokenUnavailable`, `ShuttingDown`, `SystemError`. `field` names the control: Status, Port, AutoStart, Token or Clients. Every refusal has a reason string (below), shown verbatim; nothing is disabled silently. `validateMcpPort` and `setPort` return identical out-of-range refusals. |
+| 3 | The token never appears in log, activity or diagnostic text; the snapshot shows it masked; only an explicit call returns it | `McpTokenView::masked`, `revealToken()`, `clientConfig(kind, IncludeToken)` | `maskToken()` shows the prefix and the last four characters. Activity entries carry typed facts; the fallback `summary` is built from the same facts and operation ids, never from bodies, headers or arguments. A reveal is logged without the value. |
+| 4 | The activity log is a bounded ring with monotonically increasing ids, read incrementally | `activity(afterId)` → `McpActivityBatch{entries, gap, lastId}`; `snapshot().lastActivityId` | 512 entries; ids start at 1 and are never reused; `gap` reports overflow; repeated identical rejections within one second fold into one entry with `repeat`. Each entry carries `clientLabel` (the client's sanitised title, else its name, at most 64 bytes), captured when the entry is recorded, so lines from a disconnected client stay labelled. The panel builds the line it shows from the typed facts (`tool`, `outcome`, `toolError`, `rejection`, `repeat`, `duration`, `clientLabel`); `summary` is only a fallback and a diagnostic. |
 | 5 | The host generates the client configuration text | `clientConfig(kind, disclosure)`, pure `clientConfigText(kind, endpoint, credential)` | Kinds: Claude Code, MCP JSON, VS Code, Other. The token or `${BLOOM_MCP_TOKEN}`. The text uses the configured port, so it can be copied while the server is stopped. |
 | 6 | Port, token and auto-start are preferences, never project state | `McpServerPreferences`, `preferencesRevision`, the token file | See the state table in section 6. Nothing the panel does dirties the project or enters the undo history. |
+
+**Reason strings.** Every `reason` the service returns (command refusals, `failure`, the token
+view, the project view) is shown verbatim as an inline field reason under the control it belongs
+to, so each one follows one style:
+
+- plain sentence case ending with a full stop, naming the value it is about;
+- no internal vocabulary: no codes, enum names, system error text, "socket", "bind" or "token
+  file";
+- a short first sentence saying what is wrong, optionally followed by a second giving the remedy;
+- short enough to fit one line under a field (about 80 characters).
+
+Examples: "Port 6767 is in use. Choose another port or stop the other program.", "Port 80 can't be
+used. Choose a port from 1024 to 65535.", "Stop the server to change the port.", "A project is
+opening.", "Bloom can't find a folder to keep the access token in."
 
 **What the panel shows.**
 
@@ -362,20 +381,22 @@ composition root, holds the `McpServerService`.
   - "Stopped";
   - "Running on 127.0.0.1:6767" with the number of clients;
   - "Stopping…";
-  - "Couldn't start: Port 6767 is in use by another program", or the listener failure, from
-    `failure.reason`.
+  - after a refused start or a listener failure, `failure.reason` verbatim, for example "Port 6767
+    is in use. Choose another port or stop the other program."
 - **Start/Stop** as one button, with availability from `commands[Start]` and `commands[Stop]`.
-- **Port** field (default 6767). It is editable while the server is stopped. Refusals appear inline
-  under the field.
+- **Port** field (default 6767). It is editable while the server is stopped. `validateMcpPort`
+  gives the out-of-range reason while the artist types; refusals from `setPort` and `start` appear
+  inline under the field.
 - **Start when Bloom opens** check box (auto-start).
 - **Token** row: the masked token, **Reveal**, **Copy** and **Regenerate…** (which confirms that
   every connected client will be disconnected).
 - **Copy client config** menu, with the four kinds and a "with placeholder" variant of each.
 - **Connected clients** table: name, version (from `initialize`), connected since, last activity,
   in-flight requests and the last tool.
-- **Activity** list: time, client, tool and outcome, appended incrementally with `activity(afterId)`.
-  A `gap` shows "Earlier activity was trimmed".
-- The project line from `McpLiveProjectView`, such as "A project is opening", while no project is
+- **Activity** list: time, client (`clientLabel`), tool, outcome, error or rejection, repeat count
+  and duration, composed by the panel from the typed facts and appended incrementally with
+  `activity(afterId)`. A `gap` shows "Earlier activity was trimmed."
+- The project line from `McpLiveProjectView`, such as "A project is opening.", while no project is
   bound.
 
 **Typed events** (`events(afterSequence)`, bounded ring of 128, with `gap`): `McpServerStarted`,
@@ -393,7 +414,7 @@ project.
 | --- | --- | --- |
 | `Start` | Stopped or Failed (`AlreadyRunning`, `Stopping`); token Ready (`TokenLoading`, `TokenUnavailable`); not shutting down (`ShuttingDown`) | binds `127.0.0.1:<port>`; a bind refusal returns `PortInUse`, `PermissionDenied`, `AddressUnavailable` or `ResourceExhausted` naming the port and is kept as `failure` |
 | `Stop` | Running (`NotRunning`, `Stopping`, `ShuttingDown`) | closes the listener, ends sessions, cancels requests, Stopping then Stopped |
-| `SetPort` | Stopped or Failed (`ServerRunning`, `Stopping`); 1024–65535 (`PortOutOfRange`) | stores the preference and clears a failure about the old port |
+| `SetPort` | Stopped or Failed (`ServerRunning`, `Stopping`); 1024–65535 (`PortOutOfRange`, identical to `validateMcpPort`) | stores the preference and clears a failure about the old port |
 | `SetAutoStart` | not shutting down | stores the preference |
 | `RegenerateToken` | token not Loading or Regenerating (`TokenLoading`); not shutting down | writes a new token on the blocking-I/O executor, then disconnects every client |
 | `RevealToken` | token Ready (`TokenLoading`, `TokenUnavailable`) | returns the token; logs "Token revealed" without it |
@@ -427,7 +448,8 @@ over Bloom's listener.
 ### 10. Tests the implementation adds
 
 - **Contract** (this change): `bloom.mcp.server-contract` compiles every contract header and pins
-  the defaults, limits, tool names, refusal codes and HTTP statuses.
+  the defaults, limits, tool names, refusal codes and HTTP statuses, and `validateMcpPort`'s
+  refusal (code, field, value and reason) for in-range and out-of-range values.
 - **HTTP conformance** (`bloom.mcp.http-conformance`, Python over a real socket against a headless
   `McpServerService` on an ephemeral test port):
   - `initialize` → `Mcp-Session-Id` → `notifications/initialized` (202) → `tools/list` →
@@ -469,6 +491,12 @@ over Bloom's listener.
   - auto-start waits for the token;
   - regenerate disconnects clients and the old token gets 401;
   - activity ids are monotonic, `gap` works and folding works;
+  - `clientLabel` is the title, else the name, capped at 64 bytes, and stays on entries after the
+    client disconnects;
+  - `setPort` and `validateMcpPort` return identical refusals for every out-of-range value, and
+    `setPort` refuses `ServerRunning` before the range;
+  - every reason string the service can produce matches the reason-string style (a table-driven
+    check over each refusal and failure);
   - no activity summary, event or diagnostic contains the token (a scan with a known token);
   - `clientConfigText` is pinned for all four kinds and both disclosures;
   - shutdown reaches `quiescent()`.

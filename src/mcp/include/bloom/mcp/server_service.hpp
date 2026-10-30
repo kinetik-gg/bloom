@@ -110,8 +110,8 @@ enum class McpServerFailureCode : std::uint8_t {
 struct McpServerFailure final {
     McpServerFailureCode code = McpServerFailureCode::SystemError;
     std::uint16_t port = 0;
-    // Plain language naming the port ("Port 6767 is in use by another program. Choose another port
-    // or close the program using it."). Never contains the token.
+    // A reason string (see "Reason strings" below), e.g. "Port 6767 is in use. Choose another port
+    // or stop the other program." Never contains the token.
     std::string reason;
     std::chrono::system_clock::time_point at;
 };
@@ -154,7 +154,7 @@ enum class McpUnavailableCode : std::uint8_t {
     AddressUnavailable = 8,
     // Start: out of sockets or file descriptors (field: status).
     ResourceExhausted = 9,
-    // SetPort while Running: "Stop the server to change the port" (field: port).
+    // SetPort while Running: "Stop the server to change the port." (field: port).
     ServerRunning = 10,
     // Start, RevealToken, CopyClientConfig while the token file is being read or written.
     TokenLoading = 11,
@@ -166,6 +166,15 @@ enum class McpUnavailableCode : std::uint8_t {
     SystemError = 14,
 };
 
+// Reason strings. Every `reason` in this header (McpCommandAvailability, McpServerFailure,
+// McpTokenView, McpLiveProjectView) is shown verbatim as an inline field reason under the control
+// it belongs to, so each one is written for the artist:
+// - plain sentence case, ending with a full stop, naming the value it is about ("Port 6767 ...");
+// - no internal vocabulary (no codes, enum names, errno text, "socket", "bind" or "token file");
+// - a short first sentence saying what is wrong, optionally a second giving the remedy;
+// - short enough to fit one line under a field (about 80 characters).
+// Example: "Port 6767 is in use. Choose another port or stop the other program."
+
 // Which panel field a refusal belongs to.
 enum class McpField : std::uint8_t { Status = 0, Port = 1, AutoStart = 2, Token = 3, Clients = 4 };
 
@@ -175,10 +184,29 @@ struct McpCommandAvailability final {
     McpField field = McpField::Status;
     // The port a PortInUse/PermissionDenied/PortOutOfRange refusal is about.
     std::optional<std::uint32_t> port;
-    // Tooltip-ready; empty when available, never empty when not.
+    // A reason string (above); empty when available, never empty when not.
     std::string reason;
     [[nodiscard]] explicit operator bool() const noexcept { return available; }
 };
+
+// The Port field's live check while the artist types: nullopt for 1024..65535, otherwise exactly
+// the PortOutOfRange refusal setPort() returns for the same value (code, field Port, the value in
+// `port`, and the reason "Port <value> can't be used. Choose a port from 1024 to 65535."). It
+// checks the range only; setPort() stays the authority and also refuses ServerRunning, Stopping
+// and ShuttingDown from the server's state, which it checks first.
+[[nodiscard]] inline std::optional<McpCommandAvailability>
+validateMcpPort(const std::uint32_t port) noexcept {
+    if (portInRange(port))
+        return std::nullopt;
+    McpCommandAvailability refusal;
+    refusal.code = McpUnavailableCode::PortOutOfRange;
+    refusal.field = McpField::Port;
+    refusal.port = port;
+    refusal.reason = "Port " + std::to_string(port) + " can't be used. Choose a port from " +
+                     std::to_string(kMcpMinimumPort) + " to " + std::to_string(kMcpMaximumPort) +
+                     ".";
+    return refusal;
+}
 
 struct McpCommandAvailabilitySet final {
     std::array<McpCommandAvailability, kMcpServerCommandCount> entries{};
@@ -224,7 +252,7 @@ struct McpTokenView final {
     std::string masked;
     // Advances on every regeneration (clients authorised with an older token are disconnected).
     std::uint64_t generation = 0;
-    // Why the token is Unavailable; empty otherwise.
+    // A reason string saying why the token is Unavailable; empty otherwise.
     std::string reason;
 };
 
@@ -257,7 +285,7 @@ enum class McpDisconnectCause : std::uint8_t {
 struct McpLiveProjectView final {
     bool bound = false;
     std::uint64_t generation = 0;
-    // "A project is opening", "Bloom is closing"; empty when bound.
+    // A reason string: "A project is opening.", "Bloom is closing."; empty when bound.
     std::string reason;
 };
 
@@ -303,9 +331,11 @@ enum class McpActivityKind : std::uint8_t {
     TokenRevealed = 10,
 };
 
-// One line of the activity log. `summary` is built by the service from typed facts (tool name,
-// operation ids, outcome, rejection kind); it never contains argument values, request or response
-// bodies, headers, the token or the session id.
+// One line of the activity log. The panel builds the line it shows from the typed facts (tool,
+// outcome, toolError, rejection, repeat, duration, clientLabel), so it controls wording and
+// layout. `summary` is a fallback and a diagnostic only: built by the service from the same typed
+// facts plus the operation ids and label of a transact, it never contains argument values, request
+// or response bodies, headers, the token or the session id.
 struct McpActivityEntry final {
     // Monotonic per service, starting at 1, never reused.
     std::uint64_t id = 0;
@@ -313,6 +343,10 @@ struct McpActivityEntry final {
     McpActivityKind kind = McpActivityKind::ToolCall;
     // McpClientView::id, when the entry belongs to a client.
     std::optional<std::uint64_t> client;
+    // The client's sanitised info.title, else info.name, at most 64 bytes (cut on a UTF-8
+    // boundary), captured when the entry is recorded so lines from a disconnected client stay
+    // labelled. Empty when the entry belongs to no client or the client has not initialized.
+    std::string clientLabel;
     std::optional<McpTool> tool;
     std::optional<McpCallOutcome> outcome;
     std::optional<McpToolErrorCode> toolError;
@@ -479,7 +513,7 @@ struct McpServerServiceDependencies final {
     host::ExportQueueService& exports;
     runtime::TaskScheduler& scheduler;
     // platform::userDataDirectory() / "mcp" / "token"; empty makes the token Unavailable with the
-    // reason "No user data folder".
+    // reason "Bloom can't find a folder to keep the access token in."
     std::filesystem::path tokenFile;
     // platform::userCacheDirectory() / "mcp-captures"; see McpCoreDependencies::captureDirectory.
     std::filesystem::path captureDirectory;
@@ -522,8 +556,9 @@ class McpServerService final {
     // Export panel), and reaches Stopped when the request workers are idle. Refusals: NotRunning,
     // Stopping, ShuttingDown.
     McpCommandResult stop();
-    // Refusals: PortOutOfRange (naming the value), ServerRunning, Stopping, ShuttingDown. The value
-    // is remembered as a preference.
+    // Refusals, in this order: ShuttingDown, Stopping, ServerRunning, then *validateMcpPort(port)
+    // (PortOutOfRange naming the value, identical to the live field check). The value is
+    // remembered as a preference.
     McpCommandResult setPort(std::uint32_t port);
     McpCommandResult setAutoStart(bool enabled);
     // Generates a new token (platform CSPRNG) and writes it on the blocking-I/O executor. When the

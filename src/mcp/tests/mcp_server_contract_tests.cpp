@@ -13,6 +13,7 @@
 
 #include <iostream>
 #include <set>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -137,9 +138,27 @@ int main() {
     inUse.code = mcp::McpUnavailableCode::PortInUse;
     inUse.field = mcp::McpField::Port;
     inUse.port = 6767;
-    inUse.reason = "Port 6767 is in use by another program.";
+    inUse.reason = "Port 6767 is in use. Choose another port or stop the other program.";
     failures += expect(!inUse && inUse.port == 6767u && inUse.field == mcp::McpField::Port,
                        "a port refusal names the port and the field it belongs to");
+
+    // The Port field's live check is the PortOutOfRange refusal setPort() returns: the same code,
+    // field, value and reason. setPort() is not implemented yet, so this pins the inline helper it
+    // must return verbatim; bloom.mcp.server-service compares the two directly.
+    for (const std::uint32_t valid : {1024u, 6767u, 65535u})
+        failures += expect(!mcp::validateMcpPort(valid).has_value(), "an in-range port is valid");
+    for (const std::uint32_t invalid : {0u, 80u, 1023u, 65536u, 4294967295u}) {
+        const auto refusal = mcp::validateMcpPort(invalid);
+        failures += expect(refusal.has_value() && !refusal->available &&
+                               refusal->code == mcp::McpUnavailableCode::PortOutOfRange &&
+                               refusal->field == mcp::McpField::Port && refusal->port == invalid,
+                           "an out-of-range port is refused at the Port field naming the value");
+        failures += expect(refusal && refusal->reason == "Port " + std::to_string(invalid) +
+                                                             " can't be used. Choose a port from "
+                                                             "1024 to 65535.",
+                           "the out-of-range reason is a plain sentence naming the value");
+    }
+    static_assert(noexcept(mcp::validateMcpPort(0)));
 
     const mcp::McpEndpoint endpoint;
     failures += expect(endpoint.host == "127.0.0.1" && endpoint.path == "/mcp",
@@ -149,8 +168,9 @@ int main() {
     entry.id = 1;
     entry.kind = mcp::McpActivityKind::RequestRejected;
     entry.rejection = mcp::McpHttpRejection::Unauthorized;
-    failures += expect(entry.repeat == 1 && entry.summary.empty() && !entry.client,
-                       "an activity entry starts with no client and no text");
+    failures += expect(entry.repeat == 1 && entry.summary.empty() && !entry.client &&
+                           entry.clientLabel.empty(),
+                       "an activity entry starts with no client, label or text");
 
     mcp::McpServerEvent event;
     event.sequence = 1;
