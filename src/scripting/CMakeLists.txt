@@ -18,6 +18,7 @@ add_library(bloom_scripting STATIC)
 target_sources(
     bloom_scripting
     PRIVATE
+        command_diagnostics.cpp
         export.cpp
         export_headless.cpp
         json_script.cpp
@@ -25,6 +26,7 @@ target_sources(
         operation_registry.cpp
         operation_registry_alignment.cpp
         operation_registry_export.cpp
+        operation_frame_times.cpp
         operation_values.hpp
         render.cpp
         session.cpp
@@ -32,6 +34,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/scripting/command_diagnostics.hpp
             include/bloom/scripting/events.hpp
             include/bloom/scripting/export.hpp
             include/bloom/scripting/facade.hpp

@@ -249,8 +249,10 @@ OperationContext LiveSessionLease::operationContext() const {
     if (!hold_)
         return {};
     auto context = state().context;
-    if (session_)
+    if (session_) {
         context.layerGeometry = session_->layerGeometryProvider();
+        context.compositionFrameRate = session_->compositionFrameRateLookup();
+    }
     return context;
 }
 

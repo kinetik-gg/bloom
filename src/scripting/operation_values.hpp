@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -72,6 +73,15 @@ argumentFailure(const std::string& operationId, std::string argument, std::strin
     }
     return std::nullopt;
 }
+
+// Creates an operation through `factory` after turning every whole-frame time among its arguments
+// into exact seconds (operation_frame_times.cpp): at the rate the operation itself sets, else at
+// its composition's rate when it applies. `measuresNow` factories need seconds at creation and use
+// the context's compositionFrameRate lookup, or refuse a frame count without one.
+[[nodiscard]] OperationCreateResult
+createWithFrameTimes(const OperationSchema& schema, const Arguments& arguments,
+                     const OperationContext* context, bool measuresNow,
+                     const std::function<OperationCreateResult(const Arguments&)>& factory);
 
 // Registers bloom.layer.align-layers and bloom.layer.distribute-layers (ADR 0031).
 void addLayerAlignmentOperations(std::vector<OperationDescriptor>& descriptors);

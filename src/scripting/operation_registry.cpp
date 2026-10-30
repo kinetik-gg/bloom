@@ -1316,8 +1316,10 @@ OperationRegistry OperationRegistry::builtIn() {
 
     add("bloom.animation.set-keyframe-at-time-for-parameter",
         {compositionArgument(),
-         need("parameter", ValueKind::Id, StableId{1}, "The parameter to key."), timeArgument(),
-         need("value", ValueKind::Value, 0.0, "The value at that time.")},
+         need("parameter", ValueKind::Id, StableId{1},
+              "The parameter to key. A constant parameter becomes animated in the same undo "
+              "step, its constant as the first key."),
+         timeArgument(), need("value", ValueKind::Value, 0.0, "The value at that time.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -2054,7 +2056,12 @@ OperationRegistry OperationRegistry::builtIn() {
             return OperationCreateResult(
                 std::make_unique<commands::AddComposition>(
                     *name, *compositionFormat, compositionFormat->frameRate(),
-                    duration.value_or(core::RationalTime::fromInteger(48)),
+                    // 48 frames at the composition's own rate.
+                    duration.value_or(
+                        core::RationalTime::create(std::int64_t{48} *
+                                                       compositionFormat->frameRate().denominator(),
+                                                   compositionFormat->frameRate().numerator())
+                            .value_or(core::RationalTime::fromInteger(2))),
                     background.value_or(core::Color4d{0.0, 0.0, 0.0, 1.0})),
                 std::nullopt);
         });
@@ -2073,9 +2080,10 @@ OperationRegistry OperationRegistry::builtIn() {
                "Frame-rate numerator (with frameRateDenominator)."),
          maybe("frameRateDenominator", ValueKind::Integer, std::int64_t{1},
                "Frame-rate denominator (with frameRateNumerator)."),
-         maybe("duration", ValueKind::Time, std::int64_t{10}, "Duration in seconds."),
+         maybe("duration", ValueKind::Time, std::int64_t{240},
+               "Duration: whole frames, or [numerator, denominator] seconds."),
          maybe("start", ValueKind::Time, std::int64_t{0},
-               "The time composition time zero is labelled as, in seconds."),
+               "The timecode of frame 0: whole frames, or [numerator, denominator] seconds."),
          maybe("dropFrame", ValueKind::Boolean, false,
                "Drop-frame timecode labels (honoured at 29.97 and 59.94 fps)."),
          maybe("background", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 1.0},
@@ -2429,14 +2437,9 @@ OperationRegistry OperationRegistry::builtIn() {
                 return error;
             }
             const auto compositionId = document::CompositionId::fromRaw(*composition);
-            if (position.has_value()) {
-                return OperationCreateResult(
-                    std::make_unique<commands::AddSolidLayer>(compositionId, *name, *color,
-                                                              *position, opacity.value_or(1.0)),
-                    std::nullopt);
-            }
             return OperationCreateResult(
-                std::make_unique<commands::AddSolidLayer>(compositionId, *name, *color),
+                std::make_unique<commands::AddSolidLayer>(compositionId, *name, *color, position,
+                                                          opacity.value_or(1.0)),
                 std::nullopt);
         });
 
@@ -2464,12 +2467,12 @@ OperationRegistry OperationRegistry::builtIn() {
             const auto compositionId = document::CompositionId::fromRaw(*composition);
             if (position.has_value() || opacity.has_value() || size.has_value() ||
                 color.has_value()) {
-                return OperationCreateResult(
-                    std::make_unique<commands::AddTextLayer>(
-                        compositionId, *name, *content, position.value_or(document::Vec2d{}),
-                        opacity.value_or(1.0), size.value_or(document::kDefaultTextSizePixels),
-                        color.value_or(core::Color4d{1.0, 1.0, 1.0, 1.0})),
-                    std::nullopt);
+                return OperationCreateResult(std::make_unique<commands::AddTextLayer>(
+                                                 compositionId, *name, *content, position,
+                                                 opacity.value_or(1.0),
+                                                 size.value_or(document::kDefaultTextSizePixels),
+                                                 color.value_or(core::Color4d{1.0, 1.0, 1.0, 1.0})),
+                                             std::nullopt);
             }
             return OperationCreateResult(
                 std::make_unique<commands::AddTextLayer>(compositionId, *name, *content),
@@ -3419,11 +3422,22 @@ OperationCreateResult OperationRegistry::createWith(const std::string_view typeI
                             failure(descriptor->schema.typeId, argument.name, "is required"));
         }
     }
+    // An integer time is a whole frame of the operation's composition; the factories read seconds.
     if (context != nullptr && descriptor->contextualFactory) {
-        return decorate(descriptor->schema, descriptor->contextualFactory(descriptor->schema.typeId,
-                                                                          arguments, *context));
+        return decorate(
+            descriptor->schema,
+            detail::createWithFrameTimes(descriptor->schema, arguments, context, true,
+                                         [descriptor, context](const Arguments& converted) {
+                                             return descriptor->contextualFactory(
+                                                 descriptor->schema.typeId, converted, *context);
+                                         }));
     }
-    return decorate(descriptor->schema, descriptor->factory(descriptor->schema.typeId, arguments));
+    return decorate(descriptor->schema,
+                    detail::createWithFrameTimes(descriptor->schema, arguments, context, false,
+                                                 [descriptor](const Arguments& converted) {
+                                                     return descriptor->factory(
+                                                         descriptor->schema.typeId, converted);
+                                                 }));
 }
 
 } // namespace bloom::scripting

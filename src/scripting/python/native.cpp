@@ -105,6 +105,7 @@ OperationContext NativeHost::operationContext() const {
                 selectedLayers(facade_->query.snapshot(), *context.composition, context.selection);
         }
         context.layerGeometry = session_->layerGeometryProvider();
+        context.compositionFrameRate = session_->compositionFrameRateLookup();
     } else {
         context = session_->operationContext();
     }

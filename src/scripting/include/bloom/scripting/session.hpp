@@ -150,6 +150,16 @@ class Session final {
     // render source snapshot, for align and distribute. Valid while this session is; it evaluates
     // synchronously on the calling client thread.
     [[nodiscard]] LayerGeometryProvider layerGeometryProvider() const;
+    // A composition's current frame rate {numerator, denominator} (OperationContext).
+    [[nodiscard]] std::function<
+        std::optional<std::pair<std::uint32_t, std::uint32_t>>(std::uint64_t)>
+    compositionFrameRateLookup() const;
+
+    // Takes over `other`'s project in place, so a host that keeps references to this Session (the
+    // stdio MCP server's core) follows project.open and project.new. Everything that borrowed
+    // this session's host session or coordinators must be released first; `other`'s old contents
+    // are destroyed with it.
+    void adopt(std::unique_ptr<Session> other) noexcept;
 
     [[nodiscard]] SessionSaveResult save();
     [[nodiscard]] SessionSaveResult saveAs(const std::filesystem::path& path);
@@ -184,7 +194,9 @@ class Session final {
 
     Session() : registry_(OperationRegistry::builtIn()) {}
 
-    host::ProjectSessionIdentitySource identitySource_;
+    // Heap-held so adopt() can move a host session together with the identity source it borrows.
+    std::unique_ptr<host::ProjectSessionIdentitySource> identitySource_ =
+        std::make_unique<host::ProjectSessionIdentitySource>();
     std::unique_ptr<host::ProjectSession> session_;
     std::unique_ptr<host::PublicationCoordinator> publicationCoordinator_;
     std::unique_ptr<platform::StagedArtifactCoordinator> artifactCoordinator_;

@@ -64,7 +64,7 @@ SessionCreateResult Session::createNew(std::string projectName, std::string comp
                                            .compositionName = std::move(compositionName),
                                            .duration = duration,
                                            .format = format};
-    auto hostResult = host::ProjectSession::createNew(base->identitySource_, std::move(request));
+    auto hostResult = host::ProjectSession::createNew(*base->identitySource_, std::move(request));
     return fromHostSession(std::move(base), std::move(hostResult), {});
 }
 
@@ -83,7 +83,7 @@ SessionCreateResult Session::open(const std::filesystem::path& path) {
     }
 
     auto base = std::unique_ptr<Session>(new Session());
-    auto hostResult = host::ProjectSession::createPreservedReadOnly(base->identitySource_, path);
+    auto hostResult = host::ProjectSession::createPreservedReadOnly(*base->identitySource_, path);
     auto created = fromHostSession(std::move(base), std::move(hostResult), path);
     if (!created) {
         return created;
@@ -114,7 +114,7 @@ SessionCreateResult Session::openReadOnly(const std::filesystem::path& path) {
         return failure("bloom.scripting.open-path-empty", "Open requires a project path");
     }
     auto base = std::unique_ptr<Session>(new Session());
-    auto hostResult = host::ProjectSession::createPreservedReadOnly(base->identitySource_, path);
+    auto hostResult = host::ProjectSession::createPreservedReadOnly(*base->identitySource_, path);
     return fromHostSession(std::move(base), std::move(hostResult), path);
 }
 
@@ -251,6 +251,19 @@ std::vector<std::uint64_t> selectedLayers(const document::Snapshot& snapshot,
     return layers;
 }
 
+void Session::adopt(std::unique_ptr<Session> other) noexcept {
+    if (!other)
+        return;
+    std::swap(identitySource_, other->identitySource_);
+    std::swap(session_, other->session_);
+    std::swap(publicationCoordinator_, other->publicationCoordinator_);
+    std::swap(artifactCoordinator_, other->artifactCoordinator_);
+    std::swap(displayPath_, other->displayPath_);
+    std::swap(binding_, other->binding_);
+    // `other` now holds the old project and releases it in its own member order.
+    other.reset();
+}
+
 OperationContext Session::operationContext() const {
     OperationContext context;
     if (!isValid()) {
@@ -263,7 +276,24 @@ OperationContext Session::operationContext() const {
     }
     context.time = core::RationalTime::fromInteger(0);
     context.layerGeometry = layerGeometryProvider();
+    context.compositionFrameRate = compositionFrameRateLookup();
     return context;
+}
+
+std::function<std::optional<std::pair<std::uint32_t, std::uint32_t>>(std::uint64_t)>
+Session::compositionFrameRateLookup() const {
+    return
+        [this](const std::uint64_t id) -> std::optional<std::pair<std::uint32_t, std::uint32_t>> {
+            if (!isValid())
+                return std::nullopt;
+            const auto view = snapshot();
+            const auto* composition =
+                view.project().findComposition(document::CompositionId::fromRaw(id));
+            if (composition == nullptr)
+                return std::nullopt;
+            const auto rate = composition->format().frameRate();
+            return std::pair{rate.numerator(), rate.denominator()};
+        };
 }
 
 LayerGeometryProvider Session::layerGeometryProvider() const {

@@ -6,7 +6,7 @@ from typing import Any
 from .data import Proxy
 
 Time = int | tuple[int, int] | Fraction | float
-Value = float | tuple[float, ...]
+Value = float | bool | str | tuple[float, ...]
 Path = Mapping[str, Any]
 
 class Operation:
