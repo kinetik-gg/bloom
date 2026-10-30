@@ -163,7 +163,8 @@ The detailed implementation status and next merge gates live in [`roadmap.md`](r
 
 The [performance and reliability sprint](plans/performance-reliability-sprint.md) tracks the ordered
 node, recovery, RAM preview, cache, audio, media and document work under #306, with
-[local milestone validation](development/local-validation.md).
+[local milestone validation](development/local-validation.md). Performance and colour/format
+accuracy are measured with the [benchmark suite](development/benchmarks.md).
 
 The [production workflows release](plans/production-workflows-release.md) records what landed under
 #374 (timeline, footage, masking, EXR, composition settings and Assets) and the work still open.
