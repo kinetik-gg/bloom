@@ -1522,6 +1522,18 @@ bloom_add_test(
     TIMEOUT 60
 )
 
+# ADR 0034: an MCP transaction over Streamable HTTP lands in the artist's undo history.
+add_executable(bloom_ui_mcp_live_undo_test mcp_live_undo_tests.cpp)
+target_include_directories(bloom_ui_mcp_live_undo_test PRIVATE ..)
+target_link_libraries(bloom_ui_mcp_live_undo_test PRIVATE bloom_ui bloom_runtime_compiler bloom_mcp_testing
+    Qt6::Test)
+target_compile_definitions(bloom_ui_mcp_live_undo_test PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_ui_mcp_live_undo_test)
+bloom_add_test(NAME bloom.ui.mcp-live-undo COMMAND bloom_ui_mcp_live_undo_test
+    LABELS ui mcp integration TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+
 if(BLOOM_BUILD_PYTHON)
     add_executable(bloom_script_panel_test script_panel_tests.cpp)
     target_include_directories(bloom_script_panel_test PRIVATE ..)
