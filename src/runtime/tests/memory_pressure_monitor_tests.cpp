@@ -13,9 +13,10 @@
 #include <thread>
 #include <vector>
 
-// Caches fill, then a simulated pressure source (a fake MemAvailable) makes them shrink within a
-// bounded time and the freed pages leave the process. The buffers are frame-sized and touched, as
-// pixel storage is, so the resident set really holds them.
+// Caches fill, then a simulated pressure source (a fake MemAvailable and PSI) makes them give back
+// only the deficit, oldest entries first, within a bounded time, and the freed pages leave the
+// process. Plentiful memory with light stalls and full (stale) swap never evicts anything. The
+// buffers are frame-sized and touched, as pixel storage is, so the resident set really holds them.
 namespace {
 using namespace bloom::runtime;
 using namespace std::chrono_literals;
@@ -31,19 +32,17 @@ void expect(const bool value, const std::string_view message) {
     }
 }
 
-// A reusable cache registered with the ledger, holding real touched frame buffers.
+// A reusable cache registered with the ledger, holding real touched frame buffers. Newest frames
+// are at the front; a smaller budget drops the oldest (least recently used) first.
 class FrameCache final {
   public:
     explicit FrameCache(MemoryBudgetLedger& ledger) : ledger_(ledger) {
         ledger_.registerCache(
-            this, 64 * gib,
-            [this] {
+            this, 64 * gib, [this] { return bytes(); },
+            [this](const std::size_t budget) {
                 const std::lock_guard lock(mutex_);
-                return frames_.size() * kFrameBytes;
-            },
-            [this](const std::size_t bytes) {
-                const std::lock_guard lock(mutex_);
-                while (!frames_.empty() && frames_.size() * kFrameBytes > bytes)
+                budget_ = budget;
+                while (!frames_.empty() && frames_.size() * kFrameBytes > budget)
                     frames_.pop_back();
             });
     }
@@ -53,8 +52,8 @@ class FrameCache final {
     void fill(const std::size_t count) {
         const std::lock_guard lock(mutex_);
         for (std::size_t index = 0; index < count; ++index) {
-            auto frame = std::make_unique<std::byte[]>(kFrameBytes);
-            std::memset(frame.get(), static_cast<int>(index % 251) + 1, kFrameBytes);
+            Frame frame{next_++, std::make_unique<std::byte[]>(kFrameBytes)};
+            std::memset(frame.pixels.get(), static_cast<int>(frame.id % 251) + 1, kFrameBytes);
             frames_.push_front(std::move(frame));
         }
     }
@@ -62,11 +61,29 @@ class FrameCache final {
         const std::lock_guard lock(mutex_);
         return frames_.size() * kFrameBytes;
     }
+    [[nodiscard]] std::size_t budget() const {
+        const std::lock_guard lock(mutex_);
+        return budget_;
+    }
+    // Ids of the retained frames, newest first.
+    [[nodiscard]] std::vector<std::size_t> ids() const {
+        const std::lock_guard lock(mutex_);
+        std::vector<std::size_t> result;
+        for (const auto& frame : frames_)
+            result.push_back(frame.id);
+        return result;
+    }
 
   private:
+    struct Frame final {
+        std::size_t id = 0;
+        std::unique_ptr<std::byte[]> pixels;
+    };
     MemoryBudgetLedger& ledger_;
     mutable std::mutex mutex_;
-    std::deque<std::unique_ptr<std::byte[]>> frames_;
+    std::deque<Frame> frames_;
+    std::size_t next_ = 0;
+    std::size_t budget_ = 0;
 };
 
 template <class Predicate> bool waitUntil(Predicate done, const std::chrono::milliseconds limit) {
@@ -84,162 +101,169 @@ void provokeDynamicMmapThreshold() {
     block.reset();
 }
 
-void pressureEvictsAndReturnsMemory() {
-    configureHostMemoryReturn();
-    provokeDynamicMmapThreshold();
-    MemoryBudgetLedger ledger(64 * gib, 64 * gib);
-    ledger.setRamHeadroom(2 * gib);
-    std::atomic<std::size_t> available{40 * gib};
-    std::atomic<std::size_t> swapped{0};
-    FrameCache cache(ledger);
-    static_cast<void>(ledger.applyPressureSample({.availableBytes = available.load()}));
-    cache.fill(48); // 672 MiB
-    const auto resident = processResidentBytes();
+MemoryPressureMonitor::Options fastOptions() {
     MemoryPressureMonitor::Options options;
     options.interval = 20ms;
     options.psiTrigger = false;
     options.counterSampler = {};
-    options.sampler = [&] {
-        return MachineMemorySample{.availableBytes = available.load(),
-                                   .processSwappedBytes = swapped.load()};
-    };
+    return options;
+}
+
+// Available memory below the headroom: the caches give back only the deficit to headroom plus
+// margin, oldest frames first, and the resident set drops by what they released.
+void deficitOnlyOldestFirst() {
+    configureHostMemoryReturn();
+    provokeDynamicMmapThreshold();
+    MemoryBudgetLedger ledger(64 * gib, 64 * gib);
+    ledger.setRamHeadroom(2 * gib);
+    FrameCache cache(ledger);
+    std::atomic<std::size_t> base{40 * gib};
+    // What the machine reports: a base level plus whatever the cache has released since filling.
+    const auto available = [&] { return base.load() + (48 * kFrameBytes - cache.bytes()); };
+    static_cast<void>(ledger.applyPressureSample({.availableBytes = base.load()}));
+    cache.fill(48); // 672 MiB, frames 0 (oldest) to 47 (newest)
+    const auto resident = processResidentBytes();
+    auto options = fastOptions();
+    options.sampler = [&] { return MachineMemorySample{.availableBytes = available()}; };
     MemoryPressureMonitor monitor(
         ledger, [&](const MachineMemorySample& sample) { ledger.applyPressureSample(sample); },
         options);
     std::this_thread::sleep_for(100ms);
-    expect(cache.bytes() == 48 * kFrameBytes, "no pressure, no eviction");
-    expect(monitor.deliveries() == 0, "a machine above the headroom delivers nothing");
+    expect(cache.bytes() == 48 * kFrameBytes && monitor.deliveries() == 0,
+           "a machine above the headroom evicts nothing");
 
-    // Another process takes memory: 1.5 GiB available, 0.5 GiB short of the headroom. The cache
-    // must give back the deficit plus the 512 MiB margin: 1 GiB of 672 MiB, so everything.
+    // Another program takes memory: 1.9 GiB available against a 2 GiB headroom. The deficit to
+    // headroom plus the 256 MiB margin is 358 MiB: about 26 of the 48 frames, the oldest ones.
     const auto pressured = std::chrono::steady_clock::now();
-    available = gib + gib / 2;
-    expect(waitUntil([&] { return cache.bytes() == 0; }, 2000ms),
-           "the cache evicts within two seconds of the pressure sample");
-    const auto evictedAfter = std::chrono::steady_clock::now() - pressured;
+    base = gib + 9 * gib / 10;
+    const auto restore = 2 * gib + 256 * mib;
+    expect(waitUntil([&] { return available() >= restore; }, 2000ms),
+           "the caches give back the deficit within two seconds");
+    const auto elapsed = std::chrono::steady_clock::now() - pressured;
+    std::this_thread::sleep_for(100ms);
+    const auto ids = cache.ids();
+    const auto evicted = 48 - ids.size();
+    const auto deficitFrames = (restore - (gib + 9 * gib / 10) + kFrameBytes - 1) / kFrameBytes;
+    expect(evicted >= deficitFrames && evicted <= deficitFrames + 1,
+           "only the deficit (plus one partial frame) is evicted, never the whole cache");
+    expect(!ids.empty() && ids.front() == 47 && ids.back() == evicted,
+           "the oldest frames went first; the newest stay resident");
     expect(waitUntil([&] { return monitor.trims() > 0; }, 2000ms),
            "the monitor returns the freed memory to the OS");
     const auto after = processResidentBytes();
     if (resident && after) {
         const auto dropped = *resident > *after ? *resident - *after : 0;
         std::cout << "PRESSURE_RSS before=" << *resident / mib << "MiB after=" << *after / mib
-                  << "MiB dropped=" << dropped / mib << "MiB evictedMs="
-                  << std::chrono::duration_cast<std::chrono::milliseconds>(evictedAfter).count()
-                  << '\n';
-        expect(dropped >= 48 * kFrameBytes * 9 / 10,
+                  << "MiB dropped=" << dropped / mib << "MiB evictedFrames=" << evicted
+                  << " evictedMs="
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() << '\n';
+        expect(dropped >= evicted * kFrameBytes * 9 / 10,
                "at least 90% of the evicted frame bytes leave the resident set");
     }
-
-    // Our own pages in swap: plenty available, but the caches' swapped pages are not.
-    available = 40 * gib;
-    std::this_thread::sleep_for(60ms);
-    static_cast<void>(ledger.applyPressureSample({.availableBytes = available.load()}));
-    cache.fill(16);
-    swapped = 39 * gib;
-    expect(waitUntil([&] { return cache.bytes() == 0; }, 2000ms),
-           "a cache swapped out under memory pressure is evicted, not kept in swap");
-    swapped = 0;
     monitor.stop();
 }
 
-void headroomChangeEvictsAtOnce() {
+// A larger RAM headroom applies at once against the last sample, and also evicts only the
+// deficit, oldest first.
+void headroomChangeEvictsDeficit() {
     configureHostMemoryReturn();
     MemoryBudgetLedger ledger(64 * gib, 64 * gib);
     ledger.setRamHeadroom(2 * gib);
     FrameCache cache(ledger);
     static_cast<void>(ledger.applyPressureSample({.availableBytes = 6 * gib}));
-    cache.fill(32); // 448 MiB
-    const auto resident = processResidentBytes();
-    MemoryPressureMonitor::Options options;
-    options.interval = 20ms;
-    options.psiTrigger = false;
-    options.counterSampler = {};
-    options.sampler = [] { return MachineMemorySample{.availableBytes = 6 * gib}; };
+    cache.fill(96); // 1344 MiB
+    auto options = fastOptions();
+    options.sampler = [&] {
+        return MachineMemorySample{.availableBytes = 6 * gib + (96 * kFrameBytes - cache.bytes())};
+    };
     MemoryPressureMonitor monitor(
         ledger, [&](const MachineMemorySample& sample) { ledger.applyPressureSample(sample); },
         options);
-    // The owner raises the headroom preference above what is available.
-    ledger.setRamHeadroom(8 * gib);
-    expect(cache.bytes() == 0, "a larger headroom evicts synchronously, before any new sample");
+    // 6.2 GiB headroom against 6 GiB available: margin max(256 MiB, 6.2/8 GiB) = 794 MiB, so the
+    // deficit to headroom plus margin is 998 MiB of the 1344 MiB held.
+    const auto headroom = 6 * gib + gib / 5;
+    ledger.setRamHeadroom(headroom);
+    const auto kept = cache.bytes();
+    const auto deficit = headroom + memoryPressureMarginBytes(headroom) - 6 * gib;
+    expect(kept < 96 * kFrameBytes && 96 * kFrameBytes - kept >= deficit &&
+               96 * kFrameBytes - kept < deficit + kFrameBytes,
+           "a larger headroom evicts at once, but only the deficit");
+    expect(!cache.ids().empty() && cache.ids().front() == 95,
+           "the newest frames stay after a headroom change");
     monitor.wake();
     expect(waitUntil([&] { return monitor.trims() > 0; }, 2000ms),
            "the freed memory is returned to the OS within one interval");
-    const auto after = processResidentBytes();
-    if (resident && after) {
-        const auto dropped = *resident > *after ? *resident - *after : 0;
-        std::cout << "HEADROOM_RSS before=" << *resident / mib << "MiB after=" << *after / mib
-                  << "MiB dropped=" << dropped / mib << "MiB\n";
-        expect(dropped >= 32 * kFrameBytes * 9 / 10,
-               "the headroom change returns the evicted bytes to the OS");
-    }
     monitor.stop();
 }
 
-// Another process grows and is pushed into swap while this process's own memory stays resident
-// and MemAvailable still looks above the headroom: swap traffic (or PSI stall time) is pressure,
-// the caches give memory back one margin per sample until it stops, then hold.
-void otherProcessSwappingEvicts() {
-    configureHostMemoryReturn();
+// The owner's machine: 38 GB available against a 6 GB headroom, steady light PSI stalls (some and
+// full around 3.5%), swap full of stale zram pages and a little swap-in. None of it is caused by
+// these caches: nothing is evicted and the caches keep growing. A severe "full" stall counts only
+// once available memory is inside headroom plus margin, and then only the deficit is evicted.
+void lightStallsAndStaleSwapNeverEvict() {
     MemoryBudgetLedger ledger(64 * gib, 64 * gib);
-    ledger.setRamHeadroom(2 * gib);
+    ledger.setRamHeadroom(6 * gib);
     FrameCache cache(ledger);
-    static_cast<void>(ledger.applyPressureSample({.availableBytes = 5 * gib}));
-    cache.fill(48); // 672 MiB
-    std::atomic<bool> swapping{false};
-    std::atomic<bool> stalling{false};
-    std::atomic<std::uint64_t> swapOut{1000};
-    std::atomic<std::uint64_t> someStall{0};
-    MemoryPressureMonitor::Options options;
-    options.interval = 20ms;
-    options.psiTrigger = false;
-    options.pageBytes = 4096;
-    options.sampler = [] {
-        // Available stays above headroom plus margin and nothing of ours is swapped.
-        return MachineMemorySample{.availableBytes = 5 * gib, .processSwappedBytes = 0};
+    std::atomic<std::size_t> base{38 * gib};
+    std::atomic<std::size_t> filled{0};
+    // What the machine reports: a base level plus whatever the cache released since filling.
+    const auto available = [&] { return base.load() + (filled.load() - cache.bytes()); };
+    std::atomic<std::uint64_t> stall{0};
+    std::atomic<std::uint64_t> stallPerSample{700}; // 3.5% of a 20 ms interval
+    std::atomic<std::uint64_t> swapIn{0};
+    auto options = fastOptions();
+    options.sampler = [&] {
+        return MachineMemorySample{.availableBytes = available(),
+                                   .swapTotalBytes = 3 * gib,
+                                   .swapUsedBytes = 3 * gib};
     };
     options.counterSampler = [&] {
-        if (swapping)
-            swapOut += 8192; // 32 MiB per 20 ms sample: the other process is being swapped out.
-        if (stalling)
-            someStall += 10'000; // Half of every 20 ms sample stalled on memory.
-        return MemoryPressureCounters{.someStallMicroseconds = someStall.load(),
-                                      .fullStallMicroseconds = 0,
-                                      .swapInPages = 0,
-                                      .swapOutPages = swapOut.load()};
+        stall += stallPerSample.load();
+        swapIn += 32;
+        return MemoryPressureCounters{.someStallMicroseconds = stall.load(),
+                                      .fullStallMicroseconds = stall.load(),
+                                      .swapInPages = swapIn.load(),
+                                      .swapOutPages = 0};
     };
     MemoryPressureMonitor monitor(
         ledger, [&](const MachineMemorySample& sample) { ledger.applyPressureSample(sample); },
         options);
-    std::this_thread::sleep_for(100ms);
-    expect(cache.bytes() == 48 * kFrameBytes && monitor.deliveries() == 0,
-           "quiet swap and no stalls leave the caches alone");
-
-    swapping = true;
-    expect(waitUntil([&] { return cache.bytes() < 48 * kFrameBytes; }, 1000ms),
-           "another process swapping makes the caches give memory back at once");
-    expect(waitUntil([&] { return cache.bytes() == 0; }, 2000ms),
-           "the caches keep shrinking one margin per sample while the swapping lasts");
-    swapping = false;
-    std::this_thread::sleep_for(60ms);
-    cache.fill(8);
-    const auto deliveries = monitor.deliveries();
+    static_cast<void>(ledger.applyPressureSample(options.sampler()));
+    cache.fill(16);
+    filled = 16 * kFrameBytes;
     std::this_thread::sleep_for(200ms);
-    expect(cache.bytes() == 8 * kFrameBytes && monitor.deliveries() == deliveries,
-           "once the swapping stops and available is above headroom plus margin, caches hold");
+    static_cast<void>(ledger.applyPressureSample(options.sampler()));
+    expect(cache.bytes() == 16 * kFrameBytes && monitor.deliveries() == 0,
+           "light stalls and full stale swap with plenty available evict nothing");
+    expect(cache.budget() > cache.bytes(), "and the caches may keep growing");
 
-    stalling = true;
-    expect(waitUntil([&] { return cache.bytes() == 0; }, 2000ms),
-           "PSI memory stalls alone also make the caches give memory back");
-    stalling = false;
+    // Severe full stalls (half of every interval) while memory is still plentiful: still nothing.
+    stallPerSample = 10'000;
+    std::this_thread::sleep_for(200ms);
+    expect(cache.bytes() == 16 * kFrameBytes && monitor.deliveries() == 0,
+           "a severe stall with plenty available is not these caches' doing");
+
+    // Severe stalls with available memory inside headroom plus margin (6 GiB + 768 MiB): the caches
+    // give back the deficit to headroom plus margin, oldest first, and no more.
+    base = 6 * gib + 600 * mib;
+    const auto floor = 6 * gib + memoryPressureMarginBytes(6 * gib);
+    expect(waitUntil([&] { return cache.bytes() < 16 * kFrameBytes; }, 2000ms),
+           "a severe stall inside the margin evicts");
+    std::this_thread::sleep_for(150ms);
+    const auto evicted = 16 * kFrameBytes - cache.bytes();
+    const auto deficit = floor - (6 * gib + 600 * mib);
+    expect(evicted >= deficit && evicted < deficit + kFrameBytes,
+           "only the deficit to headroom plus margin, then the caches hold");
+    expect(cache.ids().front() == 15, "the newest frames stay");
     monitor.stop();
 }
 
 } // namespace
 
 int main() {
-    pressureEvictsAndReturnsMemory();
-    headroomChangeEvictsAtOnce();
-    otherProcessSwappingEvicts();
+    deficitOnlyOldestFirst();
+    headroomChangeEvictsDeficit();
+    lightStallsAndStaleSwapNeverEvict();
     if (failures == 0)
         std::cout << "memory pressure monitor: all checks passed\n";
     return failures == 0 ? 0 : 1;

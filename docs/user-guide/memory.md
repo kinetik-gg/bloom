@@ -60,19 +60,19 @@ its share, so caches never push the computer into swap. Active work evicts them 
 room.
 
 Bloom watches memory continuously, not only when it starts work: a monitor samples the machine four
-times a second (and on Linux wakes at once on a kernel memory-pressure (PSI) notification). As soon
-as free memory drops below the headroom, every cache shrinks right away until free memory is back
-above the headroom plus a margin (a quarter of the headroom, at least 512 MiB); between the two the
-caches hold and do not refill what they just released. Bloom's own memory that the system has
-moved to swap (or compressed, on zram and macOS) counts as used, not free, so caches are evicted
-instead of being kept in swap. Free memory alone can look fine while the system is pushing other
-programs into swap, so Bloom also treats the system's memory distress as pressure, whichever program
-causes it: on Linux, swap traffic of 16 MiB/s or more, or programs stalled on memory (PSI) for a
-tenth of the time ("some") or a fiftieth ("full"); on macOS, the warning or critical memory pressure
-level; on Windows, the low-memory notification. Under such pressure the caches stop growing and give
-back one margin four times a second until it stops. Evicted memory is returned to the operating
-system immediately, so Bloom's resident size really drops. A larger RAM headroom applied in
-Preferences evicts at once.
+times a second (and on Linux wakes at once on a kernel memory-pressure (PSI) notification). Caches
+are freed only when free memory drops below the headroom. Then they give back only the shortfall,
+what brings free memory back above the headroom plus a small margin (an eighth of the headroom, at
+least 256 MiB), and always their oldest entries first: the most recently used frames, including
+the RAM preview frames you just played, stay. Between the headroom and the margin the caches hold.
+A severe memory stall (on Linux, every task stalled on memory for a tenth of the time; the macOS
+warning or critical pressure level; the Windows low-memory notification) also frees the shortfall,
+but only while free memory is already within the headroom plus the margin. Light stalls, swap that
+is full of old pages, and swap traffic while memory is plentiful are not caused by Bloom's caches
+and never free them. Bloom's own memory that the system has moved to swap (or compressed, on zram
+and macOS) counts as used, not free. Evicted memory is returned to the operating system immediately,
+so Bloom's resident size really drops. A larger RAM headroom applied in Preferences frees the
+shortfall at once. **Purge** is the only thing that empties a cache completely.
 
 Caches are never a reason for work to wait. When a Viewer frame, a RAM preview frame or an export
 frame needs more memory than is free, the caches first give back what it is short of (least
@@ -183,9 +183,9 @@ Bloom renders frames you have not looked at only when you ask for playback:
 
 RAM Preview counts frames that are currently retained, including frames already cached before the
 run. Its tooltip separates frames prepared this run from retained frames and the longest cached
-span. If the range outgrows memory, caching stops with a partial result at once and playback still
-starts from the range start: Play renders the rest just ahead of the playhead while the cache
-evicts the oldest frames, so a long range never stalls (frames may drop if rendering is slower than
-real time). Purging or later eviction removes live coverage
+span. RAM Preview never stops because of memory. If the range outgrows memory, it keeps filling while the
+cache evicts its oldest frames, ends with a partial result, and plays from the range start: Play
+renders the frames no longer cached just ahead of the playhead, so a long range never stalls (frames
+may drop if rendering is slower than real time). Purging or later eviction removes live coverage
 without erasing the history of work already prepared. Half resolution reduces the display image
 extent and retained image bytes; actual device capacity and finite resource limits still apply.

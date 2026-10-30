@@ -852,15 +852,15 @@ available memory is available memory minus the process's own swapped memory (Lin
 compressed task memory, Windows private bytes outside the working set). A sample below the RAM
 headroom is queued to the controller's thread and applied with
 `MemoryBudgetLedger::applyPressureSample`, so reusable pools shrink by their share of the deficit
-plus the hysteresis margin (`memoryPressureMarginBytes`, a quarter of the headroom, at least
-512 MiB) within one interval; they grow only above headroom plus margin. System memory pressure,
-whichever process causes it, also shrinks them by one margin per applied sample and stops growth:
-Linux PSI "some" stall time of at least 10% or "full" of at least 2% of the interval, or swap traffic
-(`/proc/vmstat` pswpin + pswpout) of at least 16 MiB/s; the macOS VM pressure level (warning or
-critical); the Windows low-memory resource notification. Another process pushed into zram keeps
-MemAvailable high while this process's own `VmSwap` stays zero, so neither availability nor own swap
-alone detects it. The ledger counts the reusable bytes each application released;
-the monitor then calls `releaseFreedHostMemory()` (glibc `malloc_trim`), and
+to headroom plus the hysteresis margin (`memoryPressureMarginBytes`, an eighth of the headroom, at
+least 256 MiB) within one interval, each pool evicting its least recently used entries; they grow
+only above headroom plus margin. Only a severe stall counts as pressure, and only while available
+memory is inside headroom plus margin: Linux PSI "full" stall time of at least 10% of the interval,
+the macOS VM pressure level (warning or critical), the Windows low-memory resource notification.
+Light "some" stalls, swap occupancy and swap traffic never shrink pools or block growth (stale zram
+swap and steady low stalls are normal while memory is plentiful). Eviction is deficit-only; the
+user purge is the only full clear and also trims the heap (`requestHostTrim`). The ledger counts
+the reusable bytes each application released; the monitor then calls `releaseFreedHostMemory()` (glibc `malloc_trim`), and
 `configureHostMemoryReturn()` fixes glibc's mmap threshold at 1 MiB when sampling starts, so freed
 pixel buffers are unmapped rather than left resident in heap arenas. macOS and Windows allocators
 already return large blocks on free.

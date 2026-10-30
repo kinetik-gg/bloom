@@ -119,6 +119,7 @@ void RamPreviewController::start() {
     retentionLoss_.reset();
     pendingRetentionLoss_.clear();
     lastCompletion_.reset();
+    partialForMemory_ = false;
     caching_ = true;
     rangeDirty_ = false;
     rebaseRange();
@@ -258,9 +259,14 @@ void RamPreviewController::advance() {
     }
 
     resolvePendingRetentionLoss();
-    if (retentionLoss_) {
-        finish(*retentionLoss_);
+    if (retentionLoss_ == Completion::Failed) {
+        finish(Completion::Failed);
         return;
+    }
+    if (retentionLoss_) {
+        // Memory took some frames: keep filling what fits; the run ends PartialBudget and plays.
+        partialForMemory_ = true;
+        retentionLoss_.reset();
     }
     requestFrames();
     if (!caching_) {
@@ -271,7 +277,9 @@ void RamPreviewController::advance() {
     // because the last frame was submitted: a second frame may still be preparing.
     if (pipeline_.empty() && nextFrameIndex_ >= totalFrameCount_) {
         refreshCoverage();
-        finish(cachedFrameCount_ == totalFrameCount_ ? Completion::Complete : Completion::Failed);
+        finish(cachedFrameCount_ == totalFrameCount_ ? Completion::Complete
+               : partialForMemory_                   ? Completion::PartialBudget
+                                                     : Completion::Failed);
     }
 }
 
@@ -462,14 +470,17 @@ bool RamPreviewController::drainResults() {
             finish(Completion::Failed);
             return false;
         }
+        if (retentionLoss_ == Completion::Failed) {
+            pipeline_.cancelAllAndDetach();
+            finish(Completion::Failed);
+            return false;
+        }
         if (inserted.outcome == PreviewFrameCache::InsertOutcome::RejectedBudget ||
             retentionLoss_) {
-            // Refusal or loss of requested coverage ends this bounded fill. The live time set
-            // may have holes or may start after the requested beginning; never call it a prefix.
-            // Detach the sibling rather than churn already retained samples.
-            pipeline_.cancelAllAndDetach();
-            finish(retentionLoss_.value_or(Completion::PartialBudget));
-            return false;
+            // Memory refused or evicted frames: never a reason to stop. The cache keeps its most
+            // recently used frames; the run keeps filling and ends PartialBudget, then plays.
+            partialForMemory_ = true;
+            retentionLoss_.reset();
         }
     }
     return true;

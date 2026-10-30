@@ -732,8 +732,9 @@ void testRamPreviewCachesTheRangeThenPlaysEveryFrame(Expectations& expectations)
     finishFixture(fixture, expectations);
 }
 
-// A range that cannot fit the cache's budget is cached as the prefix that does fit, and the run
-// stops there rather than spending the rest of the range evicting its own beginning.
+// A range that cannot fit the cache's budget never stops the run for memory (owner, 2026-10-31):
+// the run fills the whole range while the cache evicts its least recently used frames, keeps the
+// newest that fit, ends PartialBudget and still plays.
 void testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Preview Budget", time(24, 25)));
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
@@ -759,14 +760,15 @@ void testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(Expectations& expectations
     expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
                         "the budget-limited run ends on its own");
     expectations.expect(
-        ramPreview.cachedFrameCount() == 3 && ramPreview.totalFrameCount() == 24,
-        "the run reports three live retained frames after eviction, not four attempts");
+        ramPreview.cachedFrameCount() == 3 && ramPreview.totalFrameCount() == 24 &&
+            ramPreview.preparedFrameCount() >= 23,
+        "the run prepares the whole range and reports three live retained frames");
     expectations.expect(fixture.controller.frameCache().size() == 3,
                         "the cache holds exactly what its budget allows");
     expectations.expect(
         ramPreview.playableSpan().has_value() && ramPreview.playableSpan()->frameCount == 3 &&
-            ramPreview.retainedFrameIndices() == std::vector<std::uint64_t>{1, 2, 3},
-        "post-insert eviction retains the actual interior span, never a prefix");
+            ramPreview.retainedFrameIndices() == std::vector<std::uint64_t>{21, 22, 23},
+        "least-recently-used eviction keeps the newest frames that fit");
     expectations.expect(finishedCompleted && !ramPreview.canAutoPlay() &&
                             ramPreview.canPlayPartial(),
                         "a budget-limited run ends partial at once (no stall) and still plays: "

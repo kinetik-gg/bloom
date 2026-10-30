@@ -526,7 +526,7 @@ void pressureAppliesOnUiThread() {
     const auto settleEnd = std::chrono::steady_clock::now() + 150ms;
     while (std::chrono::steady_clock::now() < settleEnd)
         QCoreApplication::processEvents();
-    expect(held == 4 * gib - (gib + gib / 2) && appliedOnUi,
+    expect(held == 4 * gib - (gib + gib / 4) && appliedOnUi,
            "the cache gives back the deficit plus the margin, on the UI thread, then holds");
     owner.beginShutdown();
     scheduler.beginShutdown();

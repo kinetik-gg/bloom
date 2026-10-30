@@ -243,6 +243,9 @@ class RamPreviewController final : public QObject {
     std::uint64_t generation_ = 0;
     std::uint64_t runSerial_ = 0;
     std::optional<Completion> retentionLoss_;
+    // Memory evicted or refused some of this run's frames. A RAM preview never stops for memory:
+    // it keeps filling (the cache evicts its least recently used frames) and ends PartialBudget.
+    bool partialForMemory_ = false;
     // A cache insert can remove an expired entry and retain its exact replacement before it
     // returns. Judge removals after that transaction, when the final coverage is known.
     std::map<std::uint64_t, Completion> pendingRetentionLoss_;
