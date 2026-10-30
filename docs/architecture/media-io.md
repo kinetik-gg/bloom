@@ -765,7 +765,14 @@ not a sustained-throughput qualification.
 reads and demux indexing capture a local regular file once into bounded private spool storage while
 hashing the exact chunks written. A live capture is indexed by digest (non-owning), so a second
 session for the same verified digest — Assets thumbnails and audio, preview, export — adopts it
-instead of copying the movie again. Capture subtracts snapshot/temporary-path metadata from the current host working allowance,
+instead of copying the movie again. A capture outside any composition root and charged to its
+session's own private quota (the Assets thumbnail and probe sessions) is also retained for a short
+while after its last session ends (at most 4 files, 4 GiB and 120 s idle), so a later session on the
+unchanged file adopts it rather than copying and hashing the whole movie again (issue #401: the
+per-second asset freshness check had re-copied 200-750 MB ProRes files during playback). A capture
+refused for quota space releases the retained set and retries; Edit > Purge releases it; rooted
+captures and captures charged to a caller-supplied quota are never retained, so composition-root
+retirement and explicit quotas are unchanged. Capture subtracts snapshot/temporary-path metadata from the current host working allowance,
 then uses the remaining allowance for a chunk buffer of at most 64 KiB, without a fixed buffer floor.
 It never retains the
 whole encoded movie in RAM. The original pathname authorizes hash elision only through an identical

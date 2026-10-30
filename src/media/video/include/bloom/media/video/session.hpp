@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <bloom/media/provider/worker_pool.hpp>
 #include <bloom/platform/file_snapshot.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
@@ -17,6 +18,17 @@ using Cancel = std::function<bool()>;
 enum class SourceRevisionPolicy : std::uint8_t { Revalidate, Retained };
 // Live verified snapshots are shared by digest between sessions (non-owning index).
 [[nodiscard]] std::size_t sharedSourceSnapshotCount();
+// Recently used snapshots outside any composition root (thumbnails, probes, audio) are also kept
+// alive for a short while after their last session ends, so a new session on an unchanged file
+// adopts the copy instead of copying and hashing the whole file again. The retention is bounded
+// (kRetainedSourceSnapshots files, kRetainedSourceSnapshotBytes, kRetainedSourceSnapshotIdle) and
+// gives way at once to a capture that needs the space. Rooted snapshots are never retained.
+inline constexpr std::size_t kRetainedSourceSnapshots = 4;
+inline constexpr std::uint64_t kRetainedSourceSnapshotBytes = 4ULL << 30;
+inline constexpr std::chrono::seconds kRetainedSourceSnapshotIdle{120};
+[[nodiscard]] std::size_t retainedSourceSnapshotCount();
+// Drops every retained snapshot (cache purge, tests). Live sessions keep their own.
+void releaseRetainedSourceSnapshots();
 struct SourceRevisionAccess final {
     SourceRevisionPolicy policy = SourceRevisionPolicy::Revalidate;
     bool allowRetention = true;

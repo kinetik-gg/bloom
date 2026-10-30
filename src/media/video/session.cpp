@@ -10,6 +10,7 @@
 #include <bloom/platform/cache_directory.hpp>
 #include <cctype>
 #include <condition_variable>
+#include <deque>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -151,6 +152,7 @@ struct VideoDecodeSession::State {
     std::mutex revisionMutex;
     std::shared_ptr<const platform::ReadOnlyFileSnapshot> revision;
     std::shared_ptr<platform::FileSnapshotQuota> quota;
+    bool privateQuota = false; // the session created `quota` itself (no caller capacity)
     std::filesystem::path spoolDirectory;
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
     struct FrameCompletion final {
@@ -172,9 +174,11 @@ struct VideoDecodeSession::State {
         : path(std::move(source)), pool(options(worker, launched)), workerExecutable(worker),
           workerLaunched(launched), quota(std::move(limits)), spoolDirectory(std::move(directory)),
           retirement(std::move(owner)) {
-        if (!quota)
+        if (!quota) {
             quota =
                 std::make_shared<platform::FileSnapshotQuota>(defaultSourceSnapshotQuotaBytes(), 8);
+            privateQuota = true;
+        }
         if (spoolDirectory.empty()) {
             if (const auto cache = platform::userCacheDirectory("bloom"))
                 spoolDirectory = *cache / "video-source-snapshots";
@@ -369,10 +373,47 @@ struct SharedSnapshot final {
     std::weak_ptr<render::detail::PackedHostRetirementState> retirement;
     bool rooted = false;
 };
+// The bounded owning tail of the index (session.hpp, retainedSourceSnapshotCount): unrooted
+// snapshots only, so no composition root's retirement is ever delayed by it.
+struct RetainedSnapshot final {
+    std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot;
+    std::chrono::steady_clock::time_point used;
+};
 struct SharedSnapshots final {
     std::mutex mutex;
     std::vector<SharedSnapshot> entries;
+    std::deque<RetainedSnapshot> retained; // least recently used first
 };
+// Caller holds the registry mutex. Expired entries go first; then, when one snapshot of `incoming`
+// bytes is about to be added, the least recently used until the count and byte bounds hold.
+void trimRetained(SharedSnapshots& registry, const std::optional<std::uint64_t> incoming) {
+    const auto now = std::chrono::steady_clock::now();
+    std::erase_if(registry.retained, [now](const RetainedSnapshot& entry) {
+        return now - entry.used > kRetainedSourceSnapshotIdle;
+    });
+    const auto bytes = [&registry] {
+        std::uint64_t total = 0;
+        for (const auto& entry : registry.retained)
+            total += entry.snapshot->size();
+        return total;
+    };
+    while (incoming && !registry.retained.empty() &&
+           (registry.retained.size() >= kRetainedSourceSnapshots ||
+            bytes() + *incoming > kRetainedSourceSnapshotBytes))
+        registry.retained.pop_front();
+}
+// Caller holds the registry mutex. Marks `snapshot` used if it is retained.
+void touchRetained(SharedSnapshots& registry, const platform::ReadOnlyFileSnapshot* snapshot) {
+    const auto found = std::ranges::find_if(registry.retained, [snapshot](const auto& entry) {
+        return entry.snapshot.get() == snapshot;
+    });
+    if (found == registry.retained.end())
+        return;
+    auto entry = std::move(*found);
+    registry.retained.erase(found);
+    entry.used = std::chrono::steady_clock::now();
+    registry.retained.push_back(std::move(entry));
+}
 SharedSnapshots& sharedSnapshots() {
     static SharedSnapshots value;
     return value;
@@ -389,23 +430,50 @@ findShared(const Digest& digest,
            const std::shared_ptr<render::detail::PackedHostRetirementState>& retirement) {
     auto& registry = sharedSnapshots();
     const std::lock_guard lock(registry.mutex);
+    trimRetained(registry, std::nullopt); // idle entries expire here as well as on publication
     for (const auto& entry : registry.entries)
         if (auto snapshot = entry.snapshot.lock();
-            snapshot && snapshot->digest() == digest && sameDomain(entry, retirement))
+            snapshot && snapshot->digest() == digest && sameDomain(entry, retirement)) {
+            if (!entry.rooted)
+                touchRetained(registry, snapshot.get());
             return snapshot;
+        }
     return {};
 }
 void publishShared(const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot,
-                   const std::shared_ptr<render::detail::PackedHostRetirementState>& retirement) {
+                   const std::shared_ptr<render::detail::PackedHostRetirementState>& retirement,
+                   const bool retainable) {
     auto& registry = sharedSnapshots();
     const std::lock_guard lock(registry.mutex);
     std::erase_if(registry.entries, [](const auto& entry) { return entry.snapshot.expired(); });
     registry.entries.push_back({snapshot, retirement, retirement != nullptr});
+    // Only an unrooted snapshot charged to its session's private quota outlives the session: a
+    // caller-supplied quota is the caller's capacity and returns when its sessions end.
+    if (retainable && retirement == nullptr && snapshot->size() <= kRetainedSourceSnapshotBytes) {
+        trimRetained(registry, snapshot->size());
+        registry.retained.push_back({snapshot, std::chrono::steady_clock::now()});
+    }
+}
+// A capture refused for space first takes back what retention holds. True when it released any.
+bool releaseRetainedForCapture() {
+    auto& registry = sharedSnapshots();
+    std::deque<RetainedSnapshot> released;
+    {
+        const std::lock_guard lock(registry.mutex);
+        released.swap(registry.retained);
+    }
+    return !released.empty(); // destroyed here, outside the lock: closing returns the quota
 }
 Unavailable sourceChanged() {
     return Unavailable{Error::SourceChanged, "Video changed; relink the asset in Assets"};
 }
 } // namespace
+std::size_t retainedSourceSnapshotCount() {
+    auto& registry = sharedSnapshots();
+    const std::lock_guard lock(registry.mutex);
+    return registry.retained.size();
+}
+void releaseRetainedSourceSnapshots() { static_cast<void>(releaseRetainedForCapture()); }
 std::size_t sharedSourceSnapshotCount() {
     auto& registry = sharedSnapshots();
     const std::lock_guard lock(registry.mutex);
@@ -461,6 +529,12 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
     auto captured = platform::ReadOnlyFileSnapshot::capture(
         state_->path, state_->spoolDirectory, state_->quota, Limits::sourceBytes, cancel,
         access.progress, {}, access.hostByteBudget - sizeof(SnapshotRetirement));
+    if (const auto* refused = std::get_if<platform::ProcessFailure>(&captured);
+        refused && refused->code == platform::ProcessError::ResourceLimit &&
+        releaseRetainedForCapture())
+        captured = platform::ReadOnlyFileSnapshot::capture(
+            state_->path, state_->spoolDirectory, state_->quota, Limits::sourceBytes, cancel,
+            access.progress, {}, access.hostByteBudget - sizeof(SnapshotRetirement));
     auto* snapshot = std::get_if<std::unique_ptr<platform::ReadOnlyFileSnapshot>>(&captured);
     if (!snapshot) {
         const auto& error = std::get<platform::ProcessFailure>(captured);
@@ -498,7 +572,7 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
         });
     if (access.allowRetention) {
         state_->revision = result;
-        publishShared(result, state_->retirement);
+        publishShared(result, state_->retirement, state_->privateQuota);
     }
     return result;
 }

@@ -312,6 +312,54 @@ void identityVerifiedRevalidation(const std::filesystem::path& source,
     check(verify && verify->reason == provider::Error::SourceChanged,
           "verification of a changed source reports SourceChanged without another read");
 }
+// #401: a NEW session on an unchanged file (a thumbnail or probe after the previous session ended)
+// adopts the retained verified snapshot: no copy, no hash, no full read. A caller-supplied quota is
+// never held past its sessions, and an explicit release makes the next session capture again.
+void freshSessionAdoptsRetainedSnapshot(const std::filesystem::path& source,
+                                        const std::filesystem::path& scratch) {
+    const auto copy = scratch / "retained.mp4";
+    std::filesystem::copy_file(source, copy, std::filesystem::copy_options::overwrite_existing);
+    const auto reads = [] { return bloom::platform::sourceReadWork().fullReads; };
+    video::releaseRetainedSourceSnapshots();
+    provider::ProbeResult probe;
+    {
+        video::VideoDecodeSession first(copy, video::VideoDecodeSession::defaultWorker(), {},
+                                        scratch / "retained-spool");
+        probe = product(first.probe());
+    }
+    check(video::retainedSourceSnapshotCount() == 1,
+          "an unrooted private-quota snapshot outlives its session");
+    const auto captured = reads();
+    bloom::platform::FileSnapshotStatistics work;
+    bool retained = false;
+    const video::SourceRevisionAccess revalidate{
+        video::SourceRevisionPolicy::Revalidate, true, &work, &retained, {}};
+    {
+        video::VideoDecodeSession second(copy, video::VideoDecodeSession::defaultWorker(), {},
+                                         scratch / "retained-spool-second");
+        (void)product(second.frame(probe, 0, 1, 0, nullptr, {}, {}, {}, {}, revalidate));
+        check(retained && work.bytesRead == 0 && work.bytesHashed == 0 && reads() == captured,
+              "a second session on an unchanged file does no full read");
+    }
+    video::releaseRetainedSourceSnapshots();
+    check(video::retainedSourceSnapshotCount() == 0, "release drops every retained snapshot");
+    {
+        video::VideoDecodeSession third(copy, video::VideoDecodeSession::defaultWorker(), {},
+                                        scratch / "retained-spool-third");
+        (void)product(third.frame(probe, 0, 1, 0, nullptr, {}, {}, {}, {}, revalidate));
+        check(!retained && reads() == captured + 1, "after a release the next session captures");
+    }
+    const auto size = std::filesystem::file_size(copy);
+    auto quota = std::make_shared<Quota>(size, 1);
+    {
+        video::VideoDecodeSession explicitQuota(copy, video::VideoDecodeSession::defaultWorker(),
+                                                quota, scratch / "retained-spool-explicit");
+        (void)product(explicitQuota.frame(probe, 0, 1, 0, nullptr, {}, {}, {}, {}, revalidate));
+    }
+    check(quota->residentFiles() == 0 && quota->residentBytes() == 0,
+          "a caller-supplied quota is returned when its session ends");
+    video::releaseRetainedSourceSnapshots();
+}
 void reaped(const std::int64_t process) {
     check(process > 0, "retained worker launched");
     int status = 0;
@@ -579,6 +627,7 @@ int main(int argc, char** argv) {
         failedLeaderCompletesFollowers(source, scratch.path);
         retainedGenerationReplacement(source, scratch.path);
         identityVerifiedRevalidation(source, scratch.path);
+        freshSessionAdoptsRetainedSnapshot(source, scratch.path);
         audioOnePass(fixtures, scratch.path);
 #endif
         retirement(source, scratch.path / "retirement-spool");

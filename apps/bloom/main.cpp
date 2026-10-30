@@ -765,7 +765,10 @@ int main(int argc, char* argv[]) try {
     bloom::ui::CachePurgeController cachePurgeController(
         taskScheduler, taskUiBridge, mediaDiskCache.get(), cpuEvaluator.operationCache().get(),
         gpuPreparedUploadCache.get(), gpuSceneCoverageCache.get(),
-        [&cpuEvaluator] { cpuEvaluator.clearDecodedVideoCache(); },
+        [&cpuEvaluator] {
+            cpuEvaluator.clearDecodedVideoCache();
+            bloom::media::video::releaseRetainedSourceSnapshots();
+        },
         [&previewController, &assetController](const bool gated) {
             assetController.setCachePurgeGate(gated);
             previewController.setCachePurgeGate(gated);
