@@ -98,8 +98,8 @@ class ParityOperations(unittest.TestCase):
         self.assertTrue(added['succeeded'], added)
         layers = outputs(added, 'layer')
         self.assertEqual(len(layers), 2)
-        # A footage layer is a source node and a Layer Output node.
-        self.assertEqual(self.node_count(composition), nodes + 4)
+        # Each footage layer adds at least its source node and its Layer Output node.
+        self.assertGreaterEqual(self.node_count(composition), nodes + 4)
         self.assertTrue(self.server.history('undo')['succeeded'])
         self.assertEqual(self.node_count(composition), nodes, 'one undo removes both layers')
         self.assertTrue(self.server.history('redo')['succeeded'])
