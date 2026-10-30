@@ -4,6 +4,7 @@
 #include <QHeaderView>
 #include <QKeySequence>
 #include <QMenu>
+#include <bloom/ui/export_queue_adapter.hpp>
 #include <QSettings>
 #include <QShortcut>
 #include <QTimer>
@@ -227,6 +228,7 @@ void AssetsEditor::showContextMenu(const QPoint position) {
     }
     std::unique_ptr<QMenu> menu(kit::makeMenu(this));
     menu->setObjectName(QStringLiteral("assetsContextMenu"));
+    menu->setToolTipsVisible(true);
     const auto add = [&](const QString& text, const char* name, auto&& slot) {
         auto* action = menu->addAction(text);
         action->setObjectName(QString::fromLatin1(name));
@@ -291,6 +293,24 @@ void AssetsEditor::showContextMenu(const QPoint position) {
         add(tr("Composition Settings…"), "assetsCompositionSettingsAction", [this, composition] {
             (void)bloom::ui::showCompositionSettingsDialog(session_, composition, *this);
         });
+        // ADR 0033: queue every selected composition for export, then show the Export panel.
+        {
+            std::vector<document::CompositionId> selectedCompositions;
+            for (auto* selected : tree_->selectedItems())
+                if (const auto candidate = compositionId(selected); candidate.isValid())
+                    selectedCompositions.push_back(candidate);
+            const QString reason = exportQueue_ == nullptr
+                                       ? tr("The export queue is not available")
+                                       : exportQueue_->addUnavailableReason();
+            auto* queue = add(tr("Add to Export Queue"), "assetsAddToExportQueueAction",
+                              [this, selectedCompositions] {
+                                  for (const auto selected : selectedCompositions)
+                                      (void)exportQueue_->addCompositionToQueue(selected);
+                              });
+            queue->setEnabled(reason.isEmpty() && !selectedCompositions.empty());
+            if (!reason.isEmpty())
+                queue->setToolTip(reason);
+        }
         menu->addSeparator();
         rename();
         add(tr("Duplicate"), "assetsDuplicateAction",

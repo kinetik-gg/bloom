@@ -22,7 +22,6 @@
 
 namespace bloom::ui {
 
-enum class FrameExportOutcome : std::uint8_t;
 struct ApplicationPreferences;
 
 // A meaning, not a sound. Event kinds report a result the artist may be waiting for; Interaction
@@ -158,9 +157,6 @@ class UiFeedback final {
     // A render or export finished. Plays RenderSucceeded or RenderFailed and, when the Preferences
     // switch is on and Bloom is not the active application, posts an operating-system notification.
     void announceRender(bool succeeded, const QString& detail);
-    // The outcome mapping used by the application's export wiring: Published and
-    // PublishedWithWarning succeed; Failed, NotApprovable and Refused fail; Cancelled is silent.
-    void announceExport(FrameExportOutcome outcome, const QString& message);
 
     // Plays a bundled sample at `draft`'s volume regardless of the category switches (still
     // honouring its master switch), for the Preferences "Play test sound" button.

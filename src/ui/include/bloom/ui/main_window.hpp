@@ -31,7 +31,8 @@ class CompositionPreviewController;
 class McpServerAdapter;
 class CompositionSession;
 class EditorRegistry;
-class FrameExportController;
+class ExportQueueAdapter;
+class H264EncoderService;
 class LicensesWindow;
 class ProjectHost;
 class RamPreviewController;
@@ -82,7 +83,7 @@ class MainWindow final : public QMainWindow {
     // window's read-only Performance page. Null reports the CPU-only truth. Borrowed and must
     // outlive the window.
     MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
-               ProjectHost& projectHost, FrameExportController& frameExportController,
+               ProjectHost& projectHost,
                RamPreviewController* ramPreview = nullptr,
                CompositionPreviewController* previewController = nullptr, QWidget* parent = nullptr,
                PlaybackController* playbackController = nullptr,
@@ -90,6 +91,15 @@ class MainWindow final : public QMainWindow {
                media::cache::MediaDiskCache* mediaDiskCache = nullptr,
                const AccelerationStatusProvider* accelerationStatus = nullptr,
                CachePurgeController* cachePurgeController = nullptr);
+
+    // ADR 0033: the application's export queue. Enables File > Add to Export Queue (Ctrl+M) and
+    // Window > Export, and shows the Export panel whenever a job is added. Null leaves both
+    // present and disabled with the reason. Borrowed; must outlive the window.
+    void setExportQueue(ExportQueueAdapter* adapter);
+    // The H.264 encoder service the Export panel's Install / Locate encoder remedies open.
+    void setH264EncoderService(H264EncoderService* service) noexcept { h264Encoder_ = service; }
+    [[nodiscard]] QAction* addToExportQueueAction() const noexcept { return addToExportQueueAction_; }
+    [[nodiscard]] QAction* windowExportAction() const noexcept { return windowExportAction_; }
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
@@ -154,7 +164,8 @@ class MainWindow final : public QMainWindow {
     QPointer<ViewerEditor> lastActiveViewer_;
     QTimer displayedViewerUpdateTimer_;
     void updateFileActions();
-    void updateExportAction();
+    void updateExportQueueActions();
+    void revealExportPanel();
     void updateWindowTitle();
     void updateContentSurface();
     void updateCompositionActions();
@@ -165,7 +176,6 @@ class MainWindow final : public QMainWindow {
 
     CompositionSession& compositionSession_;
     ProjectHost& projectHost_;
-    FrameExportController& frameExportController_;
     // Borrowed, may be null; the command itself is owned by the application composition root.
     RamPreviewController* ramPreview_ = nullptr;
     // Borrowed, may be null; owned by the application composition root, and read only by the
@@ -205,12 +215,10 @@ class MainWindow final : public QMainWindow {
     QAction* saveProjectCopyAction_ = nullptr;
     QAction* projectColorSettingsAction_ = nullptr;
     QAction* preferencesAction_ = nullptr;
-    QAction* exportFrameAction_ = nullptr;
-    // Task S5, item 3a: the frame-range export, and the cancel a long sequence needs -- the single
-    // frame export never had one because it is one attempt plus one publish.
-    QAction* exportFrameRangeAction_ = nullptr;
-    QAction* exportCompositionAction_ = nullptr;
-    QAction* cancelFrameExportAction_ = nullptr;
+    QAction* addToExportQueueAction_ = nullptr;
+    QAction* windowExportAction_ = nullptr;
+    ExportQueueAdapter* exportQueue_ = nullptr;
+    H264EncoderService* h264Encoder_ = nullptr;
     QAction* quitAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;

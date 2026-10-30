@@ -65,6 +65,10 @@ class H264EncoderService final : public QObject {
     void refresh();
     // Starts Locate on a worker; false while one is already running.
     bool locate(const std::filesystem::path& file);
+    // Downloads and verifies Cisco's OpenH264 binary after the artist accepted its licence (the
+    // caller asked first). Runs on a worker as the locate task does and finishes through the same
+    // locateFinished(); false while one is running.
+    bool install();
     void cancelLocate();
     [[nodiscard]] bool locating() const noexcept { return locateTask_.has_value(); }
     [[nodiscard]] bool probing() const noexcept { return probeTask_.has_value(); }

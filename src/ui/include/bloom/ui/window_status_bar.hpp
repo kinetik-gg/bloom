@@ -102,12 +102,8 @@ class WindowStatusBar final : public kit::KSurface {
     // A message that stays until it is replaced or cleared: "Saving…", "Opening…", export range
     // progress. Passing an empty string clears it.
     void setPersistentMessage(const QString& message);
-    void setExportActive(bool active);
     // MainWindow owns selection among visible viewers. Cache/preview preparation remains shared.
     void setDisplayedViewer(ViewerEditor* viewer);
-
-  signals:
-    void cancelExportRequested();
 
   public:
     // Injected memory samples and a monotonic clock keep pressure, recovery and notice tests
@@ -176,7 +172,6 @@ class WindowStatusBar final : public kit::KSurface {
     QLabel* cache_ = nullptr;
     QLabel* mediaDiskCacheCell_ = nullptr;
     QLabel* message_ = nullptr;
-    QToolButton* exportCancel_ = nullptr;
     kit::KButton* mcpIndicator_ = nullptr;
     QPointer<McpServerAdapter> mcpServer_;
     QLabel* version_ = nullptr;

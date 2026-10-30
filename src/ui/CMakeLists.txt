@@ -457,12 +457,6 @@ target_sources(
         live_session_adapter.cpp
         script_panel.cpp
         script_panel.hpp
-        frame_export_controller.cpp
-        frame_export_controller_composition.cpp
-        frame_export_controller_dialogs.cpp
-        frame_export_controller_deliverables.cpp
-        composition_export_dialog.cpp
-        composition_export_dialog.hpp
         acceleration_status.cpp
         application_preferences.cpp
         preferences_window.cpp
@@ -471,6 +465,20 @@ target_sources(
         preferences_window_sounds.cpp
         frameless_window_support.cpp
         jobs_editor.cpp
+        export_queue_adapter.cpp
+        export_queue_edits.cpp
+        export_queue_service_port.cpp
+        export_editor.cpp
+        export_job_tree.cpp
+        export_job_tree.hpp
+        export_panel_text.cpp
+        export_panel_text.hpp
+        export_detail_pane.cpp
+        export_detail_outputs.cpp
+        export_detail_results.cpp
+        export_detail_fields.hpp
+        export_detail_support.hpp
+        export_editor_internal.hpp
         mcp_server_adapter.cpp
         mcp_server_editor.cpp
         mcp_server_service_port.cpp
@@ -547,6 +555,7 @@ target_sources(
         project_color_settings_dialog.cpp
         project_color_settings_dialog.hpp
         h264_encoder_service.cpp
+        h264_encoder_flow.cpp
         timeline_layer_timing_gesture.cpp
         timeline_key_time.cpp
         timeline_key_time.hpp
@@ -633,10 +642,14 @@ target_sources(
             include/bloom/ui/editor_registry.hpp
             include/bloom/ui/editor_native_surface.hpp
             include/bloom/ui/native_surface_retirement.hpp
-            include/bloom/ui/frame_export_controller.hpp
             include/bloom/ui/h264_encoder_service.hpp
             include/bloom/ui/frameless_window_support.hpp
             include/bloom/ui/jobs_editor.hpp
+            include/bloom/ui/h264_encoder_flow.hpp
+            include/bloom/ui/export_queue_adapter.hpp
+            include/bloom/ui/export_queue_edits.hpp
+            include/bloom/ui/export_queue_service_port.hpp
+            include/bloom/ui/export_editor.hpp
             include/bloom/ui/mcp_server_adapter.hpp
             include/bloom/ui/mcp_server_editor.hpp
             include/bloom/ui/mcp_server_service_port.hpp

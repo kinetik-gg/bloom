@@ -24,7 +24,8 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
-#include <bloom/ui/frame_export_controller.hpp>
+#include <bloom/ui/export_queue_adapter.hpp>
+#include <bloom/ui/h264_encoder_flow.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/licenses_window.hpp>
@@ -87,7 +88,7 @@ void setChromeModeInSettings(QSettings& settings, const ChromeMode mode) {
 }
 
 MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession& compositionSession,
-                       ProjectHost& projectHost, FrameExportController& frameExportController,
+                       ProjectHost& projectHost,
                        RamPreviewController* const ramPreview,
                        CompositionPreviewController* const previewController, QWidget* parent,
                        PlaybackController* const playbackController,
@@ -96,7 +97,7 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                        const AccelerationStatusProvider* const accelerationStatus,
                        CachePurgeController* const cachePurgeController)
     : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
-      frameExportController_(frameExportController), ramPreview_(ramPreview),
+      ramPreview_(ramPreview),
       previewController_(previewController), playbackController_(playbackController),
       operationCache_(operationCache), mediaDiskCache_(mediaDiskCache),
       cachePurgeController_(cachePurgeController), accelerationStatus_(accelerationStatus) {
@@ -197,65 +198,10 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                             QStringLiteral("projectCopyFailed"));
             });
 
-    // "File -> Export Frame..." gating (task F3, issue #103): a composition exists and no export
-    // is currently in flight (FrameExportController::canExport()), and the read-only placeholder is
-    // not currently authoritative (a preserved-read-only install leaves CompositionSession bound to
-    // its stale prior document -- see updateContentSurface()'s own comment -- so this action must
-    // never be offered while that placeholder is showing). Every signal that can change either
-    // condition is wired here, mirroring updateFileActions()'s own precedent.
-    connect(&frameExportController_, &FrameExportController::busyChanged, this,
-            &MainWindow::updateExportAction);
-    connect(&compositionSession_, &CompositionSession::compositionChanged, this,
-            &MainWindow::updateExportAction);
-    connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateExportAction);
-    connect(&frameExportController_, &FrameExportController::exportFinished, this,
-            [this](const FrameExportOutcome outcome, const QString& message) {
-                if (outcome == FrameExportOutcome::Published ||
-                    outcome == FrameExportOutcome::PublishedWithWarning) {
-                    statusStrip_->setPersistentMessage({});
-                    statusStrip_->showTransientMessage(message);
-                    return;
-                }
-                if (outcome == FrameExportOutcome::Cancelled) {
-                    // A cancelled RANGE says how many frames landed, which is information the
-                    // artist needs; a cancelled single frame wrote nothing, so it stays silent as
-                    // before.
-                    statusStrip_->setPersistentMessage({});
-                    if (message.isEmpty()) {
-                        statusStrip_->clearTransientMessage();
-                    } else {
-                        statusStrip_->showTransientMessage(message);
-                    }
-                    return;
-                }
-                kit::inform(*this, kit::KPromptTone::Error, tr("Export Frame"),
-                            tr("The export did not finish."), message,
-                            QStringLiteral("exportFailed"));
-            });
-    connect(statusStrip_, &WindowStatusBar::cancelExportRequested, &frameExportController_,
-            &FrameExportController::requestCancellation);
-    connect(&frameExportController_, &FrameExportController::busyChanged, this,
-            [this] { statusStrip_->setExportActive(frameExportController_.isExportingRange()); });
-    // Range progress reaches the artist through the status bar and keeps the cancel item's enabled
-    // state in step, using exactly the signals the controller already emits.
-    connect(&frameExportController_, &FrameExportController::rangeProgressChanged, this, [this] {
-        updateExportAction();
-        statusStrip_->setExportActive(frameExportController_.isExportingRange());
-        if (frameExportController_.isExportingRange()) {
-            // Range progress is a persistent message, not a notice: it describes work that is still
-            // running, so it must not clear itself out from under the artist after five seconds.
-            statusStrip_->setPersistentMessage(
-                tr("Exporting frame %1 of %2…")
-                    .arg(std::min(frameExportController_.publishedFrameCount() + 1,
-                                  frameExportController_.totalFrameCount()))
-                    .arg(frameExportController_.totalFrameCount()));
-        }
-    });
-
     updateFileActions();
     updateWindowTitle();
     updateContentSurface();
-    updateExportAction();
+    updateExportQueueActions();
 }
 
 WorkspaceHost* MainWindow::workspaceHost() const noexcept { return workspaceHost_; }
@@ -690,29 +636,21 @@ void MainWindow::createFileMenu(QMenu& fileMenu) {
 
     fileMenu.addSeparator();
 
-    // "Export Frame…" (task F3, issue #103): no default shortcut, its own group below the
-    // project-file actions.
-    exportFrameAction_ = fileMenu.addAction("Export &Frame…");
-    exportFrameAction_->setObjectName("exportFrameAction");
-    connect(exportFrameAction_, &QAction::triggered, &frameExportController_,
-            &FrameExportController::requestExport);
-
-    // "Export Frame Range…" (task S5, item 3a), beside the single-frame export it reuses stage for
-    // stage, plus the cancel that a range -- unlike one frame -- is long enough to need.
-    exportFrameRangeAction_ = fileMenu.addAction("Export Frame &Range…");
-    exportFrameRangeAction_->setObjectName("exportFrameRangeAction");
-    connect(exportFrameRangeAction_, &QAction::triggered, &frameExportController_,
-            &FrameExportController::requestRangeExport);
-
-    exportCompositionAction_ = fileMenu.addAction(tr("Export &Composition…"));
-    exportCompositionAction_->setObjectName("exportCompositionAction");
-    connect(exportCompositionAction_, &QAction::triggered, &frameExportController_,
-            &FrameExportController::requestCompositionExport);
-
-    cancelFrameExportAction_ = fileMenu.addAction("Cancel Frame &Export");
-    cancelFrameExportAction_->setObjectName("cancelFrameExportAction");
-    connect(cancelFrameExportAction_, &QAction::triggered, &frameExportController_,
-            &FrameExportController::requestCancellation);
+    // ADR 0033: the export queue. The job's own range chooses a frame, a range, the work area or the
+    // whole composition, with any preset.
+    addToExportQueueAction_ = fileMenu.addAction(tr("Add to Export &Queue"));
+    addToExportQueueAction_->setObjectName(QStringLiteral("addToExportQueueAction"));
+    addToExportQueueAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
+    addToExportQueueAction_->setShortcutContext(Qt::WindowShortcut);
+    addToExportQueueAction_->setEnabled(false);
+    connect(addToExportQueueAction_, &QAction::triggered, this, [this] {
+        if (exportQueue_ == nullptr)
+            return;
+        const auto result =
+            exportQueue_->addCompositionToQueue(compositionSession_.compositionId());
+        if (!result.accepted && statusStrip_ != nullptr && !result.reason.isEmpty())
+            statusStrip_->showTransientMessage(result.reason);
+    });
 
     fileMenu.addSeparator();
 
@@ -811,15 +749,67 @@ void MainWindow::updateFileActions() {
     }
 }
 
-void MainWindow::updateExportAction() {
-    const bool canExport = frameExportController_.canExport() && !isShowingReadOnlyPlaceholder();
-    exportFrameAction_->setEnabled(canExport);
-    exportFrameRangeAction_->setEnabled(canExport);
-    exportCompositionAction_->setEnabled(canExport);
-    // Offered only while there is actually something to cancel: a range export in flight. A
-    // disabled item is honest about that; an always-enabled one would promise a cancel with nothing
-    // to cancel.
-    cancelFrameExportAction_->setEnabled(frameExportController_.isExportingRange());
+void MainWindow::setExportQueue(ExportQueueAdapter* const adapter) {
+    if (exportQueue_ == adapter)
+        return;
+    if (exportQueue_ != nullptr)
+        disconnect(exportQueue_, nullptr, this, nullptr);
+    exportQueue_ = adapter;
+    if (adapter != nullptr) {
+        connect(adapter, &ExportQueueAdapter::queueChanged, this,
+                &MainWindow::updateExportQueueActions);
+        connect(adapter, &ExportQueueAdapter::revealRequested, this,
+                &MainWindow::revealExportPanel);
+        connect(adapter, &ExportQueueAdapter::remedyRequested, this, [this](const int remedy) {
+            switch (static_cast<host::ExportRemedy>(remedy)) {
+            case host::ExportRemedy::InstallOpenH264:
+            case host::ExportRemedy::LocateOpenH264:
+                if (h264Encoder_ != nullptr)
+                    showH264EncoderFlow(*this, *h264Encoder_);
+                break;
+            case host::ExportRemedy::OpenProjectSettings:
+                showProjectColorSettings();
+                break;
+            default:
+                break;
+            }
+        });
+        connect(&compositionSession_, &CompositionSession::compositionChanged, this,
+                &MainWindow::updateExportQueueActions);
+        connect(&projectHost_, &ProjectHost::sessionReplaced, this,
+                &MainWindow::updateExportQueueActions);
+    }
+    updateExportQueueActions();
+}
+
+void MainWindow::updateExportQueueActions() {
+    if (addToExportQueueAction_ == nullptr)
+        return;
+    QString reason;
+    if (exportQueue_ == nullptr)
+        reason = tr("The export queue is not available");
+    else if (isShowingReadOnlyPlaceholder())
+        reason = tr("This project is open read-only");
+    else if (!compositionSession_.compositionId().isValid())
+        reason = tr("Open a composition to add it to the export queue");
+    else
+        reason = exportQueue_->addUnavailableReason();
+    addToExportQueueAction_->setEnabled(reason.isEmpty());
+    addToExportQueueAction_->setToolTip(reason.isEmpty() ? tr("Add the composition to the export queue")
+                                                         : reason);
+    if (windowExportAction_ != nullptr) {
+        windowExportAction_->setEnabled(exportQueue_ != nullptr);
+        windowExportAction_->setToolTip(exportQueue_ != nullptr
+                                            ? tr("Show the Export panel")
+                                            : tr("The export queue is not available"));
+    }
+}
+
+void MainWindow::revealExportPanel() {
+    if (workspaceHost_ == nullptr)
+        return;
+    if (workspaceHost_->revealEditor("bloom.export") == nullptr && statusStrip_ != nullptr)
+        statusStrip_->showTransientMessage(tr("The Export panel could not be shown"));
 }
 
 void MainWindow::updateWindowTitle() {
@@ -996,6 +986,13 @@ void MainWindow::createWorkspaceActions() {
     // now that workspaceHost_ exists, rather than in createViewMenu().
     connect(viewMaximizePanelAction_, &QAction::triggered, workspaceHost_,
             [this] { workspaceHost_->toggleMaximizeActiveArea(); });
+
+    windowMenu_->addSeparator();
+    // Panels that are not part of the first-run layout are opened (or shown) from here.
+    windowExportAction_ = windowMenu_->addAction(tr("Export"));
+    windowExportAction_->setObjectName(QStringLiteral("windowExportAction"));
+    windowExportAction_->setEnabled(false);
+    connect(windowExportAction_, &QAction::triggered, this, &MainWindow::revealExportPanel);
 
     windowMenu_->addSeparator();
     mcpServerAction_ = windowMenu_->addAction(tr("MCP Server"));

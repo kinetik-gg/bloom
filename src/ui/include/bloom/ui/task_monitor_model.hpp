@@ -14,6 +14,7 @@
 namespace bloom::ui {
 
 class TaskUiBridge;
+class ExportQueueAdapter;
 
 class TaskMonitorModel final : public QAbstractTableModel {
     Q_OBJECT
@@ -37,9 +38,15 @@ class TaskMonitorModel final : public QAbstractTableModel {
         CancellationRequestedRole,
         DiagnosticCountRole,
         CanCancelRole,
+        // The export job an Export-owned row stands for (0 for every other row).
+        ExportJobRole,
     };
 
     explicit TaskMonitorModel(TaskUiBridge& bridge, QObject* parent = nullptr);
+
+    // ADR 0033: with the export queue, every task of one export run collapses into one row that
+    // reads its progress from the queue and has no cancel; Show in Export opens the panel.
+    void setExportQueue(ExportQueueAdapter* adapter);
 
     [[nodiscard]] int rowCount(const QModelIndex& parent = {}) const override;
     [[nodiscard]] int columnCount(const QModelIndex& parent = {}) const override;
@@ -61,6 +68,8 @@ class TaskMonitorModel final : public QAbstractTableModel {
 
   private:
     TaskUiBridge& bridge_;
+    ExportQueueAdapter* exportQueue_ = nullptr;
+    std::vector<qulonglong> exportJobs_;
     std::vector<runtime::TaskSnapshot> snapshots_;
 };
 

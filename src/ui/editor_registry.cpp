@@ -2,6 +2,7 @@
 #include <bloom/ui/mcp_server_editor.hpp>
 
 #include <bloom/ui/composition_editors.hpp>
+#include <bloom/ui/export_editor.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
@@ -59,6 +60,7 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
                                RamPreviewController* const ramPreview, ProjectHost* projectHost,
                                const ViewerGpuDependencies* const gpuDependencies,
                                std::shared_ptr<host::GpuExportProvider> gpuExportProvider,
+                               ExportQueueAdapter* const exportQueue,
                                scripting::LiveSessionHost* const liveSession,
                                McpServerAdapter* const mcpServer) {
     std::shared_ptr<ScriptPanelRuntime> script;
@@ -106,12 +108,17 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
                          return new TimelineEditor(session, previewController, parent);
                      }) &&
            addEditor("bloom.assets", "Assets",
-                     [&session](QWidget* parent) { return new AssetsEditor(session, parent); }) &&
+                     [&session, exportQueue](QWidget* parent) {
+                         auto* assets = new AssetsEditor(session, parent);
+                         assets->setExportQueue(exportQueue);
+                         return assets;
+                     }) &&
            addEditor(
                "bloom.properties", "Properties",
                [&session](QWidget* parent) { return new PropertiesEditor(session, parent); }) &&
            addEditor("bloom.script", "Script",
                      [script](QWidget* parent) { return new ScriptPanel(script, parent); }) &&
+           registerExportEditor(registry, session, exportQueue) &&
            registerMcpServerEditor(registry, mcpServer);
 }
 

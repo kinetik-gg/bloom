@@ -16,6 +16,7 @@ namespace bloom::ui {
 
 class EditorRegistry;
 class TaskMonitorModel;
+class ExportQueueAdapter;
 
 class JobsEditor final : public QWidget, public EditorChromeProvider {
     Q_OBJECT
@@ -24,6 +25,8 @@ class JobsEditor final : public QWidget, public EditorChromeProvider {
     explicit JobsEditor(TaskMonitorModel& model, QWidget* parent = nullptr);
     // Cancel is a header control, laid out and sized by the panel like every other header's.
     [[nodiscard]] EditorChromeSpec& editorChrome() override { return chrome_; }
+    // ADR 0033: an Export-owned row offers Show in Export through this adapter (and no cancel).
+    void setExportQueue(ExportQueueAdapter* adapter);
 
   private slots:
     void captureSelection();
@@ -38,10 +41,13 @@ class JobsEditor final : public QWidget, public EditorChromeProvider {
     QTableView* table_ = nullptr;
     QPlainTextEdit* details_ = nullptr;
     kit::KButton* cancelButton_ = nullptr;
+    kit::KButton* showInExportButton_ = nullptr;
+    ExportQueueAdapter* exportQueue_ = nullptr;
     EditorChromeSpec chrome_;
     runtime::TaskId selectedTaskId_;
 };
 
-[[nodiscard]] bool registerJobsEditor(EditorRegistry& registry, TaskMonitorModel& model);
+[[nodiscard]] bool registerJobsEditor(EditorRegistry& registry, TaskMonitorModel& model,
+                                      ExportQueueAdapter* exportQueue = nullptr);
 
 } // namespace bloom::ui

@@ -8,7 +8,6 @@
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
-#include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/panel_switcher.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/main_window.hpp>
@@ -425,9 +424,8 @@ int testMaximizeAndPersistence(const EditorRegistry& registry) {
 
 int testMainWindow(const EditorRegistry& registry,
                    bloom::ui::CompositionSession& compositionSession,
-                   bloom::ui::ProjectHost& projectHost,
-                   bloom::ui::FrameExportController& frameExportController) {
-    bloom::ui::MainWindow window(registry, compositionSession, projectHost, frameExportController);
+                   bloom::ui::ProjectHost& projectHost) {
+    bloom::ui::MainWindow window(registry, compositionSession, projectHost);
     if (!require(window.workspaceHost() != nullptr, 40)) {
         return 40;
     }
@@ -576,9 +574,5 @@ int main(int argc, char* argv[]) {
     bloom::runtime::NodeDefinitionRegistry nodeDefinitions;
     nodeDefinitions.freeze();
     bloom::runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
-    bloom::ui::TaskUiBridge taskUiBridge(taskScheduler);
-    bloom::ui::FrameExportController frameExportController(
-        compositionSession, taskScheduler, taskUiBridge, snapshotCompiler,
-        projectHost.publicationCoordinator(), projectHost.artifactCoordinator());
-    return testMainWindow(registry, compositionSession, projectHost, frameExportController);
+    return testMainWindow(registry, compositionSession, projectHost);
 }

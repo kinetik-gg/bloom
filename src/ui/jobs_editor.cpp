@@ -5,6 +5,7 @@
 #include <memory>
 
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/export_queue_adapter.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 
 #include <QAbstractItemView>
@@ -125,7 +126,12 @@ JobsEditor::JobsEditor(TaskMonitorModel& model, QWidget* parent) : QWidget(paren
         tr("Requests cooperative cancellation for the selected queued or running job"));
     cancelButton_->setToolTip(tr("Cancel the selected job"));
     cancelButton_->setEnabled(false);
+    showInExportButton_ = new kit::KButton(tr("Show in Export"), this);
+    showInExportButton_->setObjectName("showInExportButton");
+    showInExportButton_->setToolTip(tr("Show this render in the Export panel"));
+    showInExportButton_->hide();
     chrome_.header.addStretch();
+    chrome_.header.addWidget(showInExportButton_);
     chrome_.header.addWidget(cancelButton_);
 
     table_ = new QTableView(this);
@@ -172,11 +178,21 @@ JobsEditor::JobsEditor(TaskMonitorModel& model, QWidget* parent) : QWidget(paren
     connect(table_->selectionModel(), &QItemSelectionModel::selectionChanged, this,
             &JobsEditor::updateDetails);
     connect(cancelButton_, &kit::KButton::clicked, this, &JobsEditor::cancelSelectedTask);
+    connect(showInExportButton_, &kit::KButton::clicked, this, [this] {
+        const auto job = model_.data(selectedIndex(), TaskMonitorModel::ExportJobRole).toULongLong();
+        if (exportQueue_ != nullptr && job != 0)
+            exportQueue_->showJob(document::ExportJobId::fromRaw(job));
+    });
     connect(&model_, &QAbstractItemModel::modelAboutToBeReset, this, &JobsEditor::captureSelection);
     connect(&model_, &QAbstractItemModel::modelReset, this, &JobsEditor::restoreSelection);
     connect(&model_, &QAbstractItemModel::dataChanged, this, &JobsEditor::updateDetails);
 
     restoreSelection();
+}
+
+void JobsEditor::setExportQueue(ExportQueueAdapter* const adapter) {
+    exportQueue_ = adapter;
+    updateDetails();
 }
 
 void JobsEditor::captureSelection() {
@@ -209,6 +225,8 @@ void JobsEditor::updateDetails() {
     }
 
     selectedTaskId_ = snapshot->id;
+    const bool exportRow = model_.data(current, TaskMonitorModel::ExportJobRole).toULongLong() != 0;
+    showInExportButton_->setVisible(exportRow && exportQueue_ != nullptr);
     cancelButton_->setEnabled(model_.data(current, TaskMonitorModel::CanCancelRole).toBool());
 
     const QModelIndex stateIndex = model_.index(current.row(), TaskMonitorModel::StateColumn);
@@ -283,11 +301,16 @@ QModelIndex JobsEditor::selectedIndex() const {
     return current.isValid() ? current.siblingAtColumn(TaskMonitorModel::JobColumn) : QModelIndex{};
 }
 
-bool registerJobsEditor(EditorRegistry& registry, TaskMonitorModel& model) {
+bool registerJobsEditor(EditorRegistry& registry, TaskMonitorModel& model,
+                        ExportQueueAdapter* const exportQueue) {
     return registry.registerEditor(
         {.id = "bloom.jobs",
          .displayName = JobsEditor::tr("Jobs"),
-         .create = [&model](QWidget* parent) { return new JobsEditor(model, parent); }});
+         .create = [&model, exportQueue](QWidget* parent) {
+             auto* jobs = new JobsEditor(model, parent);
+             jobs->setExportQueue(exportQueue);
+             return jobs;
+         }});
 }
 
 } // namespace bloom::ui

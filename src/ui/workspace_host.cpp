@@ -420,23 +420,33 @@ EditorArea* WorkspaceHost::splitActiveArea(Qt::Orientation orientation) {
 EditorArea* WorkspaceHost::revealEditor(const std::string_view editorId,
                                         const Qt::Orientation orientation,
                                         const double newAreaFraction) {
-    if (editorId.empty() || surfaceRetirementGate_.isPending())
+    if (editorId.empty() || surfaceRetirementGate_.isPending()) {
         return nullptr;
-    if (maximizedArea_ != nullptr) {
-        restoreMaximizedArea();
+    }
+    const bool wasMaximized = maximizedArea_ != nullptr;
+    restoreMaximizedArea();
+    if (wasMaximized) {
         emit maximizeStateChanged(false);
     }
-    for (auto* area : findChildren<EditorArea*>()) {
+    EditorArea* timeline = nullptr;
+    const auto areas = findChildren<EditorArea*>();
+    for (auto* area : areas) {
         if (area->editorId() == editorId) {
             setActiveArea(area);
             return area;
         }
+        if (timeline == nullptr && area->editorId() == "bloom.timeline") {
+            timeline = area;
+        }
     }
-    if (activeArea_ == nullptr)
+    EditorArea* source = timeline != nullptr ? timeline : activeArea_.data();
+    if (source == nullptr) {
         return nullptr;
-    auto* created = splitArea(*activeArea_, orientation, std::string(editorId), newAreaFraction);
-    if (created != nullptr)
+    }
+    auto* created = splitArea(*source, orientation, std::string(editorId), newAreaFraction);
+    if (created != nullptr) {
         setActiveArea(created);
+    }
     return created;
 }
 

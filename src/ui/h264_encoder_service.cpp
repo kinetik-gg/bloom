@@ -91,6 +91,29 @@ bool H264EncoderService::locate(const std::filesystem::path& file) {
     return true;
 }
 
+bool H264EncoderService::install() {
+    if (locateTask_)
+        return false;
+    auto submission = scheduler_.submit<std::shared_ptr<output::H264RuntimeAvailabilityV1>>(
+        request("Install OpenH264"), [](runtime::TaskContext& context) {
+            context.reportProgress({"Installing OpenH264", "Cisco binary", 0, {}});
+            auto result = output::installH264RuntimeV1(true, [&context](std::uint64_t progress) {
+                context.reportProgress({"Installing OpenH264", "Cisco binary", progress, 100});
+            });
+            if (context.isCancellationRequested())
+                return runtime::TaskResult<
+                    std::shared_ptr<output::H264RuntimeAvailabilityV1>>::cancelled();
+            return runtime::TaskResult<std::shared_ptr<output::H264RuntimeAvailabilityV1>>::
+                succeeded(std::make_shared<output::H264RuntimeAvailabilityV1>(std::move(result)));
+        });
+    if (!submission.accepted())
+        return false;
+    locateTask_.emplace(std::move(submission.handle));
+    emit stateChanged();
+    bridge_.wake();
+    return true;
+}
+
 void H264EncoderService::cancelLocate() {
     if (locateTask_)
         locateTask_->cancel();

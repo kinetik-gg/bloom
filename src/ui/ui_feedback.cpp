@@ -1,7 +1,6 @@
 #include <bloom/ui/ui_feedback.hpp>
 
 #include <bloom/ui/application_preferences.hpp>
-#include <bloom/ui/frame_export_controller.hpp>
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -162,22 +161,6 @@ void UiFeedback::announceRender(const bool succeeded, const QString& detail) {
         succeeded ? QCoreApplication::translate("UiFeedback", "Render complete")
                   : QCoreApplication::translate("UiFeedback", "Render failed"),
         detail, !succeeded});
-}
-
-void UiFeedback::announceExport(const FrameExportOutcome outcome, const QString& message) {
-    switch (outcome) {
-    case FrameExportOutcome::Published:
-    case FrameExportOutcome::PublishedWithWarning:
-        announceRender(true, message);
-        return;
-    case FrameExportOutcome::Failed:
-    case FrameExportOutcome::NotApprovable:
-    case FrameExportOutcome::Refused:
-        announceRender(false, message);
-        return;
-    case FrameExportOutcome::Cancelled:
-        return;
-    }
 }
 
 void UiFeedback::setNotificationActivationHandler(std::function<void()> handler) {

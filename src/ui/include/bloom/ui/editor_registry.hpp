@@ -25,6 +25,7 @@ class TaskScheduler;
 namespace bloom::ui {
 
 class CompositionPreviewController;
+class ExportQueueAdapter;
 class McpServerAdapter;
 class RamPreviewController;
 class CompositionSession;
@@ -69,6 +70,9 @@ class EditorRegistry final {
 // path, exactly as before this parameter existed. The pointee must outlive every editor the
 // registry creates.
 //
+// `exportQueue` is the application-lifetime adapter the Export editor reads and commands through
+// (ADR 0033). Null registers the editor in its "not available" form. It must outlive every editor.
+//
 // `liveSession` is the application-lifetime live session the Script editor reads and commits
 // through (ADR 0034), already fed by an application-lifetime LiveSessionAdapter; the composition
 // root passes the same host to the in-app MCP server so both share one commit queue. Null makes
@@ -78,6 +82,7 @@ class EditorRegistry final {
     CompositionPreviewController& previewController, RamPreviewController* ramPreview = nullptr,
     ProjectHost* projectHost = nullptr, const ViewerGpuDependencies* gpuDependencies = nullptr,
     std::shared_ptr<host::GpuExportProvider> gpuExportProvider = {},
+    ExportQueueAdapter* exportQueue = nullptr,
     scripting::LiveSessionHost* liveSession = nullptr, McpServerAdapter* mcpServer = nullptr);
 
 } // namespace bloom::ui

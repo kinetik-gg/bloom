@@ -1,3 +1,4 @@
+#include <bloom/ui/export_queue_adapter.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -159,8 +160,15 @@ QVariant TaskMonitorModel::data(const QModelIndex& index, const int role) const 
     if (role == DiagnosticCountRole) {
         return static_cast<qulonglong>(snapshot->diagnostics.size());
     }
+    if (role == ExportJobRole) {
+        const auto row = static_cast<std::size_t>(index.row());
+        return row < exportJobs_.size() ? exportJobs_[row] : qulonglong{0};
+    }
     if (role == CanCancelRole) {
-        return canCancel(*snapshot);
+        // Cancel, pause and retry belong to the Export panel.
+        const auto row = static_cast<std::size_t>(index.row());
+        const bool exportRow = row < exportJobs_.size() && exportJobs_[row] != 0;
+        return !exportRow && canCancel(*snapshot);
     }
     if (role == Qt::TextAlignmentRole) {
         const bool rightAligned =
@@ -240,6 +248,7 @@ QHash<int, QByteArray> TaskMonitorModel::roleNames() const {
     roles.insert(CancellationRequestedRole, "cancellationRequested");
     roles.insert(DiagnosticCountRole, "diagnosticCount");
     roles.insert(CanCancelRole, "canCancel");
+    roles.insert(ExportJobRole, "exportJob");
     return roles;
 }
 
@@ -286,10 +295,57 @@ bool TaskMonitorModel::requestCancellation(const QModelIndex& indexValue) noexce
     return true;
 }
 
+void TaskMonitorModel::setExportQueue(ExportQueueAdapter* const adapter) {
+    if (exportQueue_ != nullptr)
+        disconnect(exportQueue_, nullptr, this, nullptr);
+    exportQueue_ = adapter;
+    if (adapter != nullptr)
+        connect(adapter, &ExportQueueAdapter::queueChanged, this,
+                &TaskMonitorModel::refreshFromBridge);
+    refreshFromBridge();
+}
+
 void TaskMonitorModel::refreshFromBridge() {
     Q_ASSERT(QThread::currentThread() == thread());
     auto next = bridge_.snapshots();
     std::ranges::sort(next, [](const auto& lhs, const auto& rhs) { return rhs.id < lhs.id; });
+    // One row per export run: keep the newest task of each group and name it after the job.
+    std::vector<qulonglong> exportJobs(next.size(), 0);
+    if (exportQueue_ != nullptr) {
+        std::vector<runtime::TaskSnapshot> kept;
+        std::vector<qulonglong> keptJobs;
+        std::vector<runtime::TaskGroupId> seen;
+        const auto queue = exportQueue_->snapshot();
+        for (auto& task : next) {
+            if (task.owner.kind != runtime::TaskOwnerKind::Export) {
+                kept.push_back(std::move(task));
+                keptJobs.push_back(0);
+                continue;
+            }
+            if (task.groupId.has_value()) {
+                if (std::ranges::find(seen, *task.groupId) != seen.end())
+                    continue;
+                seen.push_back(*task.groupId);
+            }
+            qulonglong jobRaw = 0;
+            if (const auto job = exportQueue_->jobForTaskOwner(task.owner.id)) {
+                jobRaw = job->value();
+                if (queue)
+                    for (const auto& view : queue->jobs)
+                        if (view.id == *job) {
+                            task.name = tr("Export: %1").arg(text(view.displayName)).toStdString();
+                            // One progress source: the queue snapshot.
+                            task.progress.completed = view.progress.framesCompleted;
+                            task.progress.total = view.progress.framesTotal;
+                        }
+            }
+            kept.push_back(std::move(task));
+            keptJobs.push_back(jobRaw);
+        }
+        next = std::move(kept);
+        exportJobs = std::move(keptJobs);
+    }
+    exportJobs_ = exportJobs;
 
     if (!equalIdentities(snapshots_, next)) {
         beginResetModel();

@@ -26,6 +26,7 @@ class SearchBar;
 class SummaryStrip;
 } // namespace assets
 class CompositionSession;
+class ExportQueueAdapter;
 
 // The project's assets, compositions and folders as one sortable tree with columns, after the After
 // Effects Project panel (#378): a compact summary strip of the selection above it, and a search row
@@ -38,6 +39,9 @@ class AssetsEditor final : public QWidget, public EditorChromeProvider {
     // Work counter: complete row rebuilds since construction.
     [[nodiscard]] std::uint64_t rowRebuildCount() const noexcept { return rowRebuilds_; }
     explicit AssetsEditor(CompositionSession& session, QWidget* parent = nullptr);
+    // ADR 0033: composition rows offer Add to Export Queue through this adapter. Null (the
+    // default) offers it disabled with the reason. Borrowed; must outlive the editor.
+    void setExportQueue(ExportQueueAdapter* adapter) noexcept { exportQueue_ = adapter; }
     ~AssetsEditor() override;
 
   private:
@@ -75,6 +79,7 @@ class AssetsEditor final : public QWidget, public EditorChromeProvider {
     [[nodiscard]] std::vector<document::AssetId> selectedAssets() const;
 
     CompositionSession& session_;
+    ExportQueueAdapter* exportQueue_ = nullptr;
     QLineEdit* search_ = nullptr;
     QTreeWidget* tree_ = nullptr;
     QWidget* headerMenuWidget_ = nullptr;
