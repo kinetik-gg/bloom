@@ -3,6 +3,7 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/memory_headroom.hpp>
 #include <bloom/runtime/task_budget_view.hpp>
 
 #include <array>
@@ -84,6 +85,9 @@ class GpuProcessingPhasePolicy final {
     [[nodiscard]] render::GpuProcessingPhaseGrant
     reserve(const GpuProcessingPhaseEnvelope&, Clock::time_point now = Clock::now()) noexcept;
     [[nodiscard]] GpuProcessingPhasePolicySnapshot snapshot() const noexcept;
+    // The RAM/VRAM headroom preferences: the only margins kept free of Bloom's work and caches.
+    void setHeadroom(MemoryHeadroom headroom) noexcept;
+    [[nodiscard]] MemoryHeadroom headroom() const noexcept;
     [[nodiscard]] render::GpuProcessingRootIdentity rootIdentity() const noexcept {
         return budget_.rootIdentity();
     }
@@ -111,6 +115,7 @@ class GpuProcessingPhasePolicy final {
     };
     std::optional<HostSampleBackingCredit> pendingHostBackingCredit_;
     std::optional<HostSampleBackingCredit> appliedHostBackingCredit_;
+    MemoryHeadroom headroom_;
     std::array<DeviceReport, 32> devices_{};
     std::size_t deviceCount_ = 0;
     void applyDeviceReportsLocked() noexcept;
