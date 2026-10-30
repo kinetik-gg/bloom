@@ -75,16 +75,42 @@ void headroomSharesFreeMemoryAndShrinks() {
         &live, gib, [] { return 0; }, [&](std::size_t bytes) { live = bytes; },
         bloom::runtime::MemoryBudgetOwnerKind::LiveWork);
     static_cast<void>(ledger.poll({.availableBytes = 32 * gib}, at(0)));
-    expect(a == heldA + 10 * gib && b == heldB + 10 * gib && c == 10 * gib,
-           "three pools split the 30 GiB beyond headroom instead of each taking all of it");
+    // The pools share what lies beyond headroom plus the 512 MiB hysteresis margin.
+    const auto share = (32 * gib - 2 * gib - gib / 2) / 3;
+    expect(a == heldA + share && b == heldB + share && c == share,
+           "three pools split the free memory beyond headroom and margin instead of each taking "
+           "all of it");
     expect((a - heldA) + (b - heldB) + (c - heldC) <= 30 * gib,
            "together the pools never grow past the free memory before the next sample");
     expect(live == gib, "live work keeps its own ceiling");
     static_cast<void>(ledger.poll({.availableBytes = 2 * gib}, at(1)));
     expect(a == heldA && b == heldB && c == 0, "at the headroom the pools hold, never grow");
-    static_cast<void>(ledger.poll({.availableBytes = 0}, at(2)));
-    expect(a == heldA - 3 * gib / 2 && b == heldB - gib / 2 && c == 0,
-           "below the headroom every pool shrinks by its share of the 2 GiB deficit");
+    static_cast<void>(ledger.poll({.availableBytes = 2 * gib + gib / 4}, at(2)));
+    expect(a == heldA && b == heldB && c == 0,
+           "inside the hysteresis margin the pools hold and do not refill what they released");
+    static_cast<void>(ledger.poll({.availableBytes = 0}, at(3)));
+    expect(a == heldA - 15 * gib / 8 && b == heldB - 5 * gib / 8 && c == 0,
+           "below the headroom every pool shrinks by its share of the deficit plus the margin");
+    // This process's swapped memory is not available: 10 GiB free but 9.5 GiB of our caches in
+    // swap leaves the machine 1.5 GiB short of the headroom.
+    static_cast<void>(
+        ledger.poll({.availableBytes = 10 * gib, .processSwappedBytes = 19 * gib / 2}, at(4)));
+    expect(a == heldA - 3 * gib / 2 && b == heldB - gib / 2,
+           "a cache paged out to swap counts against available memory");
+    expect(ledger.pressureDeficit({.availableBytes = 10 * gib, .processSwappedBytes = 9 * gib}) ==
+               gib,
+           "the deficit is the headroom minus available memory net of swapped memory");
+    expect(ledger.pressureDeficit({.availableBytes = 3 * gib}) == 0,
+           "above the headroom there is no deficit");
+    static_cast<void>(ledger.poll({.availableBytes = 32 * gib, .memoryStall = true}, at(5)));
+    expect(a == heldA && b == heldB && c == 0, "pools never grow while the OS reports stalls");
+    // A larger headroom applies at once against the last sample and reports what it released.
+    static_cast<void>(ledger.takeReleasedBytes());
+    static_cast<void>(ledger.poll({.availableBytes = 4 * gib}, at(6)));
+    ledger.setRamHeadroom(8 * gib);
+    expect(a == heldA - 9 * gib / 2 && b == heldB - 3 * gib / 2,
+           "a headroom change shrinks every pool immediately by its share of deficit plus margin");
+    ledger.setRamHeadroom(2 * gib);
     ledger.unregisterCache(&a);
     ledger.unregisterCache(&b);
     ledger.unregisterCache(&c);
