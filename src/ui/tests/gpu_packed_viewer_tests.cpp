@@ -240,6 +240,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             if (++index >= argc)
                 return 2;
             gBenchProject = argv[index];
+        } else if (argument == "--bench-workspace") {
+            gBenchWorkspace = true;
+        } else if (argument == "--bench-workspace-no-assets") {
+            gBenchWorkspace = true;
+            gBenchWorkspaceAssets = false;
         } else if (argument == "--bench-playback") {
             gBenchPlayback = true;
         } else if (argument == "--bench-play-seconds") {

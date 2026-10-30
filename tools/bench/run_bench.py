@@ -45,6 +45,10 @@ REPO = HERE.parent.parent
 OFFSCREEN_ENV = {"QT_QPA_PLATFORM": "offscreen", "QT_QPA_PLATFORMTHEME": "generic"}
 RESOLUTIONS = ("Full", "Half", "Quarter")
 EXPORTS = ("prores422hq", "h264", "exr")
+LAYER_VARIANTS = ("L10", "L25", "L50")
+# The other media an L<n> stack cycles through after its own footage: (tier, format).
+LAYER_MIX = (("1080p", "png16"), ("1080p", "prores422hq"), ("1080p", "h264"),
+             ("2160p", "exr_half_piz"), ("2160p", "prores422hq"))
 SUITES = {
     # suite: (tiers, formats or None for all, variants, resolutions, caches, playback, exports,
     #         export variants, export formats or None for all)
@@ -58,6 +62,9 @@ SUITES = {
     # The reduced 8K tier on its own: streaming/memory invariant and per-image GPU ceiling.
     "vfx8k": (("4320p",), None, ("A", "B"), RESOLUTIONS, ("cold", "warm"), True, EXPORTS,
               ("A", "B"), None),
+    # Many-layer stacks (variants L<n>): per-frame cost as the layer count grows.
+    "layers": (("1080p",), ("exr_half_piz",), LAYER_VARIANTS, RESOLUTIONS, ("cold", "warm"), True,
+               (), (), ()),
 }
 # metric: True when higher is better
 COMPARED = {"fillFps": True, "playbackFps": True, "cachedPlaybackFps": True,
@@ -306,18 +313,21 @@ def bench_env():
     return env
 
 
-def harness_measure(args, project, resolution, playback, log):
+def harness_measure(args, project, resolution, playback, log, always_play=False):
     command = [str(args.harness), "--loader", str(args.loader), "--require-device",
                "--bench-project", str(project), "--bench-timeout-seconds", str(args.timeout)]
     if resolution == "Half":
         command.append("--cache100-half")
     elif resolution == "Quarter":
         command.append("--quarter")
-    # Playback is timed in playback runs and after Full fills; other fills skip it.
-    seconds = args.play_seconds if playback or resolution == "Full" else 0
+    # Playback is timed in playback runs and after Full fills (after every fill of a layer stack,
+    # whose cached playback is the point); other fills skip it.
+    seconds = args.play_seconds if playback or always_play or resolution == "Full" else 0
     command += ["--bench-play-seconds", str(seconds)]
     if playback:
         command.append("--bench-playback")
+    if args.workspace:
+        command.append("--bench-workspace")
     code, output, sampler, wall = run_measured(command, bench_env(), args.timeout + 300,
                                                args.lock)
     log.write(f"$ {' '.join(command)}\n{output}\n")
@@ -377,22 +387,44 @@ def select_assets(manifest, args):
             yield asset_id, entry
 
 
-def build_projects(args, root, selected, projects_dir, log):
+def media_path(root, entry):
+    return root / (entry["path"] if entry["type"] == "video" else str(Path(entry["path"]).parent))
+
+
+def layer_mix(manifest, root):
+    """The (media path, manifest entry) pairs an L<n> stack cycles through after its footage."""
+    found = []
+    for tier, fmt in LAYER_MIX:
+        for entry in manifest["assets"].values():
+            if entry["kind"] == "footage" and entry["tier"] == tier and entry["format"] == fmt:
+                if media_path(root, entry).exists():
+                    found.append((media_path(root, entry), entry))
+                break
+    return found
+
+
+def build_projects(args, root, selected, projects_dir, log, manifest=None):
     jobs, plan = [], []
+    mix = layer_mix(manifest, root) if manifest else []
     for asset_id, entry in selected:
         for variant in args.variants:
             name = f"{entry['tier']}_{entry['format']}_{variant}"
             project = projects_dir / name / f"{name}.bloom"
-            media = root / (entry["path"] if entry["type"] == "video"
-                            else str(Path(entry["path"]).parent))
+            media = media_path(root, entry)
+            layered = variant.startswith("L")
             plan.append({"assetId": asset_id, "entry": entry, "variant": variant,
-                         "project": project})
+                         "project": project,
+                         "mixEntries": [e for _, e in mix] if layered else []})
             stamp = project.with_suffix(".jobs.json")
             if args.rebuild_projects or not project.is_file() or not stamp.is_file():
                 jobs.append({"project": str(project), "variant": variant,
                              "media": str(media.resolve()),
                              "label": f"{entry['tier']} {entry['format']}".upper(),
                              "width": entry["width"], "height": entry["height"]})
+                if layered:
+                    jobs[-1].update({"layers": int(variant[1:]),
+                                     "mix": [str(path.resolve()) for path, _ in mix],
+                                     "exports": [["exr", "exr", "", "exr/{name}.exr"]]})
     report = projects_dir / "build-report.json"
     failures = {}
     if jobs:
@@ -519,7 +551,7 @@ def command_run(args):
     print(f"media: {verification['status']}", flush=True)
     selected = [(i, e) for i, e in selected if i in usable]
     projects_dir = work / "projects" / re.sub(r"[^A-Za-z0-9]+", "_", root.name or "root")
-    plan = build_projects(args, root, selected, projects_dir, log)
+    plan = build_projects(args, root, selected, projects_dir, log, manifest)
     if args.build_only:
         for item in plan:
             print(f"project {item['project']} exports={item['exportJobs']}")
@@ -530,7 +562,8 @@ def command_run(args):
                "media": {"root": str(root), "verification": verification["status"],
                          "assets": verification["assets"]},
                "settings": {"resolutions": list(resolutions), "caches": list(caches),
-                            "playSeconds": args.play_seconds, "exports": list(exports)},
+                            "playSeconds": args.play_seconds, "exports": list(exports),
+                            "workspace": args.workspace},
                "measurements": []}
     out_json = results_dir / f"{name}.json"
 
@@ -549,6 +582,8 @@ def command_run(args):
     for item in plan:
         entry = item["entry"]
         files = media_files(root, entry)
+        for mixed in item.get("mixEntries", []):
+            files += media_files(root, mixed)
         print(f"{item['assetId']} {item['variant']}", flush=True)
         if "buildError" in item:
             record(item, "build", {"error": item["buildError"]})
@@ -556,7 +591,8 @@ def command_run(args):
         for resolution in resolutions:
             for cache in caches:
                 dropped = drop_page_cache(files) if cache == "cold" else None
-                values = harness_measure(args, item["project"], resolution, False, log)
+                values = harness_measure(args, item["project"], resolution, False, log,
+                                         item["variant"].startswith("L"))
                 record(item, "fill", {"resolution": resolution, "cache": cache,
                                       "coldDropped": dropped, **values})
         if playback and not args.no_playback:
@@ -690,7 +726,10 @@ def main():
     run.add_argument("--tier", action="append", choices=spec.TIER_ORDER)
     run.add_argument("--format", action="append",
                      choices=spec.IMAGE_FORMATS + spec.VIDEO_FORMATS)
-    run.add_argument("--variant", action="append", choices=("A", "B"))
+    run.add_argument("--workspace", action="store_true",
+                     help="measure in the application's window with every editor, not a bare "
+                          "Viewer")
+    run.add_argument("--variant", action="append", choices=("A", "B") + LAYER_VARIANTS)
     run.add_argument("--resolution", action="append", choices=RESOLUTIONS)
     run.add_argument("--cache", action="append", choices=("cold", "warm"))
     run.add_argument("--export", action="append", choices=EXPORTS)

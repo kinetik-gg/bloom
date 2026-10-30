@@ -5,10 +5,15 @@
 // background read-ahead for playback. It measures; it does not qualify parity (the cache100 and
 // route-proof gates do). tools/bench/run_bench.py drives it, one fresh process per measurement.
 #include <bloom/media/video/session.hpp>
+#include <bloom/scripting/live_session_host.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
 #include <bloom/ui/composition_preview_gpu_scene_stage.hpp>
+#include <bloom/ui/live_session_adapter.hpp>
+#include <bloom/ui/main_window.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 
@@ -34,6 +39,8 @@ namespace {
 std::string gBenchProject;
 bool gBenchPlayback = false;          // playback-only run: no RAM fill, read-ahead from cold
 double gBenchPlaySeconds = 6.0;       // transport run length for either playback measurement
+bool gBenchWorkspace = false;         // the application's window and editors, not a bare Viewer
+bool gBenchWorkspaceAssets = true;    // the workspace also runs the application's AssetController
 std::chrono::seconds gBenchTimeout{1800};
 
 [[nodiscard]] std::string benchJson(const std::string& text) {
@@ -100,14 +107,25 @@ struct BenchPlayback {
     double seconds = 0.0;
     std::uint64_t transportFrames = 0; // distinct times the transport asked for
     std::uint64_t paintedFrames = 0;   // distinct times the Viewer actually showed Current
+    std::uint64_t paintedChanges = 0;  // times the shown Current frame changed (counts loops)
+    double uiBusySeconds = 0.0;        // time spent inside event-loop slices on the UI thread
+    double maxSliceMs = 0.0;           // the longest single event-loop slice
+    std::uint64_t longSlices = 0;      // slices longer than one frame period
 };
 
 // Plays from the start for gBenchPlaySeconds and counts what the Viewer really showed.
 BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController& playback,
                         ui::ViewerEditor& viewer) {
+    double framePeriod = 1.0 / 24.0;
+    if (const auto* composition = session.composition(); composition != nullptr) {
+        const auto rate = composition->format().frameRate();
+        if (rate.numerator() > 0)
+            framePeriod = static_cast<double>(rate.denominator()) / rate.numerator();
+    }
     BenchPlayback result;
     static_cast<void>(session.setCurrentTime(core::RationalTime::fromInteger(0)));
     std::set<std::int64_t> requested, painted;
+    std::optional<std::int64_t> lastPainted;
     const auto toKey = [](const core::RationalTime& time) {
         return static_cast<std::int64_t>(std::llround(time.toSeconds() * 1e6));
     };
@@ -115,15 +133,29 @@ BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController&
     playback.play();
     const auto deadline = started + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                         std::chrono::duration<double>(gBenchPlaySeconds));
+    std::cout << "BENCH_PLAY_START\n" << std::flush;
     while (std::chrono::steady_clock::now() < deadline) {
+        const auto sliceStarted = std::chrono::steady_clock::now();
         QApplication::processEvents();
+        const auto slice =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - sliceStarted).count();
+        result.uiBusySeconds += slice;
+        result.maxSliceMs = std::max(result.maxSliceMs, slice * 1000.0);
+        if (slice > framePeriod)
+            ++result.longSlices;
         requested.insert(toKey(session.currentTime()));
         const auto shown = viewer.displayedPreviewState();
-        if (shown.freshness == ui::FrameFreshness::Current && shown.frame)
-            painted.insert(toKey(shown.frame->desiredIdentity().time));
+        if (shown.freshness == ui::FrameFreshness::Current && shown.frame) {
+            const auto key = toKey(shown.frame->desiredIdentity().time);
+            painted.insert(key);
+            if (lastPainted != key)
+                ++result.paintedChanges;
+            lastPainted = key;
+        }
         std::this_thread::sleep_for(std::chrono::microseconds(500));
     }
     playback.pause();
+    std::cout << "BENCH_PLAY_END\n" << std::flush;
     result.seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     result.transportFrames = requested.size();
@@ -268,22 +300,68 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         return runtime::previewFramesThatFit(*policy, pixels, deviceWorkingBytes);
     };
     // Read-ahead also fills while idle, so only the playback measurement has it: a fill run
-    // measures the RAM preview alone.
+    // measures the RAM preview alone. The workspace mode always has it, as the application does.
     std::optional<ui::BackgroundPreviewController> background;
-    if (gBenchPlayback) {
+    if (gBenchPlayback || gBenchWorkspace) {
         background.emplace(session, controller, scheduler, bridge, pipeline, nullptr, submitter);
         background->setReadAheadWidthProvider(widthProvider);
     }
     ui::RamPreviewController ram(session, controller, scheduler, bridge, pipeline, nullptr,
                                  submitter);
     ram.setFillWidthProvider(widthProvider);
-    ui::PlaybackController playback(session, controller);
+    // The workspace mode drives the controller's own transport, as the application does.
+    std::optional<ui::PlaybackController> ownPlayback;
+    if (!gBenchWorkspace)
+        ownPlayback.emplace(session, controller);
+    ui::PlaybackController& playback =
+        gBenchWorkspace ? controller.playbackController() : *ownPlayback;
     const auto firstStarted = std::chrono::steady_clock::now();
-    ui::ViewerEditor viewer(session, controller);
-    viewer.resize(960, 540);
-    viewer.show();
+    std::optional<ui::ViewerEditor> ownViewer;
+    std::optional<ui::AssetController> assets;
+    std::optional<ui::AudioPlaybackSession> audio;
+    std::optional<scripting::LiveSessionHost> liveHost;
+    std::optional<ui::LiveSessionAdapter> liveAdapter;
+    std::optional<ui::EditorRegistry> registry;
+    std::unique_ptr<ui::MainWindow> window;
+    if (gBenchWorkspace) {
+        // The application-lifetime controllers that follow session time (apps/bloom/main.cpp).
+        if (gBenchWorkspaceAssets)
+            assets.emplace(session, projectHost, scheduler, bridge, nullptr, nullptr,
+                           ui::AudioProcessingAdmission{.policy = policy});
+        audio.emplace(session, scheduler, bridge, compiler, planCache, evaluator);
+        if (assets)
+            audio->setAudioBufferSource(*assets);
+        liveHost.emplace();
+        liveAdapter.emplace(*liveHost, session, projectHost);
+        // The application's window, default workspace and every foundation editor (Timeline,
+        // Properties, Assets, ...), so per-tick work in panels is measured too. Offscreen, so the
+        // Viewer presents through its non-surface path.
+        registry.emplace();
+        if (!ui::registerFoundationEditors(*registry, session, controller, &ram, &projectHost)) {
+            std::cout << "BENCH_ERROR editors could not be registered\n";
+            return 2;
+        }
+        window = std::make_unique<ui::MainWindow>(*registry, session, projectHost, &ram,
+                                                  &controller, nullptr, &playback);
+        window->resize(1920, 1080);
+        window->show();
+        static_cast<void>(waitUntil([&] { return window->displayedViewer() != nullptr; }, 30s));
+        if (window->displayedViewer() == nullptr) {
+            std::cout << "BENCH_ERROR the workspace has no Viewer\n";
+            return 2;
+        }
+    } else {
+        ownViewer.emplace(session, controller);
+        ownViewer->resize(960, 540);
+        ownViewer->show();
+    }
+    ui::ViewerEditor& viewer = gBenchWorkspace ? *window->displayedViewer() : *ownViewer;
 
     const auto shutdown = [&] {
+        if (audio)
+            audio->beginShutdown();
+        if (assets)
+            assets->setCachePurgeGate(true);
         ram.beginShutdown();
         if (background)
             background->beginShutdown();
@@ -298,6 +376,10 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
             },
             30s);
         viewer.releasePackedFramesForShutdown();
+        if (window) {
+            window->completeShutdown();
+            window.reset();
+        }
         controller.releasePublishedFramesForShutdown();
         frameCache->clear();
         evaluator.operationCache()->closePreparedUploads();
@@ -335,6 +417,8 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     json << std::setprecision(6) << "{\"project\":" << benchJson(projectPath.string())
          << ",\"mode\":\"" << (gBenchPlayback ? "playback" : "fill") << "\""
          << ",\"resolution\":\"" << resolution << "\""
+         << ",\"workspace\":" << (gBenchWorkspace ? "true" : "false")
+         << ",\"workspaceAssets\":" << (gBenchWorkspace && gBenchWorkspaceAssets ? "true" : "false")
          << ",\"firstFramePainted\":" << (firstPainted ? "true" : "false")
          << ",\"firstFrameSeconds\":" << firstFrameSeconds
          << ",\"firstFrameProvider\":" << firstProvider
@@ -348,7 +432,11 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         const auto played = benchPlay(session, playback, viewer);
         json << ",\"playSeconds\":" << played.seconds
              << ",\"transportFrames\":" << played.transportFrames
-             << ",\"paintedFrames\":" << played.paintedFrames << std::setprecision(15)
+             << ",\"paintedFrames\":" << played.paintedFrames
+             << ",\"paintedChanges\":" << played.paintedChanges
+             << ",\"playUiBusySeconds\":" << played.uiBusySeconds
+             << ",\"playMaxSliceMs\":" << played.maxSliceMs
+             << ",\"playLongSlices\":" << played.longSlices << std::setprecision(15)
              << ",\"windowEndEpoch\":" << benchEpochSeconds() << std::setprecision(6)
              << ",\"playbackFps\":"
              << (played.seconds > 0 ? static_cast<double>(played.paintedFrames) / played.seconds
@@ -378,7 +466,15 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
             const auto played = benchPlay(session, playback, viewer);
             json << ",\"cachedPlaySeconds\":" << played.seconds
                  << ",\"cachedTransportFrames\":" << played.transportFrames
-                 << ",\"cachedPaintedFrames\":" << played.paintedFrames << ",\"cachedPlaybackFps\":"
+                 << ",\"cachedPaintedFrames\":" << played.paintedFrames
+                 << ",\"cachedPaintedChanges\":" << played.paintedChanges
+                 << ",\"cachedPresentedFps\":"
+                 << (played.seconds > 0
+                         ? static_cast<double>(played.paintedChanges) / played.seconds
+                         : 0.0)
+                 << ",\"cachedPlayUiBusySeconds\":" << played.uiBusySeconds
+                 << ",\"cachedPlayMaxSliceMs\":" << played.maxSliceMs
+                 << ",\"cachedPlayLongSlices\":" << played.longSlices << ",\"cachedPlaybackFps\":"
                  << (played.seconds > 0
                          ? static_cast<double>(played.paintedFrames) / played.seconds
                          : 0.0);
@@ -390,6 +486,21 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
          << ",\"cpuFallbacksTotal\":" << after.cpuFallbacks
          << ",\"nativeDispatches\":" << after.nativeDispatches - before.nativeDispatches
          << ",\"packedTransfers\":" << after.packedTransfers - before.packedTransfers
+         << ",\"residentGraphJobs\":" << after.residentGraphJobs - before.residentGraphJobs
+         << ",\"uploadSubmitSeconds\":"
+         << 1e-9 * static_cast<double>(after.uploadSubmitNanoseconds - before.uploadSubmitNanoseconds)
+         << ",\"uploadFenceSeconds\":"
+         << 1e-9 * static_cast<double>(after.uploadFenceObservationNanoseconds -
+                                       before.uploadFenceObservationNanoseconds)
+         << ",\"processingSubmitSeconds\":"
+         << 1e-9 * static_cast<double>(after.processingSubmitNanoseconds -
+                                       before.processingSubmitNanoseconds)
+         << ",\"processingFenceSeconds\":"
+         << 1e-9 * static_cast<double>(after.processingFenceObservationNanoseconds -
+                                       before.processingFenceObservationNanoseconds)
+         << ",\"packedTransferSeconds\":"
+         << 1e-9 * static_cast<double>(after.packedTransferNanoseconds -
+                                       before.packedTransferNanoseconds)
          << ",\"admissionRefusals\":" << after.gpuAdmissionRefusals - before.gpuAdmissionRefusals
          << ",\"residentDetail\":" << benchJson(service.status().residentDetail)
          << ",\"hostCapacityBytes\":" << claims.hostCapacityBytes.value_or(0)

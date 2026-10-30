@@ -136,7 +136,14 @@ Python and MCP (it runs inside `bloom-cli`):
   blur; two transformed copies of the footage (scaled, rotated, positioned, one at 92% opacity), the
   smaller one through an alpha track matte from a rotated solid; and an animated text layer.
 
-Each project carries three export jobs (ProRes 422 HQ MOV, H.264 MP4, OpenEXR sequence) written to
+- **L<n>, many layers (per-layer cost):** `L10`, `L25` and `L50` stack n layers over the 1080p
+  EXR half footage: a background solid, the blurred footage, then layers cycling through that
+  footage, 1080p PNG16, ProRes 422 HQ and H.264, and 2160p EXR half and ProRes 422 HQ (each
+  scaled, rotated and positioned on a grid, with its own opacity and one of six blend modes;
+  every fifth layer is a small solid), and an animated text layer on top. They carry only the
+  OpenEXR export job.
+
+Each A and B project carries three export jobs (ProRes 422 HQ MOV, H.264 MP4, OpenEXR sequence) written to
 `exports/<project>/` next to it, replacing earlier runs and evaluating every frame
 (`useCachedFrames` off). The runner builds the projects into its work directory on first use, per
 media root, so a run against another root never reuses projects that point elsewhere.
@@ -161,9 +168,14 @@ The runner never uses a display: Bloom processes run with `QT_QPA_PLATFORM=offsc
 | `standard` (default) | 720p, 1080p, 2160p | all | A and B; Full, Half, Quarter; cold and warm; playback; all exports of the B projects of PNG16, EXR half, ProRes 422 HQ and H.264 |
 | `full` | all four | all | everything, exports for every project |
 | `vfx8k` | 4320p | all | everything |
+| `layers` | 1080p | EXR half (plus the L mix) | L10, L25, L50; Full, Half, Quarter; cold and warm; cached playback after every fill; playback; no exports |
 
 `--tier`, `--format`, `--variant`, `--resolution`, `--cache`, `--export`, `--no-export` and
-`--no-playback` narrow a suite.
+`--no-playback` narrow a suite. `--workspace` runs the harness with the application's window
+instead of a bare Viewer: `MainWindow` with every foundation editor (Timeline, Properties, Node,
+Assets, ...), plus the application's `AssetController`, `AudioPlaybackSession`, live-session
+adapter and playback read-ahead, so per-tick work outside the Viewer is measured too. The harness
+flag `--bench-workspace-no-assets` leaves the `AssetController` out, to separate its cost.
 
 ### What is measured
 
@@ -180,6 +192,10 @@ Every measurement is a fresh process.
   footage is in the page cache. Bloom's own caches are always empty because the process is new.
 - **Cached playback** (`cachedPlaybackFps`): when a fill completed, the transport plays from the
   start for `--play-seconds` and counts the distinct frames the Viewer actually showed.
+  `cachedPresentedFps` counts every change of the shown frame, so it stays meaningful when a
+  short work area loops. `cachedPlayUiBusySeconds`, `cachedPlayMaxSliceMs` and
+  `cachedPlayLongSlices` report the UI thread's event-loop time over the run, its longest slice
+  and the slices longer than one frame period.
 - **Playback** (`kind: playback`): a cold start with background read-ahead and no RAM fill;
   `playbackFps` = distinct frames shown / seconds, next to the frames the transport asked for.
 - **Export** (`kind: export`): `bloom-cli export --job <id> --replace`; `secondsPerFrame` = process
@@ -187,6 +203,10 @@ Every measurement is a fresh process.
   CPU-reference frame count (`cpuFallbackFrames`). An encoder that is not installed is recorded as
   `outcome: unavailable` (H.264 needs Cisco OpenH264, which Bloom installs only with the user's
   consent; HEVC needs a VA-API encoder).
+- **GPU stages**: `uploadSubmitSeconds`, `uploadFenceSeconds`, `processingSubmitSeconds`,
+  `processingFenceSeconds` and `packedTransferSeconds` are the device owner's wall time per stage
+  over the measured window (from the preview service counters), with `residentGraphJobs` and
+  `nativeDispatches`.
 - **Resources**: `gpuBusyPercent` (and peak) from `nvidia-smi` sampled every 200 ms over the
   measured window (NVIDIA only; absent elsewhere); `fillCoresBusy` = process CPU seconds / wall
   seconds of the fill; `cpuCoresBusy` for exports from process-tree sampling; `peakRssBytes` is the

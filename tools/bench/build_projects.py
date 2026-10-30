@@ -7,11 +7,17 @@ $BLOOM_BENCH_BUILD (run_bench.py writes it):
       "media": "/abs/media/720p/png16" (sequence folder) or "/abs/.../file.mov",
       "label": "720p png16", "width": 1280, "height": 720}, ...]
 
-Variant A is the footage alone (decode-bound); a job may also list its own "exports". Variant B is a typical shot (compute-bound): a
-background solid, the footage blurred and scaled behind, two transformed footage layers, one of
-them through a track matte (an alpha matte solid), and an animated text layer. Both carry three
-export jobs: ProRes 422 HQ MOV, H.264 MP4 and an OpenEXR sequence, written below
-exports/<project name>/ next to the project, replacing earlier runs and evaluating every frame.
+Variant A is the footage alone (decode-bound); a job may also list its own "exports". Variant B
+is a typical shot (compute-bound): a background solid, the footage blurred and scaled behind, two
+transformed footage layers, one of them through a track matte (an alpha matte solid), and an
+animated text layer. Both carry three export jobs: ProRes 422 HQ MOV, H.264 MP4 and an OpenEXR
+sequence, written below exports/<project name>/ next to the project, replacing earlier runs and
+evaluating every frame.
+
+Variant L<n> (for example L25) is a stack of n layers cycling through the footage and the media
+listed in the job's "mix" (see build_l); the job also carries "layers": n. An optional
+"workAreaFrames" shortens the work area, so RAM preview fills (and playback loops) only those
+frames.
 """
 import json
 import os
@@ -126,6 +132,63 @@ def build_b(composition, asset, width, height, base_layer, base_node, image_node
     return {"blurNode": blur_node, "layers": [base_layer, mid_layer, top_layer, matte_layer]}
 
 
+BLENDS = (0, 3, 1, 2, 4, 6)  # Normal, Screen, Add, Multiply, Overlay, Lighten
+
+
+def build_l(composition, job, primary, base_node, image_node, directory):
+    """Turn the single-footage composition into a stack of job["layers"] layers (variant L<n>).
+
+    The footage cycles through the primary medium and job["mix"] (other formats and tiers), every
+    fifth layer is a small solid, each layer has its own scale, rotation, position, opacity and
+    blend mode, the base footage is blurred, a background solid sits under everything and an
+    animated text layer on top. The count includes the background, the base and the text.
+    """
+    width, height, count = job["width"], job["height"], int(job["layers"])
+    assets = [primary]
+    for path in job.get("mix") or ():
+        imported = bloom.ops.asset.import_(paths=(path,), projectDirectory=directory)
+        assets.append(output(imported, "asset"))
+    blur = bloom.ops.node.add_fed_by(composition=composition, nodeType="bloom.gaussian-blur",
+                                     node=image_node, port="image")
+    blur_node = output(blur, "node")
+    bloom.ops.node.connect(composition=composition, sourceNode=blur_node, sourcePort="image",
+                           targetNode=base_node, port="image")
+    set_param(blur_node, "radius", number=8.0 * width / 1920.0)
+    solid = bloom.ops.layer.add_solid(composition=composition, name="Background",
+                                      color=(0.04, 0.05, 0.09, 1.0))
+    bloom.ops.layer.move_before(composition=composition, slot=output(solid, "slot"))
+    columns = 5
+    for index in range(max(0, count - 3)):
+        cell_x = (index % columns + 0.5) / columns
+        cell_y = ((index // columns) % 4 + 0.5) / 4
+        if index % 5 == 4:
+            added = bloom.ops.layer.add_solid(
+                composition=composition, name=f"Solid {index + 1}",
+                color=((index * 37) % 100 / 100.0, (index * 61) % 100 / 100.0, 0.6, 1.0),
+                position=(width * cell_x, height * cell_y))
+            node = output(added, "layerOutputNode")
+            set_param(node, "scale", vector=(0.12, 0.1))
+        else:
+            _, node = add_footage_layer(composition, assets[index % len(assets)])
+            set_param(node, "scale", vector=(0.3 + 0.05 * (index % 4),) * 2)
+            set_param(node, "position", vector=(width * cell_x, height * cell_y))
+        set_param(node, "rotation", number=float((index * 7) % 30 - 15))
+        set_param(node, "opacity", number=0.75 + 0.05 * (index % 5))
+        set_param(node, "blendMode", integer=BLENDS[index % len(BLENDS)])
+    text = bloom.ops.layer.add_text(composition=composition, name="Title",
+                                    text=f"BLOOM {count} LAYERS", size=90.0 * width / 1920.0,
+                                    color=(1.0, 0.95, 0.85, 1.0),
+                                    position=(width * 0.5, height * 0.85))
+    position = output(text, "positionParameter")
+    with bloom.transactions.group("Slide the title"):
+        bloom.ops.animation.create_for_parameter(position, composition=composition, time=0)
+        bloom.ops.animation.set_keyframe_at_time_for_parameter_component(
+            position, 0, width * 0.35, composition=composition, time=0)
+        bloom.ops.animation.set_keyframe_at_time_for_parameter_component(
+            position, 0, width * 0.65, composition=composition, time=47)
+    return {"blurNode": blur_node, "layerCount": count}
+
+
 def build(job):
     project = os.path.abspath(job["project"])
     directory = os.path.dirname(project)
@@ -147,6 +210,13 @@ def build(job):
             detail = build_b(composition, asset, job["width"], job["height"],
                              output(created, "layer"), output(created, "layerOutputNode"),
                              output(created, "imageNode"), job["label"])
+        elif job["variant"].startswith("L"):
+            detail = build_l(composition, job, asset, output(created, "layerOutputNode"),
+                             output(created, "imageNode"), directory)
+        if job.get("workAreaFrames"):
+            # A shorter work area: RAM preview fills (and playback loops) only these frames.
+            bloom.ops.composition.set_work_area(0, int(job["workAreaFrames"]),
+                                                composition=composition)
         exports = f"exports/{name}"
         jobs = {}
         # A job may name its own exports: [[key, format, codec profile, file name], ...].
