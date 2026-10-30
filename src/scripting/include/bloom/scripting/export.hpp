@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -59,12 +60,14 @@ class Session;
 // (host::makePackagedGpuOcioResolver in the executable that stages the tools). It must come from
 // the executable: only that target carries the packaging definitions, and without it the queue's
 // output colour (display/view for ProRes, DNxHR, H.264, PNG) has no GPU preparation.
-// `vulkanLoader` overrides the platform Vulkan loader (tests name the qualified prefix's loader).
+// `vulkanLoader` overrides the platform Vulkan loader (tests name the qualified prefix's loader);
+// `bootstrapGate` is the provider's shared native-bootstrap gate (GpuExportProvider::create).
 class HeadlessExportQueue final {
   public:
     HeadlessExportQueue(Session& session,
                         std::shared_ptr<runtime::GpuOcioContextResolver> ocioResolver,
-                        std::filesystem::path vulkanLoader = {});
+                        std::filesystem::path vulkanLoader = {},
+                        std::shared_ptr<std::timed_mutex> bootstrapGate = {});
     ~HeadlessExportQueue();
     HeadlessExportQueue(const HeadlessExportQueue&) = delete;
     HeadlessExportQueue& operator=(const HeadlessExportQueue&) = delete;

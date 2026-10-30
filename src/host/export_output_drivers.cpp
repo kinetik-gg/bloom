@@ -562,6 +562,11 @@ class ImageDriver final : public DriverBase {
     // Keeps up to depthLimit_ frames analysing ahead of the publication tail, in frame order, and
     // retries the earliest refused frame once something completed since its refusal.
     void fill() {
+        // Issue #396: no frame starts before the GPU provider's bootstrap is terminal. Until then
+        // the evaluator and the shared OCIO context are unpublished, and a frame would be
+        // evaluated and colour-transformed on the CPU reference path on a GPU-capable machine.
+        if (dependencies_.gpu != nullptr && dependencies_.gpu->bootstrapPending())
+            return;
         for (auto& frame : window_) {
             if (pendingRepublish_)
                 break;

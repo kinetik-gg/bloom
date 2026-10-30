@@ -840,6 +840,12 @@ struct SequenceExportRunnerV1::State {
     bool fill() {
         if (!compiled || stage == Stage::Complete || work->isCancelled())
             return true;
+        // Issue #396: no frame starts before the GPU provider's bootstrap is terminal (evaluator
+        // and shared OCIO context published); an earlier frame would be evaluated and displayed
+        // on the CPU reference path on a GPU-capable machine. A provider without a device still
+        // reaches the terminal state, and its frames then take the reported CPU path.
+        if (work->request.gpuProvider && work->request.gpuProvider->bootstrapPending())
+            return true;
         // Retry the earliest refused frame once something of this export completed since its
         // refusal, or once the capacity wait's backoff elapsed when other work held the root.
         for (auto& frame : window) {

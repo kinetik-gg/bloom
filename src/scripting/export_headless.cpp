@@ -41,7 +41,7 @@ struct HeadlessExportQueue::State {
 
 HeadlessExportQueue::HeadlessExportQueue(
     Session& session, std::shared_ptr<runtime::GpuOcioContextResolver> ocioResolver,
-    std::filesystem::path vulkanLoader)
+    std::filesystem::path vulkanLoader, std::shared_ptr<std::timed_mutex> bootstrapGate)
     : state_(std::make_unique<State>()) {
     auto& s = *state_;
     const auto projectFolder = session.displayPath().empty()
@@ -57,7 +57,7 @@ HeadlessExportQueue::HeadlessExportQueue(
     gpuOptions.mediaContextProvider = [state = state_.get()] {
         return runtime::GpuSceneMediaContext::fromEvaluator(state->media);
     };
-    s.gpu = host::GpuExportProvider::create(std::move(gpuOptions));
+    s.gpu = host::GpuExportProvider::create(std::move(gpuOptions), std::move(bootstrapGate));
     s.gpu->prepare(s.scheduler);
     host::ExportEncoderStatus encoders;
     s.presets = host::ExportPresetCatalogue::create(

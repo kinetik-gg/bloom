@@ -3,10 +3,16 @@
 // the GPU in the frame's combined readback, exactly as the desktop queue does. Before the fix the
 // queue composed its own packaged-tool resolver inside the scripting library, which carries no
 // packaging definitions, so every ProRes/DNxHR/H.264 frame took the CPU reference display.
+// Issue #396: the job also starts while the provider's bootstrap is still held (its native gate is
+// locked), as an export started right after the queue opens does; no frame may start before the
+// evaluator and the shared OCIO context are published, or it would run on the CPU.
 
-// Starts `job` on the queue and pumps it to a terminal state (bounded).
-[[nodiscard]] std::optional<host::ExportJobView> runQueuedJob(host::ExportQueueService& service,
-                                                              const document::ExportJobId job) {
+// Starts `job` on the queue and pumps it to a terminal state (bounded). With a locked `gate`, the
+// job starts while the provider bootstrap is held; `framesBeforeBootstrap` receives the frames that
+// progressed in the next 500 ms, then the gate is released.
+[[nodiscard]] std::optional<host::ExportJobView>
+runQueuedJob(host::ExportQueueService& service, const document::ExportJobId job,
+             std::timed_mutex* gate = nullptr, std::uint64_t* framesBeforeBootstrap = nullptr) {
     const auto ready = std::chrono::steady_clock::now() + 60s;
     while (std::chrono::steady_clock::now() < ready) {
         service.pump();
@@ -21,6 +27,20 @@
     const std::array<document::ExportJobId, 1> jobs{job};
     if (!service.start(jobs).accepted)
         return std::nullopt;
+    if (gate != nullptr) {
+        const auto held = std::chrono::steady_clock::now() + 500ms;
+        std::uint64_t frames = 0;
+        while (std::chrono::steady_clock::now() < held) {
+            service.pump();
+            for (const auto& view : service.snapshot()->jobs)
+                if (view.id == job)
+                    frames = std::max(frames, view.progress.framesCompleted);
+            std::this_thread::sleep_for(5ms);
+        }
+        if (framesBeforeBootstrap != nullptr)
+            *framesBeforeBootstrap = frames;
+        gate->unlock();
+    }
     const auto deadline = std::chrono::steady_clock::now() + 240s;
     while (std::chrono::steady_clock::now() < deadline) {
         service.pump();
@@ -91,11 +111,17 @@ GpuProofOutcome testNativeHeadlessQueueVideoDisplay(Expectations& expectations,
         return GpuProofOutcome::Ran;
 
     std::optional<host::ExportJobView> finished;
+    std::uint64_t framesBeforeBootstrap = 0;
     {
+        auto gate = std::make_shared<std::timed_mutex>();
+        gate->lock();
         scripting::HeadlessExportQueue queue(
-            *session, host::makePackagedGpuOcioResolver(host::currentExecutablePath()), loader);
-        finished = runQueuedJob(queue.service(), *job);
+            *session, host::makePackagedGpuOcioResolver(host::currentExecutablePath()), loader,
+            gate);
+        finished = runQueuedJob(queue.service(), *job, gate.get(), &framesBeforeBootstrap);
     }
+    expectations.expect(framesBeforeBootstrap == 0,
+                        "headless queue: no frame runs before the provider bootstrap completes");
     expectations.expect(finished.has_value() && finished->state == host::ExportJobState::Done &&
                             finished->outputs.size() == 1 &&
                             finished->outputs.front().verification.has_value(),

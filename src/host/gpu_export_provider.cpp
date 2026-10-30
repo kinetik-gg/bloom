@@ -325,6 +325,14 @@ bool GpuExportProvider::prepared() const noexcept {
     return state_->bootstrapComplete;
 }
 
+bool GpuExportProvider::bootstrapPending() const noexcept {
+    if (state_ == nullptr) {
+        return false;
+    }
+    std::lock_guard lock(state_->mutex);
+    return state_->bootstrapScheduled && !state_->bootstrapComplete;
+}
+
 bool GpuExportProvider::deviceAvailable() const {
     const auto handle = evaluator();
     return handle != nullptr && handle->gpuAvailable();

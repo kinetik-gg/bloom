@@ -42,6 +42,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <source_location>
 #include <span>

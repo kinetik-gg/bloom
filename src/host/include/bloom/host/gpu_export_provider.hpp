@@ -88,6 +88,9 @@ class GpuExportProvider final {
 
     // True once the bootstrap has reached a terminal state, whether or not a device was found.
     [[nodiscard]] bool prepared() const noexcept;
+    // True while a scheduled bootstrap has not reached its terminal state: the evaluator and the
+    // shared OCIO context may still be published. Export runners start no frame meanwhile.
+    [[nodiscard]] bool bootstrapPending() const noexcept;
     // True only when the published evaluator genuinely reports an available device.
     [[nodiscard]] bool deviceAvailable() const;
 
