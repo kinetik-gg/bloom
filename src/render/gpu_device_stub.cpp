@@ -67,6 +67,9 @@ bool GpuDevice::retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) 
 }
 void GpuDevice::retireProcessingPhase(std::uint64_t, bool) noexcept {}
 bool GpuDevice::processingPhaseOccupied() const noexcept { return true; }
+GpuPhaseRecovery GpuDevice::recoverUnprovenProcessingPhase() noexcept {
+    return GpuPhaseRecovery::Failed;
+}
 std::shared_ptr<GpuProcessingPhaseLease> GpuDevice::retainedProcessingPhase() const noexcept {
     return {};
 }

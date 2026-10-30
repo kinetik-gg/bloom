@@ -144,6 +144,9 @@ class GpuProcessingPhaseLease final {
     [[nodiscard]] std::uint64_t revisionAfterOwnRelease() const noexcept;
     void markUnproven() noexcept;
     [[nodiscard]] bool isUnproven() const noexcept;
+    // Only after the owning device has gone idle (every submission that could touch this phase's
+    // storage has completed). Lets the phase release its claims normally again.
+    void proveRetiredAfterDeviceIdle() noexcept;
 
   private:
     friend class GpuProcessingPhaseBudget;

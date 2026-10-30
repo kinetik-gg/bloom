@@ -167,6 +167,15 @@ void GpuProcessingPhaseLease::markUnproven() noexcept {
     }
 }
 
+void GpuProcessingPhaseLease::proveRetiredAfterDeviceIdle() noexcept {
+    const std::lock_guard lock(state_->mutex);
+    if (id_ != 0 && unproven_) {
+        unproven_ = false;
+        --state_->counters.unprovenPhases;
+        incrementSaturating(state_->counters.admissionRevision);
+    }
+}
+
 PackedHostStorageToken::PackedHostStorageToken(
     std::shared_ptr<PackedHostStorageAuthority> authority, const std::uint64_t bytes,
     const std::uint64_t metadataBytes) noexcept

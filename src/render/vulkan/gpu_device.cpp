@@ -174,6 +174,28 @@ void GpuDevice::retireProcessingPhase(const std::uint64_t leaseId,
 std::shared_ptr<GpuProcessingPhaseLease> GpuDevice::retainedProcessingPhase() const noexcept {
     return isOwnerThread() && impl_->control ? impl_->control->processingPhase : nullptr;
 }
+GpuPhaseRecovery GpuDevice::recoverUnprovenProcessingPhase() noexcept {
+    if (!isOwnerThread() || !impl_->control)
+        return GpuPhaseRecovery::Failed;
+    auto& control = *impl_->control;
+    if (!control.processingPhase ||
+        (!control.processingPhaseUnproven && !control.processingPhase->isUnproven()))
+        return GpuPhaseRecovery::NotNeeded;
+    // Every submission of this generation is on queues owned by this thread, so a device-wide idle
+    // wait is the exact fence proof for all of them at once.
+    const VkResult idle =
+        control.device.getDispatcher()->vkDeviceWaitIdle(static_cast<VkDevice>(*control.device));
+    if (idle == VK_ERROR_DEVICE_LOST)
+        return GpuPhaseRecovery::DeviceLost;
+    if (idle != VK_SUCCESS)
+        return GpuPhaseRecovery::Failed;
+    control.processingPhase->proveRetiredAfterDeviceIdle();
+    control.processingPhaseUnproven = false;
+    control.imageStorageRefusal.reset();
+    control.bufferStorageRefusal.reset();
+    control.processingPhase.reset();
+    return GpuPhaseRecovery::Recovered;
+}
 bool GpuDevice::processingPhaseOccupied() const noexcept {
     return !isOwnerThread() || !impl_->control || impl_->control->processingPhase != nullptr;
 }

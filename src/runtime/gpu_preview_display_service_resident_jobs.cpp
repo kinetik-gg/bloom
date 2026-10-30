@@ -518,6 +518,9 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             return;
         }
         const auto& phase = stage->gpuStage->phaseLease();
+        // Recover a phase latched by an earlier unproven retirement (device-wide idle proof).
+        if (phase && core->device && core->device->processingPhaseOccupied())
+            static_cast<void>(core->device->recoverUnprovenProcessingPhase());
         if ((core->options.processingPhasePolicy && !phase) ||
             (phase && (!core->device || !core->device->retainProcessingPhase(phase)))) {
             auto diagnostic = residentJobDiagnostic(

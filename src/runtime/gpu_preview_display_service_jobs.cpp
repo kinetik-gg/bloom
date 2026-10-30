@@ -651,6 +651,8 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
             const std::uint64_t allowance = stage->gpuByteAllowance != 0
                                                 ? stage->gpuByteAllowance
                                                 : core->previewByteAllowance();
+            if (stage->cpuNativePhase && core->device && core->device->processingPhaseOccupied())
+                static_cast<void>(core->device->recoverUnprovenProcessingPhase());
             if (!stage->cpuNativePhase || !core->device ||
                 !core->device->retainProcessingPhase(stage->cpuNativePhase)) {
                 completeFailed(

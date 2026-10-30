@@ -136,6 +136,21 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
     const std::shared_ptr<render::GpuProcessingPhaseLease>& phaseLease,
     const std::uint64_t readbackByteAllowance) {
     FinalProcessingPhase phase{.device = device.get(), .lease = phaseLease};
+    // A previous frame whose native work could not be proven retired leaves its phase latched on
+    // this generation. Recover it here instead of refusing every later frame: the device-wide idle
+    // wait proves that work retired, and the executor/output colour observe their fences.
+    if (phaseLease && device && device->processingPhaseOccupied()) {
+        const auto recovery = device->recoverUnprovenProcessingPhase();
+        if (recovery == render::GpuPhaseRecovery::DeviceLost)
+            return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::DeviceLost,
+                           "the GPU device was lost while recovering an unproven frame");
+        if (recovery == render::GpuPhaseRecovery::Recovered) {
+            if (executor)
+                static_cast<void>(executor->poll());
+            if (outputColor)
+                static_cast<void>(outputColor->poll());
+        }
+    }
     if ((options.processingPhasePolicy && !phaseLease) ||
         (phaseLease && (!device || !device->retainProcessingPhase(phaseLease)))) {
         return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BudgetRefused,

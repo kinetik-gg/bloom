@@ -262,6 +262,23 @@ void testRealDeviceIfAvailable(ExpectationContext& expectations, const TestOptio
     device.retireProcessingPhase(second.lease->id(), true);
     expectations.expect(device.processingPhaseOccupied() && phases.snapshot().unprovenPhases == 1,
                         "unproven ownership is sticky despite a later claimed proof");
+    // The latch is recoverable: a device-wide idle wait proves the unproven work retired.
+    std::thread foreignRecover([&] {
+        expectations.expect(device.recoverUnprovenProcessingPhase() ==
+                                bloom::render::GpuPhaseRecovery::Failed,
+                            "foreign recovery fails closed");
+    });
+    foreignRecover.join();
+    expectations.expect(device.recoverUnprovenProcessingPhase() ==
+                                bloom::render::GpuPhaseRecovery::Recovered &&
+                            !device.processingPhaseOccupied() &&
+                            phases.snapshot().unprovenPhases == 0 && !second.lease->isUnproven(),
+                        "an idle device proves and releases the latched unproven phase");
+    expectations.expect(device.recoverUnprovenProcessingPhase() ==
+                            bloom::render::GpuPhaseRecovery::NotNeeded,
+                        "recovery without a latched phase is a no-op");
+    expectations.expect(device.retainProcessingPhase(second.lease),
+                        "the recovered generation admits the next phase");
     auto nativePin = device.allocateHostBuffer(64);
     if (!nativePin) {
         expectations.expect(false, "the native lifetime pin allocates");

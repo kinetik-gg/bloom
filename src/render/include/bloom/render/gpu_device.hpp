@@ -113,6 +113,17 @@ struct GpuOperationCapability final {
     std::vector<GpuDiagnostic> diagnostics;
 };
 
+enum class GpuPhaseRecovery : std::uint8_t {
+    // No unproven phase is latched on this generation.
+    NotNeeded,
+    // The device went idle; the latched phase was proven retired and released.
+    Recovered,
+    // The device was lost; the generation must be replaced.
+    DeviceLost,
+    // Not the owner thread, or the device could not be waited on.
+    Failed,
+};
+
 // Typed source of a resolved device allocation budget. `MemoryBudget` is an actual available
 // figure the driver reported (VK_EXT_memory_budget through VMA); `DeviceLocalEstimate` is a
 // conservative nominal DEVICE_LOCAL heap figure used when no live budget is available (integrated
@@ -288,6 +299,12 @@ class GpuDevice final {
     [[nodiscard]] bool retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) noexcept;
     void retireProcessingPhase(std::uint64_t leaseId, bool retirementProven) noexcept;
     [[nodiscard]] bool processingPhaseOccupied() const noexcept;
+    // Owner-only recovery from an unproven retirement (a failed, timed-out or cancelled frame whose
+    // native work could not be proven retired). Waits for the whole device to go idle, which proves
+    // every submission on every queue of this generation has completed, then proves and releases
+    // the latched phase so the generation admits work again. The fence-before-free guard holds:
+    // nothing is released before the idle proof. A lost device is reported, never released.
+    [[nodiscard]] GpuPhaseRecovery recoverUnprovenProcessingPhase() noexcept;
     // Owner-only authority read for synchronous native resource preparation. Returns the exact
     // already-retained lease; callers must not arm a second phase. Null for non-owner/stub devices.
     [[nodiscard]] std::shared_ptr<GpuProcessingPhaseLease> retainedProcessingPhase() const noexcept;
