@@ -1,7 +1,8 @@
-// Compile-and-value checks for the proposed in-app MCP server contract headers (ADR 0034). The
-// service, core, parser, listener and live session host are declared but not implemented yet, so
-// this test only exercises value types and the constexpr helpers; it must not ODR-use an undefined
-// member.
+// Compile-and-value checks for the in-app MCP server contract headers (ADR 0034): value types,
+// defaults, limits, names, codes and the constexpr helpers. The behaviour is covered by
+// bloom.mcp.http-parser, bloom.mcp.server-service, bloom.mcp.http-conformance,
+// bloom.platform.loopback-listener, bloom.platform.owner-only-secret and
+// bloom.scripting.live-session-host.
 
 #include <bloom/mcp/protocol.hpp>
 #include <bloom/mcp/server_core.hpp>
@@ -143,8 +144,8 @@ int main() {
                        "a port refusal names the port and the field it belongs to");
 
     // The Port field's live check is the PortOutOfRange refusal setPort() returns: the same code,
-    // field, value and reason. setPort() is not implemented yet, so this pins the inline helper it
-    // must return verbatim; bloom.mcp.server-service compares the two directly.
+    // field, value and reason. This pins the inline helper setPort() returns verbatim;
+    // bloom.mcp.server-service compares the two directly.
     for (const std::uint32_t valid : {1024u, 6767u, 65535u})
         failures += expect(!mcp::validateMcpPort(valid).has_value(), "an in-range port is valid");
     for (const std::uint32_t invalid : {0u, 80u, 1023u, 65536u, 4294967295u}) {

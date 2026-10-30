@@ -11,6 +11,9 @@ target_sources(
         json.hpp
         projections.cpp
         server_core.cpp
+        server_http.cpp
+        server_service.cpp
+        server_service_state.hpp
         stdio_transport.cpp
         streamable_http.cpp
         tool_schemas.cpp
@@ -32,6 +35,13 @@ target_link_libraries(bloom_mcp PUBLIC bloom_scripting bloom_host bloom_platform
 target_link_libraries(bloom_mcp PRIVATE yyjson::yyjson)
 bloom_enable_warnings(bloom_mcp)
 
+# Test support: a driver that scripts a real McpServerService into every state the MCP Server panel
+# shows (never linked into production).
+add_library(bloom_mcp_testing STATIC testing/server_service_driver.cpp)
+target_include_directories(bloom_mcp_testing PUBLIC testing/include PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(bloom_mcp_testing PUBLIC bloom_mcp)
+bloom_enable_warnings(bloom_mcp_testing)
+
 if(BUILD_TESTING)
     include(BloomTesting)
     add_executable(bloom_mcp_server_contract_test tests/mcp_server_contract_tests.cpp)
@@ -51,4 +61,27 @@ if(BUILD_TESTING)
         COMMAND bloom_mcp_http_parser_test
         LABELS unit mcp
     )
+    add_executable(bloom_mcp_server_service_test tests/server_service_tests.cpp)
+    target_link_libraries(bloom_mcp_server_service_test PRIVATE bloom_mcp_testing)
+    bloom_enable_warnings(bloom_mcp_server_service_test)
+    bloom_add_test(
+        NAME bloom.mcp.server-service
+        COMMAND bloom_mcp_server_service_test
+        LABELS unit mcp
+        TIMEOUT 120
+    )
+    # Streamable HTTP over a real loopback socket against a headless McpServerService.
+    add_executable(bloom_mcp_http_test_host tests/http_test_host.cpp)
+    target_link_libraries(bloom_mcp_http_test_host PRIVATE bloom_mcp)
+    bloom_enable_warnings(bloom_mcp_http_test_host)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        bloom_add_test(
+            NAME bloom.mcp.http-conformance
+            COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/http_conformance.py"
+                $<TARGET_FILE:bloom_mcp_http_test_host>
+            LABELS mcp integration
+            TIMEOUT 180
+        )
+    endif()
 endif()

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -26,6 +27,9 @@ class TaskScheduler;
 namespace bloom::scripting {
 class LiveSessionHost;
 } // namespace bloom::scripting
+namespace bloom::mcp::testing {
+class McpServerServiceDriver;
+} // namespace bloom::mcp::testing
 
 // The in-app MCP server's runtime contract (ADR 0034). Qt-free; owned by src/mcp.
 //
@@ -510,7 +514,11 @@ struct McpServerLimits final {
 // application-wide instances the rest of the application uses.
 struct McpServerServiceDependencies final {
     scripting::LiveSessionHost& live;
-    host::ExportQueueService& exports;
+    // The application's current export queue, read on the owner thread only (desktop:
+    // ProjectHost::exportQueue(), null while File > New replaces it). Empty, or a null answer,
+    // makes render, export, capture and the export.* tools answer bloom.mcp.export-unavailable.
+    // When the queue is replaced the owner calls exportQueueReplaced().
+    std::function<host::ExportQueueService*()> exportQueue;
     runtime::TaskScheduler& scheduler;
     // platform::userDataDirectory() / "mcp" / "token"; empty makes the token Unavailable with the
     // reason "Bloom can't find a folder to keep the access token in."
@@ -584,9 +592,16 @@ class McpServerService final {
     void beginShutdown();
     [[nodiscard]] bool quiescent() const noexcept;
 
-  private:
+    // Owner thread: the application's export queue was replaced (File > New). Calls that hold a
+    // job of the old queue end (its shutdown already stopped their transient jobs) and later
+    // calls use the new queue.
+    void exportQueueReplaced();
+
     struct State;
-    std::unique_ptr<State> state_;
+
+  private:
+    friend class testing::McpServerServiceDriver;
+    std::shared_ptr<State> state_;
 };
 
 } // namespace bloom::mcp
