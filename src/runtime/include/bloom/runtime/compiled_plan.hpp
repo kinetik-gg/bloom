@@ -690,6 +690,14 @@ class CompiledCompositionPlan final {
     [[nodiscard]] std::span<const std::uint8_t> valueTimeDependence() const noexcept {
         return valueTimeDependent_;
     }
+    // Whether every asset record operation `index` carries (image, Cryptomatte and LUT sources)
+    // passes AssetRecord::validate(). Derived once here because the records are immutable and
+    // the evaluator's preflight asks for every operation of every frame; an image sequence's
+    // record holds every frame's file name, so asking per frame costs layers x sequence length.
+    [[nodiscard]] bool operationAssetsValid(const OperationIndex index) const noexcept {
+        return index.value() < operationAssetsValid_.size() &&
+               operationAssetsValid_[index.value()] != 0;
+    }
     [[nodiscard]] document::Revision sourceRevision() const noexcept { return sourceRevision_; }
     [[nodiscard]] document::ProjectId projectId() const noexcept { return projectId_; }
     [[nodiscard]] document::CompositionId compositionId() const noexcept { return compositionId_; }
@@ -740,7 +748,9 @@ class CompiledCompositionPlan final {
   private:
     bool bypassOperationCache_ = false;
     void analyzeTimeDependence();
+    void analyzeAssetValidity();
     std::vector<std::uint8_t> operationTimeDependent_;
+    std::vector<std::uint8_t> operationAssetsValid_;
     std::vector<std::uint8_t> valueTimeDependent_;
     document::Revision sourceRevision_;
     document::ProjectId projectId_;

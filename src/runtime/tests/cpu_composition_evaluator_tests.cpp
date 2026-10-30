@@ -2344,6 +2344,7 @@ int main(int argc, char* argv[]) {
         testOperationCacheLifecycle(expectations);
         testOperationMemoization(expectations);
         testOperationTimeInvariance(expectations);
+        testOperationAssetValidityIsDerivedOnce(expectations);
         testEaseHandleChangeReachesAMemoizedFrame(expectations);
         testOperationDirtyPropagation(expectations);
         testNestedMergeEqualsFlat(expectations);

@@ -502,7 +502,8 @@ enum class ScalarDomain : std::uint8_t {
                                   file->direction >= 0 && file->direction <= 1 &&
                                   file->processSpaceId.size() <= 256 &&
                                   (!file->asset || (file->asset->kind == document::AssetKind::Lut &&
-                                                    file->asset->validate().ok()));
+                                                    plan.operationAssetsValid(
+                                                        OperationIndex::fromRaw(index))));
                 if (effect.input.value() < index && validInputArity && validKernel)
                     return true;
                 failure = diagnostic(
@@ -511,11 +512,12 @@ enum class ScalarDomain : std::uint8_t {
                     subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
                 return false;
             },
-            [](const CompiledImageSource& image) {
+            [&plan, index](const CompiledImageSource& image) {
                 return image.loopMode >= 0 && image.loopMode <= 2 && image.colorSpace >= 0 &&
-                       image.colorSpace <= 3 && (!image.asset || image.asset->validate().ok());
+                       image.colorSpace <= 3 &&
+                       plan.operationAssetsValid(OperationIndex::fromRaw(index));
             },
-            [](const CompiledCryptomatte& cryptomatte) {
+            [&plan, index](const CompiledCryptomatte& cryptomatte) {
                 const auto& steps = cryptomatte.channels.steps;
                 for (std::size_t step = 0; step < steps.size(); ++step) {
                     const auto& item = steps[step];
@@ -528,13 +530,13 @@ enum class ScalarDomain : std::uint8_t {
                         return false;
                 }
                 return !steps.empty() && !cryptomatte.layer.empty() &&
+                       plan.operationAssetsValid(OperationIndex::fromRaw(index)) &&
                        std::ranges::all_of(cryptomatte.channels.sources, [](const auto& source) {
                            return source.loopMode >= 0 && source.loopMode <= 2 &&
-                                  source.colorSpace >= 0 && source.colorSpace <= 3 &&
-                                  (!source.asset || source.asset->validate().ok());
+                                  source.colorSpace >= 0 && source.colorSpace <= 3;
                        });
             },
-            [](const CompiledChannelShuffle& shuffle) {
+            [&plan, index](const CompiledChannelShuffle& shuffle) {
                 const auto& steps = shuffle.channels.steps;
                 const bool stepsValid = !steps.empty() && [&] {
                     for (std::size_t step = 0; step < steps.size(); ++step) {
@@ -550,15 +552,16 @@ enum class ScalarDomain : std::uint8_t {
                     return true;
                 }();
                 return stepsValid && (shuffle.mode == 0 || shuffle.mode == 1) &&
+                       plan.operationAssetsValid(OperationIndex::fromRaw(index)) &&
                        std::ranges::all_of(shuffle.channels.sources, [](const auto& source) {
                            return source.loopMode >= 0 && source.loopMode <= 2 &&
-                                  source.colorSpace >= 0 && source.colorSpace <= 3 &&
-                                  (!source.asset || source.asset->validate().ok());
+                                  source.colorSpace >= 0 && source.colorSpace <= 3;
                        });
             },
-            [](const CompiledVideoSource& image) {
+            [&plan, index](const CompiledVideoSource& image) {
                 return image.loopMode >= 0 && image.loopMode <= 2 && image.colorSpace >= 0 &&
-                       image.colorSpace <= 3 && (!image.asset || image.asset->validate().ok());
+                       image.colorSpace <= 3 &&
+                       plan.operationAssetsValid(OperationIndex::fromRaw(index));
             },
             [&plan, index, &failure](const CompiledShape& shape) {
                 const auto* curve = std::get_if<Vec2CurveIndex>(&shape.size.source);

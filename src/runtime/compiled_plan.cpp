@@ -2,8 +2,35 @@
 
 #include <algorithm>
 #include <utility>
+#include <variant>
 
 namespace bloom::runtime {
+namespace {
+
+[[nodiscard]] bool assetValid(const std::optional<document::AssetRecord>& asset) {
+    return !asset || asset->validate().ok();
+}
+
+[[nodiscard]] bool operationAssetsValid(const CompiledOperation& operation) {
+    if (const auto* image = std::get_if<CompiledImageSource>(&operation))
+        return assetValid(image->asset);
+    if (const auto* video = std::get_if<CompiledVideoSource>(&operation))
+        return assetValid(video->asset);
+    const auto sourcesValid = [](const auto& sources) {
+        return std::ranges::all_of(sources,
+                                   [](const auto& source) { return assetValid(source.asset); });
+    };
+    if (const auto* cryptomatte = std::get_if<CompiledCryptomatte>(&operation))
+        return sourcesValid(cryptomatte->channels.sources);
+    if (const auto* shuffle = std::get_if<CompiledChannelShuffle>(&operation))
+        return sourcesValid(shuffle->channels.sources);
+    if (const auto* effect = std::get_if<CompiledImageEffect>(&operation))
+        if (const auto* file = std::get_if<FileTransformKernel>(&effect->kernel))
+            return assetValid(file->asset);
+    return true;
+}
+
+} // namespace
 
 CompiledCompositionPlan::CompiledCompositionPlan(CompiledCompositionPlanDefinition definition)
     : bypassOperationCache_(definition.bypassOperationCache),
@@ -22,6 +49,13 @@ CompiledCompositionPlan::CompiledCompositionPlan(CompiledCompositionPlanDefiniti
       operationClocks_(std::move(definition.operationClocks)),
       placementClocks_(std::move(definition.placementClocks)) {
     analyzeTimeDependence();
+    analyzeAssetValidity();
+}
+
+void CompiledCompositionPlan::analyzeAssetValidity() {
+    operationAssetsValid_.reserve(operations_.size());
+    for (const auto& operation : operations_)
+        operationAssetsValid_.push_back(runtime::operationAssetsValid(operation) ? 1 : 0);
 }
 
 bool operator==(const CompiledCompositionPlan& lhs, const CompiledCompositionPlan& rhs) {

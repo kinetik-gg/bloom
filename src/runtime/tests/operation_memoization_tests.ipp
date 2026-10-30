@@ -428,3 +428,57 @@ void benchmarkOperationMemoization(Expectations& expectations) {
                   << '\n';
     }
 }
+
+// #401: AssetRecord::validate() is derived once per compiled plan, not asked per frame by the
+// preflight; an image sequence record holds every frame's file name, so the per-frame cost grew
+// with layers x sequence length. The table must agree with validate() for every source kind.
+void testOperationAssetValidityIsDerivedOnce(Expectations& expectations) {
+    document::AssetRecord valid;
+    valid.id = document::AssetId::fromRaw(901);
+    valid.kind = document::AssetKind::Sequence;
+    valid.locator.kind = "file";
+    valid.locator.portability = "project-relative";
+    valid.locator.path = "shot/plate.####.exr";
+    valid.name = "plate";
+    valid.width = 64;
+    valid.height = 32;
+    valid.manifest.pattern = "plate.####.exr";
+    valid.manifest.padding = 4;
+    valid.manifest.first = 1;
+    valid.manifest.last = 240;
+    for (std::int64_t frame = 1; frame <= 240; ++frame) {
+        document::AssetSequenceMember member;
+        member.frame = frame;
+        member.locator = valid.locator;
+        const auto number = std::to_string(frame);
+        member.locator.path = "shot/plate." + std::string(4 - number.size(), '0') + number + ".exr";
+        valid.manifest.members.push_back(std::move(member));
+    }
+    valid.frames = 240;
+    document::AssetRecord invalid; // no identity, no locator
+    auto definition = oneSolidPlan()->copyDefinition();
+    const auto base = definition.operations.size();
+    runtime::CompiledImageSource withValid;
+    withValid.asset = valid;
+    runtime::CompiledImageSource withInvalid;
+    withInvalid.asset = invalid;
+    runtime::CompiledVideoSource videoInvalid;
+    videoInvalid.asset = invalid;
+    definition.operations.emplace_back(withValid);
+    definition.operations.emplace_back(withInvalid);
+    definition.operations.emplace_back(runtime::CompiledImageSource{});
+    definition.operations.emplace_back(videoInvalid);
+    const runtime::CompiledCompositionPlan plan(std::move(definition));
+    const auto at = [&](const std::size_t offset) {
+        return plan.operationAssetsValid(runtime::OperationIndex::fromRaw(base + offset));
+    };
+    expectations.expect(at(0) == valid.validate().ok(),
+                        "a sequence record's validity is the record's own validate()");
+    expectations.expect(!at(1) && !at(3), "an invalid image or video record stays invalid");
+    expectations.expect(at(2), "a source without a record has nothing to validate");
+    expectations.expect(plan.operationAssetsValid(runtime::OperationIndex::fromRaw(0)),
+                        "operations without asset records are valid");
+    expectations.expect(!plan.operationAssetsValid(
+                            runtime::OperationIndex::fromRaw(plan.operations().size())),
+                        "an index past the plan is never valid");
+}
