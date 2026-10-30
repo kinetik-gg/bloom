@@ -13,6 +13,7 @@
 #include "gpu_scene_executor_test_support.hpp"
 
 #include <bloom/core/color.hpp>
+#include <bloom/runtime/composite_frame_cache.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
@@ -480,14 +481,38 @@ void runProcessingPhaseTest(Expectations& expectations, const Options& options) 
     expectations.expect(static_cast<bool>(held.lease),
                         "phase final: competing preview lease admitted");
     const auto refused = evaluator->evaluate(plan, request);
-    expectations.expect(refused.diagnostic.code == GpuProcessFrameDiagnosticCode::BudgetRefused &&
+    expectations.expect(refused.diagnostic.code ==
+                                GpuProcessFrameDiagnosticCode::AwaitingCapacity &&
                             !refused.frame,
-                        "phase final: shared count pressure refuses without CPU substitution");
+                        "phase final: shared count pressure waits without CPU substitution");
     held.lease.reset();
     const auto recovered = evaluator->evaluate(plan, request);
     expectations.expect(
         recovered.frame && recovered.counters.nativeDispatches == warm.counters.nativeDispatches,
         "phase final: released competing reservation recovers with warm native pixels");
+    // Display-only job: a composite-cache hit uploads its scene-referred pixels and runs only the
+    // output stage (identity arm here) with one combined readback, on the same admission root.
+    const auto composite =
+        recovered.frame ? CompositeFrame::fromImage(recovered.frame->processImage()) : nullptr;
+    expectations.expect(composite != nullptr, "display-only: the rendered frame is cached as half");
+    if (composite) {
+        auto widened = composite->toImage();
+        expectations.expect(widened.hasValue(), "display-only: cache hit widens to float32");
+        if (widened.hasValue()) {
+            auto source =
+                std::make_shared<const bloom::render::Rgba32fImage>(std::move(*widened.value()));
+            const auto displayed =
+                evaluator->transformOutput(source, recovered.frame->identity(), nullptr, {});
+            expectations.expect(
+                displayed.status == GpuProcessFrameStatus::Evaluated && displayed.frame &&
+                    pixelsExact(displayed.frame->processImage().pixels(), source->pixels()) &&
+                    displayed.counters.uploads == 1 && displayed.counters.readbacks == 1 &&
+                    displayed.frame->identity().provider == EvaluationProvider::GpuResident,
+                "display-only: uploaded pixels return exactly through one combined readback");
+            expectations.expect(policy->snapshot().reservations.admittedPhases == 0,
+                                "display-only: the output phase retires with the job");
+        }
+    }
     evaluator->beginShutdown();
     std::cout << "PHASE_FINAL Full1080 parity/readback=1 warm-native-reuse/refusal/recovery\n";
 }

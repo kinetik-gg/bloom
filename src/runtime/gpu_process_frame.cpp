@@ -6,7 +6,10 @@
 
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/gpu_device.hpp>
+#include <bloom/render/gpu_image.hpp>
+#include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/render/image.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
@@ -19,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <mutex>
 #include <new>
 #include <optional>
@@ -59,6 +63,9 @@ struct GpuProcessFrameRequest final {
     std::uint64_t readbackByteAllowance = 0;
     // Built on the calling CPU worker (never the GPU owner) and immutable thereafter.
     std::shared_ptr<const PreparedGpuScene> scene;
+    // Display-only job (transformOutput): the host process image to upload, and its identity.
+    std::shared_ptr<const render::Rgba32fImage> uploadSource;
+    std::optional<ProcessFrameIdentity> uploadIdentity;
 
     bool done = false;
     GpuProcessFrameOutcome outcome;
@@ -89,6 +96,8 @@ struct GpuProcessFrameEvaluator::Impl final {
     // Final combined output-colour readback stage (process payload, plus the encoded output when a
     // prepared command is supplied). Created on the owner thread alongside the executor.
     std::unique_ptr<GpuOutputColorStage> outputColor;
+    // Owner-thread upload pipeline for display-only jobs, created on first use.
+    std::unique_ptr<render::GpuImageUpload> uploader;
 
     // Bounded FIFO of admitted requests. A caller admits its slot under `mutex`, wakes the owner,
     // and waits on the slot's own condition variable until the owner marks it done or shutdown
@@ -110,6 +119,7 @@ struct GpuProcessFrameEvaluator::Impl final {
                std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
                const std::shared_ptr<render::GpuProcessingPhaseLease>& phaseLease,
                std::uint64_t readbackByteAllowance);
+    GpuProcessFrameOutcome runUpload(GpuProcessFrameRequest& request);
     GpuProcessFrameOutcome runRequestImpl(
         const std::shared_ptr<const CompiledCompositionPlan>& plan,
         const EvaluationRequest& request, const std::shared_ptr<const PreparedGpuScene>& scene,
@@ -406,6 +416,115 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     return outcome;
 }
 
+GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runUpload(GpuProcessFrameRequest& request) {
+    if (outputColor == nullptr || device == nullptr || !request.uploadIdentity ||
+        request.uploadSource->descriptor() == nullptr)
+        return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::InvalidRequest,
+                       "the display-only job has no device, image or identity");
+    if (request.phaseLease && device->processingPhaseOccupied()) {
+        if (device->recoverUnprovenProcessingPhase() == render::GpuPhaseRecovery::DeviceLost)
+            return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::DeviceLost,
+                           "the GPU device was lost while recovering an unproven frame");
+        static_cast<void>(outputColor->poll());
+    }
+    FinalProcessingPhase phase{.device = device.get(), .lease = request.phaseLease};
+    if ((options.processingPhasePolicy && !request.phaseLease) ||
+        (request.phaseLease && !device->retainProcessingPhase(request.phaseLease)))
+        return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BudgetRefused,
+                       "The native generation cannot admit another processing phase");
+    phase.armed = static_cast<bool>(request.phaseLease);
+    try {
+        const auto& descriptor = *request.uploadSource->descriptor();
+        const auto imageBytes = request.uploadSource->pixelStorageByteCost();
+        if (uploader == nullptr) {
+            auto created = render::GpuImageUpload::create(
+                *device, {.maxImageBytes = std::numeric_limits<std::uint64_t>::max(),
+                          .maxStagingBytes = std::numeric_limits<std::uint64_t>::max()});
+            if (!created)
+                return failure(GpuProcessFrameStatus::Failed,
+                               GpuProcessFrameDiagnosticCode::ExecutorUnavailable,
+                               created.diagnostic.message);
+            uploader = std::move(created.upload);
+        }
+        phase.touched = true;
+        const auto begun = uploader->begin(
+            {.source = request.uploadSource, .phase = request.phaseLease}, 4 * imageBytes);
+        if (begun.code != render::GpuImageUploadDiagnosticCode::None) {
+            phase.retired = !uploader->hasUnretiredSubmission();
+            return failure(GpuProcessFrameStatus::Failed,
+                           begun.code == render::GpuImageUploadDiagnosticCode::OverBudget
+                               ? GpuProcessFrameDiagnosticCode::OverBudget
+                               : GpuProcessFrameDiagnosticCode::ExecutorUnavailable,
+                           begun.message);
+        }
+        const auto deadline = std::chrono::steady_clock::now() + options.nativeDeadline;
+        auto polled = uploader->poll();
+        while (polled == render::GpuImageUploadPollResult::Pending &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            polled = uploader->poll();
+        }
+        if (polled != render::GpuImageUploadPollResult::Ready) {
+            uploader->cancel();
+            phase.retired = !uploader->hasUnretiredSubmission();
+            return failure(GpuProcessFrameStatus::Failed,
+                           polled == render::GpuImageUploadPollResult::Pending
+                               ? GpuProcessFrameDiagnosticCode::DeadlineExceeded
+                               : GpuProcessFrameDiagnosticCode::ExecutorUnavailable,
+                           "the display-only upload did not complete");
+        }
+        auto image = std::make_shared<const render::GpuImage>(uploader->takeImage());
+        GpuProcessFrameOutcome outcome;
+        outcome.counters.uploads = 1;
+        outcome.deviceOwnershipEpoch = device->ownershipEpoch();
+        phase.retired = false;
+        auto transfer = detail::runFinalCombinedReadback(
+            *outputColor, descriptor, std::move(request.outputCommand), std::move(image),
+            request.readbackByteAllowance, options.nativeDeadline, request.cancellation,
+            stopRequested, phase.retired, phase.lease);
+        outcome.stageTimes.finalTransferNanoseconds = transfer.transferNanoseconds;
+        outcome.stageTimes.finalHostPublicationNanoseconds = transfer.hostPublicationNanoseconds;
+        outcome.counters.readbacks = transfer.readbacks;
+        if (transfer.status != GpuProcessFrameStatus::Evaluated ||
+            transfer.processImage == nullptr) {
+            outcome.status = transfer.status;
+            outcome.diagnostic = {transfer.diagnosticCode, std::move(transfer.diagnosticMessage)};
+            return outcome;
+        }
+        phase.retired = true;
+        auto identity = std::move(*request.uploadIdentity);
+        identity.provider = EvaluationProvider::GpuResident;
+        auto frame = GpuProcessFrameEvaluator::publishGpuProcessFrame(
+            std::move(identity), std::move(transfer.processImage), {}, "gpu:display-only");
+        const auto processAuthority = frame->processImage().storageAuthority();
+        const auto encodedAuthority = transfer.encodedArm == GpuOutputColorArm::DisplayRgba8
+                                          ? transfer.encodedDisplayRgba8.authority()
+                                          : transfer.encodedEffectRgba32f.authority();
+        if (processAuthority && !render::PackedHostStorageAuthority::promoteFinalProduct(
+                                    processAuthority, encodedAuthority)) {
+            outcome.status = GpuProcessFrameStatus::Failed;
+            outcome.diagnostic = {GpuProcessFrameDiagnosticCode::DeviceUnavailable,
+                                  "the complete final host product could not be published"};
+            return outcome;
+        }
+        outcome.status = GpuProcessFrameStatus::Evaluated;
+        outcome.frame = std::move(frame);
+        outcome.encodedArm = transfer.encodedArm;
+        outcome.encodedEffectRgba32f = std::move(transfer.encodedEffectRgba32f);
+        outcome.encodedDisplayRgba8 = std::move(transfer.encodedDisplayRgba8);
+        outcome.outputCommandIdentity = transfer.outputCommandIdentity;
+        outcome.outputColorCounters = transfer.outputColorCounters;
+        return outcome;
+    } catch (const std::bad_alloc&) {
+        return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BadAllocation,
+                       "the display-only job failed to allocate its host buffers");
+    } catch (...) {
+        return failure(GpuProcessFrameStatus::Failed,
+                       GpuProcessFrameDiagnosticCode::InternalInvariant,
+                       "the display-only job failed with an internal error");
+    }
+}
+
 std::shared_ptr<const ProcessFrame> GpuProcessFrameEvaluator::publishGpuProcessFrame(
     ProcessFrameIdentity identity, std::shared_ptr<const render::Rgba32fImage> processImage,
     std::vector<EvaluatedOperationBounds> bounds, std::string contentHash) {
@@ -531,9 +650,13 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
             continue;
         }
 
-        auto outcome = runRequest(active->plan, *evaluation, active->scene, active->cancellation,
-                                  active->progress, std::move(active->outputCommand),
-                                  active->phaseLease, active->readbackByteAllowance);
+        auto outcome =
+            active->uploadSource
+                ? runUpload(*active)
+                : runRequest(active->plan, *evaluation, active->scene, active->cancellation,
+                             active->progress, std::move(active->outputCommand), active->phaseLease,
+                             active->readbackByteAllowance);
+        active->uploadSource.reset();
 
         // Completed preparation and phase aliases must end on the owner before completion is
         // visible. Unknown work remains retained independently by the device/native slots.
@@ -546,6 +669,7 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
     }
 
     // Device-generation resources must be destroyed on the owner thread that created them.
+    uploader.reset();
     outputColor.reset();
     executor.reset();
     cache.reset();
@@ -829,4 +953,86 @@ bool GpuProcessFrameEvaluator::retirementComplete() const noexcept {
     return impl_->inFlightPreparations == 0;
 }
 
+} // namespace bloom::runtime
+
+namespace bloom::runtime {
+GpuProcessFrameOutcome GpuProcessFrameEvaluator::transformOutput(
+    std::shared_ptr<const render::Rgba32fImage> processImage, ProcessFrameIdentity identity,
+    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand,
+    const CancellationToken& cancellation) {
+    if (impl_ == nullptr || processImage == nullptr || processImage->descriptor() == nullptr)
+        return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::InvalidRequest,
+                       "no evaluator or no process image");
+    if (!impl_->options.enabled)
+        return failure(GpuProcessFrameStatus::Disabled, GpuProcessFrameDiagnosticCode::Disabled,
+                       "GPU process-frame evaluation is disabled");
+    if (impl_->ownerThreadId.load(std::memory_order_acquire) == std::this_thread::get_id())
+        return failure(GpuProcessFrameStatus::Failed,
+                       GpuProcessFrameDiagnosticCode::InternalInvariant,
+                       "reentrant GPU transformOutput is not permitted");
+    const auto extent = processImage->descriptor()->dataWindow().extent();
+    const auto pixels = static_cast<std::uint64_t>(extent.width()) * extent.height();
+    const bool encoded = outputCommand != nullptr;
+    // The same output envelope as a rendered final frame: the process and encoded overlap, one
+    // MiB of transfer rounding and the output program ceiling; plus the uploaded image and its
+    // staging on the device. No source and no scene working set.
+    constexpr std::uint64_t padding = 1024ULL * 1024;
+    const std::uint64_t nativeProgram = encoded ? 512ULL * 1024 * 1024 : 0;
+    const std::uint64_t readback = nativeProgram + pixels * (encoded ? 64 : 32) + padding;
+    std::shared_ptr<render::GpuProcessingPhaseLease> lease;
+    if (impl_->options.processingPhasePolicy) {
+        auto grant = impl_->options.processingPhasePolicy->reserve(
+            {.output = GpuProcessingPhaseOutput::FloatFinal,
+             .pixels = pixels,
+             .encodedBytes = encoded ? pixels * 16 : 0,
+             .metadataBytes = 16ULL * 1024 * 1024,
+             // The uploaded image is this job's only source; its staging is the upload claim.
+             .requestedSourceBytes = pixels * 16,
+             .minimumSourceBytes = pixels * 16,
+             .requestedExecutorBytes = 2 * pixels * 16,
+             .minimumExecutorBytes = 2 * pixels * 16,
+             .deviceWorkingBytes = readback,
+             .admissionClass = GpuAdmissionClass::Export});
+        if (!grant.lease)
+            return failure(GpuProcessFrameStatus::Failed,
+                           grant.status == render::GpuProcessingPhaseAdmission::AwaitingCapacity
+                               ? GpuProcessFrameDiagnosticCode::AwaitingCapacity
+                               : GpuProcessFrameDiagnosticCode::BudgetRefused,
+                           "the display-only output phase is not admitted now");
+        lease = std::move(grant.lease);
+    }
+    auto slot = std::make_shared<GpuProcessFrameRequest>();
+    slot->evaluation = EvaluationRequest{.time = core::RationalTime::fromInteger(0),
+                                         .output = OperationIndex::fromRaw(0),
+                                         .resolution = CompositionFormatResolution{}};
+    slot->cancellation = cancellation;
+    slot->outputCommand = std::move(outputCommand);
+    slot->phaseLease = std::move(lease);
+    slot->readbackByteAllowance = readback;
+    slot->uploadSource = std::move(processImage);
+    slot->uploadIdentity = std::move(identity);
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->stopping || !impl_->gpuReady.load(std::memory_order_acquire))
+            return failure(GpuProcessFrameStatus::DeviceUnavailable,
+                           GpuProcessFrameDiagnosticCode::DeviceUnavailable,
+                           "the GPU evaluator is not available for display-only work");
+        impl_->queue.push_back(slot);
+    }
+    impl_->cv.notify_all();
+    std::unique_lock lock(impl_->mutex);
+    while (!slot->done) {
+        if (cancellation.isCancellationRequested()) {
+            const auto owned = std::find(impl_->queue.begin(), impl_->queue.end(), slot);
+            if (owned != impl_->queue.end()) {
+                impl_->queue.erase(owned);
+                completeQueuedAsCancelled(slot);
+            }
+        }
+        slot->completion.wait_for(lock, std::chrono::milliseconds(2));
+    }
+    GpuProcessFrameOutcome outcome = std::move(slot->outcome);
+    slot->outcome = {};
+    return outcome;
+}
 } // namespace bloom::runtime

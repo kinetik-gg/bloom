@@ -245,6 +245,18 @@ class GpuProcessFrameEvaluator final {
              std::shared_ptr<const PreparedGpuOcioCommand> outputCommand = nullptr,
              const std::optional<std::filesystem::path>& assetBaseDirectory = std::nullopt);
 
+    // Display-only GPU job for an already-rendered scene-referred frame (an export reuse hit from
+    // the composite frame cache). Admits a frame-sized Export phase on the shared root, uploads
+    // `processImage` on the owner thread, runs `outputCommand` through the same combined final
+    // readback as evaluate() (the identity arm when null) and publishes a GpuResident ProcessFrame
+    // under `identity`. No evaluation and no CPU colour transform; one combined readback.
+    // AwaitingCapacity/BudgetRefused follow the root's admission rules; the caller waits.
+    [[nodiscard]] GpuProcessFrameOutcome
+    transformOutput(std::shared_ptr<const render::Rgba32fImage> processImage,
+                    ProcessFrameIdentity identity,
+                    std::shared_ptr<const PreparedGpuOcioCommand> outputCommand = nullptr,
+                    const CancellationToken& cancellation = {});
+
     // Non-blocking. The destructor joins the owner worker.
     void beginShutdown() noexcept;
 
