@@ -97,9 +97,9 @@ bool decodeNodeGroups(const JsonValue& node, DecodeState& state, const std::stri
     std::size_t index = 0;
     for (const auto& element : node.arrayElements()) {
         const auto recordPath = joinPathIndex(path, index++);
-        // Document 1.30 appends the optional frame `color` after `padding`.
+        // Document 1.31 appends the optional frame `color` after `padding`.
         std::vector<std::string_view> keys{"groupId", "name", "members", "padding"};
-        const bool hasColor = state.documentMinor >= 30 && element.findMember("color") != nullptr;
+        const bool hasColor = state.documentMinor >= 31 && element.findMember("color") != nullptr;
         if (hasColor)
             keys.push_back("color");
         std::vector<const JsonValue*> members;

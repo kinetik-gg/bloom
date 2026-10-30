@@ -365,8 +365,10 @@ void testCachePurgeWaitsForInFlightProducerThenClears(Expectations& check) {
             return runtime::TaskResult<std::uint64_t>::succeeded(std::uint64_t{0});
         });
     check.expect(submission.accepted(), "cache purge wait: the producer is admitted");
-    for (int turn = 0; turn < 2000 && !producerGate.entered(); ++turn) {
+    const auto producerDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!producerGate.entered() && std::chrono::steady_clock::now() < producerDeadline) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     check.expect(producerGate.entered(), "cache purge wait: the producer is in flight");
 
@@ -420,8 +422,14 @@ void testCachePurgeProceedsWhileSaveIsHeld(Expectations& check) {
             return runtime::TaskResult<void>::succeeded();
         });
     check.expect(save.accepted(), "cache purge scope: Save task is admitted");
-    for (int turn = 0; turn < 2000 && !saveGate.entered(); ++turn)
+    // Wait in wall time, not event-loop turns: processEvents returns at once when idle, so a turn
+    // count expires in a fraction of a second while a loaded machine has not yet started the
+    // BlockingIo worker.
+    const auto saveDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!saveGate.entered() && std::chrono::steady_clock::now() < saveDeadline) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     check.expect(saveGate.entered(), "cache purge scope: Save is genuinely in flight");
 
     ui::CachePurgeController controller(scheduler, bridge, &disk, &operationCache, nullptr,

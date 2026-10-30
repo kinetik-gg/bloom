@@ -25,10 +25,15 @@ void testRamRetentionAdmissionAndCompletion(Expectations& expectations) {
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                  fixture.bridge, fixture.countingPipeline());
     ram.start();
+    // Owner rule (2026-10-31): memory never ends a RAM preview run. The frame whose retention
+    // failed is left out and the run continues, so it ends PartialBudget (and plays) instead of
+    // Failed after one frame. Coverage and preparation are still reported separately: the live
+    // coverage is the preexisting frame plus the frames retained after the failure, while the
+    // preparation count includes the frame that could not be retained.
     expectations.expect(
         waitUntil([&] { return !ram.isCaching(); }) &&
-            ram.lastCompletion() == ui::RamPreviewController::Completion::Failed &&
-            ram.cachedFrameCount() == 1 && ram.preparedFrameCount() == 1,
+            ram.lastCompletion() == ui::RamPreviewController::Completion::PartialBudget &&
+            ram.cachedFrameCount() == 3 && ram.preparedFrameCount() == 3 && ram.canPlayPartial(),
         "failed retention leaves preexisting coverage but reports preparation separately");
     finishFixture(fixture, expectations);
 }

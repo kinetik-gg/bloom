@@ -4,6 +4,7 @@
 // names the parameter, the node that owns it and what it accepts, so an artist or an agent never
 // has to guess why an edit was refused.
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/layer_source.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/parameter_presentation.hpp>
@@ -261,6 +262,8 @@ OperationResult SetParameterSource::apply(document::Draft& draft) const {
                                          describe(record, owner) + " cannot take this source; " +
                                              "it takes " + accepts(record, owner) + ".");
     }
+    // Pointing a source node at another asset or composition renames the layers that follow it.
+    (void)document::refreshLayerNamesFromSources(draft.project(), compositionId_);
     return OperationResult::applied();
 }
 

@@ -4,6 +4,10 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
 
+#include <bloom/document/animation.hpp>
+
+#include <string>
+
 #include <type_traits>
 
 namespace bloom::scripting::python {
@@ -46,6 +50,17 @@ nb::object parameterValue(const document::ParameterValue& value) {
         value);
 }
 
+// Document 1.30: the interpolation's stable token next to its enum id, and the easing-equation
+// parameters every key carries.
+template <typename Keyframe> void easing(nb::dict& row, const Keyframe& key) {
+    row["interpolation_name"] =
+        std::string(document::keyframeInterpolationToken(key.outgoingInterpolation));
+    row["ease"] = std::string(document::keyframeEasingToken(key.easing.easing));
+    row["back"] = key.easing.back;
+    row["amplitude"] = key.easing.amplitude;
+    row["period"] = key.easing.period;
+}
+
 nb::list keyframes(const std::vector<document::ScalarKeyframe>& keys) {
     nb::list result;
     for (const auto& key : keys) {
@@ -54,6 +69,7 @@ nb::list keyframes(const std::vector<document::ScalarKeyframe>& keys) {
         row["time"] = nb::make_tuple(key.time.numerator(), key.time.denominator());
         row["value"] = key.value;
         row["interpolation"] = static_cast<int>(key.outgoingInterpolation);
+        easing(row, key);
         result.append(row);
     }
     return result;
@@ -69,6 +85,7 @@ nb::list keyframes(const std::vector<document::PathKeyframe>& keys) {
         row["time"] = nb::make_tuple(key.time.numerator(), key.time.denominator());
         row["value"] = parameterValue(key.value);
         row["interpolation"] = static_cast<int>(key.outgoingInterpolation);
+        easing(row, key);
         result.append(row);
     }
     return result;
@@ -116,6 +133,8 @@ nb::dict projectSnapshot(const document::Snapshot& snapshot) {
             record["enabled"] = boundary.enabled;
             record["solo"] = boundary.solo;
             record["locked"] = boundary.locked;
+            record["shy"] = boundary.shy;
+            record["name_follows_source"] = boundary.nameFollowsSource;
             record["parent"] =
                 boundary.parent.has_value() ? nb::cast(boundary.parent->value()) : nb::none();
             record["in"] =

@@ -3,7 +3,11 @@
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
+#include <bloom/document/layer_source.hpp>
 #include <limits>
+#include <optional>
+#include <string>
+#include <utility>
 
 namespace bloom::commands {
 namespace {
@@ -244,6 +248,40 @@ OperationResult SetLayerLocked::apply(document::Draft& draft) const {
     if (layer->locked == value_)
         return OperationResult::noChange();
     layer->locked = value_;
+    return OperationResult::applied();
+}
+std::string_view SetLayerShy::typeId() const noexcept { return "bloom.layer.set-shy"; }
+OperationResult SetLayerShy::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
+    if (!layer)
+        return detail::invalidTarget();
+    if (layer->shy == value_)
+        return OperationResult::noChange();
+    layer->shy = value_;
+    return OperationResult::applied();
+}
+std::string_view SetLayerNameFollowsSource::typeId() const noexcept {
+    return "bloom.layer.set-name-follows-source";
+}
+OperationResult SetLayerNameFollowsSource::apply(document::Draft& draft) const {
+    const auto* readable = std::as_const(draft.project()).findComposition(composition_);
+    const auto* current = readable ? readable->graph().findLayer(layer_) : nullptr;
+    if (!current)
+        return detail::invalidTarget();
+    std::optional<std::string> sourceName;
+    if (value_) {
+        sourceName = document::layerSourceName(draft.project(), *readable, *current);
+        if (!sourceName)
+            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                             "This layer has no source whose name it could show");
+    }
+    if (current->nameFollowsSource == value_ && (!sourceName || current->name == *sourceName))
+        return OperationResult::noChange();
+    auto* layer = draft.project().findComposition(composition_)->graph().findLayer(layer_);
+    layer->nameFollowsSource = value_;
+    if (sourceName)
+        layer->name = std::move(*sourceName);
     return OperationResult::applied();
 }
 std::string_view SetLayerLabelColor::typeId() const noexcept {

@@ -49,11 +49,13 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
       pipeline_(preparationWidth.value_or(submitter_ ? 1 : RamPreviewPipeline::kMaxInFlight)) {
     connect(&taskUiBridge_, &TaskUiBridge::resultsAvailable, this,
             &RamPreviewController::consumeReadyResult);
-    // A render-affecting edit or a composition switch makes every frame this run would still cache
-    // belong to an evaluation the artist has left behind, so the run ends rather than mixing
-    // revisions. A verified layout-only edit publishes no evaluationChanged, so the run keeps its
-    // ONE retained evaluation snapshot and completes with reusable frames.
-    connect(&session_, &CompositionSession::evaluationChanged, this, &RamPreviewController::cancel);
+    // A RAM preview run ends only on an explicit cancel (Esc, RAM Preview or Numpad 0 again, Stop,
+    // Purge) or a composition switch (the Viewer shows another composition). Anything else adapts:
+    // a render-affecting edit rescans the range, keeps every frame that is still valid and
+    // prepares only the frames the edit changed. Each frame resolves its own per-time snapshot,
+    // so a rescan never mixes revisions inside one frame.
+    connect(&session_, &CompositionSession::evaluationChanged, this,
+            &RamPreviewController::handleWorkAreaChanged);
     connect(&session_, &CompositionSession::compositionChanged, this,
             &RamPreviewController::cancel);
     // A render-neutral work-area edit adapts the run instead of ending it: expanding or shifting
@@ -66,9 +68,10 @@ RamPreviewController::RamPreviewController(CompositionSession& session,
     // is re-qualified.
     connect(&session_, &CompositionSession::documentEvaluationChanged, this,
             &RamPreviewController::handleDocumentEvaluationChanged);
-    // A range must not mix factors or policies when the viewer changes resolution mid-run.
+    // A resolution change (an explicit factor, or Auto following a Viewer resize) rescans the range
+    // at the new factor; cache keys carry the factor, so the old factor's frames never count.
     connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
-            &RamPreviewController::cancel);
+            &RamPreviewController::handleWorkAreaChanged);
     // "Purge preview cache" ends any run: every frame it would still land belongs to the generation
     // the command just retired, and cancel() detaches them so none can repopulate the cleared
     // cache.
@@ -119,6 +122,9 @@ void RamPreviewController::start() {
     retentionLoss_.reset();
     pendingRetentionLoss_.clear();
     lastCompletion_.reset();
+    partialForMemory_ = false;
+    frameFailures_.clear();
+    lossRescans_ = 0;
     caching_ = true;
     rangeDirty_ = false;
     rebaseRange();
@@ -182,23 +188,40 @@ void RamPreviewController::handleWorkAreaChanged() {
     advance();
 }
 
-void RamPreviewController::handleDocumentEvaluationChanged() {
-    Q_ASSERT(QThread::currentThread() == thread());
-    if (!caching_)
-        return;
-    const auto ranges = session_.evaluationSnapshotRanges();
-    const auto* composition = session_.composition();
-    const bool wholeRangeInvalidated =
-        composition != nullptr && ranges.size() <= 1 &&
-        (ranges.empty() || (ranges.front().start == core::RationalTime{} &&
-                            ranges.front().end == composition->duration() &&
-                            ranges.front().snapshot.revision() == session_.snapshot().revision()));
-    if (wholeRangeInvalidated) {
-        // Every cached frame belongs to an evaluation the artist left behind.
-        cancel();
+void RamPreviewController::retryFrame(const std::uint64_t frameIndex, const std::uint64_t serial) {
+    auto& failures = frameFailures_[frameIndex];
+    if (++failures > kFrameRetries) {
+        // Skipped: the run continues and ends PartialBudget; Play renders the frame on demand.
+        partialForMemory_ = true;
         return;
     }
-    // A finite edit: adapt and rescan. Retained frames hit, only the changed interval is submitted.
+    nextFrameIndex_ = std::min(nextFrameIndex_, frameIndex);
+    if (!capacityRetryScheduled_) {
+        capacityRetryScheduled_ = true;
+        QTimer::singleShot(std::chrono::milliseconds(20), this, [this, serial] {
+            capacityRetryScheduled_ = false;
+            if (caching_ && serial == runSerial_)
+                advance();
+        });
+    }
+}
+
+void RamPreviewController::rescanAfterLoss() {
+    // A frame this run retained vanished for a reason other than memory (an expired resident
+    // lease, a stale revision): rescan and prepare it again rather than ending the run. Bounded,
+    // so a source that keeps invalidating cannot keep a run alive forever.
+    retentionLoss_.reset();
+    if (++lossRescans_ > kLossRescans) {
+        partialForMemory_ = true;
+        return;
+    }
+    rangeDirty_ = true;
+}
+
+void RamPreviewController::handleDocumentEvaluationChanged() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    // A finite edit rescans and submits only the changed interval; an edit that invalidates the
+    // whole range rescans it all. Neither ends the run.
     handleWorkAreaChanged();
 }
 
@@ -258,9 +281,17 @@ void RamPreviewController::advance() {
     }
 
     resolvePendingRetentionLoss();
+    if (retentionLoss_ == Completion::Failed)
+        rescanAfterLoss();
+    if (rangeDirty_ && pipeline_.empty()) {
+        rebaseRange();
+        if (!caching_)
+            return;
+    }
     if (retentionLoss_) {
-        finish(*retentionLoss_);
-        return;
+        // Memory took some frames: keep filling what fits; the run ends PartialBudget and plays.
+        partialForMemory_ = true;
+        retentionLoss_.reset();
     }
     requestFrames();
     if (!caching_) {
@@ -271,7 +302,9 @@ void RamPreviewController::advance() {
     // because the last frame was submitted: a second frame may still be preparing.
     if (pipeline_.empty() && nextFrameIndex_ >= totalFrameCount_) {
         refreshCoverage();
-        finish(cachedFrameCount_ == totalFrameCount_ ? Completion::Complete : Completion::Failed);
+        // Frames memory took, or frames that kept failing, leave a partial run that still plays.
+        finish(cachedFrameCount_ == totalFrameCount_ ? Completion::Complete
+                                                     : Completion::PartialBudget);
     }
 }
 
@@ -417,18 +450,18 @@ bool RamPreviewController::drainResults() {
             continue;
         }
         if (ready.result.state() != runtime::TaskState::Succeeded) {
-            // Cancelled or failed: the run ends and keeps whatever already reached the cache. A
-            // partially cached range is still useful -- the transport simply plays the rest on the
-            // elapsed-time clock and says so in the footer.
-            finish(Completion::Failed);
-            return false;
+            // A frame that failed or was cancelled by other work (a purge cancels the run itself
+            // and detaches its frames first, so their results never arrive here) is retried; a
+            // frame that keeps failing is skipped. The run never ends on its own.
+            retryFrame(ready.frameIndex, serial);
+            continue;
         }
         const auto& value = ready.result.value();
         if (!value.has_value() || *value == nullptr ||
             (*value)->status() != runtime::PreviewPreparationStatus::Prepared ||
             (*value)->frame() == nullptr) {
-            finish(Completion::Failed);
-            return false;
+            retryFrame(ready.frameIndex, serial);
+            continue;
         }
         ++preparedFrameCount_;
         const auto& frame = (*value)->frame();
@@ -439,12 +472,13 @@ bool RamPreviewController::drainResults() {
         // would refuse it, and the run must not count it as progress. The cache still gets the
         // insert attempt so that a still-valid overlap survives the range rebase below.
         if (frame->desiredIdentity() != ready.identity) {
-            finish(Completion::Failed);
-            return false;
+            // A late result from an evaluation the session has left: rescan the range.
+            rangeDirty_ = true;
+            continue;
         }
         if (!cacheFrame) {
-            finish(Completion::Failed);
-            return false;
+            retryFrame(ready.frameIndex, serial);
+            continue;
         }
         const auto identityKey = PreviewFrameCacheKey::forIdentity(frame->desiredIdentity());
         if (rangeDirty_ || !resultIsCurrent(identityKey, ready.identity)) {
@@ -456,20 +490,24 @@ bool RamPreviewController::drainResults() {
         publishProgress();
         if (!caching_ || serial != runSerial_)
             return false;
-        if (inserted.outcome == PreviewFrameCache::InsertOutcome::RejectedStale ||
-            inserted.outcome == PreviewFrameCache::InsertOutcome::AllocationFailure ||
-            inserted.outcome == PreviewFrameCache::InsertOutcome::Invalid) {
-            finish(Completion::Failed);
-            return false;
+        if (inserted.outcome == PreviewFrameCache::InsertOutcome::RejectedStale) {
+            // The frame's revision or work area moved on while it was preparing: rescan.
+            rangeDirty_ = true;
+            continue;
         }
+        if (inserted.outcome == PreviewFrameCache::InsertOutcome::Invalid) {
+            retryFrame(ready.frameIndex, serial);
+            continue;
+        }
+        if (retentionLoss_ == Completion::Failed)
+            rescanAfterLoss();
         if (inserted.outcome == PreviewFrameCache::InsertOutcome::RejectedBudget ||
+            inserted.outcome == PreviewFrameCache::InsertOutcome::AllocationFailure ||
             retentionLoss_) {
-            // Refusal or loss of requested coverage ends this bounded fill. The live time set
-            // may have holes or may start after the requested beginning; never call it a prefix.
-            // Detach the sibling rather than churn already retained samples.
-            pipeline_.cancelAllAndDetach();
-            finish(retentionLoss_.value_or(Completion::PartialBudget));
-            return false;
+            // Memory refused or evicted frames: never a reason to stop. The cache keeps its most
+            // recently used frames; the run keeps filling and ends PartialBudget, then plays.
+            partialForMemory_ = true;
+            retentionLoss_.reset();
         }
     }
     return true;
@@ -818,6 +856,13 @@ bool RamPreviewController::canAutoPlay() {
            completedEnd_ == session_.workArea().end &&
            completedProbe_ == previewController_.cacheKeyForTime(session_.workArea().start) &&
            isFullRangeRetained();
+}
+
+bool RamPreviewController::canPlayPartial() {
+    return !caching_ && !shuttingDown_ && lastCompletion_ == Completion::PartialBudget &&
+           completedRevision_ == session_.snapshot().revision() &&
+           completedEnd_ == session_.workArea().end &&
+           completedProbe_ == previewController_.cacheKeyForTime(session_.workArea().start);
 }
 
 void RamPreviewController::publishProgress() {

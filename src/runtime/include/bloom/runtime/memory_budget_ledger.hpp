@@ -42,11 +42,11 @@ struct MachineMemorySample final {
     // compressed task memory, Windows private bytes outside the working set). A cache page in swap
     // is memory the machine could not leave resident, so it never counts as available.
     std::size_t processSwappedBytes = 0;
-    // The machine is under memory pressure right now, whichever process causes it: Linux PSI stall
-    // time or swap traffic since the previous pressure sample (MemoryPressureMonitor), the macOS
-    // VM pressure level, the Windows low-memory notification. While it is set reusable caches never
-    // grow, and every applied sample shrinks them by one hysteresis margin even when available
-    // memory still looks above the headroom (another process may be the one being swapped out).
+    // The machine is stalling severely on memory right now: Linux PSI "full" stall time of at least
+    // a tenth of the interval since the previous pressure sample (MemoryPressureMonitor), the macOS
+    // VM pressure level, the Windows low-memory notification. It counts only while available
+    // memory is within the headroom plus margin: then caches give back the deficit to headroom
+    // plus margin and do not grow. Light stalls, swap occupancy and swap traffic never count.
     bool memoryStall = false;
 };
 [[nodiscard]] MachineMemorySample machineMemorySample() noexcept;
@@ -122,11 +122,22 @@ class MemoryBudgetLedger final {
     MemoryBudgetState applyPressureSample(const MachineMemorySample& sample,
                                           Clock::time_point now = Clock::now());
     // Bytes by which `sample` leaves the machine short of the RAM headroom (available memory minus
-    // this process's swapped memory), at least the hysteresis margin under memory pressure; zero
-    // without a headroom or an availability reading.
+    // this process's swapped memory); under a severe stall with available memory inside headroom
+    // plus margin, the shortfall to headroom plus margin. Zero without a headroom or a reading.
     [[nodiscard]] std::size_t pressureDeficit(const MachineMemorySample& sample) const;
     // Reusable bytes the budgets released since the last call (the monitor returns them to the OS).
     [[nodiscard]] std::size_t takeReleasedBytes() noexcept;
+    // A full clear outside the budgets (a user purge) freed memory: the monitor trims at its next
+    // pass. Thread-safe.
+    void requestHostTrim() noexcept;
+    // Evict-on-demand for active work: every reusable pool gives back its share of `bytes`
+    // (proportional to what it holds, least recently used entries first), below what it holds
+    // now. Caches are never a reason for work to wait. Same thread rules as poll; returns the
+    // bytes the pools released.
+    std::size_t reclaim(std::size_t bytes);
+    // Memory admitted to active work (processing-phase claims) that reusable pools must not grow
+    // into; applied with the next budgets. Thread-safe.
+    void setActiveWorkClaims(std::size_t bytes);
     [[nodiscard]] std::optional<std::size_t> ramHeadroom() const;
     // Production activates this before constructing cache owners; it never gates live processing.
     void beginProcessSampling();
@@ -197,6 +208,10 @@ class MemoryBudgetLedger final {
     bool processSampling_ = false;
     std::optional<std::size_t> ramHeadroom_;
     std::size_t releasedSinceTake_ = 0;
+    std::size_t activeWorkClaims_ = 0;
+    // Available memory as reusable pools see it: the machine's available memory minus this
+    // process's swapped memory, bounded by the room left in any finite process/cgroup domain.
+    [[nodiscard]] std::size_t poolAvailableLocked(const MachineMemorySample& machine) const;
     bool defaultsResolved_ = false;
     bool configuredTotalSet_ = false;
     std::optional<Clock::time_point> lastProcessSample_;

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:kinetik:bloom:schema:project-manifest:1.30",
   "title": "Bloom Project Manifest for Document 1.30",
-  "$comment": "Schema 1.30 accepts document 1.30, which adds the optional node group color.",
+  "$comment": "Schema 1.30 accepts document 1.30, which adds keyframe easing equations and the presentation-only layer flags shy and nameFollowsSource.",
   "type": "object",
   "required": [
     "format",

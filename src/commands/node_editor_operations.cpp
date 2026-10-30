@@ -154,6 +154,10 @@ OperationResult AddCompositionSource::apply(document::Draft& draft) const {
     auto renamed = RenameLayer(composition_, layerId, name).apply(draft);
     if (renamed.status == OperationStatus::Rejected)
         return renamed;
+    // The nested layer shows its composition's name and follows it (document 1.30).
+    if (auto* target = draft.project().findComposition(composition_))
+        if (auto* layer = target->graph().findLayer(layerId))
+            layer->nameFollowsSource = true;
     auto range = SetLayerRange(composition_, layerId, {}, duration).apply(draft);
     if (range.status == OperationStatus::Rejected)
         return range;

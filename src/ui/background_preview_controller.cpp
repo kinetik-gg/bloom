@@ -9,6 +9,7 @@
 #include <QEvent>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <utility>
 
@@ -26,8 +27,21 @@ BackgroundPreviewController::BackgroundPreviewController(
     connect(&idleTimer_, &QTimer::timeout, this, &BackgroundPreviewController::fillNextFrame);
     connect(&bridge_, &TaskUiBridge::resultsAvailable, this,
             &BackgroundPreviewController::consumeReadyResult);
+    // Foreground work (a scrub, an edit's visible frame) takes priority over speculative frames.
+    // During playback, though, every tick that misses the cache asks for foreground work; cancelling
+    // the read-ahead then would discard exactly the frames playback is about to need, so uncached
+    // playback never got ahead of the playhead (1.5 fps against a 45 fps fill). While playing, a
+    // foreground ask only moves the next read-ahead ask to just ahead of the playhead.
     connect(&previewController_, &CompositionPreviewController::foregroundWorkRequested, this,
-            &BackgroundPreviewController::restart);
+            [this] {
+                if (playing_) {
+                    cursor_ = 0;
+                    considered_ = 0;
+                    exhausted_ = false;
+                    return;
+                }
+                restart();
+            });
     connect(&previewController_, &CompositionPreviewController::playbackActiveChanged, this,
             &BackgroundPreviewController::setPlaying);
     connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
@@ -136,8 +150,12 @@ void BackgroundPreviewController::fillNextFrame() {
         beginShutdown();
         return;
     }
-    if (!previewController_.backgroundWorkAllowed() ||
-        QApplication::mouseButtons() != Qt::NoButton) {
+    // Idle fill yields to any foreground request. Playback read-ahead runs beside the playback
+    // request itself (uncached playback always has one active; yielding to it cancelled every
+    // read-ahead frame each tick, so playback never got ahead), and yields only to a gesture.
+    const bool allowed = playing_ ? previewController_.playbackReadAheadAllowed()
+                                  : previewController_.backgroundWorkAllowed();
+    if (!allowed || QApplication::mouseButtons() != Qt::NoButton) {
         restart();
         return;
     }
@@ -178,9 +196,25 @@ void BackgroundPreviewController::fillNextFrame() {
     if (!endMapping)
         return;
     const auto maximum = endMapping.value()->maximumFrameIndex() - first;
-    const auto anchor = std::clamp(mapping.value()->nearestFrameIndex(session_.currentTime()),
-                                   first, first + maximum) -
-                        first;
+    const auto playhead = std::clamp(mapping.value()->nearestFrameIndex(session_.currentTime()),
+                                     first, first + maximum) -
+                          first;
+    // While playing, a frame asked for now lands one preparation latency later, by which time the
+    // playhead has moved on. Start the read-ahead that many frames ahead of the playhead, so the
+    // frames it caches are still ahead of the playhead when they land.
+    std::uint64_t lead = 0;
+    if (playing_ && landedLatency_.count() > 0) {
+        const auto seconds = std::chrono::duration<double>(landedLatency_).count();
+        const auto perSecond =
+            static_cast<double>(rate.numerator()) / static_cast<double>(rate.denominator());
+        lead = std::min<std::uint64_t>(
+            maximum, static_cast<std::uint64_t>(std::ceil(seconds * perSecond)));
+    }
+    // The anchor is fixed for one pass (until the cursor restarts on a time change), so the pass
+    // walks a stable order.
+    if (cursor_ == 0)
+        passAnchor_ = (playhead + lead) % (maximum + 1);
+    const auto anchor = std::min(passAnchor_, maximum);
     // Each pass visits only the nearest budget-sized set. It never cycles around evicting its
     // own useful frames. Bound each UI turn too, even for enormous compositions/sparse ranges.
     for (int inspected = 0; inspected < 256; ++inspected) {
@@ -303,6 +337,12 @@ void BackgroundPreviewController::consumeReadyResult() {
         const bool discard = slot->discard;
         slot = inFlight_.erase(slot);
         landed = true;
+        if (!discard) {
+            // Exponential average of submit-to-land latency: the read-ahead lead while playing.
+            const auto latency = std::chrono::steady_clock::now() - submittedAt;
+            landedLatency_ = landedLatency_.count() == 0 ? latency
+                                                         : (landedLatency_ * 3 + latency) / 4;
+        }
         if (discard || shuttingDown_ || previewController_.isShuttingDown()) {
             continue;
         }

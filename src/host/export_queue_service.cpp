@@ -481,12 +481,14 @@ struct Pump final {
         progress.outputCount = static_cast<std::uint32_t>(runner.outputs().size());
         progress.currentFrame = runner.currentFrame();
         progress.route = runner.route();
+        progress.memoryNeededBytes = runner.memoryNeededBytes();
         progress.fraction = progress.framesTotal == 0
                                 ? std::nullopt
                                 : std::optional(static_cast<double>(progress.framesCompleted) /
                                                 static_cast<double>(progress.framesTotal));
         const bool excluded = job.state == ExportJobState::Paused ||
-                              progress.route == ExportDeviceRoute::WaitingForViewer;
+                              progress.route == ExportDeviceRoute::WaitingForViewer ||
+                              progress.route == ExportDeviceRoute::WaitingForMemory;
         if (excluded && !job.excludedSince)
             job.excludedSince = now;
         if (!excluded && job.excludedSince) {

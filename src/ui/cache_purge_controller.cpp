@@ -2,6 +2,8 @@
 
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/memory_pressure_monitor.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -144,6 +146,10 @@ void CachePurgeController::submitPurgeTask(const Mode mode) {
             if (coverage != nullptr) {
                 coverage->clear();
             }
+            // A user purge is the one full clear: give the freed pages back to the OS now, and ask
+            // the pressure monitor to trim again once deferred host retirement has freed the rest.
+            runtime::releaseFreedHostMemory();
+            runtime::processMemoryBudgetLedger().requestHostTrim();
             std::uint64_t incomplete = 0;
             if (purgeGpu) {
                 // Both purges clear the resident GPU scene cache: it retains decoded/uploaded media

@@ -38,9 +38,9 @@ inline constexpr int kFixedMmapThresholdBytes = 1024 * 1024;
 #endif
 
 #if defined(__linux__)
-// Wake when tasks stall on memory for 100 ms within a 2 s window. Unprivileged PSI triggers need a
-// window that is a multiple of two seconds.
-inline constexpr std::string_view kPsiTrigger = "some 100000 2000000";
+// Wake when every task stalls on memory for 150 ms within a 2 s window. Unprivileged PSI triggers
+// need a window that is a multiple of two seconds.
+inline constexpr std::string_view kPsiTrigger = "full 150000 2000000";
 
 [[nodiscard]] int openPsiTrigger() noexcept {
     const int descriptor = ::open("/proc/pressure/memory", O_RDWR | O_NONBLOCK | O_CLOEXEC);
@@ -216,13 +216,6 @@ void MemoryPressureMonitor::run() {
     if (options_.psiTrigger)
         psiDescriptor = openPsiTrigger();
 #endif
-    std::uint64_t pageBytes = options_.pageBytes;
-#if defined(__linux__)
-    if (pageBytes == 0)
-        pageBytes = static_cast<std::uint64_t>(std::max(::sysconf(_SC_PAGE_SIZE), 4096L));
-#endif
-    if (pageBytes == 0)
-        pageBytes = 4096;
     std::optional<MemoryPressureCounters> last;
     auto lastAt = std::chrono::steady_clock::now();
     std::size_t releasedPending = 0;
@@ -242,15 +235,9 @@ void MemoryPressureMonitor::run() {
                                    ? static_cast<double>(*current - *previous)
                                    : 0.0;
                     };
-                    const auto swapped = (delta(counters.swapInPages, last->swapInPages) +
-                                          delta(counters.swapOutPages, last->swapOutPages)) *
-                                         static_cast<double>(pageBytes);
                     const bool stalled =
-                        delta(counters.someStallMicroseconds, last->someStallMicroseconds) >=
-                            options_.someStallFraction * micros ||
                         delta(counters.fullStallMicroseconds, last->fullStallMicroseconds) >=
-                            options_.fullStallFraction * micros ||
-                        swapped >= static_cast<double>(options_.swapBytesPerSecond) * micros / 1e6;
+                        options_.fullStallFraction * micros;
                     sample.memoryStall = sample.memoryStall || stalled;
                 }
                 last = counters;

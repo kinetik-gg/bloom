@@ -239,6 +239,8 @@ int main(int argc, char* argv[]) try {
     bloom::ui::MemoryBudgetController memoryBudgetController(
         taskScheduler, taskUiBridge, bloom::runtime::processMemoryBudgetLedger(),
         [processingPhasePolicy](const bloom::runtime::CancellationToken& cancellation) {
+            // Freed cache pages leave the process before it is measured (worker thread).
+            bloom::runtime::releaseFreedHostMemory();
             return processingPhasePolicy->sampleHostMemory(cancellation);
         });
     QObject::connect(
@@ -250,6 +252,20 @@ int main(int argc, char* argv[]) try {
                 bloom::ui::cacheMemoryBudgetAllocationFromSettings(playbackSettings, ledger);
             const auto delivered = ledger.state();
             processingPhasePolicy->applyHostSample(delivered, physicalBytes, allocation);
+            // Reusable pools never grow into memory admitted to active work.
+            ledger.setActiveWorkClaims(static_cast<std::size_t>(
+                processingPhasePolicy->usableCapacity().hostClaimBytes));
+        });
+    // Evict-on-demand: work that waits for host memory makes every reusable pool give back the
+    // shortfall at once (on the UI thread, which owns the cache callbacks) and takes a fresh
+    // sample, so caches are never a reason to wait. Device waits have no ledger pool to evict.
+    processingPhasePolicy->addRetentionReclaimer(
+        [reclaim = memoryBudgetController.workReclaimer()](
+            const bloom::render::GpuProcessingPhaseDomain domain,
+            const std::uint64_t shortfall) -> std::uint64_t {
+            if (domain == bloom::render::GpuProcessingPhaseDomain::Host)
+                reclaim(static_cast<std::size_t>(shortfall));
+            return 0;
         });
     // Explicit opt-in, one bounded numeric-only buffer. The path is only an export destination;
     // it and media locators never enter trace records. No formatting or I/O runs in UI callbacks.
@@ -914,6 +930,14 @@ int main(int argc, char* argv[]) try {
                              ramPreviewController.canAutoPlay()) {
                              static_cast<void>(compositionSession.setCurrentTime(
                                  ramPreviewController.playableSpan()->start));
+                             playback.play();
+                         } else if (outcome == bloom::ui::RamPreviewController::Completion::
+                                                  PartialBudget &&
+                                    ramPreviewController.canPlayPartial()) {
+                             // The range outgrew memory: play it anyway. Play renders ahead of
+                             // the playhead and the cache evicts the oldest frames; never a stall.
+                             static_cast<void>(
+                                 compositionSession.setCurrentTime(compositionSession.workArea().start));
                              playback.play();
                          }
                      });

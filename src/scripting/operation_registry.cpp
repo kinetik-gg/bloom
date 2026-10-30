@@ -154,14 +154,38 @@ using AnimationValue = std::variant<double, document::Vec2d, document::Vec3d, co
     if (name == nullptr) {
         return std::nullopt;
     }
-    if (*name == "hold") {
+    // The persisted tokens, plus Blender's names for the two that differ: "constant" is Hold and
+    // "bezier" the handle-driven ease-in-out.
+    if (*name == "constant") {
         return document::KeyframeInterpolation::Hold;
     }
-    if (*name == "linear") {
-        return document::KeyframeInterpolation::Linear;
-    }
-    if (*name == "ease-in-out") {
+    if (*name == "bezier") {
         return document::KeyframeInterpolation::EaseInOut;
+    }
+    return document::keyframeInterpolationFromToken(*name);
+}
+
+[[nodiscard]] std::optional<document::KeyframeEasing> easingOf(const Value& value) {
+    const auto* name = std::get_if<std::string>(&value.storage);
+    if (name == nullptr) {
+        return std::nullopt;
+    }
+    return document::keyframeEasingFromToken(*name);
+}
+
+[[nodiscard]] std::optional<commands::EasyEase> easyEaseOf(const Value& value) {
+    const auto* name = std::get_if<std::string>(&value.storage);
+    if (name == nullptr) {
+        return std::nullopt;
+    }
+    if (*name == "both") {
+        return commands::EasyEase::Both;
+    }
+    if (*name == "in") {
+        return commands::EasyEase::In;
+    }
+    if (*name == "out") {
+        return commands::EasyEase::Out;
     }
     return std::nullopt;
 }
@@ -320,8 +344,10 @@ rational(const Arguments& arguments, const std::string& operationId, const std::
 [[nodiscard]] std::optional<document::KeyframeInterpolation>
 interpolation(const Arguments& arguments, const std::string& operationId, const std::string& name,
               OperationCreateResult& error, const bool required = true) {
-    return read(arguments, operationId, name, error, required,
-                R"(expects "hold", "linear" or "ease-in-out")", interpolationOf);
+    return read(
+        arguments, operationId, name, error, required,
+        R"(expects "hold" (or "constant"), "linear", "ease-in-out" (or "bezier"), "sine", "quad", "cubic", "quart", "quint", "expo", "circ", "back", "bounce" or "elastic")",
+        interpolationOf);
 }
 
 [[nodiscard]] std::optional<AnimationValue>
@@ -848,8 +874,9 @@ locator(const Arguments& arguments, const std::string& operationId, OperationCre
 }
 
 [[nodiscard]] ArgumentSchema interpolationArgument() {
-    return maybe("interpolation", ValueKind::String, "linear",
-                 R"(Outgoing ease: "hold", "linear" or "ease-in-out". Defaults to "linear".)");
+    return maybe(
+        "interpolation", ValueKind::String, "linear",
+        R"(Outgoing interpolation: "hold", "linear", "ease-in-out" (Bezier), or one of Blender's easing equations "sine", "quad", "cubic", "quart", "quint", "expo", "circ", "back", "bounce", "elastic". Defaults to "linear".)");
 }
 
 [[nodiscard]] ArgumentSchema componentArgument() {
@@ -1411,8 +1438,9 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.animation.set-keyframe-interpolation",
         {compositionArgument(), need("curve", ValueKind::Id, StableId{1}, "The curve to edit."),
          need("keyframe", ValueKind::Id, StableId{1}, "The key whose outgoing ease changes."),
-         need("interpolation", ValueKind::String, "ease-in-out",
-              R"("hold", "linear" or "ease-in-out".)"),
+         need(
+             "interpolation", ValueKind::String, "ease-in-out",
+             R"("hold" (Constant), "linear", "ease-in-out" (Bezier), or an easing equation: "sine", "quad", "cubic", "quart", "quint", "expo", "circ", "back", "bounce", "elastic".)"),
          componentArgument()},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
@@ -1462,8 +1490,9 @@ OperationRegistry OperationRegistry::builtIn() {
          need("keys", ValueKind::Array,
               ValueArray{Value(ValueArray{Value(StableId{1}), Value(StableId{1})})},
               "Key addresses as (curve, keyframe) or (curve, keyframe, component)."),
-         need("interpolation", ValueKind::String, "ease-in-out",
-              R"("hold", "linear" or "ease-in-out".)")},
+         need(
+             "interpolation", ValueKind::String, "ease-in-out",
+             R"("hold" (Constant), "linear", "ease-in-out" (Bezier), or an easing equation: "sine", "quad", "cubic", "quart", "quint", "expo", "circ", "back", "bounce", "elastic".)")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -1479,6 +1508,72 @@ OperationRegistry OperationRegistry::builtIn() {
                 std::make_unique<commands::SetKeyframesInterpolation>(
                     document::CompositionId::fromRaw(*composition), *keys, *mode),
                 std::nullopt);
+        });
+
+    add("bloom.animation.set-keyframes-easing",
+        {compositionArgument(),
+         need("keys", ValueKind::Array,
+              ValueArray{Value(ValueArray{Value(StableId{1}), Value(StableId{1})})},
+              "Key addresses as (curve, keyframe) or (curve, keyframe, component)."),
+         maybe("interpolation", ValueKind::String, "elastic",
+               R"(Also switch the keys' outgoing interpolation, e.g. "elastic". Omit to keep it.)"),
+         maybe(
+             "ease", ValueKind::String, "out",
+             R"(Which end the easing equation applies to: "auto" (Blender's default: out for back, bounce and elastic, in otherwise), "in", "out" or "in-out".)"),
+         maybe("back", ValueKind::Double, 1.70158,
+               "Back's overshoot (Blender's default 1.70158). Any finite number."),
+         maybe("amplitude", ValueKind::Double, 0.8,
+               "Elastic's amplitude in the curve's value units (default 0.8); zero or more."),
+         maybe("period", ValueKind::Double, 4.1 / 24.0,
+               "Elastic's period in seconds (default 4.1 frames at 24 fps); 0 is Blender's "
+               "automatic period.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto keys =
+                read(args, op, "keys", error, true,
+                     "expects (curve, keyframe) entries, each with an optional component",
+                     keyframeAddressesOf);
+            const auto mode = interpolation(args, op, "interpolation", error, false);
+            const auto ease = read(args, op, "ease", error, false,
+                                   R"(expects "auto", "in", "out" or "in-out")", easingOf);
+            const auto back = number(args, op, "back", error, false);
+            const auto amplitude = number(args, op, "amplitude", error, false);
+            const auto period = number(args, op, "period", error, false);
+            if (!composition || !keys || error) {
+                return error;
+            }
+            return OperationCreateResult(
+                std::make_unique<commands::SetKeyframesEasing>(
+                    document::CompositionId::fromRaw(*composition), *keys,
+                    commands::KeyframeEasingEdit{ease, back, amplitude, period}, mode),
+                std::nullopt);
+        });
+
+    add("bloom.animation.easy-ease",
+        {compositionArgument(),
+         need("keys", ValueKind::Array,
+              ValueArray{Value(ValueArray{Value(StableId{1}), Value(StableId{1})})},
+              "Key addresses as (curve, keyframe) or (curve, keyframe, component)."),
+         maybe(
+             "side", ValueKind::String, "both",
+             R"(After Effects' Easy Ease: "both" (F9, the default), "in" (Shift+F9) or "out" (Ctrl+Shift+F9). The eased side gets a Bezier handle of 33.33% influence and zero speed.)")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto keys =
+                read(args, op, "keys", error, true,
+                     "expects (curve, keyframe) entries, each with an optional component",
+                     keyframeAddressesOf);
+            const auto side = read(args, op, "side", error, false,
+                                   R"(expects "both", "in" or "out")", easyEaseOf);
+            if (!composition || !keys || error) {
+                return error;
+            }
+            return OperationCreateResult(std::make_unique<commands::ApplyEasyEase>(
+                                             document::CompositionId::fromRaw(*composition), *keys,
+                                             side.value_or(commands::EasyEase::Both)),
+                                         std::nullopt);
         });
 
     add("bloom.animation.update-scalar-keyframe",
@@ -2555,6 +2650,28 @@ OperationRegistry OperationRegistry::builtIn() {
         layerFlag("locked", [](const document::CompositionId composition,
                                const document::LayerId layer, const bool value) {
             return std::make_unique<commands::SetLayerLocked>(composition, layer, value);
+        }));
+
+    add("bloom.layer.set-shy",
+        {compositionArgument(), layerArgument(),
+         need("shy", ValueKind::Boolean, true,
+              "Whether the layer is shy: hidden from the layer table while its shy filter is on. "
+              "It never changes the render.")},
+        layerFlag("shy", [](const document::CompositionId composition,
+                            const document::LayerId layer, const bool value) {
+            return std::make_unique<commands::SetLayerShy>(composition, layer, value);
+        }));
+
+    add("bloom.layer.set-name-follows-source",
+        {compositionArgument(), layerArgument(),
+         need("follows", ValueKind::Boolean, true,
+              "Whether the layer shows its source's name (an asset's or a nested composition's) "
+              "and follows it when the source is renamed. True renames the layer to the source's "
+              "name; it is refused for a layer without a source. Renaming the layer sets it "
+              "false.")},
+        layerFlag("follows", [](const document::CompositionId composition,
+                                const document::LayerId layer, const bool value) {
+            return std::make_unique<commands::SetLayerNameFollowsSource>(composition, layer, value);
         }));
 
     add("bloom.layer.set-label-color",

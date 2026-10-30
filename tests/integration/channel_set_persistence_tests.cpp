@@ -146,7 +146,7 @@ void roundTrip() {
     const auto snapshot = fixture.document.snapshot();
     expect(snapshot.project().validate().ok(), "the channel project validates");
     const auto text = encode(fixture.document);
-    expect(text.find("\"minor\": 30") != std::string::npos, "the document is written at 1.30");
+    expect(text.find("\"minor\": 31") != std::string::npos, "the document is written at 1.30");
     expect(text.find("\"bloom.channel-shuffle\"") != std::string::npos &&
                text.find("\"bloom.image.part\"") != std::string::npos,
            "the channel nodes and the image part parameter are written");
@@ -196,7 +196,7 @@ void imageSourceV1Migrates() {
     Fixture fixture;
     auto text = encode(fixture.document);
     // A 1.24 Image source is v1. The migrated node keeps every binding and edge.
-    replaceOnce(text, "\"minor\": 30", "\"minor\": 24");
+    replaceOnce(text, "\"minor\": 31", "\"minor\": 24");
     stripExportQueueV1_29(text);
     replaceOnce(text, "\"typeId\": \"bloom.image-source\",\n              \"schemaVersion\": 2",
                 "\"typeId\": \"bloom.image-source\",\n              \"schemaVersion\": 1");
@@ -206,12 +206,12 @@ void imageSourceV1Migrates() {
     if (!parsed)
         return;
     const auto migrated =
-        project::migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 30},
+        project::migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 31},
                                     project::kProductionDocumentMigrationSteps, {}, operation);
     expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-               migrated.stepsApplied() == 6,
+               migrated.stepsApplied() == 7,
            "the video-metadata, channel-set, composition-folder, video-colour-default, "
-           "export-queue and node-group-colour steps run once each");
+           "export-queue, easing and node-group-colour steps run once each");
     if (migrated.outcome() != project::MigrationOutcome::Migrated)
         return;
     const auto decoded = project::decodeDocumentEnvelope(*migrated.migratedRoot());

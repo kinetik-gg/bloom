@@ -7,8 +7,10 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
 
+#include <cstdint>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -453,6 +455,8 @@ struct KeyframePaste {
     // defaults because such a paste names no single scalar axis for a handle to offset.
     document::KeyframeHandle outgoingHandle{};
     document::KeyframeHandle incomingHandle{};
+    // Document 1.30: the easing-equation parameters travel with a copied key too.
+    document::KeyframeEasingParameters easing{};
 };
 // One key's ease handles. An absent optional leaves that handle exactly as it is, so a gesture that
 // drags only one side does not have to restate the other.
@@ -533,6 +537,65 @@ class SetKeyframeHandles final : public Operation {
   private:
     document::CompositionId composition_;
     std::vector<KeyframeHandleEdit> edits_;
+};
+// The easing-equation parameters to write on addressed keys (document 1.30). An absent optional
+// leaves that parameter exactly as it is.
+struct KeyframeEasingEdit {
+    std::optional<document::KeyframeEasing> easing{};
+    std::optional<double> back{};
+    std::optional<double> amplitude{};
+    std::optional<double> period{};
+    friend bool operator==(const KeyframeEasingEdit&, const KeyframeEasingEdit&) = default;
+};
+// Writes Blender's easing parameters -- ease mode, Back's overshoot, Elastic's amplitude and period
+// -- on addressed keys, optionally switching their outgoing interpolation in the same step (so a
+// menu pick of "Elastic, Ease Out" is one undo). A component-less vector or colour address edits
+// every component's key at that time, as SetKeyframesInterpolation does. Parameters outside
+// Blender's domain (non-finite, or a negative amplitude) refuse the whole batch.
+class SetKeyframesEasing final : public Operation {
+  public:
+    SetKeyframesEasing(document::CompositionId composition, std::vector<KeyframeAddress> keys,
+                       KeyframeEasingEdit edit,
+                       std::optional<document::KeyframeInterpolation> interpolation = std::nullopt)
+        : composition_(composition), keys_(std::move(keys)), edit_(edit),
+          interpolation_(interpolation) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    std::vector<KeyframeAddress> keys_;
+    KeyframeEasingEdit edit_;
+    std::optional<document::KeyframeInterpolation> interpolation_;
+};
+// After Effects' Easy Ease (F9), Easy Ease In (Shift+F9) and Easy Ease Out (Ctrl+Shift+F9) on
+// addressed keys. AE gives the eased side 33.33% influence and zero speed; in Bloom's handle model
+// that is a handle of time 1/3 (exactly the default handle) and value offset 0, on a Bezier
+// segment. In eases each key's incoming side, Out its outgoing side, Both both. The far side of a
+// segment that was not already Bezier gets the linear-speed handle (1/3, +-change/3), so it keeps
+// the speed it had; an existing Bezier far side keeps its handle. See
+// docs/architecture/animation-and-time.md, "Easy Ease".
+enum class EasyEase : std::uint8_t { Both, In, Out };
+class ApplyEasyEase final : public Operation {
+  public:
+    ApplyEasyEase(document::CompositionId composition, std::vector<KeyframeAddress> keys,
+                  EasyEase kind = EasyEase::Both)
+        : composition_(composition), keys_(std::move(keys)), kind_(kind) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    std::vector<KeyframeAddress> keys_;
+    EasyEase kind_ = EasyEase::Both;
 };
 // Re-values addressed keys in place, preserving IDs, times and interpolation. Every value is
 // domain-checked against its parameter's OWN schema through the same predicate a constant and an

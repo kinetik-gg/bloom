@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:kinetik:bloom:schema:project-document:1.30",
   "title": "Bloom Project Document 1.30",
-  "$comment": "Schema 1.30 adds the optional node group color (an 8-bit sRGB triple after padding; absent means the neutral frame). The document shape is otherwise 1.29's.",
+  "$comment": "Schema 1.30 adds Blender's keyframe easing equations: the interpolation tokens sine, quad, cubic, quart, quint, expo, circ, back, bounce and elastic, and the optional keyframe member easing (mode, back, amplitude, period). It also adds the optional presentation-only layer members shy and nameFollowsSource. The document shape is otherwise 1.29's.",
   "type": "object",
   "required": [
     "schemaVersion",
@@ -101,60 +101,6 @@
             }
           },
           "unevaluatedProperties": false
-        }
-      },
-      "unevaluatedProperties": false
-    },
-    "nodeGroup-1.30": {
-      "$comment": "A node group frames member cards. It is layout only: no ports, no encapsulation, no evaluation meaning. Document 1.30 adds the optional frame color.",
-      "type": "object",
-      "required": [
-        "groupId",
-        "name",
-        "members",
-        "padding"
-      ],
-      "properties": {
-        "groupId": {
-          "$ref": "#/$defs/objectId"
-        },
-        "name": {
-          "$ref": "#/$defs/humanFacingName"
-        },
-        "members": {
-          "type": "array",
-          "maxItems": 1000000,
-          "items": {
-            "$ref": "#/$defs/objectId"
-          }
-        },
-        "padding": {
-          "type": "object",
-          "required": [
-            "x",
-            "y"
-          ],
-          "properties": {
-            "x": {
-              "type": "number",
-              "minimum": 0
-            },
-            "y": {
-              "type": "number",
-              "minimum": 0
-            }
-          },
-          "unevaluatedProperties": false
-        },
-        "color": {
-          "type": "array",
-          "minItems": 3,
-          "maxItems": 3,
-          "items": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 255
-          }
         }
       },
       "unevaluatedProperties": false
@@ -437,7 +383,7 @@
           "type": "array",
           "maxItems": 1000000,
           "items": {
-            "$ref": "#/$defs/nodeGroup-1.30"
+            "$ref": "#/$defs/nodeGroup-1.2"
           }
         },
         "safeAreas": {
@@ -1267,13 +1213,16 @@
           "type": "number"
         },
         "outgoingInterpolation": {
-          "$ref": "#/$defs/keyframeInterpolation-1.3"
+          "$ref": "#/$defs/keyframeInterpolation-1.30"
         },
         "outgoingHandle": {
           "$ref": "#/$defs/keyframeHandle-1.12"
         },
         "incomingHandle": {
           "$ref": "#/$defs/keyframeHandle-1.12"
+        },
+        "easing": {
+          "$ref": "#/$defs/keyframeEasing-1.30"
         }
       },
       "unevaluatedProperties": true
@@ -1305,13 +1254,16 @@
           "type": "number"
         },
         "outgoingInterpolation": {
-          "$ref": "#/$defs/keyframeInterpolation-1.3"
+          "$ref": "#/$defs/keyframeInterpolation-1.30"
         },
         "outgoingHandle": {
           "$ref": "#/$defs/keyframeHandle-1.12"
         },
         "incomingHandle": {
           "$ref": "#/$defs/keyframeHandle-1.12"
+        },
+        "easing": {
+          "$ref": "#/$defs/keyframeEasing-1.30"
         }
       },
       "unevaluatedProperties": true
@@ -1344,13 +1296,16 @@
           "type": "number"
         },
         "outgoingInterpolation": {
-          "$ref": "#/$defs/keyframeInterpolation-1.3"
+          "$ref": "#/$defs/keyframeInterpolation-1.30"
         },
         "outgoingHandle": {
           "$ref": "#/$defs/keyframeHandle-1.12"
         },
         "incomingHandle": {
           "$ref": "#/$defs/keyframeHandle-1.12"
+        },
+        "easing": {
+          "$ref": "#/$defs/keyframeEasing-1.30"
         }
       },
       "unevaluatedProperties": true
@@ -1374,13 +1329,16 @@
           "type": "number"
         },
         "outgoingInterpolation": {
-          "$ref": "#/$defs/keyframeInterpolation-1.3"
+          "$ref": "#/$defs/keyframeInterpolation-1.30"
         },
         "outgoingHandle": {
           "$ref": "#/$defs/keyframeHandle-1.12"
         },
         "incomingHandle": {
           "$ref": "#/$defs/keyframeHandle-1.12"
+        },
+        "easing": {
+          "$ref": "#/$defs/keyframeEasing-1.30"
         }
       },
       "unevaluatedProperties": true
@@ -1750,6 +1708,12 @@
         },
         "trackMatte": {
           "$ref": "#/$defs/trackMatte-1.24"
+        },
+        "shy": {
+          "type": "boolean"
+        },
+        "nameFollowsSource": {
+          "type": "boolean"
         }
       },
       "unevaluatedProperties": true
@@ -2436,6 +2400,55 @@
       },
       "unevaluatedProperties": false
     },
+    "keyframeInterpolation-1.30": {
+      "$comment": "ease-in-out is the handle-driven cubic Bezier; the ten easing equations are Blender's (Robert Penner's) and read the left key's easing member. See animation-and-time.md.",
+      "enum": [
+        "hold",
+        "linear",
+        "ease-in-out",
+        "sine",
+        "quad",
+        "cubic",
+        "quart",
+        "quint",
+        "expo",
+        "circ",
+        "back",
+        "bounce",
+        "elastic"
+      ]
+    },
+    "keyframeEasing-1.30": {
+      "$comment": "Omitted when default: mode auto, back 1.70158, amplitude 0.8, period 4.1/24 seconds. A period of zero is the automatic period.",
+      "type": "object",
+      "required": [
+        "mode",
+        "back",
+        "amplitude",
+        "period"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "auto",
+            "in",
+            "out",
+            "in-out"
+          ]
+        },
+        "back": {
+          "type": "number"
+        },
+        "amplitude": {
+          "type": "number",
+          "minimum": 0
+        },
+        "period": {
+          "type": "number"
+        }
+      },
+      "unevaluatedProperties": false
+    },
     "pathPoint-1.14": {
       "type": "object",
       "required": [
@@ -2955,13 +2968,16 @@
           "$ref": "#/$defs/parameterValue-1.4"
         },
         "outgoingInterpolation": {
-          "$ref": "#/$defs/keyframeInterpolation-1.3"
+          "$ref": "#/$defs/keyframeInterpolation-1.30"
         },
         "outgoingHandle": {
           "$ref": "#/$defs/keyframeHandle-1.12"
         },
         "incomingHandle": {
           "$ref": "#/$defs/keyframeHandle-1.12"
+        },
+        "easing": {
+          "$ref": "#/$defs/keyframeEasing-1.30"
         }
       },
       "unevaluatedProperties": true

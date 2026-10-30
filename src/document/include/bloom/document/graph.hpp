@@ -181,6 +181,14 @@ struct LayerOutputBoundary {
     // ADR 0028 (document schema 1.24): ordered masks and an optional track matte.
     std::vector<LayerMask> masks{};
     std::optional<TrackMatte> trackMatte{};
+    // Document 1.30, both presentation only (never an evaluation input):
+    // `shy` hides the layer from the layer table while the table's shy filter is on, like After
+    // Effects' Shy switch; it changes no pixel and no cache identity.
+    bool shy = false;
+    // The layer shows its source's name (an asset's or a nested composition's) and follows it when
+    // the source is renamed or replaced; renaming the layer clears it. Layers made from a source
+    // start with it set; layers without a source never have it.
+    bool nameFollowsSource = false;
     [[nodiscard]] core::RationalTime endPoint(core::RationalTime duration) const noexcept {
         return outPoint == core::RationalTime{} ? duration : outPoint;
     }

@@ -18,6 +18,7 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -412,12 +413,71 @@ void retiredTransientJobs() {
 
 } // namespace
 
+// Document 1.30 read-back: query kind=layers, kind=keyframes and kind=enums carry the easing
+// equations, their parameters and the shy / nameFollowsSource layer flags the new operations write.
+std::string firstMatch(const std::string& text, const std::string& pattern) {
+    std::smatch match;
+    return std::regex_search(text, match, std::regex(pattern)) ? match[1].str() : std::string{};
+}
+
+template <typename Server> std::string revisionOf(Server& server) {
+    return firstMatch(server.call("query", R"({"kind":"project"})"), R"re("revision":(\d+))re");
+}
+
+void animationReadBack() {
+    Headless server;
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    auto result = transact(R"({"op":"bloom.layer.add-solid","args":{"composition":1,)"
+                           R"("name":"Solid","color":[1,0,0,1]}})");
+    expect(contains(result, R"("isError":false)"), "the solid fixture applies: " + result);
+    const auto layers = server.call("query", R"({"kind":"layers","composition":1})");
+    const auto layer = firstMatch(layers, R"re("records":\[\{"id":(\d+))re");
+    expect(!layer.empty() && contains(layers, R"("shy":false)") &&
+               contains(layers, R"("nameFollowsSource":false)"),
+           "layers read back with their presentation flags: " + layers);
+    const auto nodes = server.call("query", R"({"kind":"nodes","composition":1})");
+    const auto opacity = firstMatch(nodes, R"re("opacity":(\d+))re");
+    expect(!opacity.empty(), "the layer's opacity parameter is addressable: " + nodes);
+    for (const auto* at : {R"(0,"value":0.0)", R"(12,"value":1.0)"})
+        static_cast<void>(transact(
+            R"({"op":"bloom.animation.set-keyframe-at-time-for-parameter","args":{"composition":1,)"
+            R"("parameter":)" +
+            opacity + R"(,"time":)" + at + "}}"));
+    auto keyframes = server.call("query", R"({"kind":"keyframes","composition":1})");
+    const auto curve = firstMatch(keyframes, R"re("curve":(\d+))re");
+    const auto key = firstMatch(keyframes, R"re("keys":\[\{"id":(\d+))re");
+    expect(!curve.empty() && !key.empty() && contains(keyframes, R"("interpolation":"linear")"),
+           "keyframes read back with their interpolation token: " + keyframes);
+    result = transact(R"({"op":"bloom.animation.set-keyframes-easing","args":{"composition":1,)"
+                      R"("keys":[[)" +
+                      curve + "," + key +
+                      R"(]],"interpolation":"elastic","ease":"out","amplitude":2.0}},)"
+                      R"({"op":"bloom.layer.set-shy","args":{"composition":1,"layer":)" +
+                      layer + R"(,"shy":true}})");
+    keyframes = server.call("query", R"({"kind":"keyframes","composition":1})");
+    expect(contains(keyframes, R"("interpolation":"elastic")") &&
+               contains(keyframes, R"("interpolationId":12)") &&
+               contains(keyframes, R"("ease":"out")") && contains(keyframes, R"("amplitude":2)"),
+           "set-keyframes-easing reads back mode and parameters: " + result + keyframes);
+    expect(contains(server.call("query", R"({"kind":"layers","composition":1})"), R"("shy":true)"),
+           "set-shy reads back");
+    const auto enums = server.call("query", R"({"kind":"enums"})");
+    expect(contains(enums, R"("token":"bounce")") && contains(enums, R"("label":"Bezier")") &&
+               contains(enums, R"("token":"in-out")") &&
+               contains(enums, R"("label":"Easy Ease Out")"),
+           "the interpolation, ease and Easy Ease tables are listed: " + enums);
+}
+
 int main() {
     try {
         exportWithoutQueue();
         unboundSeams();
         liveSeams();
         retiredTransientJobs();
+        animationReadBack();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;

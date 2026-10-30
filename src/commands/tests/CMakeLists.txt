@@ -42,6 +42,12 @@ bloom_add_test(
     TIMEOUT 30
 )
 
+add_executable(bloom_commands_layer_presentation_test layer_presentation_tests.cpp)
+target_link_libraries(bloom_commands_layer_presentation_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_layer_presentation_test)
+bloom_add_test(NAME bloom.commands.layer-presentation COMMAND bloom_commands_layer_presentation_test
+    LABELS commands unit TIMEOUT 30)
+
 add_executable(bloom_commands_node_test node_operations_tests.cpp)
 target_link_libraries(bloom_commands_node_test PRIVATE bloom_commands)
 bloom_enable_warnings(bloom_commands_node_test)

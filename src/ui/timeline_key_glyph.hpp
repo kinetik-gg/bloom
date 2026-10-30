@@ -35,6 +35,18 @@ inline void paintKeyGlyph(QPainter& painter, const QPointF center,
         return;
     }
     case document::KeyframeInterpolation::EaseInOut:
+    // Document 1.30 easing equations draw as eased keys until the Graph Editor lane gives them a
+    // glyph of their own.
+    case document::KeyframeInterpolation::Sine:
+    case document::KeyframeInterpolation::Quad:
+    case document::KeyframeInterpolation::Cubic:
+    case document::KeyframeInterpolation::Quart:
+    case document::KeyframeInterpolation::Quint:
+    case document::KeyframeInterpolation::Expo:
+    case document::KeyframeInterpolation::Circ:
+    case document::KeyframeInterpolation::Back:
+    case document::KeyframeInterpolation::Bounce:
+    case document::KeyframeInterpolation::Elastic:
         painter.drawEllipse(center, kit::kKeyDiamondRadius * 0.92, kit::kKeyDiamondRadius * 0.92);
         return;
     case document::KeyframeInterpolation::Linear:

@@ -686,7 +686,8 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
                         document::kLayerOutputNodeSchemaVersion}) ||
         !graph.addLayerOutput({*layerOutputNodeId,
                                *layerId,
-                               asset->locator.path,
+                               // The layer shows its source's name and follows it (document 1.30).
+                               asset->name.empty() ? asset->locator.path : asset->name,
                                std::string(document::kLayerOutputAudioOutputPort),
                                std::nullopt,
                                true,
@@ -710,6 +711,7 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
     // ADR 0024: the audio is the layer's content extent and the range ends with it (capped by the
     // composition), so after its last sample the layer is silent.
     if (auto* boundary = graph.findLayer(*layerId); boundary != nullptr) {
+        boundary->nameFollowsSource = !asset->name.empty();
         boundary->timing.contentExtent = document::SourceLayerExtent{*sourceNodeId};
         const auto rate = composition->format().frameRate();
         if (asset->duration > core::RationalTime{} && asset->duration < composition->duration()) {

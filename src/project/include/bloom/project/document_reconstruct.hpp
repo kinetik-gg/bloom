@@ -143,6 +143,11 @@ class [[nodiscard]] ReconstructDocumentResult final {
 // document-model rejection is reported through the returned result rather than thrown.
 //
 // Unsupported built-in node versions are rejected before graph construction.
-[[nodiscard]] ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope);
+// `inferLayerNameFollowsSource` is the document 1.30 migration rule for a document decoded from an
+// older minor, which has no `nameFollowsSource`: reconstruction sets the flag on exactly the layers
+// whose name already equals their source's name, so following the source changes no visible name.
+// The open path passes true when the decoded document's schema minor is below 30.
+[[nodiscard]] ReconstructDocumentResult
+reconstructDocument(DecodedDocumentEnvelope envelope, bool inferLayerNameFollowsSource = false);
 
 } // namespace bloom::project

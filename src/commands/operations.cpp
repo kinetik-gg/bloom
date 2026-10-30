@@ -3,6 +3,7 @@
 
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/layer_source.hpp>
 #include <bloom/document/layer_stack.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/project.hpp>
@@ -698,8 +699,10 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
     if (!composition || !asset)
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                          "Image asset or composition does not exist");
+    // The layer shows its source's name and follows it (document 1.30).
     const std::string name =
-        asset->kind == document::AssetKind::Sequence
+        !asset->name.empty() ? asset->name
+        : asset->kind == document::AssetKind::Sequence
             ? asset->manifest.pattern
             : asset->locator.path.substr(asset->locator.path.find_last_of('/') + 1);
     const bool video = asset->kind == document::AssetKind::Video;
@@ -745,10 +748,8 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
                                      "positionParameter", "anchorParameter", "scaleParameter",
                                      "rotationParameter", "opacityParameter", "blendModeParameter",
                                      "imageToLayerEdge", "layerToStackEdge"});
-    if (added.status != OperationStatus::Applied || asset->kind == document::AssetKind::Image)
+    if (added.status != OperationStatus::Applied)
         return added;
-    // ADR 0024: timed media starts at its natural length (capped by the composition), with the
-    // media as its content extent, so after its last frame the layer shows nothing.
     std::optional<document::LayerId> layerId;
     std::optional<document::NodeId> imageNode;
     for (const auto& output : added.outputs) {
@@ -758,6 +759,12 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
             imageNode = std::get<document::NodeId>(output.id);
     }
     auto* layer = layerId ? composition->graph().findLayer(*layerId) : nullptr;
+    if (layer != nullptr)
+        layer->nameFollowsSource = !asset->name.empty();
+    if (asset->kind == document::AssetKind::Image)
+        return added;
+    // ADR 0024: timed media starts at its natural length (capped by the composition), with the
+    // media as its content extent, so after its last frame the layer shows nothing.
     if (layer == nullptr || !imageNode)
         return added;
     layer->timing.contentExtent = document::SourceLayerExtent{*imageNode};
@@ -1018,6 +1025,8 @@ OperationResult SetCompositionName::apply(document::Draft& draft) const {
         return OperationResult::noChange();
     }
     composition->setName(name_);
+    // Layers nesting this composition that still follow their source show the new name.
+    (void)document::refreshLayerNamesFromSources(draft.project());
     return OperationResult::applied();
 }
 

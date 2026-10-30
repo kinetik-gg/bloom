@@ -55,15 +55,11 @@ class MemoryPressureMonitor final {
         std::chrono::milliseconds interval{250};
         Sampler sampler = machineMemorySample;
         CounterSampler counterSampler = memoryPressureCounters;
-        // Between two samples, any of these marks the machine as under memory pressure: "some"
-        // stall time at least this share of wall time, "full" stall time at least this share, or
-        // swap traffic (in plus out) at least this many bytes a second. Another process being
-        // pushed into swap counts, not only this one.
-        double someStallFraction = 0.10;
-        double fullStallFraction = 0.02;
-        std::uint64_t swapBytesPerSecond = std::uint64_t{16} * 1024U * 1024U;
-        // Swap page size; zero uses the system page size.
-        std::uint64_t pageBytes = 0;
+        // A severe stall: PSI "full" stall time (every non-idle task waiting on memory) of at least
+        // this share of the wall time between two samples. Light "some" stalls, swap occupancy
+        // and swap traffic are not pressure: zram systems keep stale swap and steady low stalls
+        // while memory is plentiful (owner decision, 2026-10-31).
+        double fullStallFraction = 0.10;
         // Bytes released by evictions before the monitor returns free heap to the OS.
         std::size_t trimThresholdBytes = std::size_t{32} * 1024U * 1024U;
         // Use a Linux PSI trigger to wake before the interval elapses.

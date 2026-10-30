@@ -48,6 +48,15 @@ void testClassification(TestContext& test) {
                                                                    .padding = {40.0, 40.0}});
                 }),
                 "a node group (frame, name, padding) is presentation");
+    test.expect(neutralEdit([](Project& project) {
+                    NodeGroupRecord record{.id = NodeGroupId::fromRaw(901),
+                                           .name = "Frame",
+                                           .members = {kFirstLayerNodeId},
+                                           .padding = {40.0, 40.0}};
+                    record.color = std::array<std::uint8_t, 3>{200, 30, 30};
+                    mainComposition(project).nodeGroups().emplace(record.id, record);
+                }),
+                "a node group's colour is presentation");
     test.expect(neutralEdit([](Project& project) { project.setName("Renamed"); }),
                 "the project name is presentation");
 
@@ -70,8 +79,10 @@ void testClassification(TestContext& test) {
                     layer.name = "Renamed layer";
                     layer.labelColor = std::array<std::uint8_t, 3>{200, 40, 40};
                     layer.locked = true;
+                    layer.shy = true;
+                    layer.nameFollowsSource = true;
                 }),
-                "a layer's name, label color and lock are presentation");
+                "a layer's name, label color, lock, shy and name-follows-source are presentation");
     test.expect(!neutralEdit([](Project& project) { firstLayer(project).enabled = false; }),
                 "layer enable is an evaluation input");
     test.expect(!neutralEdit([](Project& project) { firstLayer(project).solo = true; }),
@@ -160,6 +171,9 @@ void testPresentationCommands(TestContext& test) {
                            fixture.run<SetLayerLocked>(kCompositionId, kSecondLayerId, true),
                            "locking a layer is render-neutral");
     expectNeutralRoundTrip(test, fixture,
+                           fixture.run<SetLayerShy>(kCompositionId, kSecondLayerId, true),
+                           "marking a layer shy is render-neutral");
+    expectNeutralRoundTrip(test, fixture,
                            fixture.run<SetCompositionName>(kCompositionId, "Renamed"),
                            "renaming a composition is render-neutral");
     expectNeutralRoundTrip(test, fixture,
@@ -187,6 +201,17 @@ void testPresentationCommands(TestContext& test) {
         expectNeutralRoundTrip(test, fixture,
                                fixture.run<RenameGroup>(kCompositionId, *groupId, "Renamed frame"),
                                "renaming a group is render-neutral");
+
+    // A frame's colour is layout only: the edit, its undo and its redo publish render-neutral
+    // results, so no render cache is invalidated and the next frame is a cache hit.
+    if (groupId.has_value()) {
+        expectNeutralRoundTrip(
+            test, fixture,
+            fixture.run<SetGroupColor>(kCompositionId, *groupId,
+                                       std::optional<std::array<std::uint8_t, 3>>{
+                                           std::array<std::uint8_t, 3>{200, 30, 30}}),
+            "colouring a group is render-neutral");
+    }
 
     // A presentation edit never hides an evaluation edit in the same transaction.
     {

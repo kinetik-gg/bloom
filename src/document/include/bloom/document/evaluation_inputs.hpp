@@ -25,8 +25,8 @@ namespace bloom::document {
 // 3. Records that mix both kinds list their presentation fields in evaluationView(), which resets
 //    exactly those; every other field, including one added later, stays an evaluation input until
 //    someone names it there. A forgotten classification therefore costs a re-render, never a stale
-//    frame. Today: a layer's name, label color and lock, a mask's name; an asset's name, folder,
-//    tags and Assets order.
+//    frame. Today: a layer's name, label color, lock, shy flag and name-follows-source flag, a
+//    mask's name; an asset's name, folder, tags and Assets order.
 // 4. Composition settings are listed in sameEvaluationInputs(Composition): duration, format and
 //    working color space are evaluation inputs; name, folder, work area, safe areas, timecode
 //    display and the viewer background color are presentation. A new Composition member must be
