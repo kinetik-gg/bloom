@@ -34,7 +34,7 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                       const bool partial, const std::string& manifestPath, const bool sustained,
                       const std::size_t preparationWidth, bool deliveredDefaults) {
     Expectations checks;
-    QSettings().setValue("viewer/resolution", half ? "Half" : "Full");
+    QSettings().setValue("viewer/resolution", gQuarter ? "Quarter" : (half ? "Half" : "Full"));
     Fixture fixture(temporary.path().toStdString());
     auto sequence = fixture.mediaAsset;
     sequence.kind = document::AssetKind::Sequence;
@@ -139,9 +139,10 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
             std::cout << "PACKED_INPUT controlledRate=" << controlledRate
                       << " descriptorSourceRate=" << sourceRate
                       << " composition=" << compositionWidth << 'x' << compositionHeight
-                      << " source=" << sequence.width << 'x' << sequence.height
-                      << " centered=" << compositionWidth / 2 << ',' << compositionHeight / 2
-                      << " background=opaqueBlack interpretation=Auto"
+                      << " resolution=" << (gQuarter ? "Quarter" : (half ? "Half" : "Full"))
+                      << " coldFootage=" << gColdFootage << " source=" << sequence.width << 'x'
+                      << sequence.height << " centered=" << compositionWidth / 2 << ','
+                      << compositionHeight / 2 << " background=opaqueBlack interpretation=Auto"
                       << " sourceIOBytes=unmeasured decodeBytes=unmeasured SMBCold=unqualified\n";
         });
         try {
@@ -166,6 +167,17 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                              ExrPixel{static_cast<float>(index + 1) / 128.0F, 0.3F, 0.7F, 1.0F}));
             const auto member = imageAsset(path, "Distinct packed member", 901);
             sequence.manifest.members.push_back({index, member.locator, member.contentDigest});
+#if defined(__linux__)
+            if (gColdFootage) {
+                // Measurement: drop the footage from the page cache so the fill reads from disk.
+                const int descriptor = ::open(path.c_str(), O_RDONLY);
+                if (descriptor >= 0) {
+                    static_cast<void>(::fdatasync(descriptor));
+                    static_cast<void>(::posix_fadvise(descriptor, 0, 0, POSIX_FADV_DONTNEED));
+                    ::close(descriptor);
+                }
+            }
+#endif
         }
     }
     sequence.locator = sequence.manifest.members.front().locator;
@@ -208,7 +220,8 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     runtime::CpuReferenceDisplayPreparer displayPreparer;
     const auto taskBudgetView =
         deliveredDefaults ? std::make_shared<runtime::TaskBudgetView>() : nullptr;
-    auto taskConfig = schedulerConfig();
+    // --app-scheduler measures on the application's worker widths and queue capacities.
+    auto taskConfig = gAppScheduler ? runtime::TaskSchedulerConfig::defaults() : schedulerConfig();
     if (deliveredDefaults) {
         taskConfig.gpuRequestOwnedByteCapacity.reset();
         taskConfig.budgetView = taskBudgetView;
@@ -350,8 +363,9 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     ui::CompositionPreviewSettings settings;
     if (!deliveredDefaults)
         settings.pixelStorageByteLimit = processingBudget;
-    settings.resolutionPolicy =
-        half ? runtime::PreviewResolutionPolicy::Half : runtime::PreviewResolutionPolicy::Full;
+    settings.resolutionPolicy = gQuarter ? runtime::PreviewResolutionPolicy::Quarter
+                                : half   ? runtime::PreviewResolutionPolicy::Half
+                                         : runtime::PreviewResolutionPolicy::Full;
     ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline, settings,
                                                 cache, nullptr, submitter, nullptr,
                                                 processingPolicy);
@@ -553,8 +567,30 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     }
     const auto before = service.status().counters;
     const auto fillStarted = std::chrono::steady_clock::now();
+    // Process CPU time across the fill; divided by the wall time it is the number of busy cores.
+    const auto fillCpuStarted = std::clock();
     ram.start();
     checks.expect(waitUntil([&] { return !ram.isCaching(); }, 110s), "100-frame range terminates");
+    {
+        const auto wallSeconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - fillStarted).count();
+        const auto cpuSeconds = static_cast<double>(std::clock() - fillCpuStarted) / CLOCKS_PER_SEC;
+        const auto after = service.status().counters;
+        const auto frames = static_cast<double>(ram.preparedFrameCount());
+        std::cout << "PACKED_MEASURE resolution="
+                  << (gQuarter ? "Quarter" : (half ? "Half" : "Full"))
+                  << " coldFootage=" << gColdFootage << " appScheduler=" << gAppScheduler
+                  << " frames=" << ram.preparedFrameCount() << " wallSeconds=" << wallSeconds
+                  << " fps=" << (wallSeconds > 0 ? frames / wallSeconds : 0.0)
+                  << " processCpuSeconds=" << cpuSeconds
+                  << " coresBusy=" << (wallSeconds > 0 ? cpuSeconds / wallSeconds : 0.0)
+                  << " peakInFlight=" << ram.peakInFlightFrames()
+                  << " cpuFallbackFrames=" << after.cpuFallbacks - before.cpuFallbacks
+                  << " nativeDispatches=" << after.nativeDispatches - before.nativeDispatches
+                  << " packedTransfers=" << after.packedTransfers - before.packedTransfers
+                  << " admissionRefusals="
+                  << after.gpuAdmissionRefusals - before.gpuAdmissionRefusals << '\n';
+    }
     if (ram.lastCompletion() != ui::RamPreviewController::Completion::Complete && !partial) {
         for (const auto& task : scheduler.snapshots()) {
             if (task.name != "Cache RAM preview frame")
@@ -612,9 +648,10 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
     checks.expect(cache->gpuResidentBytes() == 0 && cache->gpuResidentEntryCount() == 0 &&
                       cache->residentBytes() <= hostBudget,
                   "packed retained storage is host-only and fits its actual byte budget");
-    std::cout << "PACKED100 resolution=" << (half ? "Half" : "Full") << " hostBudget=" << hostBudget
-              << " requested=" << ram.totalFrameCount() << " prepared=" << ram.preparedFrameCount()
-              << " retained=" << ram.cachedFrameCount() << " charged=" << cache->residentBytes()
+    std::cout << "PACKED100 resolution=" << (gQuarter ? "Quarter" : (half ? "Half" : "Full"))
+              << " hostBudget=" << hostBudget << " requested=" << ram.totalFrameCount()
+              << " prepared=" << ram.preparedFrameCount() << " retained=" << ram.cachedFrameCount()
+              << " charged=" << cache->residentBytes()
               << " nativeRetained=" << cache->gpuResidentBytes()
               << " ownerCacheBytes=" << ownerLimits.cacheBytes
               << " ownerLeaseBytes=" << ownerLimits.leaseBytes
@@ -671,8 +708,9 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
             continue;
         }
         const auto extent = view->dataWindow.value_or(view->displayWindow).extent();
-        const auto width = half ? compositionWidth / 2 : compositionWidth;
-        const auto height = half ? compositionHeight / 2 : compositionHeight;
+        const auto divisor = gQuarter ? 4U : (half ? 2U : 1U);
+        const auto width = (compositionWidth + divisor - 1) / divisor;
+        const auto height = (compositionHeight + divisor - 1) / divisor;
         if (extent.width() != width || extent.height() != height ||
             view->pixels.size() != static_cast<std::size_t>(width) * height) {
             checks.expect(false, "retained physical span matches expected output geometry");
@@ -857,7 +895,7 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
             finalClaims.deviceReservedBytes == 0 && finalClaims.unprovenPhases == 0,
         "published payload/header and phases conserve to zero");
     std::cout << (checks.failures() ? "FAIL" : "PASS") << ": production packed cache100 "
-              << (half ? "Half" : "Full") << '\n';
+              << (gQuarter ? "Quarter" : (half ? "Half" : "Full")) << '\n';
     return checks.failures() ? 1 : 0;
 }
 } // namespace
