@@ -171,10 +171,18 @@ void testCompositionSwitchRetainsUnaffectedCache(Expectations& expectations) {
     rewire.emplace<commands::ConnectPorts>(
         second, document::OutputPortRef{*source, "image"},
         document::InputPortRef{document::NodeInputRef{secondLayer.nodeId, "image"}});
+    const auto generationBeforeRewire = generation(controller.state());
     const auto rewired = session.executeTransaction(std::move(rewire));
     expectations.expect(rewired.changed() && !rewired.affectedTimes.has_value() &&
                             rewired.affectedComposition == second,
                         "a reachable rewire is a whole render scoped to its composition");
+    // The rewire re-renders the second composition in the background. Count its preparation
+    // before the baseline, or it lands inside the measured window on a loaded machine.
+    expectations.expect(waitUntil([&] {
+                            return generation(controller.state()) > generationBeforeRewire &&
+                                   isReady(controller);
+                        }),
+                        "the second composition finishes its whole render");
     const auto beforeReturn = preparations.load();
     expectations.expect(enter(first) && warm(1) && warm(5) && preparations.load() == beforeReturn,
                         "an unrelated composition's whole render keeps this one cached");

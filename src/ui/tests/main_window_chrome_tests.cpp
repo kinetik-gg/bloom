@@ -18,14 +18,14 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/context_bar.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/split_handle.hpp>
-#include <bloom/ui/licenses_window.hpp>
-#include <bloom/ui/context_bar.hpp>
 #include <bloom/ui/layer_alignment_actions.hpp>
+#include <bloom/ui/licenses_window.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/playback_controller.hpp>
@@ -860,7 +860,8 @@ void testContextBarIsAFixedSurfaceUnderTheMenuBar(Expectations& expectations) {
                             "the bar spans the window above the workspace");
         QTest::qWait(20);
         expectations.expect(bar->viewer() != nullptr &&
-                                bar->viewer() == fixture.window->statusStrip()->displayedViewerForTest(),
+                                bar->viewer() ==
+                                    fixture.window->statusStrip()->displayedViewerForTest(),
                             "the bar acts on the Viewer the window follows");
         auto* composition = fixture.window->findChild<QMenu*>(QStringLiteral("alignMenu"));
         expectations.expect(composition != nullptr &&
@@ -884,20 +885,31 @@ void testContextBarIsAFixedSurfaceUnderTheMenuBar(Expectations& expectations) {
     }
 }
 
+// The window follows its viewers through coalesced deferred updates, so a state is awaited, never
+// assumed after a fixed delay.
+template <typename Condition> bool eventually(Condition condition) {
+    return QTest::qWaitFor(std::move(condition), 5000);
+}
+
 void testDisplayedViewerStatusPolicy(Expectations& expectations) {
     bloom::ui::test::WindowFixture fixture;
     auto* workspace = fixture.window->workspaceHost();
     auto* status = fixture.window->statusStrip();
     workspace->resetToSingleArea("bloom.viewer");
-    QTest::qWait(20);
     auto* firstArea = workspace->activeArea();
-    auto* first = firstArea->findChild<ViewerEditor*>();
-    expectations.expect(first && status->displayedViewerForTest() == first,
+    ViewerEditor* first = nullptr;
+    expectations.expect(eventually([&] {
+                            first = firstArea->findChild<ViewerEditor*>();
+                            return first && status->displayedViewerForTest() == first;
+                        }),
                         "active visible viewer owns global display status");
     auto* secondArea = workspace->splitArea(*firstArea, Qt::Horizontal, "bloom.viewer");
-    QTest::qWait(20);
-    auto* second = secondArea ? secondArea->findChild<ViewerEditor*>() : nullptr;
-    expectations.expect(second != nullptr, "a second real viewer is created");
+    ViewerEditor* second = nullptr;
+    expectations.expect(eventually([&] {
+                            second = secondArea ? secondArea->findChild<ViewerEditor*>() : nullptr;
+                            return second != nullptr;
+                        }),
+                        "a second real viewer is created");
     if (!second)
         return;
     auto* channel = secondArea->findChild<kit::KDropdown*>("viewerChannelDropdown");
@@ -907,14 +919,14 @@ void testDisplayedViewerStatusPolicy(Expectations& expectations) {
         return;
     channel->setCurrentIndex(static_cast<int>(ViewerChannel::Red));
     workspace->setActiveArea(secondArea);
-    QTest::qWait(20);
-    expectations.expect(status->displayedViewerForTest() == second &&
-                            status->previewStateTextForTest().contains("Red"),
+    expectations.expect(eventually([&] {
+                            return status->displayedViewerForTest() == second &&
+                                   status->previewStateTextForTest().contains("Red");
+                        }),
                         "active second viewer reports its own painted channel intent");
     auto* nodesArea = workspace->splitArea(*secondArea, Qt::Vertical, "bloom.nodes");
     workspace->setActiveArea(nodesArea);
-    QTest::qWait(20);
-    expectations.expect(status->displayedViewerForTest() == second,
+    expectations.expect(eventually([&] { return status->displayedViewerForTest() == second; }),
                         "a non-viewer active panel retains the last-active visible viewer");
     ProbeReadout readout;
     readout.valid = true;
@@ -924,21 +936,22 @@ void testDisplayedViewerStatusPolicy(Expectations& expectations) {
     expectations.expect(probe && !probe->text().isEmpty(),
                         "selected viewer supplies the probe cell");
     workspace->toggleMaximizeActiveArea();
-    QTest::qWait(20);
-    expectations.expect(!status->displayedViewerForTest() &&
-                            status->colorChipTextForTest() == "No visible viewer" &&
-                            status->previewStateTextForTest().isEmpty() && probe->text().isEmpty(),
+    expectations.expect(eventually([&] {
+                            return !status->displayedViewerForTest() &&
+                                   status->colorChipTextForTest() == "No visible viewer" &&
+                                   status->previewStateTextForTest().isEmpty() &&
+                                   probe->text().isEmpty();
+                        }),
                         "no visible viewer clears displayed qualification, activity and probe");
     workspace->toggleMaximizeActiveArea();
-    QTest::qWait(20);
-    expectations.expect(status->displayedViewerForTest() == second,
+    expectations.expect(eventually([&] { return status->displayedViewerForTest() == second; }),
                         "restoring visibility restores the last-active viewer");
     Q_EMIT second->probeChanged(readout);
     expectations.expect(secondArea->setEditorId("bloom.nodes"),
                         "selected viewer replacement succeeds");
-    QTest::qWait(20);
     expectations.expect(
-        status->displayedViewerForTest() == first && probe->text().isEmpty(),
+        eventually(
+            [&] { return status->displayedViewerForTest() == first && probe->text().isEmpty(); }),
         "destroyed selected viewer clears its probe and falls back to first visible viewer");
 }
 

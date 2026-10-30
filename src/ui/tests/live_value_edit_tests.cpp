@@ -202,7 +202,9 @@ void fieldsShareLiveValues() {
 
     auto* chip = properties.findChild<ui::kit::KColorChip*>("propertiesSolidColorChip");
     require(chip != nullptr, "Solid chip exists");
-    waitFor([&] { return static_cast<bool>(session.colorConverter()); });
+    // The chip enables once the converter arrives and the panel has refreshed; openPicker() is a
+    // no-op on a disabled chip, so wait for both rather than assuming they have happened.
+    waitFor([&] { return static_cast<bool>(session.colorConverter()) && chip->isEnabled(); });
     fixture.history.clear();
     chip->openPicker();
     auto* picker = chip->picker();

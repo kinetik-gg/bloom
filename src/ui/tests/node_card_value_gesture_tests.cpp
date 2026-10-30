@@ -246,13 +246,10 @@ void colorChipCommits(App& app, const document::NodeId solid) {
     if (chip == nullptr) {
         return;
     }
-    QElapsedTimer preparation;
-    preparation.start();
-    while (!app.session.colorConverter() && preparation.elapsed() < 5000) {
-        QCoreApplication::processEvents();
-        QTest::qWait(1);
-    }
-    QTest::qWait(20);
+    // The chip is enabled once the converter exists and the card has refreshed; a click on a
+    // disabled chip opens nothing, so wait for the state itself instead of a fixed delay.
+    expect(QTest::qWaitFor([&] { return app.session.colorConverter() && chip->isEnabled(); }, 5000),
+           "the Solid card's color chip is enabled once the converter is ready");
     click(app, chip);
     expect(chip->isPickerOpen(), "clicking the Solid card's color chip opens its picker");
     // The picker is the chip's own popup; choosing a colour in it is what the chip reports.
