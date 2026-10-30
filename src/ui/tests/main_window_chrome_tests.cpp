@@ -646,7 +646,8 @@ void testWindowStatusBarReportsSelectedMemoryBudgets(Expectations& expectations)
                      .sampledAt = now,
                      .membershipPath = "/fixture",
                      .domains = {{"/fixture", bloom::runtime::ProcessMemoryLimitKind::Finite,
-                                  8 * gib, 6 * gib}}}},
+                                  8 * gib, 6 * gib}},
+                     .reclaimableBytes = {}}},
         now));
     strip.pollMemoryPressureForTest({.availableBytes = 16 * gib}, now);
     expectations.expect(

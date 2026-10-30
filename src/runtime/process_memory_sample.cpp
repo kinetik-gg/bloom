@@ -253,6 +253,16 @@ parseLinuxProcessMemorySample(const std::string_view cgroupText,
             if (current.status == ProcessMemoryReadStatus::Value &&
                 current.text.size() <= kMaximumProcessMemoryScalarBytes)
                 domain.currentBytes = bytes(current.text);
+            std::optional<std::size_t> reclaimable;
+            if (domain.currentBytes) {
+                const auto stat = readScalar(path / "memory.stat");
+                if (stat.status == ProcessMemoryReadStatus::Value &&
+                    stat.text.size() <= kMaximumProcessMemoryStatBytes) {
+                    if (const auto parsed = parseCgroupReclaimableBytes(stat.text))
+                        reclaimable = std::min(*parsed, *domain.currentBytes);
+                }
+            }
+            sample.reclaimableBytes.push_back(reclaimable);
             complete = complete && domain.kind != ProcessMemoryLimitKind::Unknown &&
                        domain.currentBytes.has_value();
             sample.domains.push_back(std::move(domain));
@@ -293,7 +303,9 @@ ProcessMemorySample sampleProcessMemory(CancellationToken cancellation) noexcept
             [&cancellation](const std::filesystem::path& path) {
                 return cancellation.isCancellationRequested()
                            ? ProcessMemoryFileRead{}
-                           : readBounded(path, kMaximumProcessMemoryScalarBytes);
+                           : readBounded(path, path.filename() == "memory.stat"
+                                                   ? kMaximumProcessMemoryStatBytes
+                                                   : kMaximumProcessMemoryScalarBytes);
             },
             sample.sampledAt, before);
         const auto membershipAfter = readBounded("/proc/self/cgroup", kMaximumMembershipBytes);
@@ -479,6 +491,55 @@ bool ProcessMemoryConstraintHistory::verifiesRemoval(
     return true;
 }
 
+std::optional<std::size_t> parseCgroupReclaimableBytes(const std::string_view text) noexcept {
+    std::optional<std::size_t> activeFile, inactiveFile, slabReclaimable, dirty, writeback;
+    auto remaining = text;
+    while (!remaining.empty()) {
+        const auto end = remaining.find('\n');
+        const auto line = remaining.substr(0, end);
+        const auto space = line.find(' ');
+        if (space != std::string_view::npos) {
+            const auto key = line.substr(0, space);
+            const auto value = bytes(line.substr(space + 1));
+            if (key == "active_file")
+                activeFile = value;
+            else if (key == "inactive_file")
+                inactiveFile = value;
+            else if (key == "slab_reclaimable")
+                slabReclaimable = value;
+            else if (key == "file_dirty")
+                dirty = value;
+            else if (key == "file_writeback")
+                writeback = value;
+        }
+        if (end == std::string_view::npos)
+            break;
+        remaining.remove_prefix(end + 1);
+    }
+    if (!activeFile || !inactiveFile)
+        return std::nullopt;
+    const auto saturatingAdd = [](const std::size_t left, const std::size_t right) {
+        return right > std::numeric_limits<std::size_t>::max() - left
+                   ? std::numeric_limits<std::size_t>::max()
+                   : left + right;
+    };
+    // Dirty and writeback pages must reach the disk before they can be freed: no credit.
+    const auto cache =
+        saturatingAdd(saturatingAdd(*activeFile, *inactiveFile), slabReclaimable.value_or(0));
+    const auto pinned = saturatingAdd(dirty.value_or(0), writeback.value_or(0));
+    return cache - std::min(cache, pinned);
+}
+
+std::size_t processMemoryDomainUnreclaimableBytes(const ProcessMemorySample& sample,
+                                                  const std::size_t index) noexcept {
+    if (index >= sample.domains.size())
+        return 0;
+    const auto current = sample.domains[index].currentBytes.value_or(0);
+    const auto reclaimable =
+        index < sample.reclaimableBytes.size() ? sample.reclaimableBytes[index].value_or(0) : 0;
+    return current - std::min(current, reclaimable);
+}
+
 std::size_t reserveForProcessMemoryLimit(const std::size_t limit) noexcept {
     constexpr std::size_t mib = std::size_t{1024} * 1024U;
     return std::min(1024U * mib, std::max(16U * mib, limit / 8U));
@@ -496,13 +557,14 @@ std::optional<std::size_t>
 minimumProcessCacheAllowance(const ProcessMemorySample& sample,
                              const std::size_t reusableHostBytes) noexcept {
     std::optional<std::size_t> cap;
-    for (const auto& domain : sample.domains) {
+    for (std::size_t index = 0; index < sample.domains.size(); ++index) {
+        const auto& domain = sample.domains[index];
         if (domain.kind != ProcessMemoryLimitKind::Finite)
             continue;
         // An unread usage cannot authorize growth, but a known limit remains an absolute ceiling.
         const auto allowance = processCacheAllowanceForDomain(
-            domain.limitBytes, domain.currentBytes.value_or(0), reusableHostBytes,
-            reserveForProcessMemoryLimit(domain.limitBytes));
+            domain.limitBytes, processMemoryDomainUnreclaimableBytes(sample, index),
+            reusableHostBytes, reserveForProcessMemoryLimit(domain.limitBytes));
         cap = cap ? std::min(*cap, allowance) : allowance;
     }
     return cap;

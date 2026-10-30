@@ -107,6 +107,50 @@ GpuProcessingPhaseEnvelope preview() {
             .deviceWorkingBytes = 2 * 1920ULL * 1080 * 16,
             .sourceFree = true};
 }
+// A memory-limited cgroup whose limit is filled by page cache (builds, tests, media reads) still
+// admits work: the cache is reclaimable. A cgroup filled by anonymous memory waits for memory to
+// be released instead of refusing work that fits its limit.
+void cgroupPageCacheAdmitsAndAnonWaits() {
+    // Samples in the recent past: admission reads the real clock.
+    const auto now = GpuProcessingPhasePolicy::Clock::now() - std::chrono::seconds(1);
+    const auto cgroup = [&](const std::size_t reclaimable, const std::uint64_t serial) {
+        auto state = sample(now + std::chrono::milliseconds(serial));
+        state.machine.availableBytes = 48 * gib;
+        state.sampleSerial = serial;
+        state.process.domains = {{.path = "/own",
+                                  .kind = ProcessMemoryLimitKind::Finite,
+                                  .limitBytes = 28 * gib,
+                                  .currentBytes = 28 * gib}};
+        state.process.reclaimableBytes = {reclaimable};
+        return state;
+    };
+    GpuProcessingPhasePolicy policy;
+    policy.setHeadroom({.ramBytes = 2 * gib, .vramBytes = 0});
+    policy.applyHostSample(cgroup(26 * gib, 1), 64 * gib, now + std::chrono::milliseconds(1));
+    const auto cached = policy.snapshot().reservations;
+    require(cached.hostReady && cached.hostCapacityBytes == 24 * gib &&
+                cached.hostCeilingBytes == 26 * gib,
+            "a full page cache leaves the limit minus unreclaimable usage minus headroom");
+    auto grant = reserveHostEvaluationPhase(policy, 2048ULL * 858, gib,
+                                            GpuProcessingPhaseOutput::FloatFinal);
+    require(grant.status == GpuProcessingPhaseAdmission::Accepted && grant.lease,
+            "export work is admitted in a cgroup full of page cache");
+    grant.lease.reset();
+
+    policy.applyHostSample(cgroup(0, 2), 64 * gib, now + std::chrono::milliseconds(2));
+    const auto anon = policy.snapshot().reservations;
+    require(anon.hostReady && anon.hostCapacityBytes == 0,
+            "an anonymous-full cgroup has no free capacity");
+    const auto waiting = reserveHostEvaluationPhase(policy, 2048ULL * 858, gib,
+                                                    GpuProcessingPhaseOutput::FloatFinal);
+    require(waiting.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                waiting.domain == GpuProcessingPhaseDomain::Host && !waiting.lease,
+            "work that fits the limit waits while anonymous memory fills it");
+    const auto tooLarge = reserveHostEvaluationPhase(
+        policy, 64ULL * 1024 * 1024 * 1024 / 16, 64 * gib, GpuProcessingPhaseOutput::FloatFinal);
+    require(tooLarge.status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "a need larger than the limit minus headroom is still refused");
+}
 void lowMemoryHostFinalAdmission() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
     constexpr std::size_t mib = std::size_t{1024} * 1024;
@@ -165,16 +209,16 @@ void lowMemoryHostFinalAdmission() {
         deliver(policy, smallPhysical, available);
         require(policy.snapshot().reservations.hostReady &&
                     policy.snapshot().reservations.hostCapacityBytes == available &&
-                    final(policy).status == GpuProcessingPhaseAdmission::BudgetRefused,
-                "measured zero and low availability still refuse the actual final minimum");
+                    final(policy).status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+                "measured zero and low availability make a final that fits the machine wait");
     }
     for (const auto processAllowance : {std::size_t{0}, std::size_t{32} * mib}) {
         GpuProcessingPhasePolicy policy;
         deliver(policy, smallPhysical, smallPhysical, processAllowance);
         require(policy.snapshot().reservations.hostReady &&
                     policy.snapshot().reservations.hostCapacityBytes == processAllowance &&
-                    final(policy).status == GpuProcessingPhaseAdmission::BudgetRefused,
-                "finite process headroom remains authoritative below the small-host floor");
+                    final(policy).status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+                "finite process headroom bounds admission; a final within the limit waits");
     }
     GpuProcessingPhasePolicy unavailable;
     deliver(unavailable, smallPhysical, std::nullopt);
@@ -219,8 +263,8 @@ void lowMemoryHostFinalAdmission() {
     GpuProcessingPhasePolicy ancestor;
     ancestor.applyHostSample(finite, 64 * gib, now);
     require(ancestor.snapshot().reservations.hostCapacityBytes == 32 * mib &&
-                final(ancestor).status == GpuProcessingPhaseAdmission::BudgetRefused,
-            "every finite process domain hard-caps otherwise ample live host capacity");
+                final(ancestor).status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+            "every finite process domain caps otherwise ample live host capacity");
 }
 void liveHeadroomDuringCachePressure() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
@@ -256,10 +300,10 @@ void liveHeadroomDuringCachePressure() {
     ++delivered.sampleSerial;
     policy.applyHostSample(delivered, reading.physicalBytes, delivered.process.sampledAt);
     require(policy.reserve(preview(), delivered.process.sampledAt).status ==
-                    GpuProcessingPhaseAdmission::BudgetRefused &&
+                    GpuProcessingPhaseAdmission::AwaitingCapacity &&
                 policy.snapshot().reservations.totalHostClaimBytes == held.totalHostClaimBytes &&
                 policy.snapshot().reservations.totalDeviceClaimBytes == held.totalDeviceClaimBytes,
-            "measured zero refuses growth without crediting or retiring held claims");
+            "measured zero makes growth wait without crediting or retiring held claims");
     native.lease.reset();
     cpu.lease.reset();
     delivered.machine.availableBytes = 64 * gib;
@@ -343,7 +387,7 @@ void rootedBackingReconcilesSampledHostHeadroom() {
     require(
         policy.snapshot().reservations.hostCapacityBytes == 70 &&
             policy.reserve({.pixels = 20, .sourceFree = true, .native = false}, scriptedSampleAt)
-                    .status == GpuProcessingPhaseAdmission::BudgetRefused,
+                    .status == GpuProcessingPhaseAdmission::AwaitingCapacity,
         "retired backing revokes old sample credit even when allocator pages stay resident");
     policy.applyHostSample(delivered, 4096, scriptedSampleAt);
     require(policy.snapshot().reservations.hostCapacityBytes == 70,
@@ -423,7 +467,7 @@ void rootedBackingReconcilesSampledHostHeadroom() {
     policy.applyHostSample(delivered, 4096, scriptedSampleAt);
     require(policy.snapshot().reservations.hostCapacityBytes == 32 &&
                 policy.reserve({.pixels = 5, .sourceFree = true, .native = false}, scriptedSampleAt)
-                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
+                        .status == GpuProcessingPhaseAdmission::AwaitingCapacity,
             "backing freed during an OS sample receives no continuous-lifetime credit");
     ++delivered.sampleSerial;
     delivered.processSampleFresh = false;
@@ -440,8 +484,8 @@ void rootedBackingReconcilesSampledHostHeadroom() {
     require(policy.snapshot().reservations.hostCapacityBytes == 0 &&
                 policy.reserve({.pixels = 1, .sourceFree = true, .native = false},
                                delivered.process.sampledAt)
-                        .status == GpuProcessingPhaseAdmission::BudgetRefused,
-            "measured zero never gains a floor from previously retired backing");
+                        .status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+            "measured zero never gains a floor from previously retired backing; work waits");
 }
 void adoptedHostBackingCreditsOnlyMaterializedBytes() {
     using Backing = std::array<std::byte, 80>;
@@ -1146,6 +1190,7 @@ int main(int argc, char** argv) {
             return liveConstraintRemoval();
         headroomPreferenceRoundTrips();
         sourceFreeOutputStage();
+        cgroupPageCacheAdmitsAndAnonWaits();
         lowMemoryHostFinalAdmission();
         liveHeadroomDuringCachePressure();
         rootedBackingReconcilesSampledHostHeadroom();

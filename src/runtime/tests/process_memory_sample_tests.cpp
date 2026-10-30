@@ -63,6 +63,53 @@ void pairedHierarchy() {
            "successfully measured no-finite-visible differs from unknown");
 }
 
+// memory.current counts the page cache that any I/O in the cgroup fills. Clean file cache and
+// reclaimable slab are credited; dirty/writeback pages, anonymous memory and an unreadable
+// memory.stat are not.
+void pageCacheIsReclaimable() {
+    Files files;
+    files.domain("/sys/fs/cgroup/leaf", std::to_string(28 * gib), std::to_string(28 * gib));
+    files.values["/sys/fs/cgroup/leaf/memory.stat"] =
+        "anon " + std::to_string(gib) + "\nactive_file " + std::to_string(6 * gib) +
+        "\ninactive_file " + std::to_string(20 * gib) + "\nslab_reclaimable " +
+        std::to_string(gib / 2) + "\nfile_dirty " + std::to_string(gib / 4) + "\nfile_writeback " +
+        std::to_string(gib / 4) + "\n";
+    files.domain("/sys/fs/cgroup", "max", "0");
+    const auto cached = parseLinuxProcessMemorySample("0::/leaf\n", mount, files.reader());
+    expect(cached.status == ProcessMemoryStatus::Finite && cached.domains.size() == 2 &&
+               cached.reclaimableBytes.size() == 2 && cached.reclaimableBytes.front() == 26 * gib &&
+               !cached.reclaimableBytes.back(),
+           "clean file cache and reclaimable slab are credited, dirty/writeback pages are not");
+    expect(processMemoryDomainUnreclaimableBytes(cached, 0) == 2 * gib,
+           "a cgroup full of page cache keeps only its unreclaimable usage");
+    expect(minimumProcessCacheAllowance(cached, 0).value_or(0) > 20 * gib,
+           "a full page cache does not close the process cache allowance");
+
+    files.values["/sys/fs/cgroup/leaf/memory.stat"] = "anon " + std::to_string(27 * gib) +
+                                                      "\nactive_file " + std::to_string(gib / 2) +
+                                                      "\ninactive_file 0\n";
+    const auto anon = parseLinuxProcessMemorySample("0::/leaf\n", mount, files.reader());
+    expect(processMemoryDomainUnreclaimableBytes(anon, 0) == 28 * gib - gib / 2,
+           "anonymous memory is never credited");
+
+    files.values["/sys/fs/cgroup/leaf/memory.stat"] =
+        "active_file " + std::to_string(64 * gib) + "\ninactive_file 0\n";
+    const auto clamped = parseLinuxProcessMemorySample("0::/leaf\n", mount, files.reader());
+    expect(clamped.reclaimableBytes.front() == 28 * gib &&
+               processMemoryDomainUnreclaimableBytes(clamped, 0) == 0,
+           "the credit never exceeds memory.current");
+
+    files.values.erase("/sys/fs/cgroup/leaf/memory.stat");
+    const auto unread = parseLinuxProcessMemorySample("0::/leaf\n", mount, files.reader());
+    expect(unread.status == ProcessMemoryStatus::Finite && !unread.reclaimableBytes.front() &&
+               processMemoryDomainUnreclaimableBytes(unread, 0) == 28 * gib,
+           "an unreadable memory.stat grants no credit and keeps the sample complete");
+    expect(!parseCgroupReclaimableBytes("anon 5\nfile 7\n") &&
+               !parseCgroupReclaimableBytes("active_file x\ninactive_file 1\n") &&
+               parseCgroupReclaimableBytes("inactive_file 3\nactive_file 4") == 7,
+           "memory.stat parsing needs both file LRU counts");
+}
+
 void pathsAndProvenance() {
     Files files;
     files.domain("/sys/cgroup memory/leaf", "256", "0");
@@ -330,6 +377,7 @@ void arithmeticAndPlatformFallback() {
 int main() try {
 #if defined(__linux__)
     pairedHierarchy();
+    pageCacheIsReclaimable();
     pathsAndProvenance();
     rootAndAlternateMounts();
     failuresAndBounds();

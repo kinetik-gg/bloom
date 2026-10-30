@@ -1116,7 +1116,11 @@ access to another native owner, device generation or cache.
 
 **Usable capacity.** Usable RAM is the measured available system memory (within an observed
 process/cgroup limit, sampled off the UI thread and captured once per delivered sample) minus the
-RAM headroom preference. Usable VRAM is the driver's live device budget (`VK_EXT_memory_budget`
+RAM headroom preference. Inside a cgroup v2 limit the domain's usage is `memory.current` minus its
+reclaimable memory from `memory.stat` (`active_file + inactive_file + slab_reclaimable`, less
+`file_dirty` and `file_writeback`, never more than `memory.current`), as the kernel's own
+MemAvailable credits page cache: a limit filled by file cache from builds, tests or media reads is
+not a full limit. An unreadable `memory.stat` grants no credit. Usable VRAM is the driver's live device budget (`VK_EXT_memory_budget`
 heap budget minus heap usage, through VMA) with the root's own allocated native backing credited
 back once, minus the VRAM headroom preference. Without a live budget the documented fallback is the
 device-local heap size minus the headroom. The two headroom values (`memory/ramHeadroomBytes`,
@@ -1139,7 +1143,10 @@ they live.
 now returns `AwaitingCapacity` with its domain (Host, Device or RequestCount). Before answering, the
 policy asks registered retention owners to evict reusable cache entries. Waiters resume on a phase
 release, a capacity change or a fresh sample (`waitForAdmissionChange`). Only a need larger than the
-whole usable capacity of an otherwise empty root is `BudgetRefused`. Each wait or refusal is logged
+whole usable capacity of an otherwise empty root is `BudgetRefused`. On the host that is the
+ceiling (the tightest finite memory limit, or physical memory, minus headroom), so a host need that
+fits the ceiling waits even while measured free memory is zero, for example while anonymous memory
+of other processes fills the same cgroup. Each wait or refusal is logged
 once per second per root with the status and domain names and the capacity, claim, retention and
 admitted-phase counters (`describeAdmission`). The final-export attempt runner waits in place,
 cancellably, and reports `Waiting for capacity`; a refused frame names the counters.

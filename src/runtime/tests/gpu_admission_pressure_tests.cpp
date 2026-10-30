@@ -145,15 +145,26 @@ void exhaustionIsRefusedWithReadableCounters() {
     policy.setHeadroom(MemoryHeadroom{});
     deliverHost(policy, 4 * kGiB, 1);
     reportDevice(policy, 1, 3 * kGiB);
-    // Usable: 2 GiB RAM, 1 GiB VRAM. A 16384x16384 float frame cannot fit an empty root.
-    auto huge = frame();
-    huge.pixels = 16384ULL * 16384;
+    // Usable now: 2 GiB RAM, 1 GiB VRAM; the host ceiling is the 64 GiB machine minus headroom.
+    // A 16384x16384 float frame (about 24 GiB of host need) fits the machine, so it waits for
+    // memory other processes hold; a 32768x32768 frame can never fit and is refused.
+    auto large = frame();
+    large.pixels = 16384ULL * 16384;
+    large.minimumSourceBytes = large.pixels * 16;
+    large.minimumExecutorBytes = large.pixels * 16;
+    const auto waits = policy.reserve(large);
+    require(waits.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                waits.domain == GpuProcessingPhaseDomain::Host && !waits.lease,
+            "a frame that fits the machine but not the memory free now waits");
+    auto huge = large;
+    huge.pixels = 32768ULL * 32768;
+    huge.requestedSourceBytes = huge.pixels * 16;
     huge.minimumSourceBytes = huge.pixels * 16;
     huge.minimumExecutorBytes = huge.pixels * 16;
     const auto refused = policy.reserve(huge);
     require(refused.status == GpuProcessingPhaseAdmission::BudgetRefused &&
                 refused.domain == GpuProcessingPhaseDomain::Host && !refused.lease,
-            "a frame larger than the whole usable host capacity is refused");
+            "a frame larger than the host ceiling is refused");
     auto deviceHuge = frame(2 * kGiB);
     const auto deviceRefused = policy.reserve(deviceHuge);
     require(deviceRefused.status == GpuProcessingPhaseAdmission::BudgetRefused &&

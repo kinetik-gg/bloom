@@ -70,10 +70,12 @@ const char* domainName(const render::GpuProcessingPhaseDomain domain) noexcept {
 }
 std::optional<std::uint64_t> processHeadroom(const ProcessMemorySample& sample) noexcept {
     std::optional<std::uint64_t> result;
-    for (const auto& domain : sample.domains) {
+    for (std::size_t index = 0; index < sample.domains.size(); ++index) {
+        const auto& domain = sample.domains[index];
         if (domain.kind != ProcessMemoryLimitKind::Finite)
             continue;
-        const auto current = domain.currentBytes.value_or(0);
+        // Clean page cache in the domain is reclaimable on demand and is not in use.
+        const auto current = processMemoryDomainUnreclaimableBytes(sample, index);
         const auto remaining = domain.limitBytes > current ? domain.limitBytes - current : 0;
         result = result ? std::min<std::uint64_t>(*result, remaining) : remaining;
     }
@@ -264,6 +266,19 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
             current
                 ? std::optional{std::min(*allowance, addSaturating(*current, headroom_.ramBytes))}
                 : std::nullopt;
+    }
+    // The ceiling decides refusal versus waiting: a need within it waits for memory that other
+    // work in the same limit releases; only a need above it can never be given.
+    if (fresh) {
+        std::optional<std::uint64_t> ceiling;
+        if (physicalBytes != 0)
+            ceiling = physicalBytes;
+        for (const auto& domain : sample.process.domains)
+            if (domain.kind == ProcessMemoryLimitKind::Finite)
+                ceiling = ceiling ? std::min<std::uint64_t>(*ceiling, domain.limitBytes)
+                                  : domain.limitBytes;
+        hostCeiling_ = ceiling;
+        budget_.setHostCeiling(minusHeadroom(hostCeiling_, headroom_.ramBytes));
     }
     // The RAM headroom preference is the only margin kept free of Bloom's work and caches.
     allowance = minusHeadroom(allowance, headroom_.ramBytes);
@@ -508,6 +523,7 @@ void GpuProcessingPhasePolicy::setHeadroom(const MemoryHeadroom headroom) noexce
     const auto previous = headroom_;
     headroom_ = headroom;
     budget_.shiftHostCapacity(previous.ramBytes, headroom.ramBytes);
+    budget_.setHostCeiling(minusHeadroom(hostCeiling_, headroom_.ramBytes));
     if (deviceCount_ != 0)
         applyDeviceReportsLocked();
 }

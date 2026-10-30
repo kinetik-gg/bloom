@@ -68,7 +68,8 @@ runtime::MemoryBudgetSample sample() {
                         .sampledAt = std::chrono::steady_clock::now(),
                         .membershipPath = "/fixture",
                         .domains = {{"/fixture", runtime::ProcessMemoryLimitKind::Finite, 8 * gib,
-                                     6 * gib}}}};
+                                     6 * gib}},
+                        .reclaimableBytes = {}}};
 }
 struct Held {
     std::atomic_bool entered = false;

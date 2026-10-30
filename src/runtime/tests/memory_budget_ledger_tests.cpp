@@ -181,7 +181,8 @@ MemoryBudgetSample processSample(const std::size_t limit, const std::optional<st
                         .status = status,
                         .sampledAt = at(seconds),
                         .membershipPath = "/test",
-                        .domains = {{"/test", ProcessMemoryLimitKind::Finite, limit, used}}}};
+                        .domains = {{"/test", ProcessMemoryLimitKind::Finite, limit, used}},
+                        .reclaimableBytes = {}}};
 }
 
 void processAdmissionAndFailures() {

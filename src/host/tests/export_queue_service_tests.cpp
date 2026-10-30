@@ -16,6 +16,8 @@
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/platform/staged_artifact.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -421,11 +423,7 @@ struct Fixture {
     }();
     std::shared_ptr<output::ExportResourceLedgerV1> ledger =
         std::make_shared<output::ExportResourceLedgerV1>();
-    std::shared_ptr<host::GpuExportProvider> gpu = [] {
-        runtime::GpuProcessFrameEvaluatorOptions options;
-        options.enabled = false;
-        return host::GpuExportProvider::create(std::move(options));
-    }();
+    std::shared_ptr<host::GpuExportProvider> gpu;
     std::shared_ptr<host::SequenceExportRetirementOwnerV1> retirement =
         host::SequenceExportRetirementOwnerV1::create();
     std::shared_ptr<host::ExportPresetCatalogue> presets;
@@ -450,9 +448,21 @@ struct Fixture {
         return std::move(result).takeSession();
     }
 
+    // A null root gives the provider its own worker-sampled processing root; a test may inject
+    // one whose measured capacity it controls.
+    static std::shared_ptr<host::GpuExportProvider>
+    makeProvider(std::shared_ptr<runtime::GpuProcessingPhasePolicy> root) {
+        runtime::GpuProcessFrameEvaluatorOptions options;
+        options.enabled = false;
+        options.processingPhasePolicy = std::move(root);
+        return host::GpuExportProvider::create(std::move(options));
+    }
+
     explicit Fixture(const std::string& name, host::ExportEncoderStatus encoders = linuxEncoders(),
-                     std::optional<document::ColorSettings> colour = {})
-        : folder(scratch(name)), session(makeSession(identity, folder, std::move(colour))) {
+                     std::optional<document::ColorSettings> colour = {},
+                     std::shared_ptr<runtime::GpuProcessingPhasePolicy> root = {})
+        : folder(scratch(name)), session(makeSession(identity, folder, std::move(colour))),
+          gpu(makeProvider(std::move(root))) {
         if (!runtime::registerBuiltInNodeDefinitions(registry))
             throw std::runtime_error("registry");
         registry.freeze();
@@ -627,6 +637,44 @@ void testLifecycle() {
     expect(f.view(longJob)->state == ExportJobState::Stopped &&
                f.view(longJob)->stopCause == host::ExportStopCause::User,
            "stop ends in Stopped with the user cause");
+}
+
+// A processing root that measures no usable host memory and has no ceiling to wait for refuses
+// the export's frames. The job ends with a readable failure (or waits and stops on request); a
+// refusal before any frame exists never crashes the service.
+void testZeroHostCapacityRefusal() {
+    const auto root = std::make_shared<runtime::GpuProcessingPhasePolicy>();
+    runtime::MemoryBudgetState zero;
+    zero.machine.availableBytes = 0;
+    zero.process.source = runtime::ProcessMemorySource::OtherHostOnly;
+    zero.process.status = runtime::ProcessMemoryStatus::Unsupported;
+    zero.process.sampledAt = std::chrono::steady_clock::now();
+    zero.sampleSerial = 1;
+    zero.processSampleFresh = true;
+    root->applyHostSample(zero, 0, zero.process.sampledAt);
+    expect(root->snapshot().reservations.hostReady &&
+               root->snapshot().reservations.hostCapacityBytes == 0,
+           "the injected root measures zero usable host memory");
+    Fixture f("zero-host", linuxEncoders(), {}, root);
+    const auto job = f.addJob(png(), "Exports/zero.png", document::ExportOverwritePolicy::Replace);
+    expect(f.startable(job), "the zero-capacity job becomes startable");
+    const document::ExportJobId ids[] = {job};
+    expect(f.service->start(ids).accepted, "start the zero-capacity job");
+    const bool ended = f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }, 20);
+    if (!ended) {
+        expect(f.service->stop(job).accepted, "a waiting zero-capacity job stops on request");
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }),
+               "the stopped zero-capacity job ends");
+    }
+    const auto* view = f.view(job);
+    expect(view && view->state != ExportJobState::Done &&
+               view->state != ExportJobState::DoneWithWarnings,
+           "no frame is published without usable memory");
+    expect(view && (view->state == ExportJobState::Stopped ||
+                    (view->failure && !view->failure->reason.empty())),
+           "the refusal is a readable failure");
+    if (view && view->failure)
+        std::cerr << "  zero-capacity failure: " << view->failure->reason << '\n';
 }
 
 void testReplaceConfirmation() {
@@ -843,16 +891,18 @@ void testVideoEndToEnd(const document::ExportFormat format,
     if (!view || !view->outputs.front().verification)
         return;
     const auto& verification = *view->outputs.front().verification;
-    const auto find = [&](host::ExportCheck what) {
-        return std::ranges::find(verification.checks, what, &host::ExportCheckResult::check);
+    // A failed run carries a partial verification: an absent check is a failed expectation,
+    // never a dereference of the end iterator.
+    const auto passed = [&](host::ExportCheck what) {
+        const auto found =
+            std::ranges::find(verification.checks, what, &host::ExportCheckResult::check);
+        return found != verification.checks.end() &&
+               found->outcome == host::ExportCheckOutcome::Passed;
     };
-    expect(find(host::ExportCheck::Reopen)->outcome == host::ExportCheckOutcome::Passed,
-           name + ": reopened by the worker");
-    expect(find(host::ExportCheck::FrameCount)->outcome == host::ExportCheckOutcome::Passed,
-           name + ": frame count matches the range");
-    expect(find(host::ExportCheck::Container)->outcome == host::ExportCheckOutcome::Passed,
-           name + ": the container and codec match");
-    expect(find(host::ExportCheck::ColourTags)->outcome == host::ExportCheckOutcome::Passed,
+    expect(passed(host::ExportCheck::Reopen), name + ": reopened by the worker");
+    expect(passed(host::ExportCheck::FrameCount), name + ": frame count matches the range");
+    expect(passed(host::ExportCheck::Container), name + ": the container and codec match");
+    expect(passed(host::ExportCheck::ColourTags),
            name + ": the colour tags match the output colour intent");
     expect(verification.artifacts.digest.has_value() &&
                std::filesystem::exists(f.folder / ("Exports/Main." + extension)),
@@ -871,6 +921,7 @@ int main() {
         testDestinationForPath();
         testUserPresets();
         testLifecycle();
+        testZeroHostCapacityRefusal();
         testReplaceConfirmation();
         testPlatformNotSupported();
         testTransient();
