@@ -1,6 +1,6 @@
+// Mute is the one node-layout field evaluation reads (document/evaluation_inputs.hpp, #399).
 [[nodiscard]] bool isMuted(const document::NodeId id) const {
-    const auto found = composition_->nodeLayout().find(id);
-    return found != composition_->nodeLayout().end() && found->second.muted;
+    return document::nodeMuted(composition_->nodeLayout(), id);
 }
 
 [[nodiscard]] bool hasImageOutput(const runtime::NodeDefinition& definition) const {

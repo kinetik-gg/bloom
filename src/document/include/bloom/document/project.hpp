@@ -203,6 +203,8 @@ class Composition final {
     [[nodiscard]] static std::size_t calculateContentByteCharge(const Content& authored);
     [[nodiscard]] static LockIndex buildLockIndex(const Content& authored);
     void freezeContent();
+    // Every member below and every Content field is classified as an evaluation input or as
+    // presentation in evaluation_inputs.hpp; a new one must be classified there too (#399).
     std::optional<WorkArea> workArea_{};
     CompositionTimecode timecode_{};
     std::optional<AssetFolderId> folder_{};
