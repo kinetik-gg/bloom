@@ -2,10 +2,13 @@
 // fails a real encoding error (corrupted luma, a wrong matrix or range).
 #include "ffmpeg_reopen_compare.hpp"
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <vector>
 extern "C" {
 #include <libavutil/pixdesc.h>
 }
@@ -125,7 +128,50 @@ void shiftLuma(AVFrame& f, int x0, int x1, int y0, int y1, int delta) {
         }
 }
 } // namespace
+// Issue #394: lossy codecs write footroom (Y' below 16) beside saturated chroma. swscale's Y'CbCr
+// to RGBA64 path wrapped such samples (the VA-API H.264 red square reconstructed a near-black
+// pixel, Y' 12 Cb 126 Cr 125, as G = 65535), so the verifier failed a correct encode. The
+// reconstruction clips: exact BT.709 limited-range values for uniform 8-bit 4:2:0 frames.
+void footroomClips() {
+    const DeclaredSampling bt709{AVCOL_SPC_BT709, AVCOL_RANGE_MPEG, AVCHROMA_LOC_LEFT};
+    struct Case {
+        int y, cb, cr;
+        unsigned r, g, b;
+    };
+    // R = (Y' - 16) / 219 + 1.5748 (Cr - 128) / 224, clipped; 12/90/240 is red with footroom luma.
+    for (const auto& [y, cb, cr, r, g, b] :
+         {Case{12, 90, 240, 50405, 0, 0}, Case{16, 128, 128, 0, 0, 0},
+          Case{235, 128, 128, 65535, 65535, 65535}, Case{126, 128, 128, 32917, 32917, 32917},
+          Case{4, 128, 128, 0, 0, 0}, Case{250, 128, 128, 65535, 65535, 65535}}) {
+        auto f = frame();
+        f->format = AV_PIX_FMT_YUV420P;
+        f->width = 64;
+        f->height = 16;
+        if (av_frame_get_buffer(f.get(), 32) < 0)
+            std::exit(1);
+        for (int row = 0; row < 16; ++row)
+            std::fill_n(f->data[0] + row * f->linesize[0], 64, static_cast<std::uint8_t>(y));
+        for (int row = 0; row < 8; ++row) {
+            std::fill_n(f->data[1] + row * f->linesize[1], 32, static_cast<std::uint8_t>(cb));
+            std::fill_n(f->data[2] + row * f->linesize[2], 32, static_cast<std::uint8_t>(cr));
+        }
+        std::vector<std::byte> rgba;
+        const bool ok =
+            reconstructYuv(64, 16, AV_PIX_FMT_YUV420P, f->data, f->linesize, bt709, rgba);
+        const auto at = [&](const std::size_t channel) {
+            return ok ? std::to_integer<unsigned>(rgba[channel * 2]) |
+                            (std::to_integer<unsigned>(rgba[channel * 2 + 1]) << 8U)
+                      : 0U;
+        };
+        check(ok && at(0) == r && at(1) == g && at(2) == b && at(3) == 65535,
+              "Y'CbCr " + std::to_string(y) + "/" + std::to_string(cb) + "/" + std::to_string(cr) +
+                  " reconstructs clipped to " + std::to_string(r) + "/" + std::to_string(g) + "/" +
+                  std::to_string(b) + " (got " + std::to_string(at(0)) + "/" +
+                  std::to_string(at(1)) + "/" + std::to_string(at(2)) + ")");
+    }
+}
 int main() {
+    footroomClips();
     const DeclaredSampling bt709{AVCOL_SPC_BT709, AVCOL_RANGE_MPEG, AVCHROMA_LOC_LEFT};
     const auto red = square({1, 0, 0});
     // Every sample layout the lossy presets write or read back: ProRes/DNxHR 4:2:2 and 4:4:4,

@@ -37,6 +37,12 @@ inline constexpr unsigned kOutputConversionFlags = SWS_BICUBIC | SWS_FULL_CHR_H_
 // Decoded sample format -> RGBA16 (siting-aware chroma reconstruction).
 inline constexpr unsigned kReconstructionFlags =
     SWS_BILINEAR | SWS_FULL_CHR_H_INT | SWS_ACCURATE_RND | SWS_BITEXACT;
+// Y'CbCr samples in `format` -> RGBA16 (little-endian, 8 bytes per pixel) under the declared
+// sampling: chroma reconstructed at the declared siting, then the declared matrix and range applied
+// with clipping. False when the conversion is unavailable.
+[[nodiscard]] bool reconstructYuv(int width, int height, AVPixelFormat format,
+                                  const std::uint8_t* const* planes, const int* strides,
+                                  const DeclaredSampling& declared, std::vector<std::byte>& out);
 struct ReopenMeasure {
     // The decoded frame reconstructed to RGBA16 (little-endian, 8 bytes per pixel).
     std::vector<std::byte> rgba;

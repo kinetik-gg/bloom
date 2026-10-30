@@ -1878,7 +1878,10 @@ The comparison models the codec's own chroma sampling (`reference=declared-sampl
 reopened stream declares its sample format, matrix, range and chroma siting. Bloom takes the
 RGBA16 reference the encoder received through that sample format with the encoder's own conversion,
 using the declared matrix, range and siting. It then reconstructs the reference and the decoded
-frame to RGBA16 with one siting-aware conversion and compares them. 4:2:0 and 4:2:2 chroma
+frame to RGBA16 with one siting-aware conversion and compares them: chroma is reconstructed
+Y'CbCr to full-resolution 16-bit Y'CbCr at the declared siting, and the declared matrix and range
+are applied with clipping (issue #394: swscale's Y'CbCr to RGBA64 path wrapped footroom samples
+beside saturated chroma, so a near-black VA-API H.264 pixel read back as full green). 4:2:0 and 4:2:2 chroma
 decimation is therefore not counted as codec error, so a small saturated feature passes. The
 luma, alpha and every chroma sample the codec kept are still compared, and the bounds are
 unchanged. A real encoding error still fails: corrupted or drifting samples, a sample layout that
