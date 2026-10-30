@@ -241,36 +241,49 @@ void nodeOperations() {
     if (nodes.empty())
         return;
 
-    // A node fed by the source's image, then a reroute inserted into that link.
+    // A Math node fed by a Value node's output, then a reroute inserted into that link.
+    auto value =
+        fixture.run("bloom.node.add", {{"composition", Value(StableId{fixture.main.value()})},
+                                       {"nodeType", Value("bloom.value-scalar")}});
+    const auto values = Fixture::outputs<document::NodeId>(value, "node");
+    expect(values.size() == 1, "a value node is added");
+    if (values.empty())
+        return;
     auto fed = fixture.run("bloom.node.add-fed-by",
                            {{"composition", Value(StableId{fixture.main.value()})},
-                            {"nodeType", Value("bloom.reroute")},
-                            {"node", Value(StableId{nodes.front().value()})},
-                            {"port", Value("image")}});
+                            {"nodeType", Value("bloom.math")},
+                            {"node", Value(StableId{values.front().value()})},
+                            {"port", Value(std::string(document::kValuePortName))}});
     expect(fed.succeeded(), "a node fed by an output is added and wired");
     const auto fedNodes = Fixture::outputs<document::NodeId>(fed, "editorNode");
     expect(fedNodes.size() == 1, "the fed node is output");
     if (!fedNodes.empty()) {
         fixture.refresh();
-        const auto& graph = fixture.composition(fixture.main).graph();
-        const auto wired = std::ranges::any_of(graph.edges(), [&](const auto& edge) {
-            const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
-            return edge.source.nodeId == nodes.front() && input && input->nodeId == fedNodes[0];
-        });
-        expect(wired, "the new node reads the named output");
-        const auto before = graph.nodes().size();
-        auto reroute = fixture.run("bloom.node.insert-reroute",
-                                   {{"composition", Value(StableId{fixture.main.value()})},
-                                    {"node", Value(StableId{fedNodes[0].value()})},
-                                    {"port", Value(std::string(document::kValuePortName))}});
-        expect(reroute.succeeded(), "a reroute is inserted into the link");
-        fixture.refresh();
-        expect(fixture.composition(fixture.main).graph().nodes().size() == before + 1,
-               "the reroute is one new node");
-        expect(fixture.session->undo().succeeded(), "undo the reroute");
-        fixture.refresh();
-        expect(fixture.composition(fixture.main).graph().nodes().size() == before,
-               "undo removes the reroute in one step");
+        std::optional<std::string> port;
+        std::size_t before = 0;
+        {
+            const auto& graph = fixture.composition(fixture.main).graph();
+            for (const auto& edge : graph.edges())
+                if (const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+                    input && edge.source.nodeId == values.front() && input->nodeId == fedNodes[0])
+                    port = input->port;
+            before = graph.nodes().size();
+        }
+        expect(port.has_value(), "the new node reads the named output");
+        if (port) {
+            auto reroute = fixture.run("bloom.node.insert-reroute",
+                                       {{"composition", Value(StableId{fixture.main.value()})},
+                                        {"node", Value(StableId{fedNodes[0].value()})},
+                                        {"port", Value(*port)}});
+            expect(reroute.succeeded(), "a reroute is inserted into the link");
+            fixture.refresh();
+            expect(fixture.composition(fixture.main).graph().nodes().size() == before + 1,
+                   "the reroute is one new node");
+            expect(fixture.session->undo().succeeded(), "undo the reroute");
+            fixture.refresh();
+            expect(fixture.composition(fixture.main).graph().nodes().size() == before,
+                   "undo removes the reroute in one step");
+        }
     }
     auto arranged =
         fixture.run("bloom.node.arrange", {{"composition", Value(StableId{fixture.main.value()})}});
