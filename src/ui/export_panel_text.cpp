@@ -13,6 +13,7 @@ namespace {
 QString tr(const char* source) { return QCoreApplication::translate("ExportPanel", source); }
 
 using host::ExportJobState;
+using host::isActive;
 using host::ExportOutputState;
 
 [[nodiscard]] QString twoDigits(const qlonglong value) {
@@ -33,9 +34,9 @@ kit::Color toneColor(const StatusTone tone) {
         // The progress bar carries the accent; a running status reads in neutral ink.
         return kit::Color::Muted;
     case StatusTone::Success:
-        return kit::Color::Ok;
     case StatusTone::Warning:
-        return kit::Color::Warn;
+        // A finished render and a note read in neutral ink; only a failure is coloured.
+        return kit::Color::Muted;
     case StatusTone::Error:
         return kit::Color::Error;
     }
@@ -61,6 +62,27 @@ QString failureDetails(const host::ExportJobView& job) {
     return text;
 }
 
+namespace {
+
+[[nodiscard]] QString percentText(const host::ExportJobProgress& progress) {
+    if (!progress.fraction.has_value())
+        return {};
+    return QStringLiteral(" %1%").arg(static_cast<int>(std::clamp(*progress.fraction, 0.0, 1.0) * 100.0));
+}
+
+// True when the job cannot start because an output has nowhere (valid) to save.
+[[nodiscard]] bool needsLocation(const host::ExportJobView& job) {
+    for (const auto& output : job.outputs)
+        for (const auto& issue : output.preflight)
+            if (issue.severity == host::ExportPreflightSeverity::Blocking &&
+                (issue.code == host::ExportPreflightCode::DestinationMissing ||
+                 issue.code == host::ExportPreflightCode::DestinationNotWritable))
+                return true;
+    return false;
+}
+
+} // namespace
+
 StatusText jobStatus(const host::ExportJobView& job) {
     const auto reasonOf = [&job] { return failureSentence(job); };
     switch (job.state) {
@@ -70,45 +92,48 @@ StatusText jobStatus(const host::ExportJobView& job) {
             return {tr("Ready"), {}, StatusTone::Neutral};
         switch (start.code) {
         case host::ExportUnavailableCode::DestinationCheckPending:
-            return {tr("Checking destination…"), qs(start.reason), StatusTone::Neutral};
+            return {tr("Checking where it saves\u2026"), qs(start.reason), StatusTone::Neutral};
         case host::ExportUnavailableCode::NeedsReplaceConfirmation:
-            return {tr("Needs confirmation"), qs(start.reason), StatusTone::Warning};
+            return {tr("Waiting for your OK"), qs(start.reason), StatusTone::Neutral};
         case host::ExportUnavailableCode::PlatformNotSupported:
             // Editing works everywhere; only running is a Linux feature in this version.
             return {tr("Ready"), qs(start.reason), StatusTone::Neutral};
         default:
-            return {tr("Not ready"), qs(start.reason), StatusTone::Warning};
+            return {needsLocation(job) ? tr("Needs a location") : tr("Needs attention"),
+                    qs(start.reason), StatusTone::Neutral};
         }
     }
     case ExportJobState::Waiting:
-        return {tr("Waiting"), {}, StatusTone::Neutral};
+        return {tr("Up next"), {}, StatusTone::Neutral};
     case ExportJobState::Preparing:
-        return {tr("Preparing"), {}, StatusTone::Active};
+        return {tr("Getting ready"), {}, StatusTone::Active};
     case ExportJobState::Rendering:
         switch (job.progress.route) {
         case host::ExportDeviceRoute::WaitingForViewer:
-            return {tr("Waiting for the Viewer"),
-                    tr("Waiting for the Viewer to finish playback"), StatusTone::Neutral};
+            return {tr("Paused while you work in the Viewer"),
+                    tr("Export uses only spare time while the Viewer plays. It continues when "
+                       "playback stops."),
+                    StatusTone::Neutral};
         case host::ExportDeviceRoute::RecoveringGpu:
-            return {tr("Recovering GPU"), {}, StatusTone::Active};
+            return {tr("Reconnecting GPU"), {}, StatusTone::Active};
         case host::ExportDeviceRoute::CpuReference:
-            return {tr("Rendering (CPU)"), tr("Rendering on the CPU reference path"),
+            return {tr("Rendering (slower: no GPU available)") + percentText(job.progress), {},
                     StatusTone::Active};
         default:
-            return {tr("Rendering"), {}, StatusTone::Active};
+            return {tr("Rendering") + percentText(job.progress), {}, StatusTone::Active};
         }
     case ExportJobState::Pausing:
         return {tr("Pausing"), {}, StatusTone::Neutral};
     case ExportJobState::Paused:
         return {tr("Paused"), {}, StatusTone::Neutral};
     case ExportJobState::Verifying:
-        return {tr("Verifying"), {}, StatusTone::Active};
+        return {tr("Checking the file"), {}, StatusTone::Active};
     case ExportJobState::Stopping:
         return {tr("Stopping"), {}, StatusTone::Neutral};
     case ExportJobState::Done:
         return {tr("Done"), {}, StatusTone::Success};
     case ExportJobState::DoneWithWarnings:
-        return {tr("Done with warnings"), {}, StatusTone::Warning};
+        return {tr("Done, with a note"), {}, StatusTone::Warning};
     case ExportJobState::Failed:
         return {tr("Failed"), reasonOf(), StatusTone::Error};
     case ExportJobState::Stopped:
@@ -117,20 +142,42 @@ StatusText jobStatus(const host::ExportJobView& job) {
     return {};
 }
 
-StatusText outputStatus(const host::ExportOutputView& output) {
+StatusText outputStatus(const host::ExportOutputView& output, const host::ExportJobView& job) {
+    if (!output.record.enabled)
+        return {tr("Off"), {}, StatusTone::Neutral};
     switch (output.state) {
     case ExportOutputState::Pending:
-        return {};
+        if (job.state == ExportJobState::Ready) {
+            // The output's own blocker says what to fix; a job-level word would repeat it.
+            for (const auto& issue : orderedIssues(output.preflight)) {
+                if (issue.code == host::ExportPreflightCode::DestinationCheckPending)
+                    return {tr("Checking where it saves\u2026"), qs(issue.reason), StatusTone::Neutral};
+                if (issue.code == host::ExportPreflightCode::DestinationExists &&
+                    issue.severity == host::ExportPreflightSeverity::NeedsConfirmation &&
+                    !output.replaceConfirmed)
+                    return {tr("Waiting for your OK"), qs(issue.reason), StatusTone::Neutral};
+                if (issue.severity == host::ExportPreflightSeverity::Blocking)
+                    return {issue.target == host::ExportPreflightTarget::Destination
+                                ? tr("Needs a location")
+                                : tr("Needs attention"),
+                            qs(issue.reason), StatusTone::Neutral};
+            }
+            if (!output.availability.available)
+                return {tr("Needs attention"), qs(output.availability.reason), StatusTone::Neutral};
+            return {tr("Ready"), {}, StatusTone::Neutral};
+        }
+        return {isActive(job.state) ? tr("Up next") : QString{}, {}, StatusTone::Neutral};
     case ExportOutputState::Preparing:
-        return {tr("Preparing"), {}, StatusTone::Active};
+        return {tr("Getting ready"), {}, StatusTone::Active};
     case ExportOutputState::Rendering:
-        return {tr("Rendering"), {}, StatusTone::Active};
+        return {tr("Writing") + (job.progress.outputCount <= 1 ? percentText(job.progress) : QString{}),
+                {}, StatusTone::Active};
     case ExportOutputState::Verifying:
-        return {tr("Verifying"), {}, StatusTone::Active};
+        return {tr("Checking the file"), {}, StatusTone::Active};
     case ExportOutputState::Published:
-        return {tr("Published"), {}, StatusTone::Success};
+        return {tr("Saved"), {}, StatusTone::Success};
     case ExportOutputState::PublishedWithWarnings:
-        return {tr("Published with warnings"), {}, StatusTone::Warning};
+        return {tr("Saved, with a note"), {}, StatusTone::Warning};
     case ExportOutputState::Failed:
         return {tr("Failed"), {}, StatusTone::Error};
     case ExportOutputState::Stopped:
@@ -139,12 +186,6 @@ StatusText outputStatus(const host::ExportOutputView& output) {
         return {tr("Skipped"), {}, StatusTone::Neutral};
     }
     return {};
-}
-
-QString runLine(const host::ExportJobView& job) {
-    if (isWaitingForViewer(job))
-        return tr("Waiting for the Viewer to finish playback");
-    return jobStatus(job).text;
 }
 
 QString clockText(const std::chrono::milliseconds duration) {
@@ -192,18 +233,18 @@ QString rangeText(const host::ExportJobView& job) {
     };
     switch (job.record.render.range.kind) {
     case document::ExportRangeKind::WorkArea:
-        return job.resolvedRange ? QCoreApplication::translate("ExportPanel", "Work area (%1)").arg(span())
+        return job.resolvedRange ? QCoreApplication::translate("ExportPanel", "Work area \u00b7 %1").arg(span())
                                  : tr("Work area");
     case document::ExportRangeKind::Composition:
         return job.resolvedRange
-                   ? QCoreApplication::translate("ExportPanel", "Composition (%1)").arg(span())
-                   : tr("Composition");
+                   ? QCoreApplication::translate("ExportPanel", "Whole composition \u00b7 %1").arg(span())
+                   : tr("Whole composition");
     case document::ExportRangeKind::Custom:
         return QCoreApplication::translate("ExportPanel", "Frames %1–%2")
             .arg(job.record.render.range.first)
             .arg(job.record.render.range.last);
     case document::ExportRangeKind::Frame:
-        return QCoreApplication::translate("ExportPanel", "Frame %1").arg(job.record.render.range.first);
+        return QCoreApplication::translate("ExportPanel", "One frame \u00b7 %1").arg(job.record.render.range.first);
     }
     return {};
 }
@@ -228,7 +269,7 @@ QString presetText(const host::ExportOutputView& output,
                 continue;
             const auto name = qs(preset.displayName);
             return output.presetModified
-                       ? QCoreApplication::translate("ExportPanel", "%1 (modified)").arg(name)
+                       ? QCoreApplication::translate("ExportPanel", "%1 (edited)").arg(name)
                        : name;
         }
     }
@@ -268,6 +309,14 @@ orderedIssues(const std::vector<host::ExportPreflightIssue>& issues) {
     };
     std::ranges::stable_sort(ordered, {}, rank);
     return ordered;
+}
+
+bool awaitsReplaceConfirmation(const host::ExportOutputView& output) {
+    return output.record.enabled && !output.replaceConfirmed &&
+           std::ranges::any_of(output.preflight, [](const auto& issue) {
+               return issue.code == host::ExportPreflightCode::DestinationExists &&
+                      issue.severity == host::ExportPreflightSeverity::NeedsConfirmation;
+           });
 }
 
 bool hasIssue(const host::ExportOutputView& output, const host::ExportPreflightCode code) {
