@@ -1005,7 +1005,7 @@ colour space by its plain name, then the alpha, then the colour note once; a not
 or an unshowable one turns that part Warn, with the detail in its tooltip
 (`Colour: sRGB · Straight alpha · Colour tags missing — assumed Rec.709 with the sRGB transfer.
 Change in Assets → Input Colour`). Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene`
-is **Linear Rec.709**, `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space
+is **Linear Rec.709 (sRGB)** (the working-space label, `host::workingColorSpaceLabel`), `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space
 **Rec.709 video**); another config's spaces show the names the config gives them. A space Auto read
 from the file's own tags adds `(from the file)` in the tooltip; an assumed one is explained by the
 note alone. Several items: `3 items selected` and their kinds (`2 sequences · 1 composition`). None:

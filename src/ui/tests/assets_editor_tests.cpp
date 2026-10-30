@@ -399,8 +399,8 @@ void durationFormat(TestContext& context) {
 // #380: Bloom Neutral's interchange identifiers read as plain names; other configs' own names
 // are already written for people.
 void colourSpaceNames(TestContext& context) {
-    context.expect(ui::colourSpaceDisplayName("lin_rec709_scene") == "Linear Rec.709",
-                   "lin_rec709_scene reads as Linear Rec.709");
+    context.expect(ui::colourSpaceDisplayName("lin_rec709_scene") == "Linear Rec.709 (sRGB)",
+                   "lin_rec709_scene reads as Linear Rec.709 (sRGB), as in Project Settings");
     context.expect(ui::colourSpaceDisplayName("srgb_rec709_display") == "sRGB",
                    "srgb_rec709_display reads as sRGB");
     context.expect(ui::colourSpaceDisplayName("Rec.709 Camera (Bloom)") == "Rec.709 video",
