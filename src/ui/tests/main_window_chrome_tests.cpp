@@ -21,7 +21,6 @@
 #include <bloom/ui/context_bar.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
-#include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/split_handle.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -126,7 +125,7 @@ using namespace bloom::ui;
 }
 
 // A small fixture bundle so each test can build a fresh MainWindow without repeating the whole
-// ProjectHost/CompositionSession/FrameExportController wiring inline -- mirrors tests/ui_smoke.cpp
+// ProjectHost/CompositionSessionwiring inline -- mirrors tests/ui_smoke.cpp
 // and main_window_readonly_placeholder_tests.cpp's own precedent for this construction.
 struct Fixture final {
     EditorRegistry registry;
@@ -136,15 +135,11 @@ struct Fixture final {
     bloom::runtime::NodeDefinitionRegistry nodeDefinitions;
     bloom::runtime::SnapshotCompiler snapshotCompiler{nodeDefinitions};
     TaskUiBridge taskUiBridge{scheduler};
-    FrameExportController frameExportController;
 
     explicit Fixture(bool* ok)
         : compositionSession(*projectHost.liveDocumentAndStack().first,
                              *projectHost.liveDocumentAndStack().second,
-                             projectHost.lowestCompositionId()),
-          frameExportController(compositionSession, scheduler, taskUiBridge, snapshotCompiler,
-                                projectHost.publicationCoordinator(),
-                                projectHost.artifactCoordinator()) {
+                             projectHost.lowestCompositionId()) {
         nodeDefinitions.freeze();
         *ok = registerStandInEditors(registry);
     }
@@ -208,8 +203,7 @@ void testLegacyLayoutMigration(Expectations& expectations) {
     bool ok = false;
     Fixture fixture(&ok);
     expectations.expect(ok, "migration editors registered");
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController);
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
     window.workspaceHost()->resetToSingleArea("bloom.viewer");
     auto legacy = QJsonDocument::fromJson(window.workspaceHost()->saveLayoutState()).object();
     legacy["schema"] = 1;
@@ -392,8 +386,7 @@ void testMainWindowAlwaysBuildsNativeChrome(Expectations& expectations) {
         return;
     }
 
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController);
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
     expectations.expect(!window.windowFlags().testFlag(Qt::FramelessWindowHint),
                         "native chrome: stock OS decorations, never frameless");
     expectations.expect(window.findChild<QWidget*>(QStringLiteral("kinetikTitleBar")) == nullptr,
@@ -418,8 +411,7 @@ void testWindowTitleIsJustTheDocumentTitle(Expectations& expectations) {
         return;
     }
 
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController);
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
     expectations.expect(window.windowTitle() == QStringLiteral("Untitled[*]"),
                         "window title: a fresh project shows the bare document title, no Bloom "
                         "prefix (got \"" +
@@ -434,8 +426,7 @@ void testViewMenuItemsExistAndFire(Expectations& expectations) {
         expectations.expect(false, "view menu: fixture editors registered");
         return;
     }
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController);
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
 
     auto* fullScreenAction = window.findChild<QAction*>(QStringLiteral("viewFullScreenAction"));
     auto* maximizePanelAction =
@@ -489,8 +480,7 @@ void testHelpMenuItemsExistAndFire(Expectations& expectations) {
         expectations.expect(false, "help menu: fixture editors registered");
         return;
     }
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController);
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
 
     auto* reportIssueAction = window.findChild<QAction*>(QStringLiteral("reportIssueAction"));
     auto* licensesAction = window.findChild<QAction*>(QStringLiteral("openSourceLicensesAction"));
@@ -538,8 +528,7 @@ void testPreferencesActionIsInTheEditMenuWithPreferencesRole(Expectations& expec
         expectations.expect(false, "preferences action: fixture editors registered");
         return;
     }
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController);
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
 
     auto* settings = window.findChild<QAction*>(QStringLiteral("preferencesAction"));
     expectations.expect(settings != nullptr, "edit menu: a Settings action exists");
@@ -572,8 +561,7 @@ void testWindowStatusBarIsAKitStripWithEveryCell(Expectations& expectations) {
     Fixture fixture(&ok);
     expectations.expect(ok, "status bar: stand-in editors register");
     QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController);
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
 
     auto* strip = window.findChild<WindowStatusBar*>(QStringLiteral("windowStatusBar"));
     expectations.expect(strip != nullptr && strip == window.statusStrip(),
@@ -703,8 +691,7 @@ void testPurgeMenuActionsExistAndAreInTheEditMenu(Expectations& expectations) {
     bool ok = false;
     Fixture fixture(&ok);
     expectations.expect(ok, "purge menu: stand-in editors register");
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController);
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
 
     auto* purgeMenu = window.findChild<QMenu*>(QStringLiteral("editPurgeMenu"));
     expectations.expect(purgeMenu != nullptr, "purge menu: the Edit menu carries a Purge submenu");
@@ -754,8 +741,7 @@ void testPurgePreviewCacheActionHasRealEffect(Expectations& expectations) {
     expectations.expect(operationCache.retainedBytes() > 0,
                         "purge preview: the operation cache holds entries before the purge");
 
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController, nullptr, nullptr, nullptr, nullptr,
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost, nullptr, nullptr, nullptr, nullptr,
                       &operationCache);
 
     const auto revisionBefore = fixture.compositionSession.snapshot().revision();
@@ -810,7 +796,7 @@ void testMediaPurgeDropsCompletedSourceFrames(Expectations& expectations) {
         nullptr, nullptr, {},
         [&fixture](const bool gated) { fixture.preview->setCachePurgeGate(gated); });
     fixture.window = std::make_unique<MainWindow>(
-        fixture.registry, fixture.session, fixture.projectHost, *fixture.exporter, nullptr,
+        fixture.registry, fixture.session, fixture.projectHost, nullptr,
         fixture.preview.get(), nullptr, nullptr, fixture.evaluator.operationCache().get(), nullptr,
         nullptr, &purge);
     action = fixture.window->findChild<QAction*>(QStringLiteral("purgeMediaCacheAction"));
@@ -1098,8 +1084,7 @@ void testPreferencesAudioActionMirrorsCommittedPreference(Expectations& expectat
                                        qualifiedProcessorProvider));
     PlaybackController playback(fixture.compositionSession, previewController);
 
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController, nullptr, &previewController, nullptr,
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost, nullptr, &previewController, nullptr,
                       &playback);
     auto* audioAction = window.findChild<QAction*>(QStringLiteral("viewAudioEnabledAction"));
     expectations.expect(audioAction != nullptr && audioAction->isCheckable(),
@@ -1139,8 +1124,7 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
     expectations.expect(ok, "colour settings: stand-in editors registered");
     if (!ok)
         return;
-    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost,
-                      fixture.frameExportController);
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
     auto* action = window.findChild<QAction*>(QStringLiteral("projectColorSettingsAction"));
     expectations.expect(action != nullptr, "colour settings: project action exists");
     if (!action)

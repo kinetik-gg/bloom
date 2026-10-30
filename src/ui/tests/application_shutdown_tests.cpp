@@ -18,7 +18,6 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
-#include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
@@ -180,10 +179,7 @@ void testShutdownAndCloseRouting(Expectations& expectations) {
     runtime::NodeDefinitionRegistry nodeDefinitions;
     nodeDefinitions.freeze();
     runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
-    ui::FrameExportController frameExportController(session, scheduler, bridge, snapshotCompiler,
-                                                    projectHost.publicationCoordinator(),
-                                                    projectHost.artifactCoordinator());
-    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    ui::MainWindow window(registry, session, projectHost);
     window.resize(913, 577);
     QTemporaryDir settingsDirectory;
     QSettings settings(settingsDirectory.filePath(QStringLiteral("shutdown-state.ini")),
@@ -283,10 +279,7 @@ void testFileMenuQuitRoutesThroughShutdown(Expectations& expectations) {
     runtime::NodeDefinitionRegistry nodeDefinitions;
     nodeDefinitions.freeze();
     runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
-    ui::FrameExportController frameExportController(session, scheduler, bridge, snapshotCompiler,
-                                                    projectHost.publicationCoordinator(),
-                                                    projectHost.artifactCoordinator());
-    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    ui::MainWindow window(registry, session, projectHost);
     QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
                      &ui::ApplicationShutdownCoordinator::beginShutdown);
 
@@ -356,10 +349,7 @@ void testIdleApplicationQuitsOnClose(Expectations& expectations) {
 
     ui::ProjectHost projectHost(scheduler);
     ui::EditorRegistry registry;
-    ui::FrameExportController frameExportController(
-        session, scheduler, taskUiBridge, snapshotCompiler, projectHost.publicationCoordinator(),
-        projectHost.artifactCoordinator());
-    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    ui::MainWindow window(registry, session, projectHost);
     QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
                      &ui::ApplicationShutdownCoordinator::beginShutdown);
     bool quitRequested = false;
@@ -444,10 +434,7 @@ void testShapeSolidLayerPreviewDeliveredThenClose(Expectations& expectations) {
 
     ui::ProjectHost projectHost(scheduler);
     ui::EditorRegistry registry;
-    ui::FrameExportController frameExportController(
-        session, scheduler, taskUiBridge, snapshotCompiler, projectHost.publicationCoordinator(),
-        projectHost.artifactCoordinator());
-    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    ui::MainWindow window(registry, session, projectHost);
     QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
                      &ui::ApplicationShutdownCoordinator::beginShutdown);
     bool quitRequested = false;
@@ -528,10 +515,7 @@ void testShapeCloseWhilePreviewInFlight(Expectations& expectations) {
 
     ui::ProjectHost projectHost(scheduler);
     ui::EditorRegistry registry;
-    ui::FrameExportController frameExportController(
-        session, scheduler, taskUiBridge, snapshotCompiler, projectHost.publicationCoordinator(),
-        projectHost.artifactCoordinator());
-    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    ui::MainWindow window(registry, session, projectHost);
     QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
                      &ui::ApplicationShutdownCoordinator::beginShutdown);
     bool quitRequested = false;
@@ -610,10 +594,7 @@ void testShapeCloseWhilePlaybackArmed(Expectations& expectations) {
 
     ui::ProjectHost projectHost(scheduler);
     ui::EditorRegistry registry;
-    ui::FrameExportController frameExportController(
-        session, scheduler, taskUiBridge, snapshotCompiler, projectHost.publicationCoordinator(),
-        projectHost.artifactCoordinator());
-    ui::MainWindow window(registry, session, projectHost, frameExportController);
+    ui::MainWindow window(registry, session, projectHost);
     QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
                      &ui::ApplicationShutdownCoordinator::beginShutdown);
     bool quitRequested = false;
@@ -639,96 +620,6 @@ void testShapeCloseWhilePlaybackArmed(Expectations& expectations) {
         "a bounded timeout");
     expectations.expect(scheduler.isQuiescent(),
                         "shape (c): shutdownQuiescent corresponds to scheduler quiescence");
-    application->removeEventFilter(&shutdown);
-    window.hide();
-}
-
-// S1-A(d): close right after a Frame Export attempt (PNG, to a temp dir) reaches a terminal,
-// published outcome -- mirrors frame_export_controller_tests.cpp's own PNG destination-seam drive.
-void testShapeCloseAfterFrameExportCompletes(Expectations& expectations) {
-    using namespace bloom;
-    const auto format = document::CompositionFormat::create(4, 4);
-    expectations.expect(format.has_value(), "shape (d): the small composition format is valid");
-    if (!format.has_value()) {
-        return;
-    }
-    auto newProject = document::makeNewProject("Export Shutdown Test", "Main",
-                                               core::RationalTime::fromInteger(10), *format);
-    const auto compositionId = newProject.initialCompositionId;
-    document::Document document(std::move(newProject.project));
-    commands::CommandStack commands(document);
-    ui::CompositionSession session(document, commands, compositionId);
-    expectations.expect(
-        session.addSolidLayer(QStringLiteral("Solid"), core::Color4d{0.2, 0.4, 0.6, 1.0}),
-        "shape (d): the solid layer is added");
-
-    runtime::NodeDefinitionRegistry nodeDefinitions;
-    expectations.expect(runtime::registerBuiltInNodeDefinitions(nodeDefinitions),
-                        "shape (d) fixture registers built-in node definitions");
-    nodeDefinitions.freeze();
-    runtime::SnapshotCompiler snapshotCompiler(nodeDefinitions);
-    runtime::CpuCompositionEvaluator cpuEvaluator;
-    runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
-    runtime::QualifiedDisplayProcessorProvider qualifiedDisplayProcessorProvider;
-
-    runtime::TaskScheduler scheduler(testSchedulerConfig());
-    ui::TaskUiBridge taskUiBridge(scheduler, nullptr, 1ms);
-    ui::QualifiedDisplayProcessorBootstrap qualifiedDisplayProcessorBootstrap(
-        scheduler, taskUiBridge, qualifiedDisplayProcessorProvider);
-    ui::CompositionPreviewController previewController(
-        session, scheduler, taskUiBridge,
-        ui::makeCompositionPreviewPipeline(snapshotCompiler, cpuEvaluator, referenceDisplayPreparer,
-                                           qualifiedDisplayProcessorProvider));
-    ui::ApplicationShutdownCoordinator shutdown(previewController, taskUiBridge);
-    auto* application = QCoreApplication::instance();
-    application->installEventFilter(&shutdown);
-
-    ui::ProjectHost projectHost(scheduler);
-    ui::EditorRegistry registry;
-    QTemporaryDir exportDirectory;
-    expectations.expect(exportDirectory.isValid(), "shape (d): the export temp dir is valid");
-    ui::FrameExportController frameExportController(
-        session, scheduler, taskUiBridge, snapshotCompiler, projectHost.publicationCoordinator(),
-        projectHost.artifactCoordinator(),
-        std::filesystem::path(exportDirectory.path().toStdString()) / "scratch");
-    ui::MainWindow window(registry, session, projectHost, frameExportController);
-    QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
-                     &ui::ApplicationShutdownCoordinator::beginShutdown);
-    bool quitRequested = false;
-    QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &shutdown,
-                     [&quitRequested] { quitRequested = true; });
-
-    window.show();
-
-    const auto target =
-        std::filesystem::path(exportDirectory.path().toStdString()) / "shutdown-export.png";
-    frameExportController.setDestinationProvider(
-        [&target]() -> std::optional<std::filesystem::path> { return target; });
-    frameExportController.setApprovalDecisionProvider([](const ui::FrameExportApprovalPrompt&) {
-        return ui::FrameExportApprovalDecision::Export;
-    });
-
-    int exportFinishedCount = 0;
-    ui::FrameExportOutcome exportOutcome = ui::FrameExportOutcome::Refused;
-    QObject::connect(&frameExportController, &ui::FrameExportController::exportFinished,
-                     [&](const ui::FrameExportOutcome outcome, const QString&) {
-                         ++exportFinishedCount;
-                         exportOutcome = outcome;
-                     });
-    frameExportController.requestExport();
-    expectations.expect(waitUntilBounded([&] { return exportFinishedCount == 1; }, 8'000),
-                        "shape (d): the export reaches a terminal outcome before close");
-    expectations.expect(exportOutcome == ui::FrameExportOutcome::Published,
-                        "shape (d): the export publishes");
-
-    window.close();
-
-    expectations.expect(
-        waitUntil([&quitRequested] { return quitRequested; }),
-        "shape (d): an application closed right after a completed export still reaches quiescence "
-        "within a bounded timeout");
-    expectations.expect(scheduler.isQuiescent(),
-                        "shape (d): shutdownQuiescent corresponds to scheduler quiescence");
     application->removeEventFilter(&shutdown);
     window.hide();
 }
@@ -828,10 +719,7 @@ void testRealApplicationQuit(Expectations& expectations, const bool dirty) {
     runtime::NodeDefinitionRegistry definitions;
     definitions.freeze();
     runtime::SnapshotCompiler compiler(definitions);
-    ui::FrameExportController exporter(session, scheduler, bridge, compiler,
-                                       projectHost.publicationCoordinator(),
-                                       projectHost.artifactCoordinator());
-    ui::MainWindow window(registry, session, projectHost, exporter);
+    ui::MainWindow window(registry, session, projectHost);
     QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
                      &ui::ApplicationShutdownCoordinator::beginShutdown);
     QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &window,
@@ -901,10 +789,7 @@ void testBlankApplicationQuitsWithNeverStartedBridge(Expectations& expectations)
     runtime::NodeDefinitionRegistry definitions;
     definitions.freeze();
     runtime::SnapshotCompiler compiler(definitions);
-    ui::FrameExportController exporter(session, scheduler, bridge, compiler,
-                                       projectHost.publicationCoordinator(),
-                                       projectHost.artifactCoordinator());
-    ui::MainWindow window(registry, session, projectHost, exporter);
+    ui::MainWindow window(registry, session, projectHost);
     QObject::connect(&window, &ui::MainWindow::shutdownRequested, &shutdown,
                      &ui::ApplicationShutdownCoordinator::beginShutdown);
     QObject::connect(&shutdown, &ui::ApplicationShutdownCoordinator::shutdownQuiescent, &window,
@@ -1012,7 +897,6 @@ int main(int argc, char** argv) {
     testShapeSolidLayerPreviewDeliveredThenClose(expectations);
     testShapeCloseWhilePreviewInFlight(expectations);
     testShapeCloseWhilePlaybackArmed(expectations);
-    testShapeCloseAfterFrameExportCompletes(expectations);
     testGpuRetirementWithholdsQuiescenceUntilComplete(expectations);
     testStuckShutdownDiagnosticLogsAfterFiveSeconds(expectations);
     return expectations.failures() == 0 ? 0 : 1;

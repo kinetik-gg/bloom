@@ -22,7 +22,7 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
-#include <bloom/ui/frame_export_controller.hpp>
+#include <bloom/ui/export_queue_adapter.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
@@ -49,8 +49,9 @@ struct WindowFixture {
     TaskUiBridge bridge{scheduler};
     std::unique_ptr<AssetController> assets;
     std::unique_ptr<CompositionPreviewController> preview;
-    std::unique_ptr<FrameExportController> exporter;
     EditorRegistry registry;
+    // Set by `author` to give the window an export queue (ADR 0033); null leaves it without one.
+    ExportQueueAdapter* exportQueue = nullptr;
     std::unique_ptr<MainWindow> window;
 
     // NOLINTBEGIN(clang-analyzer-cplusplus.NewDeleteLeaks) -- QApplication owns its style.
@@ -129,14 +130,13 @@ struct WindowFixture {
             makeCompositionPreviewPipeline(compiler, evaluator, display, qualified),
             CompositionPreviewSettings{},
             std::make_shared<PreviewFrameCache>(kMinimumPreviewFrameCacheByteBudget));
-        exporter = std::make_unique<FrameExportController>(session, scheduler, bridge, compiler,
-                                                           projectHost.publicationCoordinator(),
-                                                           projectHost.artifactCoordinator());
-        if (!registerFoundationEditors(registry, session, *preview, nullptr, &projectHost))
+        if (!registerFoundationEditors(registry, session, *preview, nullptr, &projectHost, nullptr, {},
+                                       exportQueue))
             throw std::runtime_error("Editor registration failed");
-        window = std::make_unique<MainWindow>(registry, session, projectHost, *exporter, nullptr,
+        window = std::make_unique<MainWindow>(registry, session, projectHost, nullptr,
                                               preview.get(), nullptr, nullptr,
                                               evaluator.operationCache().get());
+        window->setExportQueue(exportQueue);
         window->resize(1920, 1200);
         window->show();
         QElapsedTimer timer;

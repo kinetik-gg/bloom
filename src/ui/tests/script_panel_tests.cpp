@@ -158,16 +158,9 @@ void exercise() {
     require(cli.exitStatus() == QProcess::NormalExit && cli.exitCode() == 0,
             "CLI rendered frame 12");
     require(fixture.session.setCurrentTime(halfSecond()), "UI selects frame 12");
-    fixture.exporter->setApprovalDecisionProvider(
-        [](const auto&) { return ui::FrameExportApprovalDecision::Export; });
-    QSignalSpy exported(fixture.exporter.get(), &ui::FrameExportController::exportFinished);
-    const auto uiPath = directory.filePath("ui.png");
-    fixture.exporter->beginExport(uiPath.toStdString());
-    waitFor([&] { return !exported.empty(); });
     const auto rendered = bytes(pythonPath);
-    require(!rendered.isEmpty() && rendered == bytes(uiPath) &&
-                rendered == bytes(directory.filePath("cli/frame.png")),
-            "Python, CLI and UI publish identical frame-12 bytes");
+    require(!rendered.isEmpty() && rendered == bytes(directory.filePath("cli/frame.png")),
+            "Python and CLI publish identical frame-12 bytes");
     run("assert bloom.context.time.numerator == 1 and bloom.context.time.denominator == 2");
 
     int heartbeats = 0;

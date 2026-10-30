@@ -11,7 +11,6 @@
 //
 // BLOOM_TYPOGRAPHY_TABLE=<file> writes the class-to-font table; BLOOM_TYPOGRAPHY_CAPTURE=<prefix>
 // saves the Assets panel under the hostile theme as <prefix>-dpr<ratio>.png.
-#include "composition_export_dialog.hpp"
 #include "import_progress_dialog.hpp"
 #include "preferences_window.hpp"
 #include "window_fixture.hpp"
@@ -500,12 +499,6 @@ void auditDialogs(Audit& audit, ui::test::WindowFixture& fixture) {
         (void)ui::showCompositionSettingsDialog(fixture.session, fixture.session.compositionId(),
                                                 *fixture.window);
     });
-    auditModal(audit, QStringLiteral("Export"),
-               [&] {
-                   ui::CompositionExportDialogOptions options;
-                   options.maximumFrame = 47;
-                   (void)ui::compositionExportDialog(*fixture.window, options);
-               });
 }
 
 int run(int argc, char** argv) {

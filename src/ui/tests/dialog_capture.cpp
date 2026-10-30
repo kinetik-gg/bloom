@@ -9,7 +9,6 @@
 // status is the number of audit findings.
 #include "window_fixture.hpp"
 
-#include "composition_export_dialog.hpp"
 #include "composition_settings_dialog.hpp"
 #include "import_progress_dialog.hpp"
 #include "node_editor_add.hpp"
@@ -302,85 +301,6 @@ void compositionDialogs(test::WindowFixture& fixture) {
     trigger(window, "compositionSettingsAction");
     trigger(window, "compositionRenameAction");
     shootAsync(QStringLiteral("rename-composition"), QStringLiteral("compositionRenamePrompt"));
-}
-
-void exportDialogs(test::WindowFixture& fixture) {
-    auto& window = *fixture.window;
-    const bool h264 =
-        output::outputPresetAvailabilityV1(output::OutputPresetV1::H264MovV1).available;
-    std::atomic<bool> releaseLocate = false;
-    H264EncoderService encoder(
-        fixture.scheduler, fixture.bridge,
-        {.software = output::H264EncoderV1::OpenH264, .hardwareVaapi = true, .softwareReason = {}},
-        [](const output::H264EncoderSupportV1&) {
-            return H264EncoderProbe{.vaapiDevice = true,
-                                    .openh264Installed = false,
-                                    .detail = "H.264 encoder not installed"};
-        },
-        [&releaseLocate](const std::filesystem::path&, const std::function<bool()>& cancelled) {
-            while (!releaseLocate && !cancelled())
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            return output::H264RuntimeAvailabilityV1{};
-        });
-    CompositionExportDialogOptions options;
-    options.maximumFrame = 239;
-    options.sampleRate = 48000;
-    options.colorSettings = &fixture.session.colorSettings();
-    options.encoder = &encoder;
-    const auto chooseH264 = [h264, &encoder](QDialog& dialog) {
-        (void)QTest::qWaitFor([&encoder] { return encoder.state().probed; }, 3000);
-        auto* preset = child<kit::KDropdown>(dialog, "compositionExportPreset");
-        const auto index = preset->findData(static_cast<int>(output::OutputPresetV1::H264MovV1));
-        if (h264 && index >= 0)
-            preset->chooseIndex(index);
-        child<QLineEdit>(dialog, "compositionExportDestination")
-            ->setText(QStringLiteral("review.mov"));
-    };
-    onModal(QStringLiteral("export-composition-consent"), chooseH264, [](QDialog& dialog) {
-        onModal(QStringLiteral("openh264-consent"));
-        child<QAbstractButton>(dialog, "installOpenH264")->click();
-    });
-    (void)compositionExportDialog(window, options);
-    onModal(QStringLiteral("export-composition-locating"), [&](QDialog& dialog) {
-        chooseH264(dialog);
-        (void)encoder.locate("libopenh264.so.8");
-        (void)QTest::qWaitFor([&encoder] { return encoder.locating(); }, 3000);
-    });
-    (void)compositionExportDialog(window, options);
-    releaseLocate = true;
-    (void)QTest::qWaitFor([&encoder] { return !encoder.locating(); }, 3000);
-    onModal(QStringLiteral("export-composition-error"), [](QDialog& dialog) {
-        child<kit::KValueField>(dialog, "compositionExportFirst")->setValue(200);
-        child<kit::KValueField>(dialog, "compositionExportLast")->setValue(20);
-        child<QLineEdit>(dialog, "compositionExportDestination")
-            ->setText(QStringLiteral("shot.exr"));
-    });
-    (void)compositionExportDialog(window, options);
-
-    {
-        const std::unique_ptr<kit::KDialog> range(
-            FrameExportController::buildRangeDialog(window, 239));
-        range->show();
-        shoot(QStringLiteral("export-frame-range"), *range);
-    }
-    {
-        FrameExportApprovalPrompt prompt;
-        prompt.destination = std::filesystem::path("renders") / "shot_010.0001.png";
-        prompt.width = 1920;
-        prompt.height = 1080;
-        prompt.preset = output::OutputPresetV1::PngRgba8SrgbV1;
-        prompt.presetName = QStringLiteral("PngRgba8SrgbV1");
-        prompt.presetLabel = outputPresetLabel(prompt.preset);
-        prompt.facets.exactFacetCount = 9;
-        prompt.facets.nonExactFacetCount = 2;
-        prompt.facets.nonExactFacetNames = {QStringLiteral("Precision"), QStringLiteral("Colour")};
-        prompt.digestShortForm = QStringLiteral("3f2a9c0d81b4e6f7");
-        prompt.implementationNote = QStringLiteral("look: baked (1 look-tagged effect)");
-        const std::unique_ptr<kit::KDialog> approval(
-            FrameExportController::buildApprovalDialog(window, prompt));
-        approval->show();
-        shoot(QStringLiteral("approve-export"), *approval);
-    }
 }
 
 void fileChoosers(test::WindowFixture& fixture, const QString& root) {
@@ -712,10 +632,8 @@ int main(int argc, char** argv) {
     test::WindowFixture fixture;
     fixture.window->show();
     fixture.projectHost.setDialogOwner(fixture.window.get());
-    fixture.exporter->setDialogOwner(fixture.window.get());
     settle(500);
     compositionDialogs(fixture);
-    exportDialogs(fixture);
     projectDialogs(fixture);
     importDialogs(fixture);
     fileChoosers(fixture, scratch.path());

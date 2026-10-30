@@ -156,9 +156,6 @@ add_executable(bloom_gesture_finiteness_test
 add_executable(bloom_direct_manipulation_test
     direct_manipulation_tests.cpp
 )
-add_executable(bloom_frame_export_controller_test
-    frame_export_controller_tests.cpp
-)
 
 # QSignalSpy and QTest::keyClick -- issue #105's real key-event dispatch through Qt's own shortcut
 # machinery, and issue #117's header-chrome signal assertions -- need Qt6::Test. Scoped to the two
@@ -368,11 +365,6 @@ target_include_directories(bloom_timeline_graph_view_test PRIVATE ..)
 target_link_libraries(bloom_composition_session_position_interaction_test PRIVATE bloom_ui)
 target_link_libraries(bloom_gesture_finiteness_test PRIVATE bloom_ui)
 target_link_libraries(bloom_direct_manipulation_test PRIVATE bloom_ui)
-target_link_libraries(bloom_frame_export_controller_test PRIVATE bloom_ui)
-target_include_directories(bloom_frame_export_controller_test PRIVATE ..)
-if(TARGET bloom-media-worker)
-    add_dependencies(bloom_frame_export_controller_test bloom-media-worker)
-endif()
 target_link_libraries(bloom_main_window_readonly_placeholder_test PRIVATE bloom_ui ZLIB::ZLIB)
 target_link_libraries(bloom_playback_controller_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_timeline_editor_style_test PRIVATE bloom_ui Qt6::Test)
@@ -430,7 +422,6 @@ bloom_enable_warnings(bloom_timeline_graph_view_test)
 bloom_enable_warnings(bloom_composition_session_position_interaction_test)
 bloom_enable_warnings(bloom_gesture_finiteness_test)
 bloom_enable_warnings(bloom_direct_manipulation_test)
-bloom_enable_warnings(bloom_frame_export_controller_test)
 bloom_enable_warnings(bloom_main_window_readonly_placeholder_test)
 bloom_enable_warnings(bloom_playback_controller_test)
 bloom_enable_warnings(bloom_timeline_editor_style_test)
@@ -874,14 +865,6 @@ bloom_add_test(
 )
 
 bloom_add_test(
-    NAME bloom.ui.frame_export_controller
-    COMMAND bloom_frame_export_controller_test
-    LABELS ui integration host output
-    TIMEOUT 30
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-)
-
-bloom_add_test(
     NAME bloom.ui.playback_controller
     COMMAND bloom_playback_controller_test
     LABELS ui integration animation
@@ -1206,6 +1189,46 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+add_executable(bloom_export_panel_test export_panel_tests.cpp)
+target_include_directories(bloom_export_panel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_export_panel_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_export_panel_test PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_export_panel_test)
+bloom_add_test(
+    NAME bloom.ui.export-panel
+    COMMAND bloom_export_panel_test
+    LABELS ui integration export
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+)
+
+add_executable(bloom_export_panel_capture export_panel_capture.cpp)
+target_include_directories(bloom_export_panel_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_export_panel_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_export_panel_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_export_panel_capture)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.export_panel_capture.dpr${scale} COMMAND bloom_export_panel_capture)
+    set_tests_properties(bloom.ui.export_panel_capture.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;grammar" TIMEOUT 120)
+endforeach()
+
+add_executable(bloom_export_queue_host_test export_queue_host_tests.cpp)
+target_include_directories(bloom_export_queue_host_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_export_queue_host_test PRIVATE bloom_ui bloom_host_export_testing
+                                                            bloom_runtime_compiler Qt6::Test)
+bloom_enable_warnings(bloom_export_queue_host_test)
+bloom_add_test(
+    NAME bloom.ui.export-queue-host
+    COMMAND bloom_export_queue_host_test
+    LABELS ui integration export
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+)
+
 add_executable(bloom_background_preview_test background_preview_tests.cpp)
 target_link_libraries(bloom_background_preview_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_background_preview_test)
@@ -1499,17 +1522,6 @@ bloom_add_test(
 )
 
 # Lane C: Export Composition's H.264 encoder gate and its worker-only verify/Locate.
-add_executable(bloom_composition_export_dialog_test composition_export_dialog_tests.cpp)
-target_include_directories(bloom_composition_export_dialog_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
-target_link_libraries(bloom_composition_export_dialog_test PRIVATE bloom_ui Qt6::Test)
-bloom_enable_warnings(bloom_composition_export_dialog_test)
-bloom_add_test(
-    NAME bloom.ui.composition-export-dialog
-    COMMAND bloom_composition_export_dialog_test
-    LABELS ui unit media
-    TIMEOUT 60
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
-)
 
 add_executable(bloom_network_share_paths_test network_share_paths_tests.cpp)
 target_include_directories(bloom_network_share_paths_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)

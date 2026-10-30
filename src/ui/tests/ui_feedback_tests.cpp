@@ -1,6 +1,5 @@
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/ui/application_preferences.hpp>
-#include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/interaction_sounds.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/dialog_prompts.hpp>
@@ -233,20 +232,6 @@ void testNotifications(Expectations& check) {
     rig.feedback->setSettings(settings);
     rig.feedback->announceRender(true, QStringLiteral("quiet"));
     check.expect(rig.notifier->posted.size() == 3, "notifications are independent of sounds");
-
-    const auto before = rig.notifier->posted.size();
-    rig.feedback->announceExport(ui::FrameExportOutcome::Cancelled, QStringLiteral("c"));
-    check.expect(rig.notifier->posted.size() == before, "a cancelled export is silent");
-    for (const auto outcome :
-         {ui::FrameExportOutcome::Failed, ui::FrameExportOutcome::Refused,
-          ui::FrameExportOutcome::NotApprovable}) {
-        rig.feedback->announceExport(outcome, QStringLiteral("f"));
-    }
-    check.expect(rig.notifier->posted.size() == before + 3 &&
-                     rig.notifier->posted.back().failure,
-                 "failed, refused and not-approvable exports notify as failures");
-    rig.feedback->announceExport(ui::FrameExportOutcome::PublishedWithWarning, QStringLiteral("w"));
-    check.expect(!rig.notifier->posted.back().failure, "a published export notifies as success");
 
     bool activated = false;
     rig.feedback->setNotificationActivationHandler([&] { activated = true; });

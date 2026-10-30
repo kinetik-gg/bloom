@@ -23,7 +23,6 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_registry.hpp>
-#include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/main_window.hpp>
@@ -220,9 +219,7 @@ void testEmptyWorkspaceEditorsAndFirstComposition(Expectations& expectations) {
     definitions.freeze();
     runtime::SnapshotCompiler compiler(definitions);
     ui::TaskUiBridge bridge(scheduler);
-    ui::FrameExportController exporter(session, scheduler, bridge, compiler,
-                                       host.publicationCoordinator(), host.artifactCoordinator());
-    ui::MainWindow window(registry, session, host, exporter);
+    ui::MainWindow window(registry, session, host);
     window.resize(1280, 800);
     window.show();
     QApplication::processEvents();
@@ -245,9 +242,9 @@ void testEmptyWorkspaceEditorsAndFirstComposition(Expectations& expectations) {
             duplicateCompositionAction != nullptr && !duplicateCompositionAction->isEnabled(),
         "empty UI: composition actions that need an active composition are disabled, "
         "not left offering an invalid command");
-    auto* exportFrameAction = window.findChild<QAction*>(QStringLiteral("exportFrameAction"));
-    expectations.expect(exportFrameAction != nullptr && !exportFrameAction->isEnabled(),
-                        "empty UI: frame export is disabled with no composition");
+    expectations.expect(window.addToExportQueueAction() != nullptr &&
+                            !window.addToExportQueueAction()->isEnabled(),
+                        "empty UI: Add to Export Queue is disabled with no composition");
     auto* saveProjectAction = window.findChild<QAction*>(QStringLiteral("saveProjectAction"));
     auto* undoAction = window.findChild<QAction*>(QStringLiteral("undoAction"));
     expectations.expect(saveProjectAction != nullptr && saveProjectAction->isEnabled(),
