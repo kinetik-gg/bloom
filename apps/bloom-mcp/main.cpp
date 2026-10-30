@@ -17,7 +17,9 @@
 
 #include <array>
 #include <chrono>
+#include <functional>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -70,50 +72,141 @@ int serve(scripting::Session& session) {
     const auto scratch = scratchFolder();
     std::error_code ignored;
     std::filesystem::create_directories(scratch, ignored);
-    {
-        host::ExportQueueService queue(
-            {.session = *session.hostSession(),
-             .scheduler = scheduler,
-             .compiler = compiler,
-             .publications = *session.publicationCoordinator(),
-             .artifacts = *session.artifactCoordinator(),
-             .ledger = std::make_shared<output::ExportResourceLedgerV1>(),
-             .gpu = gpu,
-             .retirement = retirement,
-             .presets = presets,
-             .limits = {},
-             .displayProcessor = nullptr,
-             .scratchDirectory = scratch,
-             .backend = nullptr});
-        {
-            const auto captures = platform::userCacheDirectory();
-            mcp::McpServerCore core(
-                {.session = std::ref(session),
-                 // This thread owns the headless queue: queue calls run inline.
-                 .exports = {.run =
-                                 [&queue](const mcp::McpExportAccess::Work& work,
-                                          const std::stop_token& stop) {
-                                     if (stop.stop_requested())
-                                         return false;
-                                     work(&queue, 1);
-                                     return true;
-                                 },
-                             .callerIsOwner = true},
-                 .scheduler = scheduler,
-                 .gpuProvider = gpu,
-                 .captureDirectory =
-                     captures ? *captures / "mcp-captures" : std::filesystem::path{},
-                 .serverVersion = BLOOM_VERSION,
-                 .limits = mcp::kMcpMessageLimits});
-            mcp::serveStdio(core, std::cin, std::cout, {});
-        }
-        queue.beginShutdown(host::ExportStopCause::ApplicationQuit);
+    const auto makeQueue = [&] {
+        return std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
+            .session = *session.hostSession(),
+            .scheduler = scheduler,
+            .compiler = compiler,
+            .publications = *session.publicationCoordinator(),
+            .artifacts = *session.artifactCoordinator(),
+            .ledger = std::make_shared<output::ExportResourceLedgerV1>(),
+            .gpu = gpu,
+            .retirement = retirement,
+            .presets = presets,
+            .limits = {},
+            .displayProcessor = nullptr,
+            .scratchDirectory = scratch,
+            .backend = nullptr});
+    };
+    const auto stopQueue = [](host::ExportQueueService& queue, const host::ExportStopCause cause) {
+        queue.beginShutdown(cause);
         const auto deadline = std::chrono::steady_clock::now() + 30s;
         while (!queue.quiescent() && std::chrono::steady_clock::now() < deadline) {
             queue.pump();
             std::this_thread::sleep_for(2ms);
         }
+    };
+    auto queue = makeQueue();
+    std::uint64_t queueGeneration = 1;
+    mcp::McpServerCore* corePointer = nullptr;
+    // project.save, save-as, open, new and close on the headless session (ADR 0034 item 9 as
+    // amended). This thread owns the session and the queue, and the core handles one request at a
+    // time, so the replacement happens between requests' reads.
+    const auto lifecycle = [&](const mcp::McpProjectRequest& request,
+                               const std::function<void(mcp::McpProjectResult)>& done) {
+        mcp::McpProjectResult result;
+        result.projectName = session.snapshot().project().name();
+        const auto refuse = [&](const mcp::McpUiRefusal refusal, std::string message) {
+            result.refusal = refusal;
+            result.message = std::move(message);
+            done(result);
+        };
+        using Kind = mcp::McpProjectRequestKind;
+        if (request.kind == Kind::Save || request.kind == Kind::SaveAs) {
+            if (request.kind == Kind::Save && session.displayPath().empty())
+                return refuse(mcp::McpUiRefusal::NoPath,
+                              result.projectName +
+                                  " has never been saved; use project.save-as with a path.");
+            if (request.kind == Kind::SaveAs) {
+                if (request.path.extension() != ".bloom" ||
+                    !std::filesystem::is_directory(request.path.parent_path(), ignored))
+                    return refuse(mcp::McpUiRefusal::PathInvalid,
+                                  "Save As needs a .bloom path in a folder that exists.");
+                if (std::filesystem::exists(request.path, ignored) && !request.replace)
+                    return refuse(mcp::McpUiRefusal::DestinationExists,
+                                  request.path.filename().string() +
+                                      " already exists; pass replace:true to replace it.");
+            }
+            const auto saved =
+                request.kind == Kind::Save ? session.save() : session.saveAs(request.path);
+            if (!saved.succeeded())
+                return refuse(saved.status == scripting::SessionSaveStatus::ReadOnly
+                                  ? mcp::McpUiRefusal::ReadOnly
+                                  : mcp::McpUiRefusal::Failed,
+                              saved.message.empty() ? "The project could not be saved."
+                                                    : saved.message);
+            result.path = session.displayPath();
+            result.message = "Saved " + result.projectName + ".";
+            return done(result);
+        }
+        const auto state = session.state();
+        if (state.dirty.value_or(false) && !request.discardChanges)
+            return refuse(mcp::McpUiRefusal::UnsavedChanges,
+                          result.projectName +
+                              " has unsaved changes; save it first or pass discardChanges:true.");
+        if (queue->activeJobCount() != 0 && !request.stopJobs)
+            return refuse(mcp::McpUiRefusal::JobsRunning,
+                          "Export jobs are running; wait for them or pass stopJobs:true.");
+        if (request.kind == Kind::Open &&
+            (request.path.extension() != ".bloom" ||
+             !std::filesystem::is_regular_file(request.path, ignored)))
+            return refuse(mcp::McpUiRefusal::PathInvalid,
+                          "Open needs the path of an existing .bloom file.");
+        auto opened = request.kind == Kind::Open ? scripting::Session::open(request.path)
+                                                 : scripting::Session::createNew();
+        if (!opened)
+            return refuse(mcp::McpUiRefusal::Failed, opened.diagnostic().message.empty()
+                                                         ? "The project could not be opened."
+                                                         : opened.diagnostic().message);
+        stopQueue(*queue, host::ExportStopCause::ProjectClosing);
+        queue.reset();
+        session.adopt(std::move(opened).takeSession());
+        mediaEvaluator.setAssetBaseDirectory(session.displayPath().empty()
+                                                 ? std::filesystem::path{}
+                                                 : session.displayPath().parent_path());
+        queue = makeQueue();
+        ++queueGeneration;
+        if (corePointer != nullptr)
+            corePointer->headlessProjectReplaced();
+        result.path = session.displayPath();
+        result.projectName = session.snapshot().project().name();
+        result.message = request.kind == Kind::Open  ? "Opened " + result.projectName + "."
+                         : request.kind == Kind::New ? "Created a new project."
+                                                     : "Closed the project; an empty project "
+                                                       "is open.";
+        done(result);
+    };
+    {
+        const auto captures = platform::userCacheDirectory();
+        mcp::McpServerCore core(
+            {.session = std::ref(session),
+             // This thread owns the headless queue: queue calls run inline.
+             .exports = {.run =
+                             [&queue, &queueGeneration](const mcp::McpExportAccess::Work& work,
+                                                        const std::stop_token& stop) {
+                                 if (stop.stop_requested())
+                                     return false;
+                                 work(queue.get(), queueGeneration);
+                                 return true;
+                             },
+                         .callerIsOwner = true},
+             .scheduler = scheduler,
+             .gpuProvider = gpu,
+             .captureDirectory = captures ? *captures / "mcp-captures" : std::filesystem::path{},
+             .ui = {.revealComposition = {},
+                    .projectLifecycle = lifecycle,
+                    .setSelection = {},
+                    .activateComposition = {},
+                    .transport = {},
+                    .setViewer = {}},
+             .serverVersion = BLOOM_VERSION,
+             .limits = mcp::kMcpMessageLimits});
+        corePointer = &core;
+        mcp::serveStdio(core, std::cin, std::cout, {});
+        corePointer = nullptr;
     }
+    stopQueue(*queue, host::ExportStopCause::ApplicationQuit);
+    queue.reset();
     // Headless teardown runs on this thread, never a UI event loop: retire the provider and the
     // encoder retirement owner while the scheduler that serves them is still alive.
     retirement->beginShutdown();

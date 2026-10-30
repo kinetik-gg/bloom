@@ -109,7 +109,7 @@ void onOwner(McpServerCore::State& core, const McpExportAccess::Work& work,
 
 [[noreturn]] void noQueue() {
     throw ToolFailure(McpToolErrorCode::ExportUnavailable,
-                      "The export queue is not available while a project is opening.");
+                      "Export isn't available in this window yet.");
 }
 
 yyjson_mut_val* availabilityValue(Json& out, const host::ExportCommandAvailability& value) {
@@ -330,7 +330,11 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
     if (missing)
         noQueue();
     if (!submitted.accepted || !submitted.job)
-        throw ToolFailure(McpToolErrorCode::ExportUnavailable, submitted.availability.reason,
+        throw ToolFailure(submitted.availability.code ==
+                                  host::ExportUnavailableCode::PreflightBlocked
+                              ? McpToolErrorCode::PreflightBlocked
+                              : McpToolErrorCode::ExportUnavailable,
+                          submitted.availability.reason,
                           std::string(unavailableName(submitted.availability.code)));
     const auto job = *submitted.job;
     std::uint64_t observed = sub ? sub->serial() : 0;

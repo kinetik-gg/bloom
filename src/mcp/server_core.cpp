@@ -127,6 +127,13 @@ void McpServerCore::State::record(const commands::CommandEvent& event) {
     events.emplace_back(++sequence, event);
 }
 
+void McpServerCore::State::notice(McpNotice value) {
+    const std::lock_guard lock(eventsMutex);
+    if (events.size() >= dependencies.limits.retainedCommandEvents)
+        events.pop_front();
+    events.emplace_back(++sequence, std::move(value));
+}
+
 void McpServerCore::State::syncEvents() {
     auto* live = liveHost();
     if (live == nullptr)
@@ -172,6 +179,25 @@ McpServerCore::McpServerCore(McpCoreDependencies dependencies)
 McpServerCore::~McpServerCore() = default;
 
 void McpServerCore::followLiveSession() { state_->syncEvents(); }
+
+void McpServerCore::headlessProjectReplaced() {
+    auto& state = *state_;
+    auto* headless =
+        std::get_if<std::reference_wrapper<scripting::Session>>(&state.dependencies.session);
+    if (headless == nullptr)
+        return;
+    const std::lock_guard lock(state.subscriptionMutex);
+    state.subscription.reset();
+    {
+        const std::lock_guard guard(state.eventsMutex);
+        state.events.clear();
+        state.resetSequence = state.sequence;
+        state.replaced = true;
+    }
+    scripting::Events events(headless->get());
+    state.subscription = events.subscribe(
+        [raw = &state](const commands::CommandEvent& event) { raw->record(event); });
+}
 
 std::span<const McpTool> McpServerCore::tools() const noexcept { return kTools; }
 
@@ -388,70 +414,81 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
             bool failed = false;
             std::vector<yyjson_mut_val*> content;
             try {
-                // Read and commit through the live lease or the headless session.
-                std::optional<scripting::LiveSessionLease> lease;
-                scripting::Session* target = nullptr;
-                scripting::OperationContext context;
-                std::uint64_t generation = 0;
-                if (auto* live = state.liveHost()) {
-                    state.syncEvents();
-                    lease.emplace(live->acquire(
-                        {.stop = control.stop,
-                         .deadline = std::chrono::steady_clock::now() + kMcpCommitDeadline}));
-                    if (!*lease)
-                        throw ToolFailure(McpToolErrorCode::ProjectUnavailable,
-                                          lease->availability() ==
-                                                  scripting::LiveSessionAvailability::ShuttingDown
-                                              ? "Bloom is closing."
-                                              : "A project is opening.");
-                    target = &lease->session();
-                    context = lease->operationContext();
-                    generation = lease->generation();
+                if (toolUsesLiveUi(*tool)) {
+                    // Window and project-lifecycle tools hold no lease: project.open must work
+                    // while the old project is being replaced.
+                    std::string summary;
+                    value = sessionTool(state, out, *tool, member(params, "arguments"), control,
+                                        summary);
+                    if (!summary.empty() && summary != handled.summary)
+                        handled.summary += " " + summary;
                 } else {
-                    auto& headless = std::get<std::reference_wrapper<scripting::Session>>(
-                                         state.dependencies.session)
-                                         .get();
-                    target = &headless;
-                    context = headless.operationContext();
+                    // Read and commit through the live lease or the headless session.
+                    std::optional<scripting::LiveSessionLease> lease;
+                    scripting::Session* target = nullptr;
+                    scripting::OperationContext context;
+                    std::uint64_t generation = 0;
+                    if (auto* live = state.liveHost()) {
+                        state.syncEvents();
+                        lease.emplace(live->acquire(
+                            {.stop = control.stop,
+                             .deadline = std::chrono::steady_clock::now() + kMcpCommitDeadline}));
+                        if (!*lease)
+                            throw ToolFailure(
+                                McpToolErrorCode::ProjectUnavailable,
+                                lease->availability() ==
+                                        scripting::LiveSessionAvailability::ShuttingDown
+                                    ? "Bloom is closing."
+                                    : "A project is opening.");
+                        target = &lease->session();
+                        context = lease->operationContext();
+                        generation = lease->generation();
+                    } else {
+                        auto& headless = std::get<std::reference_wrapper<scripting::Session>>(
+                                             state.dependencies.session)
+                                             .get();
+                        target = &headless;
+                        context = headless.operationContext();
+                    }
+                    McpCall call{.session = *target,
+                                 .context = std::move(context),
+                                 .live = lease ? &lease->state() : nullptr,
+                                 .lease = lease ? &*lease : nullptr,
+                                 .generation = generation,
+                                 .control = control,
+                                 .content = {},
+                                 .summary = {},
+                                 .notice = std::nullopt};
+                    auto* arguments = member(params, "arguments");
+                    switch (*tool) {
+                    case McpTool::Query:
+                        value = queryTool(state, out, call, arguments);
+                        break;
+                    case McpTool::Transact:
+                        value = transactTool(state, out, call, arguments);
+                        break;
+                    case McpTool::History:
+                        value = historyTool(state, out, call, arguments);
+                        break;
+                    case McpTool::Events:
+                        value = eventsTool(state, out, call, arguments);
+                        break;
+                    case McpTool::Render:
+                    case McpTool::Export:
+                        value = renderTool(state, out, call, arguments, *tool == McpTool::Export);
+                        break;
+                    case McpTool::Capture:
+                        value = captureTool(state, out, call, arguments);
+                        break;
+                    default:
+                        value = exportSessionTool(state, out, call, *tool, arguments);
+                        break;
+                    }
+                    if (!call.summary.empty())
+                        handled.summary += " " + call.summary;
+                    content = std::move(call.content);
+                    handled.toolError = call.notice;
                 }
-                McpCall call{.session = *target,
-                             .context = std::move(context),
-                             .live = lease ? &lease->state() : nullptr,
-                             .lease = lease ? &*lease : nullptr,
-                             .generation = generation,
-                             .control = control,
-                             .content = {},
-                             .summary = {},
-                             .notice = std::nullopt};
-                auto* arguments = member(params, "arguments");
-                switch (*tool) {
-                case McpTool::Query:
-                    value = queryTool(state, out, call, arguments);
-                    break;
-                case McpTool::Transact:
-                    value = transactTool(state, out, call, arguments);
-                    break;
-                case McpTool::History:
-                    value = historyTool(state, out, call, arguments);
-                    break;
-                case McpTool::Events:
-                    value = eventsTool(state, out, call, arguments);
-                    break;
-                case McpTool::Render:
-                case McpTool::Export:
-                    value = renderTool(state, out, call, arguments, *tool == McpTool::Export);
-                    break;
-                case McpTool::Capture:
-                    value = captureTool(state, out, call, arguments);
-                    break;
-                default:
-                    value = exportSessionTool(state, out, call, *tool, arguments);
-                    break;
-                }
-                if (!call.summary.empty())
-                    handled.summary += " " + call.summary;
-                content = std::move(call.content);
-                handled.toolError = call.notice;
             } catch (const ToolFailure& failure) {
                 failed = true;
                 handled.toolError = failure.code;

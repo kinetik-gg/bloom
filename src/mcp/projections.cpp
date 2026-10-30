@@ -84,6 +84,30 @@ yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& valu
     return record;
 }
 
+yyjson_mut_val* noticeValue(Json& out, const McpNotice& notice) {
+    auto* value = out.object();
+    out.set(value, "kind", out.text(notice.kind));
+    out.set(value, "revision", out.number(notice.revision));
+    out.set(value, "message", out.text(notice.message));
+    if (notice.composition)
+        out.set(value, "composition", out.number(*notice.composition));
+    if (notice.node || notice.parameter) {
+        auto* subject = out.object();
+        if (notice.composition)
+            out.set(subject, "composition", out.number(*notice.composition));
+        if (notice.node)
+            out.set(subject, "node", out.number(*notice.node));
+        if (notice.parameter)
+            out.set(subject, "parameter", out.number(*notice.parameter));
+        out.set(value, "subject", subject);
+    }
+    if (!notice.path.empty())
+        out.set(value, "path", out.text(notice.path));
+    if (!notice.projectName.empty())
+        out.set(value, "projectName", out.text(notice.projectName));
+    return value;
+}
+
 yyjson_mut_val* parameterSummary(Json& out, const document::ParameterRecord& value) {
     auto* record = out.object();
     out.set(record, "id", out.number(value.id.value()));

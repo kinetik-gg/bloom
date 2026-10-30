@@ -67,6 +67,8 @@ QString toolErrorText(const mcp::McpToolErrorCode code) {
         return tr("project is read-only");
     case C::OperationRejected:
         return tr("operation rejected");
+    case C::PreflightBlocked:
+        return tr("cannot render as asked");
     }
     return {};
 }

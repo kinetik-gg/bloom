@@ -520,6 +520,10 @@ struct McpServerServiceDependencies final {
     // When the queue is replaced the owner calls exportQueueReplaced().
     std::function<host::ExportQueueService*()> exportQueue;
     runtime::TaskScheduler& scheduler;
+    // The application's session and UI seams (live_ui_port.hpp): project lifecycle, editor.reveal,
+    // selection, active composition, transport and Viewer settings. Called on the owner thread;
+    // an empty member answers bloom.mcp.ui-unbound.
+    McpLiveUiPort liveUi{};
     // platform::userDataDirectory() / "mcp" / "token"; empty makes the token Unavailable with the
     // reason "Bloom can't find a folder to keep the access token in."
     std::filesystem::path tokenFile;

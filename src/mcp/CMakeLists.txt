@@ -20,10 +20,12 @@ target_sources(
         tools_document.cpp
         tools_export.cpp
         tools_render.cpp
+        tools_session.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/mcp/live_ui_port.hpp
             include/bloom/mcp/protocol.hpp
             include/bloom/mcp/server_core.hpp
             include/bloom/mcp/server_service.hpp
@@ -53,6 +55,15 @@ if(BUILD_TESTING)
         LABELS unit mcp
     )
     # Streamable HTTP framing and admission against a hostile-input corpus (pure, byte strings).
+    add_executable(bloom_mcp_core_tools_test tests/core_tools_tests.cpp)
+    target_link_libraries(bloom_mcp_core_tools_test PRIVATE bloom_mcp)
+    bloom_enable_warnings(bloom_mcp_core_tools_test)
+    bloom_add_test(
+        NAME bloom.mcp.core-tools
+        COMMAND bloom_mcp_core_tools_test
+        LABELS unit mcp
+        TIMEOUT 120
+    )
     add_executable(bloom_mcp_http_parser_test tests/http_parser_tests.cpp)
     target_link_libraries(bloom_mcp_http_parser_test PRIVATE bloom_mcp)
     bloom_enable_warnings(bloom_mcp_http_parser_test)
