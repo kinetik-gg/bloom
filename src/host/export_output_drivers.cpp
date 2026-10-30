@@ -528,7 +528,13 @@ class ImageDriver final : public DriverBase {
             auto& counters = report_.verification.provenance;
             ++counters.gpuFrames;
             counters.gpuNativeDispatches += provenance->counters.nativeDispatches;
+            counters.gpuReadbacks += provenance->counters.readbacks;
             counters.gpuReadbackSubmissions += provenance->readbackSubmissions;
+            counters.gpuTransferredPayloads += provenance->transferredPayloads;
+            counters.gpuProcessPayloadBytes += provenance->processPayloadBytes;
+            counters.gpuEncodedPayloadBytes += provenance->encodedPayloadBytes;
+            if (provenance->deviceOwnershipEpoch != 0)
+                counters.gpuDeviceOwnershipEpoch = provenance->deviceOwnershipEpoch;
             route_ = ExportDeviceRoute::Gpu;
         } else if (outcome) {
             ++report_.verification.provenance.cpuReferenceFrames;
@@ -927,7 +933,12 @@ class MediaDriver final : public DriverBase {
                                             ? result.encodedFrames - result.gpuEvaluatedFrames
                                             : 0;
         provenance.gpuNativeDispatches = result.gpuNativeDispatches;
+        provenance.gpuReadbacks = result.gpuReadbacks;
         provenance.gpuReadbackSubmissions = result.gpuReadbackSubmissions;
+        provenance.gpuTransferredPayloads = result.gpuTransferredPayloads;
+        provenance.gpuProcessPayloadBytes = result.gpuProcessPayloadBytes;
+        provenance.gpuEncodedPayloadBytes = result.gpuEncodedPayloadBytes;
+        provenance.gpuDeviceOwnershipEpoch = result.gpuDeviceOwnershipEpoch;
         route_ = provenance.cpuReferenceFrames > 0 ? ExportDeviceRoute::CpuReference
                                                    : ExportDeviceRoute::Gpu;
         if (const auto* analysis = runner_->analysis())

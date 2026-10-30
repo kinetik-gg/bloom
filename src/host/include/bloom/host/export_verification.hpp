@@ -124,7 +124,15 @@ struct ExportDeviceProvenance final {
     // Export GPU generations replaced after an unproven phase retirement during this output.
     std::uint32_t recoveredGenerations = 0;
     std::uint64_t gpuNativeDispatches = 0;
+    // Final device-to-host readbacks and their submissions (one per GPU frame), the distinct
+    // payloads they carried and their exact byte totals, and the last genuine device ownership
+    // epoch. Diagnostics only; never part of preservation identity.
+    std::uint64_t gpuReadbacks = 0;
     std::uint64_t gpuReadbackSubmissions = 0;
+    std::uint64_t gpuTransferredPayloads = 0;
+    std::uint64_t gpuProcessPayloadBytes = 0;
+    std::uint64_t gpuEncodedPayloadBytes = 0;
+    std::uint64_t gpuDeviceOwnershipEpoch = 0;
     // Frames taken from the scene-referred composite cache instead of being evaluated again
     // (the output's useCachedFrames setting). Each reused frame still passes the same analysis,
     // approval and verification as an evaluated one.

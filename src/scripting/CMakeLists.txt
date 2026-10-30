@@ -82,6 +82,18 @@ if(BUILD_TESTING)
         LABELS unit scripting host commands runtime
         TIMEOUT 120
     )
+    # ADR 0033 "One runner": Render::run through host::ExportJobRunner writes the same files and
+    # bytes as the previous direct attempt/publication route, kept verbatim in the test.
+    add_executable(bloom_scripting_render_parity_test tests/render_parity_tests.cpp)
+    target_link_libraries(bloom_scripting_render_parity_test PRIVATE bloom_scripting)
+    add_dependencies(bloom_scripting_render_parity_test bloom-media-worker)
+    bloom_enable_warnings(bloom_scripting_render_parity_test)
+    bloom_add_test(
+        NAME bloom.scripting.render-parity
+        COMMAND bloom_scripting_render_parity_test
+        LABELS unit scripting host output
+        TIMEOUT 300
+    )
     add_executable(bloom_scripting_facade_test tests/facade_tests.cpp)
     target_link_libraries(bloom_scripting_facade_test PRIVATE bloom_scripting)
     bloom_enable_warnings(bloom_scripting_facade_test)

@@ -90,11 +90,13 @@ void testInjectedProviderIsReusedAndNotRetired(Expectations& expectations) {
          .preset = bloom::output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
          .destination = directory.path() / "absent-directory" / "frame.exr"},
         {}, provider);
+    if (invalidDestination.diagnostic.find("stage=resolving") == std::string::npos)
+        std::cerr << "invalid destination: " << invalidDestination.diagnostic << '\n';
     expectations.expect(
         !invalidDestination.succeeded &&
-            invalidDestination.diagnostic.find("target preflight") != std::string::npos &&
+            invalidDestination.diagnostic.find("stage=resolving") != std::string::npos &&
             invalidDestination.diagnostic.find(
-                "destination error " +
+                "StagedArtifactError:" +
                 std::to_string(static_cast<unsigned>(
                     bloom::platform::StagedArtifactError::ParentResolutionFailed))) !=
                 std::string::npos,
