@@ -351,6 +351,9 @@ if(BUILD_TESTING)
             "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/core/include"
             "${PROJECT_SOURCE_DIR}/src/document/include" "${PROJECT_SOURCE_DIR}/src/render/include")
         add_dependencies(bloom_host_sequence_export_runner_test bloom-media-worker)
+        # The GPU video proof prepares the export's display/view through the packaged shader tools,
+        # exactly as the application and headless roots do.
+        bloom_package_gpu_shader_tools(bloom_host_sequence_export_runner_test)
         bloom_enable_warnings(bloom_host_sequence_export_runner_test)
         bloom_add_test(NAME bloom.host.sequence-export COMMAND bloom_host_sequence_export_runner_test
                        "${CMAKE_CURRENT_BINARY_DIR}/sequence-export-fixtures" LABELS unit host media output TIMEOUT 180)

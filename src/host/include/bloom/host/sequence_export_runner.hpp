@@ -18,6 +18,10 @@ reserveSequenceExportQueueV1(output::ExportResourceLedgerV1&, std::uint64_t byte
                              std::optional<std::uint64_t> explicitJobLimit,
                              std::shared_ptr<GpuExportProvider>, const runtime::CancellationToken&,
                              output::ExportResourceAdmissionStatusV1&) noexcept;
+// Frames analysed ahead of the ordered encoder for one sequence export: the capacity seam. At
+// least one; `cap` is an explicit caller ceiling (tests that need one frame at a time).
+[[nodiscard]] std::size_t sequenceExportFramesInFlightV1(const GpuExportProvider* provider,
+                                                         std::optional<std::size_t> cap) noexcept;
 } // namespace detail
 class SequenceExportRunnerV1;
 
@@ -90,6 +94,8 @@ struct SequenceExportRequestV1 {
     // provider into every per-frame attempt; an injected application provider retains its shared
     // policy and independent retirement ownership.
     std::shared_ptr<GpuExportProvider> gpuProvider = nullptr;
+    // Ceiling on frames analysed ahead of the ordered encoder; absent uses the capacity seam.
+    std::optional<std::size_t> framesInFlight = std::nullopt;
 };
 enum class SequenceExportStageV1 : std::uint8_t {
     Compiling,
@@ -123,6 +129,12 @@ struct SequenceExportResultV1 {
     // Genuine native device ownership epoch observed on the GPU-evaluated frames (last nonzero
     // value; zero when no frame used a device). Diagnostics only.
     std::uint64_t gpuDeviceOwnershipEpoch = 0;
+    // Output colour provenance for video frames: `gpuDisplayFrames` were transformed to the display
+    // by the GPU display/view command in the frame's combined readback; `cpuDisplayFrames` ran the
+    // CPU reference display transform at the codec boundary, with `cpuDisplayReason` naming why.
+    std::uint64_t gpuDisplayFrames = 0;
+    std::uint64_t cpuDisplayFrames = 0;
+    std::string cpuDisplayReason;
     // Issue #369: what the output colour intent and preset asked the container to carry, for the
     // ColourTags and Container checks against the reopened artifact (evidence).
     media::provider::ColourTags expectedColourTags;
@@ -133,7 +145,9 @@ struct SequenceExportResultV1 {
     [[nodiscard]] bool published() const noexcept { return publication.targetWasPublished(); }
 };
 // Authoring-thread driver. poll() never blocks: it composes the existing attempt/approval stages.
-// One compile, exact SCRIPT-0 frame mapping, one acknowledged product at a time, one publication.
+// One compile, exact SCRIPT-0 frame mapping, several frames analysed ahead of one ordered encoder
+// (frames reach the encoder strictly in order, one acknowledged product at a time), one
+// publication. The first frame waits for approve(); later frames are approved in order.
 class SequenceExportRunnerV1 final {
   public:
     SequenceExportRunnerV1(runtime::TaskScheduler&, const runtime::SnapshotCompiler&,

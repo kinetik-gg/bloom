@@ -18,6 +18,8 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
+#include <algorithm>
+#include <deque>
 #include <variant>
 
 namespace bloom::host::detail {
@@ -267,7 +269,9 @@ class ImageDriver final : public DriverBase {
   public:
     ImageDriver(const ExportJobRunnerDependencies& dependencies, ExportDriverInput input,
                 const OutputPresetV1 preset)
-        : DriverBase(dependencies, std::move(input)), preset_(preset), next_(input_.range.first) {
+        : DriverBase(dependencies, std::move(input)), preset_(preset), next_(input_.range.first),
+          nextStart_(input_.range.first), depthLimit_(detail::sequenceExportFramesInFlightV1(
+                                              dependencies.gpu.get(), std::nullopt)) {
         const auto& settings = input_.output.record.settings;
         if (preset_ == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1) {
             const auto compression = exrCompression(settings.compression);
@@ -302,65 +306,129 @@ class ImageDriver final : public DriverBase {
                 return fail(failure(ExportFailureCode::CompileFailed, "export.compile.failed",
                                     "The composition could not be compiled for export"));
             plan_ = *result->value();
+            mediaDisplay_ = std::move(*mediaDisplaySlot_);
+            compiled_ = true;
             report_.state = ExportOutputState::Rendering;
-            return advance();
+        } else if (auto* preparing = std::get_if<PrepareHandle>(&inFlight_)) {
+            if (auto result = preparing->tryTakeResult()) {
+                inFlight_.emplace<std::monostate>();
+                if (result->state() == runtime::TaskState::Cancelled || stopRequested_)
+                    return stopNow();
+                if (!result->value() || !*result->value() || !(*result->value())->approvable())
+                    return fail(failure(ExportFailureCode::AnalysisRefused, "export.exr.colour",
+                                        "The EXR output colour space or compression is "
+                                        "unavailable in this project",
+                                        next_));
+                approve(*result->value());
+                if (done_)
+                    return;
+            }
+        } else if (auto* publishing = std::get_if<PublishHandle>(&inFlight_)) {
+            if (publishing->handle.tryTakeResult()) {
+                auto result = std::move(*publishing->result);
+                inFlight_.emplace<std::monostate>();
+                handlePublication(std::move(result));
+                if (done_)
+                    return;
+            }
         }
-        if (auto* attempt = std::get_if<OutputAnalysisAttemptRunnerV1>(&inFlight_)) {
-            auto outcome = attempt->tryComplete();
-            if (!outcome)
-                return;
-            inFlight_.emplace<std::monostate>();
-            return handleAttempt(std::move(*outcome));
-        }
-        if (auto* preparing = std::get_if<PrepareHandle>(&inFlight_)) {
-            auto result = preparing->tryTakeResult();
-            if (!result)
-                return;
-            inFlight_.emplace<std::monostate>();
-            if (result->state() == runtime::TaskState::Cancelled || stopRequested_)
-                return finishStopped();
-            if (!result->value() || !*result->value() || !(*result->value())->approvable())
-                return fail(failure(ExportFailureCode::AnalysisRefused, "export.exr.colour",
-                                    "The EXR output colour space or compression is unavailable "
-                                    "in this project",
-                                    next_));
-            return approve(*result->value());
-        }
-        if (auto* publishing = std::get_if<PublishHandle>(&inFlight_)) {
-            auto taken = publishing->handle.tryTakeResult();
-            if (!taken)
-                return;
-            auto result = std::move(*publishing->result);
-            inFlight_.emplace<std::monostate>();
-            return handlePublication(std::move(result));
-        }
-        if (holding_ && !pauseRequested_) {
-            holding_ = false;
-            advance();
+        if (!compiled_)
+            return;
+        if (stopRequested_) {
+            if (std::holds_alternative<std::monostate>(inFlight_))
+                stopNow();
             return;
         }
-        if (capacity_.waiting() && std::holds_alternative<std::monostate>(inFlight_))
-            pollCapacityWait();
+        // Analyses ahead of the ordered publication tail.
+        for (std::size_t position = 0; position < window_.size(); ++position) {
+            auto& frame = window_[position];
+            if (!frame.runner)
+                continue;
+            auto outcome = frame.runner->tryComplete();
+            if (!outcome)
+                continue;
+            frame.runner.reset();
+            ++releaseEpoch_;
+            const auto refusal = outputAnalysisCapacityRefusalV1(*outcome, processingPolicy());
+            if (refusal != OutputAnalysisCapacityRefusalV1::None) {
+                if (othersHoldMemory(position)) {
+                    // Frames of this export hold memory: keep them running and retry this
+                    // frame once something has completed.
+                    frame.awaitingCapacity = true;
+                    frame.externalWait = false;
+                    frame.refusedAtEpoch = releaseEpoch_;
+                    continue;
+                }
+                if (refusal == OutputAnalysisCapacityRefusalV1::Wait) {
+                    if (!capacity_.waiting())
+                        log(runtime::DiagnosticSeverity::Information, "export.capacity.waiting",
+                            describeOutputAnalysisAttemptV1(*outcome) + "; " +
+                                describeProcessingReservationsV1(processingPolicy()),
+                            frame.index);
+                    capacity_.refused(OutputAnalysisCapacityWaitV1::Clock::now(),
+                                      processingPolicy());
+                    route_ = ExportDeviceRoute::WaitingForViewer;
+                    frame.awaitingCapacity = true;
+                    frame.externalWait = true;
+                    frame.refusedAtEpoch = releaseEpoch_;
+                    continue;
+                }
+                log(runtime::DiagnosticSeverity::Error, "export.capacity.never-fits",
+                    describeOutputAnalysisAttemptV1(*outcome) + "; " +
+                        describeProcessingReservationsV1(processingPolicy()),
+                    frame.index);
+                capacity_.succeeded();
+                return fail(failure(ExportFailureCode::ResourceRefused,
+                                    "export.capacity.never-fits",
+                                    "Frame " + std::to_string(frame.index) +
+                                        " needs more memory than this computer can give the "
+                                        "export, so the export stopped. Try a smaller "
+                                        "resolution; the details are in the log.",
+                                    frame.index));
+            }
+            frame.outcome.emplace(std::move(*outcome));
+        }
+        // The head frame enters the serial tail (EXR colour preparation, then publication).
+        if (std::holds_alternative<std::monostate>(inFlight_) && !window_.empty() &&
+            window_.front().outcome) {
+            auto outcome = std::move(*window_.front().outcome);
+            target_ = window_.front().target;
+            window_.pop_front();
+            handleAttempt(std::move(outcome));
+            if (done_)
+                return;
+        }
+        if (next_ > input_.range.last && std::holds_alternative<std::monostate>(inFlight_) &&
+            window_.empty())
+            return verify();
+        waitForCapacity();
+        if (done_)
+            return;
+        fill();
     }
 
     void stop() override {
         stopRequested_ = true;
+        for (auto& frame : window_)
+            if (frame.runner)
+                frame.runner->requestCancellation();
         if (auto* compiling = std::get_if<CompileHandle>(&inFlight_))
             compiling->cancel();
-        else if (auto* attempt = std::get_if<OutputAnalysisAttemptRunnerV1>(&inFlight_))
-            attempt->requestCancellation();
         else if (auto* preparing = std::get_if<PrepareHandle>(&inFlight_))
             preparing->cancel();
         else if (auto* publishing = std::get_if<PublishHandle>(&inFlight_))
             publishing->handle.cancel();
         else if (!done_) {
             capacity_.succeeded();
-            finishStopped();
+            stopNow();
         }
     }
 
     void setPaused(const bool paused) override { pauseRequested_ = paused; }
-    [[nodiscard]] bool pausedAtBoundary() const override { return holding_ && pauseRequested_; }
+    [[nodiscard]] bool pausedAtBoundary() const override {
+        return pauseRequested_ && compiled_ && !done_ &&
+               std::holds_alternative<std::monostate>(inFlight_) && window_.empty();
+    }
     [[nodiscard]] std::uint64_t framesCompleted() const override { return published_; }
     [[nodiscard]] std::optional<std::uint64_t> currentFrame() const override {
         return done_ ? std::nullopt : std::optional(next_);
@@ -376,15 +444,53 @@ class ImageDriver final : public DriverBase {
         runtime::TaskHandle<void> handle;
         std::shared_ptr<std::optional<FrameExportPublicationResultV1>> result;
     };
+    // One frame analysed ahead of the ordered publication tail.
+    struct WindowFrame final {
+        std::uint64_t index = 0;
+        std::filesystem::path target;
+        std::optional<OutputAnalysisAttemptRunnerV1> runner;
+        std::optional<OutputAnalysisAttemptOutcomeV1> outcome;
+        bool awaitingCapacity = false;
+        std::uint64_t refusedAtEpoch = 0;
+        // Refused while nothing of this export held memory: retried on the capacity backoff.
+        bool externalWait = false;
+    };
+
+    void stopNow() {
+        for (auto& frame : window_)
+            if (frame.runner)
+                frame.runner->requestCancellation();
+        window_.clear();
+        finishStopped();
+    }
+
+    // Whether anything besides window_[position] retains processing memory.
+    [[nodiscard]] bool othersHoldMemory(const std::size_t position) const {
+        if (!std::holds_alternative<std::monostate>(inFlight_))
+            return true;
+        for (std::size_t index = 0; index < window_.size(); ++index)
+            if (index != position && (window_[index].runner || window_[index].outcome))
+                return true;
+        return false;
+    }
+
+    [[nodiscard]] std::size_t runningAnalyses() const {
+        return static_cast<std::size_t>(std::ranges::count_if(
+            window_, [](const auto& frame) { return frame.runner.has_value(); }));
+    }
 
     void submitCompile() {
         runtime::TaskRequest request("Compile composition for export", input_.owner,
                                      runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu);
+        // TIFF sequences also prepare their display once here, off the authoring thread, so every
+        // frame attempt can run its output colour on the GPU.
+        const bool tiff = preset_ == OutputPresetV1::TiffRgba16SrgbV1;
         auto submission = dependencies_.scheduler.submit<
             std::shared_ptr<const runtime::CompiledCompositionPlan>>(
             std::move(request),
             [snapshot = input_.snapshot, composition = input_.composition,
-             &compiler = dependencies_.compiler](runtime::TaskContext& context) {
+             &compiler = dependencies_.compiler, tiff, intent = input_.colorIntent,
+             slot = mediaDisplaySlot_](runtime::TaskContext& context) {
                 using Result =
                     runtime::TaskResult<std::shared_ptr<const runtime::CompiledCompositionPlan>>;
                 if (context.isCancellationRequested())
@@ -402,6 +508,11 @@ class ImageDriver final : public DriverBase {
                         .summary = "The composition could not be compiled for export",
                         .detail = {},
                         .suggestedAction = "Review the composition graph."});
+                if (tiff) {
+                    if (auto display = output::PreparedOutputDisplayV1::prepare(intent))
+                        *slot = std::make_shared<OutputMediaDisplayCommandV1>(std::move(display),
+                                                                              intent);
+                }
                 return Result::succeeded(compiled.plan);
             });
         if (!submission.accepted())
@@ -410,27 +521,78 @@ class ImageDriver final : public DriverBase {
         inFlight_.emplace<CompileHandle>(std::move(submission.handle));
     }
 
-    void advance() {
-        if (stopRequested_)
-            return finishStopped();
-        if (next_ > input_.range.last)
-            return verify();
-        if (pauseRequested_) {
-            holding_ = true;
+    // Keeps up to depthLimit_ frames analysing ahead of the publication tail, in frame order, and
+    // retries the earliest refused frame once something completed since its refusal.
+    void fill() {
+        for (auto& frame : window_) {
+            if (!frame.awaitingCapacity)
+                continue;
+            const bool due = frame.externalWait
+                                 ? capacity_.retryDue(OutputAnalysisCapacityWaitV1::Clock::now())
+                                 : frame.refusedAtEpoch != releaseEpoch_;
+            if (due && !startAttempt(frame))
+                return;
+            break;
+        }
+        // The frame in the publication tail counts: a depth of one is one frame at a time.
+        const auto tailFrames = std::holds_alternative<std::monostate>(inFlight_) ? 0U : 1U;
+        while (!pauseRequested_ && nextStart_ <= input_.range.last &&
+               window_.size() + tailFrames < depthLimit_) {
+            window_.emplace_back();
+            window_.back().index = nextStart_++;
+            if (!startAttempt(window_.back()))
+                return;
+        }
+        resolveStall();
+    }
+
+    // Nothing runs and the tail is idle while the earliest unanalysed frame waits for capacity:
+    // only analysed later frames hold memory and they cannot publish first. Drop them (they
+    // analyse again) and retry; with nothing left to drop the refusal stops the export.
+    void resolveStall() {
+        if (done_ || !std::holds_alternative<std::monostate>(inFlight_) || runningAnalyses() != 0)
+            return;
+        const auto waiting =
+            std::ranges::find_if(window_, [](const auto& frame) { return frame.awaitingCapacity; });
+        if (waiting == window_.end() || waiting->externalWait ||
+            waiting->refusedAtEpoch != releaseEpoch_)
+            return;
+        bool released = false;
+        for (auto later = std::next(waiting); later != window_.end(); ++later) {
+            if (later->outcome) {
+                later->outcome.reset();
+                later->awaitingCapacity = true;
+                later->refusedAtEpoch = releaseEpoch_;
+                released = true;
+            }
+        }
+        if (released) {
+            ++releaseEpoch_;
+            fill();
             return;
         }
+        const auto index = waiting->index;
+        log(runtime::DiagnosticSeverity::Error, "export.attempt.detail",
+            "processing admission refused with nothing else in flight", index);
+        fail(failure(ExportFailureCode::ResourceRefused, "export.attempt.failed",
+                     "The export couldn't reserve its processing memory, so it stopped.", index));
+    }
+
+    bool startAttempt(WindowFrame& frame) {
         const auto* composition = input_.snapshot.project().findComposition(input_.composition);
         const FrameRangeRequestV1 frames{.destination = input_.output.destination.basePath,
                                          .firstFrame = input_.range.first,
                                          .lastFrame = input_.range.last,
                                          .frameRate = composition->format().frameRate(),
                                          .duration = composition->duration()};
-        const auto time = FrameRangeRunnerV1::timeForFrame(frames, next_);
-        const auto path = exportFramePath(input_.job, input_.output, next_);
-        if (!time || !path)
-            return fail(failure(ExportFailureCode::Internal, "export.frame.time",
-                                "This frame has no exact time or file name", next_));
-        target_ = *path;
+        const auto time = FrameRangeRunnerV1::timeForFrame(frames, frame.index);
+        const auto path = exportFramePath(input_.job, input_.output, frame.index);
+        if (!time || !path) {
+            fail(failure(ExportFailureCode::Internal, "export.frame.time",
+                         "This frame has no exact time or file name", frame.index));
+            return false;
+        }
+        frame.target = *path;
         OutputAnalysisAttemptRequestV1 request{
             .plan = plan_,
             .evaluation = {.time = *time,
@@ -441,7 +603,7 @@ class ImageDriver final : public DriverBase {
                            .pixelStorageByteLimit = 0,
                            .bypassLookNodes = !input_.output.record.settings.bakeLook},
             .assetBaseDirectory = input_.assetBaseDirectory,
-            .targetPath = target_,
+            .targetPath = frame.target,
             .overwritePolicy = input_.output.refuseExisting
                                    ? platform::ArtifactOverwritePolicy::CreateOnly
                                    : platform::ArtifactOverwritePolicy::CreateOrReplace,
@@ -449,48 +611,60 @@ class ImageDriver final : public DriverBase {
             .preset = preset_,
             .displayProcessorProvider = dependencies_.displayProcessor,
             .gpuProvider = dependencies_.gpu,
+            .mediaDisplay = mediaDisplay_,
             .useRootPixelCapacity = true};
         auto begin = beginOutputAnalysisAttemptV1(dependencies_.scheduler, dependencies_.artifacts,
                                                   *dependencies_.ledger, std::move(request));
-        if (!begin)
-            return fail(failure(ExportFailureCode::ResourceRefused, "export.attempt.refused",
-                                "The frame analysis could not be started", next_));
-        inFlight_.emplace<OutputAnalysisAttemptRunnerV1>(std::move(begin).takeHandle());
+        if (!begin) {
+            fail(failure(ExportFailureCode::ResourceRefused, "export.attempt.refused",
+                         "The frame analysis could not be started", frame.index));
+            return false;
+        }
+        frame.runner.emplace(std::move(begin).takeHandle());
+        frame.awaitingCapacity = false;
+        frame.externalWait = false;
+        return true;
     }
 
     [[nodiscard]] const runtime::GpuProcessingPhasePolicy* processingPolicy() const {
         return dependencies_.gpu ? dependencies_.gpu->processingPhasePolicy().get() : nullptr;
     }
 
-    // ADR 0033 section 9: the frame waits at its boundary (route WaitingForViewer, no ETA) and is
-    // retried with bounded backoff; it stays stoppable and pausable.
-    void pollCapacityWait() {
-        if (stopRequested_) {
-            capacity_.succeeded();
-            return finishStopped();
-        }
+    // ADR 0033 section 9: a frame refused while nothing of this export held memory waits at its
+    // boundary (route WaitingForViewer, no ETA) and is retried with bounded backoff; it stays
+    // stoppable and pausable. Pausing drops the waiting frames so the pause reaches its boundary.
+    void waitForCapacity() {
+        const auto waiting =
+            std::ranges::find_if(window_, [](const auto& frame) { return frame.awaitingCapacity; });
+        if (waiting == window_.end())
+            return;
         if (pauseRequested_) {
+            nextStart_ = waiting->index;
+            for (auto later = waiting; later != window_.end(); ++later)
+                if (later->runner)
+                    later->runner->requestCancellation();
+            window_.erase(waiting, window_.end());
             capacity_.succeeded();
-            holding_ = true;
             return;
         }
+        if (!waiting->externalWait)
+            return;
         const auto now = OutputAnalysisCapacityWaitV1::Clock::now();
         if (capacity_.stalled(now, processingPolicy())) {
+            const auto index = waiting->index;
             log(runtime::DiagnosticSeverity::Error, "export.capacity.stalled",
                 "No processing phase was admitted for " +
                     std::to_string(OutputAnalysisCapacityWaitV1::kStallAfter.count()) +
                     " s while waiting; " + describeProcessingReservationsV1(processingPolicy()),
-                next_);
+                index);
             capacity_.succeeded();
-            return fail(failure(ExportFailureCode::ResourceRefused, "export.capacity.stalled",
-                                "Bloom waited for memory to export frame " + std::to_string(next_) +
-                                    ", but other work kept holding it, so the export stopped. "
-                                    "Close a RAM preview or other exports and try again; the "
-                                    "details are in the log.",
-                                next_));
+            fail(failure(ExportFailureCode::ResourceRefused, "export.capacity.stalled",
+                         "Bloom waited for memory to export frame " + std::to_string(index) +
+                             ", but other work kept holding it, so the export stopped. "
+                             "Close a RAM preview or other exports and try again; the "
+                             "details are in the log.",
+                         index));
         }
-        if (capacity_.retryDue(now))
-            advance();
     }
 
     void handleAttempt(OutputAnalysisAttemptOutcomeV1 outcome) {
@@ -715,7 +889,7 @@ class ImageDriver final : public DriverBase {
         }
         ++published_;
         ++next_;
-        advance();
+        ++releaseEpoch_;
     }
 
     void verify() {
@@ -764,11 +938,17 @@ class ImageDriver final : public DriverBase {
     ExportDeviceRoute route_ = ExportDeviceRoute::None;
     bool stopRequested_ = false;
     bool pauseRequested_ = false;
-    bool holding_ = false;
+    bool compiled_ = false;
+    // The compile, then the ordered tail of the head frame: EXR colour preparation, publication.
+    std::variant<std::monostate, CompileHandle, PrepareHandle, PublishHandle> inFlight_;
+    std::deque<WindowFrame> window_;
+    std::uint64_t nextStart_ = 0;
+    std::size_t depthLimit_ = 1;
+    std::uint64_t releaseEpoch_ = 0;
+    std::shared_ptr<OutputMediaDisplayCommandV1> mediaDisplay_;
+    std::shared_ptr<std::shared_ptr<OutputMediaDisplayCommandV1>> mediaDisplaySlot_ =
+        std::make_shared<std::shared_ptr<OutputMediaDisplayCommandV1>>();
     OutputAnalysisCapacityWaitV1 capacity_;
-    std::variant<std::monostate, CompileHandle, OutputAnalysisAttemptRunnerV1, PrepareHandle,
-                 PublishHandle>
-        inFlight_;
 };
 
 // ---------------------------------------------------------------------------------------------

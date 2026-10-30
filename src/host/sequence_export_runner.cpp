@@ -5,9 +5,12 @@
 #include <bloom/output/composition_output_stream.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <condition_variable>
+#include <cstdint>
+#include <deque>
 #include <exception>
 #include <iostream>
 #include <mutex>
+#include <numeric>
 #include <thread>
 
 namespace bloom::host {
@@ -104,6 +107,11 @@ struct detail::SequenceExportWorkV1 {
     std::uint64_t gpuProcessPayloadBytes = 0;
     std::uint64_t gpuEncodedPayloadBytes = 0;
     std::uint64_t gpuDeviceOwnershipEpoch = 0;
+    // The export's display/view as one GPU command shared by every frame attempt (video only).
+    std::shared_ptr<OutputMediaDisplayCommandV1> mediaDisplay;
+    std::uint64_t gpuDisplayFrames = 0;
+    std::uint64_t cpuDisplayFrames = 0;
+    std::string cpuDisplayReason;
     std::unique_ptr<output::OutputAnalysisAttemptTargetV1> target;
     std::optional<SequenceExportResultV1> result;
     // One final-render evaluator per range: its verified source revisions and video sessions are
@@ -137,6 +145,14 @@ struct detail::SequenceExportWorkV1 {
         return analysis->settings;
     }
     std::uint64_t total() const { return request.range.lastFrame - request.range.firstFrame + 1; }
+    media::provider::Rational framePts(const std::uint64_t frame) const {
+        const auto& s = settings();
+        const auto numerator = frame * static_cast<std::uint64_t>(s.rate.denominator);
+        const auto denominator = static_cast<std::uint64_t>(s.rate.numerator);
+        const auto divisor = std::gcd(numerator, denominator);
+        return {static_cast<std::int64_t>(numerator / divisor),
+                static_cast<std::int64_t>(denominator / divisor)};
+    }
     std::uint64_t samplesThrough(std::uint64_t frames) const {
         const auto& s = settings();
         return frames * s.sampleRate * static_cast<std::uint64_t>(s.rate.denominator) /
@@ -271,6 +287,9 @@ struct detail::SequenceExportWorkV1 {
                                        " sha256=" + request.worker.openh264Digest;
         }
 #endif
+        if (!settings().videoCodec.empty() && analysis->display != nullptr)
+            mediaDisplay =
+                std::make_shared<OutputMediaDisplayCommandV1>(analysis->display, colorIntent());
         // Prepared frame, outbound protocol buffer and transport copy; one slot by construction.
         const auto bytes = static_cast<std::uint64_t>(settings().width) * settings().height * 24U +
                            std::uint64_t{8} * kEncodeChunkBytes;
@@ -320,9 +339,36 @@ struct detail::SequenceExportWorkV1 {
         }
         const auto digest = required(attempt.digest(), "Frame approval digest missing");
         (void)approvals.update(std::as_bytes(std::span(digest.bytes())));
-        checked(encoder->writeFrame(attempt.frame()->processImage(), encoded,
-                                    settings().audioCodec.empty() ? 0 : samplesThrough(encoded + 1),
-                                    context));
+        const auto samples = settings().audioCodec.empty() ? 0 : samplesThrough(encoded + 1);
+        const auto& media = attempt.gpuMediaDisplay();
+        if (!settings().videoCodec.empty() && mediaDisplay != nullptr && media.isPresent() &&
+            media.commandIdentity == mediaDisplay->commandIdentity() &&
+            media.displayDigest == analysis->display->digest()) {
+            // The GPU already ran the display/view transform; only un-association, clamping and
+            // quantization happen at the codec boundary.
+            auto prepared = checked(output::prepareMediaRgba16FromDisplayV1(
+                media.pixels.pixels(), media.width, media.height, framePts(encoded),
+                [this] { return isCancelled() || taskCancellation.isCancellationRequested(); }));
+            checked(encoder->writePreparedFrame(std::move(prepared), samples, context));
+            ++gpuDisplayFrames;
+        } else {
+            if (!settings().videoCodec.empty()) {
+                // Explicit provenance: the CPU reference display transform ran for this frame.
+                if (cpuDisplayFrames++ == 0) {
+                    cpuDisplayReason = mediaDisplay == nullptr ? "no display command"
+                                       : media.isPresent()
+                                           ? "the GPU display payload's command differs"
+                                       : mediaDisplay->unavailableReason().empty()
+                                           ? "the frame was not evaluated on the GPU"
+                                           : mediaDisplay->unavailableReason();
+                    std::cerr << "Bloom export: CPU reference display transform for frame "
+                              << request.range.firstFrame + encoded << " (" << cpuDisplayReason
+                              << ")\n";
+                }
+            }
+            checked(
+                encoder->writeFrame(attempt.frame()->processImage(), encoded, samples, context));
+        }
         ++encoded;
         context.reportProgress({"Encoding composition", "", encoded, total()});
     }
@@ -389,6 +435,9 @@ struct detail::SequenceExportWorkV1 {
         outcome.gpuProcessPayloadBytes = gpuProcessPayloadBytes;
         outcome.gpuEncodedPayloadBytes = gpuEncodedPayloadBytes;
         outcome.gpuDeviceOwnershipEpoch = gpuDeviceOwnershipEpoch;
+        outcome.gpuDisplayFrames = gpuDisplayFrames;
+        outcome.cpuDisplayFrames = cpuDisplayFrames;
+        outcome.cpuDisplayReason = cpuDisplayReason;
         if (guardResult.status() == PublicationGuardStatus::Entered) {
             auto guard = std::move(guardResult).takeGuard();
             outcome.publication = lease.publish(platform::PublicationDisposition::Proceed);
@@ -538,7 +587,31 @@ bool SequenceExportRetirementOwnerV1::collect() noexcept {
     return true;
 }
 
+std::size_t detail::sequenceExportFramesInFlightV1(const GpuExportProvider* provider,
+                                                   const std::optional<std::size_t> cap) noexcept {
+    // Frames analysed ahead of the ordered encoder. The measured-capacity model
+    // (GpuProcessingPhasePolicy::framesThatFit, measured free memory minus the headroom
+    // preference) replaces this bounded default when it is available; the runner also shrinks
+    // its window whenever admission reports the processing root out of capacity.
+    (void)provider;
+    constexpr std::size_t kDefaultFramesInFlight = 4;
+    return std::max<std::size_t>(1, std::min(kDefaultFramesInFlight, cap.value_or(SIZE_MAX)));
+}
+
 struct SequenceExportRunnerV1::State {
+    // One frame between its analysis attempt and the ordered encoder.
+    struct InFlightFrame final {
+        std::uint64_t offset = 0;
+        std::optional<OutputAnalysisAttemptRunnerV1> runner;
+        std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt;
+        // Admission found the processing root full while other frames held memory; the frame
+        // starts again once an encode has released a retained frame (`releaseEpoch` advanced).
+        bool awaitingCapacity = false;
+        std::uint64_t refusedAtEpoch = 0;
+        // Refused while nothing of this export held memory: other work holds the shared root, so
+        // the retry follows the capacity wait's backoff instead of this export's completions.
+        bool externalWait = false;
+    };
     runtime::TaskScheduler& scheduler;
     PublicationCoordinator& publications;
     platform::StagedArtifactCoordinator& artifacts;
@@ -547,15 +620,22 @@ struct SequenceExportRunnerV1::State {
     std::unique_ptr<SequenceExportRetirementOwnerV1::Ticket> ticket;
     std::shared_ptr<Work> work;
     Stage stage = Stage::Compiling;
+    // The compile task, then each ordered encode task; at most one at a time.
     runtime::TaskHandle<void> task;
-    std::optional<OutputAnalysisAttemptRunnerV1> attemptRunner;
+    bool compiled = false;
+    bool encoding = false;
+    // Frames in flight, ordered by frame; the head is the next frame the encoder takes.
+    std::deque<InFlightFrame> window;
+    std::uint64_t nextOffset = 0;
+    std::size_t depthLimit = 1;
+    std::uint64_t releaseEpoch = 0;
     std::shared_ptr<const output::OutputAnalysisAttemptV1> pending;
     bool approved = false;
     bool pauseRequested = false;
     // Technical detail of the last failure, for logs only.
     std::string diagnostic;
-    bool holding = false;
-    // ADR 0033 section 9: a frame refused for capacity waits at the frame boundary.
+    // ADR 0033 section 9: the frame queue reservation, or a frame refused while no frame of this
+    // export holds memory, waits at the frame boundary with backoff and a stall rule.
     OutputAnalysisCapacityWaitV1 capacity;
     bool capacityLogged = false;
     [[nodiscard]] const runtime::GpuProcessingPhasePolicy* processingPolicy() const {
@@ -565,9 +645,6 @@ struct SequenceExportRunnerV1::State {
     }
     // The movie frame queue's reservation is this export's own admitted phase.
     [[nodiscard]] std::size_t ownPhases() const { return work && work->queueReservation ? 1 : 0; }
-    [[nodiscard]] std::uint64_t currentFrame() const {
-        return work->request.range.firstFrame + visibleEncoded;
-    }
     std::uint64_t visibleEncoded = 0;
     std::optional<SequenceExportResultV1> outcome;
     State(runtime::TaskScheduler& s, PublicationCoordinator& p,
@@ -599,8 +676,7 @@ struct SequenceExportRunnerV1::State {
             return;
         }
         work->cancelled.store(true);
-        if (attemptRunner)
-            attemptRunner->requestCancellation();
+        cancelAnalyses();
         task.cancel();
         auto retained = std::move(work);
         {
@@ -608,6 +684,11 @@ struct SequenceExportRunnerV1::State {
             retained->abandoned = true;
         }
         retirement.retire(std::move(ticket), std::move(retained));
+    }
+    void cancelAnalyses() noexcept {
+        for (auto& frame : window)
+            if (frame.runner)
+                frame.runner->requestCancellation();
     }
     void fail(Unavailable error) {
         SequenceExportResultV1 result;
@@ -620,7 +701,8 @@ struct SequenceExportRunnerV1::State {
         outcome = std::move(result);
         stage = Stage::Complete;
         pending.reset();
-        attemptRunner.reset();
+        cancelAnalyses();
+        window.clear();
         // The pre-reserved ticket remains admissible even after scheduler shutdown. It retains
         // the encoder and ledger charge until the independent owner has closed/reaped them.
         retirement.retire(std::move(ticket), std::move(work));
@@ -663,12 +745,17 @@ struct SequenceExportRunnerV1::State {
         else
             task = std::move(submission.handle);
     }
-    void nextAttempt() {
-        const auto index = work->request.range.firstFrame + visibleEncoded;
+    [[nodiscard]] std::size_t runningAnalyses() const noexcept {
+        return static_cast<std::size_t>(std::ranges::count_if(
+            window, [](const auto& frame) { return frame.runner.has_value(); }));
+    }
+    // Starts the analysis attempt of one frame. False after a terminal failure.
+    bool startAttempt(InFlightFrame& frame) {
+        const auto index = work->request.range.firstFrame + frame.offset;
         const auto time = FrameRangeRunnerV1::timeForFrame(work->request.range, index);
         if (!time) {
             fail({Error::InvalidValue, "Frame has no exact composition time"});
-            return;
+            return false;
         }
         // The per-frame preservation check compares the prepared float frame before encoding.
 #if defined(__APPLE__)
@@ -694,28 +781,170 @@ struct SequenceExportRunnerV1::State {
             .owner = work->request.owner,
             .preset = preset,
             .gpuProvider = work->request.gpuProvider,
+            .mediaDisplay = work->mediaDisplay,
             .useRootPixelCapacity = true};
         auto begin = beginOutputAnalysisAttemptV1(scheduler, artifacts, ledger, std::move(request));
         if (!begin) {
             fail({Error::Busy, "Frame analysis admission refused"});
-            return;
+            return false;
         }
-        attemptRunner.emplace(std::move(begin).takeHandle());
-        stage = Stage::Analyzing;
+        frame.runner.emplace(std::move(begin).takeHandle());
+        frame.awaitingCapacity = false;
+        frame.externalWait = false;
+        return true;
     }
-    bool encodeApproved() {
-        if (!pending)
+    // Keeps up to `depthLimit` analyses running ahead of the encoder, in frame order. A frame
+    // admission refused restarts once an encode released memory. Nothing new starts while paused
+    // or cancelled. False after a terminal failure.
+    bool fill() {
+        if (!compiled || stage == Stage::Complete || work->isCancelled())
+            return true;
+        // Retry the earliest refused frame once something of this export completed since its
+        // refusal, or once the capacity wait's backoff elapsed when other work held the root.
+        for (auto& frame : window) {
+            if (!frame.awaitingCapacity)
+                continue;
+            const bool due = frame.externalWait
+                                 ? capacity.retryDue(OutputAnalysisCapacityWaitV1::Clock::now())
+                                 : frame.refusedAtEpoch != releaseEpoch;
+            if (due) {
+                frame.externalWait = false;
+                if (!startAttempt(frame))
+                    return false;
+            }
+            break;
+        }
+        // The frame being encoded counts: a depth of one is exactly one frame at a time.
+        while (!pauseRequested && nextOffset < work->total() &&
+               window.size() + (encoding ? 1U : 0U) < depthLimit) {
+            window.emplace_back();
+            window.back().offset = nextOffset++;
+            if (!startAttempt(window.back()))
+                return false;
+        }
+        return true;
+    }
+    [[nodiscard]] static bool capacityRefusal(const OutputAnalysisAttemptOutcomeV1& outcome) {
+        const auto* failure = outcome.failure();
+        if (!failure)
             return false;
-        const auto digest = pending->digest();
-        if (!digest)
+        if (const auto* code = failure->payloadAs<runtime::GpuProcessFrameDiagnosticCode>())
+            return *code == runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity ||
+                   *code == runtime::GpuProcessFrameDiagnosticCode::BudgetRefused;
+        if (const auto* code = failure->payloadAs<output::OutputAnalysisAttemptErrorCodeV1>())
+            return *code == output::OutputAnalysisAttemptErrorCodeV1::ResourceReservationFailed;
+        return false;
+    }
+    // Consumes the completed analysis of window[position]. False after a terminal failure.
+    bool complete(const std::size_t position, OutputAnalysisAttemptOutcomeV1 result) {
+        auto& frame = window[position];
+        if (const auto& provenance = result.gpuProvenance();
+            provenance.has_value() && provenance->gpuEvaluated()) {
+            ++work->gpuEvaluatedFrames;
+            work->gpuNativeDispatches += provenance->counters.nativeDispatches;
+            work->gpuReadbacks += provenance->counters.readbacks;
+            work->gpuReadbackSubmissions += provenance->readbackSubmissions;
+            work->gpuTransferredPayloads += provenance->transferredPayloads;
+            work->gpuProcessPayloadBytes += provenance->processPayloadBytes;
+            work->gpuEncodedPayloadBytes += provenance->encodedPayloadBytes;
+            if (provenance->deviceOwnershipEpoch != 0)
+                work->gpuDeviceOwnershipEpoch = provenance->deviceOwnershipEpoch;
+        }
+        if (work->isCancelled()) {
+            fail({Error::Cancelled, "Composition export cancelled"});
             return false;
-        auto approval = approveFrameExportV1(publications, pending, *digest);
+        }
+        const auto refusal =
+            outputAnalysisCapacityRefusalV1(result, processingPolicy(), ownPhases());
+        if (refusal != OutputAnalysisCapacityRefusalV1::None) {
+            const auto index = work->request.range.firstFrame + frame.offset;
+            // Another frame of this export (analysing, analysed or encoding) holds memory or the
+            // device phase: keep everything else running and start this frame again once
+            // something has completed (releaseEpoch advances on every completion).
+            const bool ownFramesHold =
+                encoding || std::ranges::any_of(window, [&frame](const auto& other) {
+                    return &other != &frame &&
+                           (other.runner.has_value() || other.attempt != nullptr);
+                });
+            if (ownFramesHold) {
+                frame.awaitingCapacity = true;
+                frame.externalWait = false;
+                frame.refusedAtEpoch = releaseEpoch;
+                return true;
+            }
+            if (refusal == OutputAnalysisCapacityRefusalV1::Wait) {
+                // ADR 0033 section 9: other work holds the shared root; wait at this boundary.
+                frame.awaitingCapacity = true;
+                frame.externalWait = true;
+                frame.refusedAtEpoch = releaseEpoch;
+                capacity.refused(OutputAnalysisCapacityWaitV1::Clock::now(), processingPolicy(),
+                                 ownPhases());
+                if (!std::exchange(capacityLogged, true))
+                    std::cerr << "Bloom export: frame " << index << " waiting for capacity; "
+                              << describeOutputAnalysisAttemptV1(result) << "; "
+                              << describeProcessingReservationsV1(processingPolicy()) << '\n';
+                return true;
+            }
+            diagnostic = "frame " + std::to_string(index) + " never fits; " +
+                         describeOutputAnalysisAttemptV1(result) + "; " +
+                         describeProcessingReservationsV1(processingPolicy());
+            std::cerr << "Bloom export: " << diagnostic << '\n';
+            capacity.succeeded();
+            fail({Error::Oversized,
+                  "Frame " + std::to_string(index) +
+                      " needs more memory than this computer can give the export, so the "
+                      "export stopped. Try a smaller resolution; the details are in the log."});
+            return false;
+        }
+        if (result && !frame.awaitingCapacity && capacity.waiting() &&
+            std::ranges::none_of(window, [](const auto& other) { return other.externalWait; })) {
+            capacity.succeeded();
+            capacityLogged = false;
+        }
+        if (!result || !result.attempt() || !result.attempt()->approvable()) {
+            // The artist reads a sentence; the stage, codes and facets go to the diagnostic log.
+            const auto index = work->request.range.firstFrame + frame.offset;
+            std::string facets;
+            if (result.attempt() && result.attempt()->report())
+                for (const auto& facet : result.attempt()->report()->view().facets)
+                    if (facet.state == output::OutputPreservationStateV1::Missing ||
+                        facet.state == output::OutputPreservationStateV1::Unsupported)
+                        facets += (facets.empty() ? "" : ", ") +
+                                  std::string(output::outputFacetDisplayNameV1(facet.facet));
+            std::string message =
+                facets.empty()
+                    ? "Bloom couldn't check frame " + std::to_string(index) +
+                          " before encoding, so the export stopped. This is a bug in Bloom; the "
+                          "details are in the log."
+                    : "Frame " + std::to_string(index) + " can't be exported in this format (" +
+                          facets + "), so the export stopped.";
+            std::string detail = "frame " + std::to_string(index) + " not approvable; " +
+                                 describeOutputAnalysisAttemptV1(result);
+            std::cerr << "Bloom export: " << detail << '\n';
+            diagnostic = std::move(detail);
+            fail({Error::Unavailable, std::move(message)});
+            return false;
+        }
+        frame.attempt = result.attempt();
+        return true;
+    }
+    // Hands the analysed head frame to the ordered encoder. False after a terminal failure.
+    bool encodeHead() {
+        auto attempt = std::move(window.front().attempt);
+        window.pop_front();
+        pending.reset();
+        const auto digest = attempt->digest();
+        if (!digest) {
+            fail({Error::IdentityMismatch, "Frame approval digest missing"});
+            return false;
+        }
+        auto approval = approveFrameExportV1(publications, attempt, *digest);
         if (!approval) {
             fail({Error::IdentityMismatch, "Frame approval refused"});
             return false;
         }
         work->approvedFrame = std::move(approval).takeRequest();
-        pending.reset();
+        encoding = true;
         auto* artifactService = &artifacts;
         submit(Stage::Encoding, [artifactService](Work& w, runtime::TaskContext& context) {
             struct Release {
@@ -726,7 +955,85 @@ struct SequenceExportRunnerV1::State {
             if (w.encoded == w.total())
                 w.publish(*w.approvedFrame, *artifactService, context);
         });
+        return stage != Stage::Complete;
+    }
+    // The frame-boundary side of an external capacity wait: pausing drops the waiting frames (they
+    // start again on resume) so the pause reaches its boundary, and a wait no admitted phase can
+    // end stops the export with readable text. False after a terminal failure.
+    bool waitForCapacity() {
+        if (!compiled || stage == Stage::Complete)
+            return true;
+        const auto waiting =
+            std::ranges::find_if(window, [](const auto& frame) { return frame.awaitingCapacity; });
+        if (waiting == window.end())
+            return true;
+        if (pauseRequested) {
+            nextOffset = waiting->offset;
+            for (auto later = waiting; later != window.end(); ++later)
+                if (later->runner)
+                    later->runner->requestCancellation();
+            window.erase(waiting, window.end());
+            capacity.succeeded();
+            return true;
+        }
+        const auto now = OutputAnalysisCapacityWaitV1::Clock::now();
+        if (waiting->externalWait && capacity.stalled(now, processingPolicy(), ownPhases())) {
+            const auto index = work->request.range.firstFrame + waiting->offset;
+            diagnostic = "frame " + std::to_string(index) +
+                         " capacity wait stalled; no processing phase was admitted for " +
+                         std::to_string(OutputAnalysisCapacityWaitV1::kStallAfter.count()) +
+                         " s; " + describeProcessingReservationsV1(processingPolicy());
+            std::cerr << "Bloom export: " << diagnostic << '\n';
+            capacity.succeeded();
+            fail({Error::Busy,
+                  "Bloom waited for memory to export frame " + std::to_string(index) +
+                      ", but other work kept holding it, so the export stopped. Close a RAM "
+                      "preview or other exports and try again; the details are in the log."});
+            return false;
+        }
         return true;
+    }
+    // Nothing runs, nothing encodes and the earliest unanalysed frame waits for capacity: only
+    // analysed later frames still hold memory, and they can never reach the encoder first. Drop
+    // them (they analyse again later) and retry; with nothing left to drop the refusal is real.
+    // False after a terminal failure.
+    bool resolveStall() {
+        if (stage == Stage::Complete || encoding || runningAnalyses() != 0)
+            return true;
+        const auto waiting =
+            std::ranges::find_if(window, [](const auto& frame) { return frame.awaitingCapacity; });
+        if (waiting == window.end() || waiting->externalWait ||
+            waiting->refusedAtEpoch != releaseEpoch)
+            return true;
+        bool released = false;
+        for (auto later = std::next(waiting); later != window.end(); ++later) {
+            if (later->attempt != nullptr) {
+                later->attempt.reset();
+                later->awaitingCapacity = true;
+                later->refusedAtEpoch = releaseEpoch;
+                released = true;
+            }
+        }
+        if (released) {
+            ++releaseEpoch;
+            return fill();
+        }
+        const auto index = work->request.range.firstFrame + waiting->offset;
+        diagnostic = "frame " + std::to_string(index) + " processing admission refused";
+        std::cerr << "Bloom export: " << diagnostic << '\n';
+        fail({Error::Unavailable, "Bloom couldn't reserve processing memory for frame " +
+                                      std::to_string(index) + ", so the export stopped."});
+        return false;
+    }
+    void updateStage() {
+        if (stage == Stage::Complete || !compiled)
+            return;
+        if (encoding)
+            stage = Stage::Encoding;
+        else if (!window.empty() && window.front().attempt && !approved)
+            stage = Stage::AwaitingApproval;
+        else
+            stage = Stage::Analyzing;
     }
 };
 SequenceExportRunnerV1::SequenceExportRunnerV1(
@@ -746,6 +1053,8 @@ SequenceExportRunnerV1::SequenceExportRunnerV1(
         state_->work->ownsDefaultGpuProvider = true;
         state_->work->request.gpuProvider->prepare(scheduler);
     }
+    state_->depthLimit = detail::sequenceExportFramesInFlightV1(
+        state_->work->request.gpuProvider.get(), state_->work->request.framesInFlight);
     state_->submit(Stage::Compiling,
                    [&compiler, &ledger](Work& work, runtime::TaskContext& context) {
                        work.prepare(compiler, ledger, context);
@@ -756,36 +1065,26 @@ void SequenceExportRunnerV1::cancel() {
     if (!state_->work || state_->stage == Stage::Complete)
         return;
     state_->work->cancelled.store(true);
-    if (state_->attemptRunner)
-        state_->attemptRunner->requestCancellation();
+    state_->cancelAnalyses();
     state_->task.cancel();
 }
 void SequenceExportRunnerV1::setPaused(const bool paused) { state_->pauseRequested = paused; }
 bool SequenceExportRunnerV1::pausedAtBoundary() const {
     const auto& s = *state_;
     const bool queueWait = s.stage == Stage::Compiling && !s.task.isValid() && s.capacity.waiting();
-    return s.pauseRequested && (s.holding || queueWait);
+    const bool drained =
+        s.compiled && s.stage != Stage::Complete && !s.encoding && s.window.empty();
+    return s.pauseRequested && (queueWait || drained);
 }
-bool SequenceExportRunnerV1::waitingForCapacity() const { return state_->capacity.waiting(); }
+bool SequenceExportRunnerV1::waitingForCapacity() const {
+    const auto& s = *state_;
+    return s.capacity.waiting() ||
+           std::ranges::any_of(s.window, [](const auto& frame) { return frame.awaitingCapacity; });
+}
 void SequenceExportRunnerV1::poll() {
     auto& s = *state_;
     if (s.stage == Stage::Complete)
         return;
-    if (s.holding) {
-        if (s.work->isCancelled()) {
-            s.holding = false;
-            s.fail({Error::Cancelled, "Composition export cancelled"});
-        } else if (!s.pauseRequested) {
-            s.holding = false;
-            s.nextAttempt();
-        }
-        return;
-    }
-    if (s.stage == Stage::AwaitingApproval) {
-        if (s.work->isCancelled())
-            s.fail({Error::Cancelled, "Composition export cancelled"});
-        return;
-    }
     if (s.stage == Stage::Compiling && !s.task.isValid() && s.capacity.waiting()) {
         // Waiting for the frame queue reservation (nothing in flight).
         if (s.work->isCancelled()) {
@@ -820,157 +1119,80 @@ void SequenceExportRunnerV1::poll() {
         }
         return;
     }
-    if (s.stage == Stage::Analyzing && !s.attemptRunner && s.capacity.waiting()) {
-        if (s.work->isCancelled()) {
-            s.capacity.succeeded();
-            s.fail({Error::Cancelled, "Composition export cancelled"});
-            return;
-        }
-        if (s.pauseRequested) {
-            // Paused while waiting: nothing is in flight, so this is the frame boundary.
-            s.capacity.succeeded();
-            s.holding = true;
-            return;
-        }
-        const auto now = OutputAnalysisCapacityWaitV1::Clock::now();
-        if (s.capacity.stalled(now, s.processingPolicy(), s.ownPhases())) {
-            const auto frame = s.currentFrame();
-            s.diagnostic = "frame " + std::to_string(frame) +
-                           " capacity wait stalled; no processing phase was admitted for " +
-                           std::to_string(OutputAnalysisCapacityWaitV1::kStallAfter.count()) +
-                           " s; " + describeProcessingReservationsV1(s.processingPolicy());
-            std::cerr << "Bloom export: " << s.diagnostic << '\n';
-            s.capacity.succeeded();
-            s.fail({Error::Busy,
-                    "Bloom waited for memory to export frame " + std::to_string(frame) +
-                        ", but other work kept holding it, so the export stopped. Close a RAM "
-                        "preview or other exports and try again; the details are in the log."});
-            return;
-        }
-        if (s.capacity.retryDue(now))
-            s.nextAttempt();
-        return;
-    }
-    if (s.stage == Stage::Analyzing) {
-        if (!s.attemptRunner) {
-            s.fail({Error::InvalidValue, "Missing analysis runner"});
-            return;
-        }
-        auto outcome = s.attemptRunner->tryComplete();
-        if (!outcome)
-            return;
-        s.attemptRunner.reset();
-        if (const auto& provenance = outcome->gpuProvenance();
-            provenance.has_value() && provenance->gpuEvaluated()) {
-            ++s.work->gpuEvaluatedFrames;
-            s.work->gpuNativeDispatches += provenance->counters.nativeDispatches;
-            s.work->gpuReadbacks += provenance->counters.readbacks;
-            s.work->gpuReadbackSubmissions += provenance->readbackSubmissions;
-            s.work->gpuTransferredPayloads += provenance->transferredPayloads;
-            s.work->gpuProcessPayloadBytes += provenance->processPayloadBytes;
-            s.work->gpuEncodedPayloadBytes += provenance->encodedPayloadBytes;
-            if (provenance->deviceOwnershipEpoch != 0) {
-                s.work->gpuDeviceOwnershipEpoch = provenance->deviceOwnershipEpoch;
+    if (!s.compiled || s.encoding) {
+        // The compile (or frame queue) task, or the ordered encode task of the head frame.
+        if (auto completed = s.task.tryTakeResult()) {
+            const bool wasEncoding = s.encoding;
+            s.encoding = false;
+            if (s.work->result) {
+                s.outcome = std::move(s.work->result);
+                s.visibleEncoded = s.work->encoded;
+                s.stage = Stage::Complete;
+                return;
             }
-        }
-        if (s.work->isCancelled()) {
-            s.fail({Error::Cancelled, "Composition export cancelled"});
+            if (s.work->error) {
+                s.fail(*s.work->error);
+                return;
+            }
+            if (s.work->isCancelled() || completed->state() != runtime::TaskState::Succeeded) {
+                s.fail({Error::Cancelled, "Composition export cancelled"});
+                return;
+            }
+            if (!wasEncoding && s.work->queueAwaitingCapacity) {
+                // ADR 0033 section 9: the export has not started yet; it waits, never fails,
+                // while the Viewer or other work holds the shared processing root.
+                s.task = {};
+                s.capacity.refused(OutputAnalysisCapacityWaitV1::Clock::now(),
+                                   s.processingPolicy());
+                if (!std::exchange(s.capacityLogged, true))
+                    std::cerr << "Bloom export: frame queue waiting for capacity; "
+                              << describeProcessingReservationsV1(s.processingPolicy()) << '\n';
+                return;
+            }
+            if (!wasEncoding) {
+                s.capacity.succeeded();
+                s.capacityLogged = false;
+            }
+            s.visibleEncoded = s.work->encoded;
+            if (wasEncoding)
+                ++s.releaseEpoch;
+            s.compiled = true;
+        } else if (!s.compiled) {
             return;
         }
-        switch (outputAnalysisCapacityRefusalV1(*outcome, s.processingPolicy(), s.ownPhases())) {
-        case OutputAnalysisCapacityRefusalV1::Wait:
-            // Hold at this frame boundary and retry the same frame when capacity frees.
-            s.capacity.refused(OutputAnalysisCapacityWaitV1::Clock::now(), s.processingPolicy(),
-                               s.ownPhases());
-            if (!std::exchange(s.capacityLogged, true))
-                std::cerr << "Bloom export: frame " << s.currentFrame() << " waiting for capacity; "
-                          << describeOutputAnalysisAttemptV1(*outcome) << "; "
-                          << describeProcessingReservationsV1(s.processingPolicy()) << '\n';
-            return;
-        case OutputAnalysisCapacityRefusalV1::NeverFits: {
-            const auto frame = s.currentFrame();
-            s.diagnostic = "frame " + std::to_string(frame) + " never fits; " +
-                           describeOutputAnalysisAttemptV1(*outcome) + "; " +
-                           describeProcessingReservationsV1(s.processingPolicy());
-            std::cerr << "Bloom export: " << s.diagnostic << '\n';
-            s.capacity.succeeded();
-            s.fail({Error::Oversized,
-                    "Frame " + std::to_string(frame) +
-                        " needs more memory than this computer can give the export, so the "
-                        "export stopped. Try a smaller resolution; the details are in the log."});
-            return;
-        }
-        case OutputAnalysisCapacityRefusalV1::None:
-            s.capacity.succeeded();
-            s.capacityLogged = false;
-            break;
-        }
-        if (!*outcome || !outcome->attempt() || !outcome->attempt()->approvable()) {
-            // The artist reads a sentence; the stage, codes and facets go to the diagnostic log.
-            const auto frame = s.work->request.range.firstFrame + s.visibleEncoded;
-            std::string facets;
-            if (outcome->attempt() && outcome->attempt()->report())
-                for (const auto& facet : outcome->attempt()->report()->view().facets)
-                    if (facet.state == output::OutputPreservationStateV1::Missing ||
-                        facet.state == output::OutputPreservationStateV1::Unsupported)
-                        facets += (facets.empty() ? "" : ", ") +
-                                  std::string(output::outputFacetDisplayNameV1(facet.facet));
-            std::string message =
-                facets.empty()
-                    ? "Bloom couldn't check frame " + std::to_string(frame) +
-                          " before encoding, so the export stopped. This is a bug in Bloom; the "
-                          "details are in the log."
-                    : "Frame " + std::to_string(frame) + " can't be exported in this format (" +
-                          facets + "), so the export stopped.";
-            std::string detail = "frame " + std::to_string(frame) + " not approvable; " +
-                                 describeOutputAnalysisAttemptV1(*outcome);
-            std::cerr << "Bloom export: " << detail << '\n';
-            s.diagnostic = std::move(detail);
-            s.fail({Error::Unavailable, std::move(message)});
-            return;
-        }
-        s.pending = outcome->attempt();
-        if (s.approved)
-            (void)s.encodeApproved();
-        else
-            s.stage = Stage::AwaitingApproval;
-        return;
     }
-    auto completed = s.task.tryTakeResult();
-    if (!completed)
-        return;
-    if (s.work->result) {
-        s.outcome = std::move(s.work->result);
-        s.visibleEncoded = s.work->encoded;
-        s.stage = Stage::Complete;
-        return;
-    }
-    if (s.work->error) {
-        s.fail(*s.work->error);
-        return;
-    }
-    if (s.work->isCancelled() || completed->state() != runtime::TaskState::Succeeded) {
+    if (s.work->isCancelled() && !s.encoding) {
+        s.capacity.succeeded();
         s.fail({Error::Cancelled, "Composition export cancelled"});
         return;
     }
-    if (s.stage == Stage::Compiling && s.work->queueAwaitingCapacity) {
-        // ADR 0033 section 9: the export has not started yet; it waits, never fails, while the
-        // Viewer or other work holds the shared processing root.
-        s.task = {};
-        s.capacity.refused(OutputAnalysisCapacityWaitV1::Clock::now(), s.processingPolicy());
-        if (!std::exchange(s.capacityLogged, true))
-            std::cerr << "Bloom export: frame queue waiting for capacity; "
-                      << describeProcessingReservationsV1(s.processingPolicy()) << '\n';
-        return;
+    for (std::size_t position = 0; position < s.window.size(); ++position) {
+        auto& frame = s.window[position];
+        if (!frame.runner)
+            continue;
+        auto result = frame.runner->tryComplete();
+        if (!result)
+            continue;
+        frame.runner.reset();
+        ++s.releaseEpoch;
+        if (!s.complete(position, std::move(*result)))
+            return;
     }
-    if (s.stage == Stage::Compiling)
-        s.capacity.succeeded();
-    s.visibleEncoded = s.work->encoded;
-    if (s.pauseRequested) {
-        s.holding = true;
-        return;
+    if (!s.encoding && !s.window.empty() && s.window.front().attempt) {
+        if (s.approved) {
+            if (!s.encodeHead())
+                return;
+        } else {
+            s.pending = s.window.front().attempt;
+        }
     }
-    s.nextAttempt();
+    if (!s.waitForCapacity())
+        return;
+    if (!s.fill())
+        return;
+    if (!s.resolveStall())
+        return;
+    s.updateStage();
 }
 SequenceExportStageV1 SequenceExportRunnerV1::stage() const { return state_->stage; }
 const output::MediaOutputAnalysisV1* SequenceExportRunnerV1::analysis() const {
@@ -983,11 +1205,16 @@ std::optional<core::Sha256Digest> SequenceExportRunnerV1::frameApprovalDigest() 
 }
 bool SequenceExportRunnerV1::approve(core::Sha256Digest mediaDigest,
                                      core::Sha256Digest frameDigest) {
-    if (state_->stage != Stage::AwaitingApproval || !analysis() ||
-        analysis()->digest != mediaDigest || frameApprovalDigest() != frameDigest)
+    auto& s = *state_;
+    if (s.stage != Stage::AwaitingApproval || !analysis() || analysis()->digest != mediaDigest ||
+        frameApprovalDigest() != frameDigest || s.window.empty() ||
+        s.window.front().attempt != s.pending)
         return false;
-    state_->approved = true;
-    return state_->encodeApproved();
+    s.approved = true;
+    if (!s.encodeHead())
+        return false;
+    s.updateStage();
+    return true;
 }
 std::uint64_t SequenceExportRunnerV1::encodedFrames() const { return state_->visibleEncoded; }
 std::uint64_t SequenceExportRunnerV1::totalFrames() const {

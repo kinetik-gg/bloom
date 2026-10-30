@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -11,11 +13,14 @@
 #include <bloom/host/export_capacity_wait.hpp>
 #include <bloom/host/frame_range_runner.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/host/gpu_export_tool_package.hpp>
+#include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/media/provider/contract.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/session.hpp>
+#include <bloom/output/media_output.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <chrono>
@@ -114,6 +119,9 @@ template <typename T> T need(media::provider::Result<T> value) {
 }
 
 namespace routeproof = bloom::gpu_route_proof_export;
+// Documented GPU output-colour tolerance for RGBA16 media delivery (docs/architecture/
+// frame-output.md): binary32 GPU OCIO against the binary64 CPU reference, in 16-bit codes.
+constexpr std::uint32_t kMediaDisplayTolerance16 = 16;
 enum class GpuProofOutcome : std::uint8_t { NotRequested, Skipped, Ran };
 
 // The per-frame production identity material the sequence runner can genuinely observe: the real
@@ -567,6 +575,76 @@ void verify(const host::SequenceExportResultV1& r, const std::filesystem::path& 
 // documented preset tolerance below, and the evidence digest is bound to the exact decoded bytes.
 // Skips (exit 77) when no loader/device is configured; `--require-device` turns that into a
 // failure.
+// CPU/GPU parity of the media output colour: the same GPU-evaluated process frame is prepared for
+// the codec twice, once through the CPU reference display transform and once from the GPU
+// display/view ProcessEffect payload of the same combined readback. The only difference is the
+// display transform's implementation, measured in RGBA16 codes.
+void testGpuMediaDisplayParity(Fixture& f, const std::shared_ptr<host::GpuExportProvider>& provider,
+                               const runtime::EvaluationColorIntent& intent,
+                               const std::uint32_t tolerance, const std::string_view label) {
+    const auto compiled =
+        f.compiler.compile({f.doc.snapshot(), f.initial.initialCompositionId}, {});
+    check(compiled.plan != nullptr, "parity plan compiles");
+    const auto display = output::PreparedOutputDisplayV1::prepare(intent);
+    check(display != nullptr, "parity display prepared");
+    const auto media = std::make_shared<host::OutputMediaDisplayCommandV1>(display, intent);
+    std::uint64_t worst = 0;
+    std::uint64_t compared = 0;
+    for (const std::int64_t frame : {0, 23, 47}) {
+        host::OutputAnalysisAttemptRequestV1 request{
+            .plan = compiled.plan,
+            .evaluation = {.time = need(core::RationalTime::create(frame, 24)),
+                           .output = compiled.plan->output(),
+                           .resolution = runtime::CompositionFormatResolution{},
+                           .quality = runtime::EvaluationQuality::Reference,
+                           .colorIntent = intent,
+                           .pixelStorageByteLimit = 0},
+            .targetPath = std::filesystem::temp_directory_path() / "bloom-parity-unused.tiff",
+            .preset = output::OutputPresetV1::TiffRgba16SrgbV1,
+            .gpuProvider = provider,
+            .mediaDisplay = media,
+            .useRootPixelCapacity = true};
+        auto begin = host::beginOutputAnalysisAttemptV1(f.scheduler, f.artifacts, f.ledger,
+                                                        std::move(request));
+        check(static_cast<bool>(begin), "parity attempt admitted");
+        auto runner = std::move(begin).takeHandle();
+        std::optional<host::OutputAnalysisAttemptOutcomeV1> outcome;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (!outcome && std::chrono::steady_clock::now() < deadline) {
+            outcome = runner.tryComplete();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        check(outcome.has_value() && static_cast<bool>(*outcome), "parity attempt completes");
+        const auto& attempt = *outcome->attempt();
+        const auto& payload = attempt.gpuMediaDisplay();
+        check(payload.isPresent() && payload.commandIdentity == media->commandIdentity() &&
+                  outcome->gpuProvenance().has_value() &&
+                  outcome->gpuProvenance()->gpuEvaluated() &&
+                  outcome->gpuProvenance()->encodedArm == runtime::GpuOutputColorArm::ProcessEffect,
+              "parity frame carries the GPU display payload of its own command");
+        const auto cpu = need(output::prepareMediaRgba16V1(attempt.frame()->processImage(), {0, 1},
+                                                           {}, display.get()));
+        const auto gpu = need(output::prepareMediaRgba16FromDisplayV1(
+            payload.pixels.pixels(), payload.width, payload.height, {0, 1}));
+        check(cpu.planes.size() == 1 && gpu.planes.size() == 1 &&
+                  cpu.planes[0].bytes.size() == gpu.planes[0].bytes.size(),
+              "parity planes share one layout");
+        const auto& left = cpu.planes[0].bytes;
+        const auto& right = gpu.planes[0].bytes;
+        for (std::size_t offset = 0; offset + 1 < left.size(); offset += 2) {
+            const auto a = std::to_integer<unsigned>(left[offset]) |
+                           (std::to_integer<unsigned>(left[offset + 1]) << 8U);
+            const auto b = std::to_integer<unsigned>(right[offset]) |
+                           (std::to_integer<unsigned>(right[offset + 1]) << 8U);
+            worst = std::max<std::uint64_t>(worst, a > b ? a - b : b - a);
+            ++compared;
+        }
+    }
+    std::cout << "GPU media display parity (" << label << "): samples=" << compared
+              << " max16=" << worst << " tolerance=" << tolerance << '\n';
+    check(worst <= tolerance, "GPU media display matches the CPU reference within tolerance");
+}
+
 GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& directory,
                                        const std::filesystem::path& cpuReferencePath,
                                        const std::filesystem::path& proofDirectory,
@@ -585,6 +663,10 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
         runtime::GpuProcessFrameEvaluatorOptions options;
         options.enabled = true;
         options.loaderPath = std::filesystem::path(loader);
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+        // The production composition roots qualify the packaged shader tools the same way.
+        options.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
+#endif
         return options;
     }());
     GpuProviderRetirement retirement(provider);
@@ -610,14 +692,43 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
           "GPU video: exactly one final readback per GPU-evaluated frame");
     check(result.gpuReadbackSubmissions == result.gpuEvaluatedFrames,
           "GPU video: exactly one final readback submission per GPU-evaluated frame");
-    // The per-frame attempts use the identity/TIFF arm: one process payload per submission, no
-    // encoded output-colour payload. These are the ACTUAL counters, not a guess from dimensions.
-    check(result.gpuTransferredPayloads == result.gpuReadbackSubmissions,
-          "GPU video: the identity arm transfers exactly one payload per submission");
-    check(result.gpuProcessPayloadBytes > 0 && result.gpuEncodedPayloadBytes == 0,
-          "GPU video: the identity arm reports real process bytes and no encoded bytes");
+    // The per-frame attempts run the export's display/view as a float ProcessEffect in the same
+    // single submission: two payloads (process + display-referred RGBA32F) per readback, and every
+    // GPU-evaluated frame reaches the encoder without the CPU display transform. These are the
+    // ACTUAL counters, not a guess from dimensions.
+    if (provider->gpuDisplayPreparationAvailable()) {
+        check(result.gpuTransferredPayloads == 2 * result.gpuReadbackSubmissions,
+              "GPU video: the display arm transfers process and display payloads per submission");
+        check(result.gpuProcessPayloadBytes > 0 &&
+                  result.gpuEncodedPayloadBytes == result.gpuProcessPayloadBytes,
+              "GPU video: the display arm reports real process and equal-sized display bytes");
+        check(result.gpuDisplayFrames == result.gpuEvaluatedFrames &&
+                  result.cpuDisplayFrames == 0 && result.gpuDisplayFrames == result.encodedFrames,
+              "GPU video: every frame took GPU output colour, none the CPU reference");
+    } else {
+        // Without qualified shader tools the identity arm runs and the CPU reference display
+        // transform is the explicit, counted fallback.
+        std::cout << "NOTE: GPU shader tools unavailable; CPU reference output colour\n";
+        check(result.gpuTransferredPayloads == result.gpuReadbackSubmissions &&
+                  result.gpuEncodedPayloadBytes == 0,
+              "GPU video: the identity arm transfers exactly one payload per submission");
+        check(result.gpuDisplayFrames == 0 && result.cpuDisplayFrames == result.encodedFrames &&
+                  !result.cpuDisplayReason.empty(),
+              "GPU video: the CPU reference output colour is counted with its reason");
+    }
     check(result.gpuDeviceOwnershipEpoch > 0,
           "GPU video: a genuine device ownership epoch is reported");
+    if (provider->gpuDisplayPreparationAvailable()) {
+        testGpuMediaDisplayParity(f, provider, {}, kMediaDisplayTolerance16, "Bloom Neutral");
+        if (const auto revision = color::ocioBuiltInContentRevision(
+                color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri)) {
+            testGpuMediaDisplayParity(f, provider,
+                                      {.workingColorSpaceId = "ACEScg",
+                                       .ocioConfigRevision = *revision,
+                                       .ocioConfigUri = color::kAcesCgV1ConfigUri},
+                                      kMediaDisplayTolerance16, "ACES 1.0 SDR");
+        }
+    }
     check(retirement.finish(), "GPU video: native and host owners retire before proof publication");
     std::cout << "GPU video frames=" << result.gpuEvaluatedFrames
               << " dispatches=" << result.gpuNativeDispatches
@@ -735,6 +846,9 @@ void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::pa
     std::atomic<std::int64_t> pid{0};
     auto request = f.request(directory / "rejected-live.mov", output::OutputPresetV1::ProResMovV1);
     request.gpuProvider = provider;
+    // A deterministic lifecycle fixture: one frame at a time, so it can stop with exactly one
+    // encoded frame, the encoder live and nothing else in flight.
+    request.framesInFlight = 1;
     request.worker.launched = [&](auto value) { pid.store(value); };
     auto runner = std::make_unique<host::SequenceExportRunnerV1>(
         f.scheduler, f.compiler, f.publications, f.artifacts, f.ledger, std::move(request),
