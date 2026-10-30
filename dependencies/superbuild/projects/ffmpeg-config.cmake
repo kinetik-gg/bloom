@@ -5,16 +5,39 @@ set(FFmpeg_VERSION "8.1.2")
 set(_bloom_ffmpeg_include_dir "${_bloom_ffmpeg_prefix}/include")
 set(_bloom_ffmpeg_library_dir "${_bloom_ffmpeg_prefix}/lib")
 
+# Shared libraries by platform: Linux libNAME.so, macOS libNAME.dylib (with @rpath install names),
+# Windows bin/NAME-<major>.dll with lib/NAME.lib import libraries (FFmpeg's MSVC layout).
 foreach(_bloom_ffmpeg_library IN ITEMS avutil swresample swscale avcodec avformat avfilter avdevice)
-    if(NOT EXISTS "${_bloom_ffmpeg_library_dir}/lib${_bloom_ffmpeg_library}.so")
+    if(WIN32)
+        file(GLOB _bloom_ffmpeg_runtime "${_bloom_ffmpeg_prefix}/bin/${_bloom_ffmpeg_library}-*.dll")
+        set(_bloom_ffmpeg_import "${_bloom_ffmpeg_library_dir}/${_bloom_ffmpeg_library}.lib")
+        if(NOT _bloom_ffmpeg_runtime OR NOT EXISTS "${_bloom_ffmpeg_import}")
+            set(FFmpeg_FOUND FALSE)
+            set(FFmpeg_NOT_FOUND_MESSAGE
+                "Bloom FFmpeg prefix is missing ${_bloom_ffmpeg_library}-*.dll or its import library")
+            return()
+        endif()
+        list(GET _bloom_ffmpeg_runtime 0 _bloom_ffmpeg_runtime)
+        add_library("FFmpeg::${_bloom_ffmpeg_library}" SHARED IMPORTED)
+        set_target_properties("FFmpeg::${_bloom_ffmpeg_library}" PROPERTIES
+            IMPORTED_LOCATION "${_bloom_ffmpeg_runtime}"
+            IMPORTED_IMPLIB "${_bloom_ffmpeg_import}"
+            INTERFACE_INCLUDE_DIRECTORIES "${_bloom_ffmpeg_include_dir}")
+        continue()
+    endif()
+    if(APPLE)
+        set(_bloom_ffmpeg_file "${_bloom_ffmpeg_library_dir}/lib${_bloom_ffmpeg_library}.dylib")
+    else()
+        set(_bloom_ffmpeg_file "${_bloom_ffmpeg_library_dir}/lib${_bloom_ffmpeg_library}.so")
+    endif()
+    if(NOT EXISTS "${_bloom_ffmpeg_file}")
         set(FFmpeg_FOUND FALSE)
-        set(FFmpeg_NOT_FOUND_MESSAGE
-            "Bloom FFmpeg prefix is missing lib${_bloom_ffmpeg_library}.so")
+        set(FFmpeg_NOT_FOUND_MESSAGE "Bloom FFmpeg prefix is missing ${_bloom_ffmpeg_file}")
         return()
     endif()
     add_library("FFmpeg::${_bloom_ffmpeg_library}" SHARED IMPORTED)
     set_target_properties("FFmpeg::${_bloom_ffmpeg_library}" PROPERTIES
-        IMPORTED_LOCATION "${_bloom_ffmpeg_library_dir}/lib${_bloom_ffmpeg_library}.so"
+        IMPORTED_LOCATION "${_bloom_ffmpeg_file}"
         INTERFACE_INCLUDE_DIRECTORIES "${_bloom_ffmpeg_include_dir}")
 endforeach()
 
