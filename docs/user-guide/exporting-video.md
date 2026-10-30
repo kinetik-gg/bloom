@@ -132,9 +132,12 @@ Ready, or stops a running one. A stopped movie or WAV leaves the destination unc
 sequence keeps the frames it already published. **Render again** starts a finished job again. The Jobs panel shows a running export as one row with **Show in Export**.
 
 The Viewer always comes first. While you scrub, play or build a RAM preview, an export only uses
-spare GPU capacity and may wait with no time left shown; it continues at full speed when the Viewer is idle. Waiting and
-paused time do not count toward the export's time limits. This is not a fault, and the job reads
-**Paused while you work in the Viewer** in plain gray, not in a warning color.
+spare GPU capacity and may wait with no time left shown; it continues at full speed when the Viewer
+is idle. That wait is shown only while the Viewer is actually rendering, and the job reads **Paused
+while you work in the Viewer** in plain gray, not in a warning color. When a frame does not fit the
+memory other active work holds (after Bloom's caches gave back theirs), the job reads **Waiting for
+memory** with the amount needed. Waiting and paused time do not count toward the export's time
+limits. Neither is a fault.
 
 Quitting or closing the project while exports run asks "N exports are running. Stop them and
 quit?"; **Keep Exporting** is the default. Saving the project during an export is allowed.

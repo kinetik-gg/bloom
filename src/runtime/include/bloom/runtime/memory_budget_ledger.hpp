@@ -127,6 +127,14 @@ class MemoryBudgetLedger final {
     [[nodiscard]] std::size_t pressureDeficit(const MachineMemorySample& sample) const;
     // Reusable bytes the budgets released since the last call (the monitor returns them to the OS).
     [[nodiscard]] std::size_t takeReleasedBytes() noexcept;
+    // Evict-on-demand for active work: every reusable pool gives back its share of `bytes`
+    // (proportional to what it holds, least recently used entries first), below what it holds
+    // now. Caches are never a reason for work to wait. Same thread rules as poll; returns the
+    // bytes the pools released.
+    std::size_t reclaim(std::size_t bytes);
+    // Memory admitted to active work (processing-phase claims) that reusable pools must not grow
+    // into; applied with the next budgets. Thread-safe.
+    void setActiveWorkClaims(std::size_t bytes);
     [[nodiscard]] std::optional<std::size_t> ramHeadroom() const;
     // Production activates this before constructing cache owners; it never gates live processing.
     void beginProcessSampling();
@@ -197,6 +205,10 @@ class MemoryBudgetLedger final {
     bool processSampling_ = false;
     std::optional<std::size_t> ramHeadroom_;
     std::size_t releasedSinceTake_ = 0;
+    std::size_t activeWorkClaims_ = 0;
+    // Available memory as reusable pools see it: the machine's available memory minus this
+    // process's swapped memory, bounded by the room left in any finite process/cgroup domain.
+    [[nodiscard]] std::size_t poolAvailableLocked(const MachineMemorySample& machine) const;
     bool defaultsResolved_ = false;
     bool configuredTotalSet_ = false;
     std::optional<Clock::time_point> lastProcessSample_;

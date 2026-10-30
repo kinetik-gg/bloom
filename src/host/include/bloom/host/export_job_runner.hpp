@@ -131,6 +131,10 @@ class ExportRun {
     [[nodiscard]] virtual std::optional<std::uint64_t> currentFrame() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t outputIndex() const noexcept = 0;
     [[nodiscard]] virtual ExportDeviceRoute route() const noexcept = 0;
+    // While route() is WaitingForMemory: the bytes the waiting frame needs.
+    [[nodiscard]] virtual std::optional<std::uint64_t> memoryNeededBytes() const noexcept {
+        return std::nullopt;
+    }
     // Log entries produced since the last call (code, severity, output, frame, message).
     [[nodiscard]] virtual std::vector<ExportLogEntry> takeLog() = 0;
 };
@@ -196,6 +200,7 @@ class ExportJobRunner final : public ExportRun {
     [[nodiscard]] std::optional<std::uint64_t> currentFrame() const noexcept override;
     [[nodiscard]] std::uint32_t outputIndex() const noexcept override;
     [[nodiscard]] ExportDeviceRoute route() const noexcept override;
+    [[nodiscard]] std::optional<std::uint64_t> memoryNeededBytes() const noexcept override;
     [[nodiscard]] std::vector<ExportLogEntry> takeLog() override;
 
   private:

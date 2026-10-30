@@ -119,6 +119,10 @@ class RamPreviewController final : public QObject {
     // Refresh at the autoplay boundary, including external callbacks/rebinds and expired leases.
     [[nodiscard]] bool isFullRangeRetained();
     [[nodiscard]] bool canAutoPlay();
+    // A still-current run that ended PartialBudget (the range outgrew memory): playback starts
+    // anyway from the range start, and Play's read-ahead renders the rest ahead of the playhead
+    // while the cache evicts least-recently-used frames. Output length is never limited by RAM.
+    [[nodiscard]] bool canPlayPartial();
     [[nodiscard]] bool isCaching() const noexcept { return caching_; }
     // Live exact-grid retention and requested range size. Coverage follows cache mutations after
     // completion too; preparedFrameCount()/lastCompletion() alone describe historical work.

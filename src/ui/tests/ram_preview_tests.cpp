@@ -767,8 +767,10 @@ void testRamPreviewStopsWhenTheRangeOutgrowsTheBudget(Expectations& expectations
         ramPreview.playableSpan().has_value() && ramPreview.playableSpan()->frameCount == 3 &&
             ramPreview.retainedFrameIndices() == std::vector<std::uint64_t>{1, 2, 3},
         "post-insert eviction retains the actual interior span, never a prefix");
-    expectations.expect(finishedCompleted,
-                        "a budget-limited run reports partial completion without autoplay");
+    expectations.expect(finishedCompleted && !ramPreview.canAutoPlay() &&
+                            ramPreview.canPlayPartial(),
+                        "a budget-limited run ends partial at once (no stall) and still plays: "
+                        "Play renders the rest with LRU eviction");
 
     finishFixture(fixture, expectations);
 }

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <limits>
@@ -384,9 +385,11 @@ std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) 
             ++pools;
             retainedTotal += static_cast<long double>(cache.retained ? cache.retained() : 0);
         }
-        const auto available = effectiveAvailableBytes(state_.machine);
+        const auto available = poolAvailableLocked(state_.machine);
         const auto margin = memoryPressureMarginBytes(*ramHeadroom_);
-        const auto growthFloor = saturatedAdd(*ramHeadroom_, margin);
+        const auto restoreFloor = saturatedAdd(*ramHeadroom_, margin);
+        // Pools never grow into memory already admitted to active work.
+        const auto growthFloor = saturatedAdd(restoreFloor, activeWorkClaims_);
         const bool stall = state_.machine.memoryStall;
         std::size_t bytes = own;
         if (available >= growthFloor && !stall) {
@@ -396,7 +399,7 @@ std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) 
             // swapping or stalling even if available memory looks sufficient (another process may
             // be the one pushed into swap), so give back at least one margin per applied sample
             // until the pressure stops.
-            auto shortfall = available < *ramHeadroom_ ? growthFloor - available : std::size_t{0};
+            auto shortfall = available < *ramHeadroom_ ? restoreFloor - available : std::size_t{0};
             if (stall)
                 shortfall = std::max(shortfall, margin);
             const auto deficit = static_cast<long double>(shortfall);
@@ -558,7 +561,7 @@ std::size_t MemoryBudgetLedger::pressureDeficit(const MachineMemorySample& sampl
     const std::lock_guard lock(mutex_);
     if (!ramHeadroom_ || !sample.availableBytes)
         return 0;
-    const auto available = effectiveAvailableBytes(sample);
+    const auto available = poolAvailableLocked(sample);
     const auto deficit = available < *ramHeadroom_ ? *ramHeadroom_ - available : std::size_t{0};
     return sample.memoryStall ? std::max(deficit, memoryPressureMarginBytes(*ramHeadroom_))
                               : deficit;
@@ -567,6 +570,57 @@ std::size_t MemoryBudgetLedger::pressureDeficit(const MachineMemorySample& sampl
 std::size_t MemoryBudgetLedger::takeReleasedBytes() noexcept {
     const std::lock_guard lock(mutex_);
     return std::exchange(releasedSinceTake_, 0);
+}
+
+std::size_t MemoryBudgetLedger::poolAvailableLocked(const MachineMemorySample& machine) const {
+    auto available = effectiveAvailableBytes(machine);
+    // Inside a memory-limited cgroup the machine can have plenty free while the process's own
+    // domain is full: the room left there (limit minus usage that clean page cache cannot cover)
+    // bounds what pools may hold.
+    const auto& process = state_.process;
+    for (std::size_t index = 0; index < process.domains.size(); ++index) {
+        const auto& domain = process.domains[index];
+        if (domain.kind != ProcessMemoryLimitKind::Finite || !domain.currentBytes)
+            continue;
+        const auto used = processMemoryDomainUnreclaimableBytes(process, index);
+        available = std::min(available, domain.limitBytes - std::min(domain.limitBytes, used));
+    }
+    return available;
+}
+
+std::size_t MemoryBudgetLedger::reclaim(const std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
+    if (bytes == 0)
+        return 0;
+    std::vector<std::pair<const Cache*, std::size_t>> held;
+    long double total = 0;
+    for (const auto& [owner, cache] : caches_) {
+        if (cache.kind != MemoryBudgetOwnerKind::ReusableRetention || !cache.retained)
+            continue;
+        const auto own = cache.retained();
+        held.emplace_back(&cache, own);
+        total += static_cast<long double>(own);
+    }
+    if (total <= 0)
+        return 0;
+    const auto before = reusableRetainedLocked();
+    for (const auto& [cache, own] : held) {
+        // Round each share up so the pools together give back at least `bytes`.
+        const auto share = static_cast<std::size_t>(
+            std::min(static_cast<long double>(own),
+                     std::ceil(static_cast<long double>(bytes) * static_cast<long double>(own) /
+                               total)));
+        cache->applyBudget(own - share);
+    }
+    const auto after = reusableRetainedLocked();
+    const auto released = before > after ? before - after : std::size_t{0};
+    releasedSinceTake_ = saturatedAdd(releasedSinceTake_, released);
+    return released;
+}
+
+void MemoryBudgetLedger::setActiveWorkClaims(const std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
+    activeWorkClaims_ = bytes;
 }
 
 std::optional<std::size_t> MemoryBudgetLedger::ramHeadroom() const {

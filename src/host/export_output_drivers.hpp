@@ -45,6 +45,9 @@ class ExportOutputDriver {
     [[nodiscard]] virtual std::uint64_t framesCompleted() const = 0;
     [[nodiscard]] virtual std::optional<std::uint64_t> currentFrame() const = 0;
     [[nodiscard]] virtual ExportDeviceRoute route() const = 0;
+    [[nodiscard]] virtual std::optional<std::uint64_t> memoryNeededBytes() const {
+        return std::nullopt;
+    }
     [[nodiscard]] virtual std::vector<ExportLogEntry> takeLog() = 0;
     [[nodiscard]] virtual ExportDriverReport takeReport() = 0;
 };

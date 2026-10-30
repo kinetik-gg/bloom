@@ -863,7 +863,19 @@ alone detects it. The ledger counts the reusable bytes each application released
 the monitor then calls `releaseFreedHostMemory()` (glibc `malloc_trim`), and
 `configureHostMemoryReturn()` fixes glibc's mmap threshold at 1 MiB when sampling starts, so freed
 pixel buffers are unmapped rather than left resident in heap arenas. macOS and Windows allocators
-already return large blocks on free. Cache callbacks apply on the owner thread; status bars and
+already return large blocks on free.
+
+Evict-on-demand: a `GpuProcessingPhasePolicy::reserve` that returns `AwaitingCapacity` on the host
+domain calls its retention reclaimers with the shortfall (need minus free) and records it
+(`lastAwaitingNeed`). The application registers `MemoryBudgetController::workReclaimer()`, which
+queues `MemoryBudgetLedger::reclaim(shortfall)` (at least 256 MiB, coalesced) to the controller's
+thread and requests a host sample at once (the sampler trims the heap first); headless export
+providers reclaim synchronously on the process ledger and force their next sample. Reusable pools
+see `poolAvailableLocked`: available memory minus own swap, bounded by the room left in each finite
+cgroup domain (limit minus unreclaimable usage), and never grow into `setActiveWorkClaims` (the
+policy's host claims, applied after each sample). An export waiting for capacity reports
+`ExportDeviceRoute::WaitingForViewer` only while `viewerPriority()` shows the Viewer waiting or
+active; otherwise `WaitingForMemory` with `ExportJobProgress::memoryNeededBytes`. Cache callbacks apply on the owner thread; status bars and
 Preferences observe cached state. Shutdown cancels and stops admission without waiting on a held
 worker. A preference change requests a new sample but applies retention targets immediately.
 

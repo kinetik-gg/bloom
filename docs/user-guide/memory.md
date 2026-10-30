@@ -70,12 +70,24 @@ programs into swap, so Bloom also treats the system's memory distress as pressur
 causes it: on Linux, swap traffic of 16 MiB/s or more, or programs stalled on memory (PSI) for a
 tenth of the time ("some") or a fiftieth ("full"); on macOS, the warning or critical memory pressure
 level; on Windows, the low-memory notification. Under such pressure the caches stop growing and give
-back one margin four times a second until it stops. Evicted memory is returned to the operating system immediately, so Bloom's
-resident size really drops. A larger RAM headroom applied in Preferences evicts at once. Inside a container or memory-limited session, clean file cache counts as available, as the
-kernel reclaims it on demand. When work needs more than is free at that moment, it waits and
-resumes as soon as memory is released; it is refused only when one frame cannot fit within the
-computer's (or the container's) memory minus the headroom, and the refusal names the measured
-numbers.
+back one margin four times a second until it stops. Evicted memory is returned to the operating
+system immediately, so Bloom's resident size really drops. A larger RAM headroom applied in
+Preferences evicts at once.
+
+Caches are never a reason for work to wait. When a Viewer frame, a RAM preview frame or an export
+frame needs more memory than is free, the caches first give back what it is short of (least
+recently used entries first) and Bloom measures again at once, so the work continues. Inside a
+container or memory-limited session (a cgroup memory limit), the caches see the room left inside
+that limit, not the whole machine's free memory, and clean file cache counts as available, as the
+kernel reclaims it on demand. Work waits only when other active work holds the memory, and resumes
+as soon as it is released; the Export panel then reads **Waiting for memory** with the amount the
+frame needs. It is refused only when one frame cannot fit within the computer's (or the
+container's) memory minus the headroom, and the refusal names the measured numbers.
+
+Export, rendering and RAM Preview stream: a run holds only the frames in flight (at most four for an
+export, eight for RAM Preview and playback, and never more than a quarter of the free memory at its
+start) plus caches within the headroom. Every finished frame is encoded or written and its memory
+released, so the length of an export is never limited by memory.
 
 The earlier per-cache targets `playback/operation-cache-bytes` and
 `playback/ram-preview-memory-bytes` are retired. Bloom ignores saved values for them and does not
@@ -171,7 +183,9 @@ Bloom renders frames you have not looked at only when you ask for playback:
 
 RAM Preview counts frames that are currently retained, including frames already cached before the
 run. Its tooltip separates frames prepared this run from retained frames and the longest cached
-span. If the range outgrows a real memory limit, caching stops with a partial result and does not
-autoplay; use Play for ordinary manual playback. Purging or later eviction removes live coverage
+span. If the range outgrows memory, caching stops with a partial result at once and playback still
+starts from the range start: Play renders the rest just ahead of the playhead while the cache
+evicts the oldest frames, so a long range never stalls (frames may drop if rendering is slower than
+real time). Purging or later eviction removes live coverage
 without erasing the history of work already prepared. Half resolution reduces the display image
 extent and retained image bytes; actual device capacity and finite resource limits still apply.

@@ -145,9 +145,21 @@ class GpuProcessingPhasePolicy final {
     };
     [[nodiscard]] ViewerPriority
     viewerPriority(Clock::time_point now = Clock::now()) const noexcept;
+    // A reclaimer receives the waiting domain and the shortfall (the need minus what that domain
+    // has free now). Composition roots register one that evicts every reusable ledger pool, so
+    // caches are never a reason for work to wait.
     using RetentionReclaimer =
         std::function<std::uint64_t(render::GpuProcessingPhaseDomain, std::uint64_t)>;
     void addRetentionReclaimer(RetentionReclaimer reclaimer);
+    // The most recent request that had to wait for capacity: its domain, whole need and shortfall
+    // (export progress reports "waiting for memory: N needed").
+    struct AwaitingNeed final {
+        render::GpuProcessingPhaseDomain domain = render::GpuProcessingPhaseDomain::Host;
+        std::uint64_t bytes = 0;
+        std::uint64_t shortfallBytes = 0;
+        Clock::time_point at{};
+    };
+    [[nodiscard]] std::optional<AwaitingNeed> lastAwaitingNeed() const noexcept;
     [[nodiscard]] render::GpuProcessingRootIdentity rootIdentity() const noexcept {
         return budget_.rootIdentity();
     }
@@ -185,6 +197,7 @@ class GpuProcessingPhasePolicy final {
     std::uint64_t viewerNeedDeviceBytes_ = 0;
     std::vector<RetentionReclaimer> reclaimers_;
     mutable std::mutex reclaimerMutex_;
+    std::optional<AwaitingNeed> lastAwaitingNeed_;
     std::chrono::steady_clock::time_point lastAdmissionLog_{};
     void logWaitOrRefusal(const render::GpuProcessingPhaseGrant&) noexcept;
     std::array<DeviceReport, 32> devices_{};

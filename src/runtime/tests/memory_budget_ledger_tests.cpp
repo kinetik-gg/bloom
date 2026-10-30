@@ -245,6 +245,44 @@ MemoryBudgetSample processSample(const std::size_t limit, const std::optional<st
                         .reclaimableBytes = {}}};
 }
 
+// Inside a memory-limited cgroup the machine can have plenty free while the process's own domain
+// is full: pools see the room left in the domain. Work evicts them on demand, and they never grow
+// into memory admitted to active work.
+void cgroupRoomReclaimAndActiveClaims() {
+    MemoryBudgetLedger ledger(60 * gib, 60 * gib);
+    ledger.beginProcessSampling();
+    ledger.setRamHeadroom(2 * gib);
+    // Process readiness first: until a complete sample, reusable retention is zero.
+    static_cast<void>(ledger.applySample(processSample(64 * gib, 8 * gib, 0), at(0)));
+    std::size_t held = 10 * gib;
+    std::size_t budget = 0;
+    ledger.registerCache(
+        &held, 64 * gib, [&] { return held; },
+        [&](const std::size_t bytes) {
+            budget = bytes;
+            held = std::min(held, bytes);
+        });
+    // 24 GiB cap, 23 GiB used: 1 GiB of room although the machine has 60 GiB available.
+    static_cast<void>(ledger.applySample(processSample(24 * gib, 23 * gib, 1), at(1)));
+    expect(held == 10 * gib - 3 * gib / 2,
+           "a full cgroup shrinks the pools by the deficit plus margin despite free machine RAM");
+    expect(ledger.pressureDeficit({.availableBytes = 60 * gib}) == gib,
+           "the deficit uses the cgroup room, not machine availability");
+    static_cast<void>(ledger.takeReleasedBytes());
+    const auto released = ledger.reclaim(gib);
+    expect(released == gib && held == 10 * gib - 5 * gib / 2 && ledger.takeReleasedBytes() == gib,
+           "work evicts reusable retention on demand, at least the bytes it asked for");
+    expect(ledger.reclaim(0) == 0, "an empty request evicts nothing");
+    // Ample room again, but 20 GiB is admitted to active work: pools grow only beyond it.
+    ledger.setActiveWorkClaims(20 * gib);
+    static_cast<void>(ledger.applySample(processSample(64 * gib, 8 * gib, 2), at(2)));
+    const auto room = 56 * gib; // 64 GiB limit minus 8 GiB used; machine reports 60 GiB.
+    expect(budget == held + (room - 2 * gib - gib / 2 - 20 * gib),
+           "pools never grow into memory admitted to active work");
+    ledger.setActiveWorkClaims(0);
+    ledger.unregisterCache(&held);
+}
+
 void processAdmissionAndFailures() {
     MemoryBudgetLedger legacy(60 * gib, 60 * gib);
     const auto legacyState = legacy.applySample(processSample(0, 0, 0), at(0));
@@ -606,6 +644,7 @@ int main(int argc, char** argv) try {
     swapActivityPolicy();
     selectedTotalsAndHardwareDefaults();
     processAdmissionAndFailures();
+    cgroupRoomReclaimAndActiveClaims();
     verifiedConstraintRemovalRecovery();
     processHierarchyAndStableFill();
     return failures == 0 ? 0 : 1;

@@ -92,6 +92,7 @@ struct ExportJobRunner::State {
     std::uint64_t completedBefore = 0;
     std::vector<ExportLogEntry> log;
     ExportDeviceRoute route = ExportDeviceRoute::None;
+    std::optional<std::uint64_t> memoryNeeded;
 
     [[nodiscard]] std::uint64_t perOutputFrames() const {
         return request.range.last - request.range.first + 1;
@@ -210,6 +211,9 @@ void ExportJobRunner::poll() {
     if (s.phase == ExportJobRunPhase::Rendering && s.driver) {
         s.driver->poll();
         s.route = s.driver->route();
+        s.memoryNeeded = s.route == ExportDeviceRoute::WaitingForMemory
+                             ? s.driver->memoryNeededBytes()
+                             : std::nullopt;
         s.outputs[s.current].state = s.driver->state();
         if (s.driver->done())
             s.finishOutput();
@@ -265,6 +269,9 @@ std::uint32_t ExportJobRunner::outputIndex() const noexcept {
     return static_cast<std::uint32_t>(std::min(state_->current, state_->outputs.size()));
 }
 ExportDeviceRoute ExportJobRunner::route() const noexcept { return state_->route; }
+std::optional<std::uint64_t> ExportJobRunner::memoryNeededBytes() const noexcept {
+    return state_->memoryNeeded;
+}
 std::vector<ExportLogEntry> ExportJobRunner::takeLog() {
     auto& s = *state_;
     if (s.driver)

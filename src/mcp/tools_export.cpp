@@ -87,6 +87,8 @@ std::string_view routeName(const host::ExportDeviceRoute route) {
         return "recovering-gpu";
     case host::ExportDeviceRoute::CpuReference:
         return "cpu-reference";
+    case host::ExportDeviceRoute::WaitingForMemory:
+        return "waiting-for-memory";
     }
     return "none";
 }
@@ -229,6 +231,13 @@ McpProgress progressOf(const host::ExportJobView& job) {
         progress.total = static_cast<double>(job.progress.framesTotal);
     if (job.progress.route == host::ExportDeviceRoute::WaitingForViewer)
         progress.message = "Waiting for the Viewer";
+    else if (job.progress.route == host::ExportDeviceRoute::WaitingForMemory)
+        progress.message =
+            job.progress.memoryNeededBytes
+                ? "Waiting for memory: " +
+                      std::to_string((*job.progress.memoryNeededBytes + (1ULL << 20) - 1) >> 20) +
+                      " MiB needed"
+                : std::string("Waiting for memory");
     else if (job.state == host::ExportJobState::Rendering && job.progress.currentFrame)
         progress.message = "Rendering frame " + std::to_string(job.progress.framesCompleted + 1) +
                            " of " + std::to_string(job.progress.framesTotal);

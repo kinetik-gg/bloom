@@ -7,7 +7,9 @@
 // need larger than the whole usable capacity is refused (BudgetRefused).
 #include <bloom/render/native_image_storage.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -232,10 +234,83 @@ void retentionIsEvictedBeforeWaiting() {
     require(held.lease != nullptr, "the first frame fits");
     auto big = frame();
     big.minimumSourceBytes = 300 * kMiB;
+    const auto free = policy.usableCapacity().hostFreeBytes;
     const auto waiting = policy.reserve(big);
+    const auto need = policy.lastAwaitingNeed();
     require(waiting.status == GpuProcessingPhaseAdmission::AwaitingCapacity && calls == 1 &&
-                asked >= 3 * big.minimumSourceBytes,
-            "a waiting request first asks reusable retention to release its need");
+                need && need->domain == GpuProcessingPhaseDomain::Host &&
+                need->bytes >= 3 * big.minimumSourceBytes && asked == need->bytes - free &&
+                need->shortfallBytes == asked,
+            "a waiting request first asks reusable retention to release its shortfall");
+}
+
+// The owner's stuck export: reusable caches filled the memory beyond the headroom (inside a
+// 24 GB cgroup cap), and an export frame waited forever because nothing evicted them. With the
+// ledger's evict-on-demand registered as the policy's reclaimer, the frame is admitted at the
+// next sample instead of waiting.
+void cachesYieldToWork() {
+    for (const bool cgroupCapped : {false, true}) {
+        MemoryBudgetLedger ledger(64 * kGiB, 64 * kGiB);
+        ledger.setRamHeadroom(2 * kGiB);
+        std::size_t cached = 0;
+        ledger.registerCache(
+            &cached, 64 * kGiB, [&] { return cached; },
+            [&](const std::size_t bytes) { cached = std::min(cached, bytes); });
+        // What the machine (or the 24 GB cgroup) has left once the caches hold `cached`.
+        const std::uint64_t room = cgroupCapped ? 24 * kGiB : 60 * kGiB;
+        const auto availableNow = [&] { return room - std::min<std::uint64_t>(room, cached); };
+        cached = room - 3 * kGiB; // Caches filled to headroom plus margin plus a little.
+        MemoryBudgetState state;
+        state.machine.availableBytes = cgroupCapped ? 40 * kGiB : availableNow();
+        if (cgroupCapped) {
+            state.process.status = ProcessMemoryStatus::Finite;
+            state.process.source = ProcessMemorySource::LinuxCgroupV2;
+            state.process.domains = {{"/owner.scope", ProcessMemoryLimitKind::Finite, room,
+                                      static_cast<std::size_t>(room - availableNow())}};
+            state.process.reclaimableBytes = {std::size_t{0}};
+        }
+        static_cast<void>(ledger.poll(state.machine));
+        GpuProcessingPhasePolicy policy(32);
+        policy.setHeadroom({.ramBytes = 2 * kGiB, .vramBytes = 0});
+        std::uint64_t serial = 1;
+        const auto sample = [&] {
+            if (cgroupCapped)
+                state.process.domains.front().currentBytes =
+                    static_cast<std::size_t>(room - availableNow());
+            else
+                state.machine.availableBytes = availableNow();
+            state.process.sampledAt = Clock::now();
+            state.processSampleFresh = true;
+            state.sampleSerial = serial++;
+            if (!cgroupCapped) {
+                state.process.status = ProcessMemoryStatus::Unsupported;
+                state.process.source = ProcessMemorySource::OtherHostOnly;
+            }
+            policy.applyHostSample(state, 64 * kGiB, state.process.sampledAt);
+        };
+        sample();
+        reportDevice(policy, 1, 22 * kGiB);
+        policy.addRetentionReclaimer(
+            [&](const GpuProcessingPhaseDomain domain, const std::uint64_t shortfall) {
+                return domain == GpuProcessingPhaseDomain::Host
+                           ? ledger.reclaim(static_cast<std::size_t>(shortfall))
+                           : std::uint64_t{0};
+            });
+        auto exportFrame = frame();
+        exportFrame.admissionClass = GpuAdmissionClass::Export;
+        exportFrame.minimumSourceBytes = 512 * kMiB; // A 4K float source.
+        const auto before = cached;
+        const auto first = policy.reserve(exportFrame);
+        require(first.status == GpuProcessingPhaseAdmission::AwaitingCapacity && cached < before,
+                cgroupCapped ? "capped: a frame that does not fit makes the caches give back"
+                             : "a frame that does not fit makes the caches give back");
+        sample(); // The fresh sample the reclaimer requests.
+        const auto admitted = policy.reserve(exportFrame);
+        require(admitted.status == GpuProcessingPhaseAdmission::Accepted,
+                cgroupCapped ? "capped: the export frame is admitted at the next sample"
+                             : "the export frame is admitted at the next sample");
+        ledger.unregisterCache(&cached);
+    }
 }
 
 void strictViewerPriority() {
@@ -349,6 +424,7 @@ int main() {
         manyConcurrentPhases();
         strictViewerPriority();
         retentionIsEvictedBeforeWaiting();
+        cachesYieldToWork();
         deviceGrowthBeyondTheClaimUsesLiveRoom();
     } catch (const std::exception& error) {
         std::cerr << "admission pressure: " << error.what() << '\n';

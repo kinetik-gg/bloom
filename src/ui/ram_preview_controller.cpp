@@ -820,6 +820,13 @@ bool RamPreviewController::canAutoPlay() {
            isFullRangeRetained();
 }
 
+bool RamPreviewController::canPlayPartial() {
+    return !caching_ && !shuttingDown_ && lastCompletion_ == Completion::PartialBudget &&
+           completedRevision_ == session_.snapshot().revision() &&
+           completedEnd_ == session_.workArea().end &&
+           completedProbe_ == previewController_.cacheKeyForTime(session_.workArea().start);
+}
+
 void RamPreviewController::publishProgress() {
     const auto serial = runSerial_;
     refreshCoverage(false);
