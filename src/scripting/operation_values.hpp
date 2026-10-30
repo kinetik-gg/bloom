@@ -75,5 +75,7 @@ argumentFailure(const std::string& operationId, std::string argument, std::strin
 
 // Registers bloom.layer.align-layers and bloom.layer.distribute-layers (ADR 0031).
 void addLayerAlignmentOperations(std::vector<OperationDescriptor>& descriptors);
+// Registers the bloom.export.* project-truth operations (ADR 0033).
+void addExportOperations(std::vector<OperationDescriptor>& descriptors);
 
 } // namespace bloom::scripting::detail

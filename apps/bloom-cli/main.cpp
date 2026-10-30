@@ -9,9 +9,18 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/scripting/export.hpp>
 #include <bloom/scripting/json_script.hpp>
 #include <bloom/scripting/render.hpp>
 #include <bloom/scripting/session.hpp>
+
+#include <bloom/host/export_presets.hpp>
+#include <bloom/host/export_queue.hpp>
+#include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/output/media_output.hpp>
+#include <bloom/output/output_export_resource_ledger.hpp>
+#include <bloom/platform/user_data_directory.hpp>
+#include <thread>
 
 #include <chrono>
 #include <cstdint>
@@ -55,8 +64,96 @@ class ExportProviderTeardown final {
 void printUsage() {
     std::cerr << "usage: bloom-cli new <file> | open <file> | run <script.json|script.py> | "
                  "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
-                 "<dir>\n";
+                 "<dir> | export --project <file> (--all | --job <id>...) [--replace] [--save]\n";
 }
+
+// ADR 0033: the export queue for a headless session. Owns the scheduler, compiler, GPU export
+// provider and encoder retirement owner the queue borrows, and retires them in order.
+class HeadlessExport final {
+  public:
+    explicit HeadlessExport(scripting::Session& session, const std::filesystem::path& projectFolder)
+        : scheduler_(schedulerConfig()), compiler_(document::builtInNodeDefinitions()) {
+        if (!projectFolder.empty())
+            media_.setAssetBaseDirectory(projectFolder);
+        runtime::GpuProcessFrameEvaluatorOptions gpuOptions;
+        gpuOptions.ocioResolver =
+            bloom::host::makePackagedGpuOcioResolver(bloom::host::currentExecutablePath());
+        gpuOptions.mediaContextProvider = [this] {
+            return runtime::GpuSceneMediaContext::fromEvaluator(media_);
+        };
+        gpu_ = bloom::host::GpuExportProvider::create(std::move(gpuOptions));
+        gpu_->prepare(scheduler_);
+        bloom::host::ExportEncoderStatus encoders;
+        encoders.exportPlatform = bloom::host::exportPlatformSupported();
+        presets_ = bloom::host::ExportPresetCatalogue::create(
+            {.userDataDirectory = bloom::platform::userDataDirectory(),
+             .initialEncoders = encoders});
+        presets_->refreshEncoders(scheduler_);
+        presets_->loadUserPresets(scheduler_);
+        scratch_ = std::filesystem::temp_directory_path() / "bloom-cli-export-scratch";
+        std::error_code error;
+        std::filesystem::create_directories(scratch_, error);
+        service_ = std::make_unique<bloom::host::ExportQueueService>(
+            bloom::host::ExportQueueServiceDependencies{
+                .session = *session.hostSession(),
+                .scheduler = scheduler_,
+                .compiler = compiler_,
+                .publications = *session.publicationCoordinator(),
+                .artifacts = *session.artifactCoordinator(),
+                .ledger = std::make_shared<output::ExportResourceLedgerV1>(),
+                .gpu = gpu_,
+                .retirement = retirement_,
+                .presets = presets_,
+                .limits = {},
+                .displayProcessor = nullptr,
+                .scratchDirectory = scratch_,
+                .backend = nullptr});
+        // The encoder probe answers on a worker before anything can start.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (!presets_->snapshot()->encoders.probed &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        calls_.emplace(*service_);
+        service_->pump();
+    }
+    HeadlessExport(const HeadlessExport&) = delete;
+    HeadlessExport& operator=(const HeadlessExport&) = delete;
+    ~HeadlessExport() {
+        service_->beginShutdown(bloom::host::ExportStopCause::ApplicationQuit);
+        while (!service_->quiescent()) {
+            service_->pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        service_.reset();
+        while (!gpu_->shutdownAndWait(std::chrono::seconds(10)))
+            std::cerr << "CLI export retirement pending; provider/media/scheduler retained\n";
+        scheduler_.beginShutdown();
+        retirement_->beginShutdown();
+        while (!scheduler_.isQuiescent() || !retirement_->retirementComplete())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        while (!retirement_->collect())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    [[nodiscard]] bloom::host::ExportQueueService& service() { return *service_; }
+    [[nodiscard]] scripting::ExportCalls& calls() { return *calls_; }
+
+  private:
+    static runtime::TaskSchedulerConfig schedulerConfig() {
+        auto config = runtime::TaskSchedulerConfig::defaults();
+        config.rowBandWorkerCount = runtime::kSerialRowBandWorkers;
+        return config;
+    }
+    runtime::TaskScheduler scheduler_;
+    runtime::SnapshotCompiler compiler_;
+    runtime::CpuCompositionEvaluator media_;
+    std::shared_ptr<bloom::host::GpuExportProvider> gpu_;
+    std::shared_ptr<bloom::host::SequenceExportRetirementOwnerV1> retirement_ =
+        bloom::host::SequenceExportRetirementOwnerV1::create();
+    std::shared_ptr<bloom::host::ExportPresetCatalogue> presets_;
+    std::filesystem::path scratch_;
+    std::unique_ptr<bloom::host::ExportQueueService> service_;
+    std::optional<scripting::ExportCalls> calls_;
+};
 
 [[nodiscard]] std::optional<std::string> readText(const std::filesystem::path& path) {
     std::ifstream stream(path);
@@ -151,7 +248,21 @@ frameRange(std::string_view value) {
         return 3;
     }
     auto session = std::move(created).takeSession();
+    std::unique_ptr<HeadlessExport> exports;
     for (const auto& transaction : parsed.transactions()) {
+        if (scripting::isExportCall(transaction.operation)) {
+            if (!exports)
+                exports = std::make_unique<HeadlessExport>(*session, std::filesystem::path{});
+            const auto answer =
+                exports->calls().call(transaction.operation, transaction.arguments, true);
+            if (!answer.ok) {
+                std::cerr << "error[" << answer.code << "] " << transaction.operation << ": "
+                          << answer.message << '\n';
+                return 6;
+            }
+            std::cout << answer.json << '\n';
+            continue;
+        }
         const auto result =
             session->executeJsonOperation(transaction.operation, transaction.arguments);
         if (result.diagnostic.has_value()) {
@@ -167,10 +278,124 @@ frameRange(std::string_view value) {
         for (const auto& warning : result.command->warnings)
             std::cerr << "warning[bloom-cli.operation-warning] " << warning.operationType << ": "
                       << warning.issue.message << '\n';
+        if (const auto job = result.command->outputId<document::ExportJobId>("exportJob")) {
+            if (!exports)
+                exports = std::make_unique<HeadlessExport>(*session, std::filesystem::path{});
+            exports->calls().noteAddedJob(*job);
+        }
     }
     std::cout << "executed " << parsed.transactions().size()
               << " transaction(s), revision=" << session->snapshot().revision().value() << '\n';
     return 0;
+}
+
+// ADR 0033: renders the saved queue headlessly. Exits non-zero unless every selected job
+// succeeds; prints the verification and import results as JSON. --replace confirms every existing
+// destination that asks before replacing; --save writes asset imports back to the project.
+[[nodiscard]] int commandExport(int argc, char** argv) {
+    std::optional<std::filesystem::path> project;
+    bool all = false;
+    bool replace = false;
+    bool save = false;
+    std::vector<document::ExportJobId> jobs;
+    for (int index = 2; index < argc; ++index) {
+        const std::string_view option = argv[index];
+        if ((option == "--project" || option == "--job") && index + 1 >= argc) {
+            std::cerr << "error[bloom-cli.option]: " << option << " needs a value\n";
+            return 2;
+        }
+        if (option == "--project") {
+            project = argv[++index];
+        } else if (option == "--job") {
+            const auto id = unsignedInteger(argv[++index]);
+            if (!id || *id == 0) {
+                std::cerr << "error[bloom-cli.job]: invalid job id\n";
+                return 2;
+            }
+            jobs.push_back(document::ExportJobId::fromRaw(*id));
+        } else if (option == "--all") {
+            all = true;
+        } else if (option == "--replace") {
+            replace = true;
+        } else if (option == "--save") {
+            save = true;
+        } else {
+            std::cerr << "error[bloom-cli.option]: unknown option " << option << '\n';
+            return 2;
+        }
+    }
+    if (!project || all == !jobs.empty()) {
+        printUsage();
+        return 2;
+    }
+    auto opened = scripting::Session::open(*project);
+    if (!opened) {
+        std::cerr << "error[" << opened.diagnostic().code << "]: " << opened.diagnostic().message
+                  << '\n';
+        return 3;
+    }
+    auto session = std::move(opened).takeSession();
+    const auto folder = std::filesystem::absolute(*project).parent_path();
+    int status = 0;
+    {
+        HeadlessExport exports(*session, folder);
+        auto& service = exports.service();
+        if (all)
+            for (const auto& job : session->snapshot().project().exportJobs())
+                if (job.enabled)
+                    jobs.push_back(job.id);
+        // Wait for the destination samples, then confirm replacements when asked to.
+        const auto ready = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (std::chrono::steady_clock::now() < ready) {
+            service.pump();
+            bool pending = false;
+            for (const auto& view : service.snapshot()->jobs)
+                pending =
+                    pending || view.commands[bloom::host::ExportCommand::Start].code ==
+                                   bloom::host::ExportUnavailableCode::DestinationCheckPending;
+            if (!pending)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (replace)
+            for (const auto& view : service.snapshot()->jobs)
+                for (const auto& output : view.outputs)
+                    if (output.commands[bloom::host::ExportCommand::ConfirmReplace])
+                        (void)service.confirmReplace(view.id, output.id);
+        const auto started = service.start(jobs);
+        if (!started.accepted) {
+            std::cerr << "error[bloom-cli.export." << static_cast<int>(started.availability.code)
+                      << "]: " << started.availability.reason << '\n';
+            return 5;
+        }
+        bool active = true;
+        while (active) {
+            service.pump();
+            active = false;
+            for (const auto& view : service.snapshot()->jobs)
+                if (std::ranges::find(jobs, view.id) != jobs.end() &&
+                    bloom::host::isActive(view.state))
+                    active = true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        const auto snapshot = service.snapshot();
+        for (const auto& view : snapshot->jobs)
+            if (std::ranges::find(jobs, view.id) != jobs.end() &&
+                view.state != bloom::host::ExportJobState::Done &&
+                view.state != bloom::host::ExportJobState::DoneWithWarnings)
+                status = 6;
+        std::cout << scripting::exportEventsJson(service.events(0)) << '\n';
+    }
+    if (save) {
+        const auto saved = session->save();
+        if (!saved.succeeded()) {
+            std::cerr << "error[" << saved.code << "]: " << saved.message << '\n';
+            return 7;
+        }
+    } else {
+        std::cerr << "note[bloom-cli.export]: asset imports were not saved; pass --save\n";
+    }
+    return status;
 }
 
 [[nodiscard]] int commandRender(int argc, char** argv) {
@@ -322,6 +547,9 @@ int main(int argc, char** argv) {
     }
     if (command == "render") {
         return commandRender(argc, argv);
+    }
+    if (command == "export") {
+        return commandExport(argc, argv);
     }
     printUsage();
     return 2;

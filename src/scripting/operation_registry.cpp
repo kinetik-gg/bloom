@@ -3376,6 +3376,7 @@ OperationRegistry OperationRegistry::builtIn() {
         });
 
     detail::addLayerAlignmentOperations(all);
+    detail::addExportOperations(all);
 
     std::ranges::sort(
         all, {}, [](const OperationDescriptor& descriptor) { return descriptor.schema.typeId; });

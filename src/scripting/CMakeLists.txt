@@ -18,10 +18,12 @@ add_library(bloom_scripting STATIC)
 target_sources(
     bloom_scripting
     PRIVATE
+        export.cpp
         json_script.cpp
         live_session_host.cpp
         operation_registry.cpp
         operation_registry_alignment.cpp
+        operation_registry_export.cpp
         operation_values.hpp
         render.cpp
         session.cpp
@@ -30,6 +32,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/scripting/events.hpp
+            include/bloom/scripting/export.hpp
             include/bloom/scripting/facade.hpp
             include/bloom/scripting/json_script.hpp
             include/bloom/scripting/live_session_host.hpp
