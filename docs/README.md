@@ -47,8 +47,9 @@ provide research or rationale, but they are not binding until adopted here.
 
 The issue #304 Linux implementation and local qualification cover processing/presentation allocation
 ownership, immutable source revisions, bounded native command batches, repeated fill/purge and
-sustained packed Viewer playback. The measured width-two candidate failed the interaction/headroom
-gate, so production service-backed RAM fill defaults to width one. See the
+sustained packed Viewer playback. Admission now uses measured capacity minus the RAM/VRAM headroom
+preferences and each frame's actual need, and service-backed RAM fill keeps as many frames in flight
+as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admission-by-measured-capacity-and-actual-need)). See the
 [current Linux qualification record](plans/gpu-304-linux-qualification.md) and the historical
 [execution checkpoints](plans/gpu-reliability-and-preview.md#execution-checkpoint) for exact limits.
 
@@ -59,8 +60,8 @@ gate, so production service-backed RAM fill defaults to width one. See the
   importing from it on Linux, macOS and Windows.
 - [Preferences](user-guide/preferences.md) — global preferences, which changes take effect immediately,
   which need a restart, and what is project or session state instead.
-- [Memory](user-guide/memory.md) — the cache budgets Bloom chooses, the two override keys, and what
-  actual OS limits affect selected targets.
+- [Memory](user-guide/memory.md) — the RAM and VRAM headroom preferences, how work and caches use
+  the rest of the machine, and what actual OS limits apply.
 - [The Context Bar](user-guide/context-bar.md) — the tools, the active tool's options, and aligning
   and distributing layers.
 - [Scripting Bloom with Python](user-guide/python.md) — Python package, transactions and embedding.
@@ -135,16 +136,15 @@ gate, so production service-backed RAM fill defaults to width one. See the
 - Typed task results now belong to live handles rather than retained terminal history. Weak writers,
   admission pins and pointer-only lock exchange preserve take-once delivery while releasing abandoned
   results outside locks. CPU/I/O and mock GPU forced/late/reentrant lifetime gates pass; scheduler
-  history, accounting and completion ordering remain unchanged. The first G6B phase-reservation slice is accepted separately;
-  this adds no native GPU performance or whole-process memory guarantee.
+  history, accounting and completion ordering remain unchanged. Processing-phase admission is
+  documented separately and adds no whole-process memory guarantee beyond the headroom.
 
-- The first conservative G6B processing-phase reservation slice is accepted within bounded scope:
-  explicit shared roots, checked host/device/count envelopes, admitted CPU fallback,
-  retirement/quarantine lifetime and bounded readiness/capacity-release retry. Required native
-  coverage/routes, affected strict checks, application quality and Linux CPU-only closure pass,
-  including corrected owning reruns; the reliability plan records their distinct evidence.
-  Allocation-owned physical accounting, width two and sustained/platform qualification remain open;
-  see the [owning GPU contract](architecture/gpu-backend.md#conservative-processing-phase-reservations-first-g6b-slice).
+- Processing-phase admission uses measured capacity minus the RAM/VRAM headroom preferences
+  (default 2 GiB each) and each phase's actual need: explicit shared roots, checked host/device/count
+  claims, typed waits that resume on release, refusal only when one frame cannot fit the whole usable
+  capacity, strict Viewer priority for exports, retirement/quarantine lifetime and recovery of a
+  generation latched by an unproven retirement; see the
+  [owning GPU contract](architecture/gpu-backend.md#processing-phase-admission-by-measured-capacity-and-actual-need).
 
 - Rooted packed-host RGBA8 payload ownership and conservation are accepted within
   [a separate bounded slice](architecture/gpu-backend.md#rooted-packed-host-payload-ownership-bounded-ownership-slice).

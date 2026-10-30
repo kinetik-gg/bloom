@@ -202,11 +202,16 @@ The initial scheduler has four semantic priority classes:
 3. `foreground` — explicit user jobs with visible progress, such as save or export
 4. `background` — thumbnails, proxies, indexing, cache warming, and speculative work
 
-Priority expresses user intent, not a dedicated thread per class. The scheduler may reserve
-capacity for interactive work, but it must also apply aging or fair sharing so continuous scrubbing
-does not starve an explicit export indefinitely. When the Viewer or a RAM preview holds the shared
-processing root's capacity, an export frame waits at its boundary (`WaitingForViewer`, no estimate)
-and retries, instead of failing ([ADR 0033](../decisions/0033-export-queue.md), section 9).
+Priority expresses user intent, not a dedicated thread per class. For CPU and I/O work the scheduler
+may reserve capacity for interactive work, but it must also apply aging or fair sharing so continuous
+scrubbing does not starve an explicit export indefinitely. GPU processing-phase admission instead
+applies strict Viewer priority on the shared processing root (ADR 0033 section 9): while a Viewer
+request waits for capacity no Export or Background phase is granted, while the Viewer is active an
+export frame uses spare capacity only, and an idle Viewer holds nothing, so exports run at full speed
+(see [GPU admission](gpu-backend.md#processing-phase-admission-by-measured-capacity-and-actual-need)).
+Capacity waits are typed (`AwaitingCapacity` with a Host, Device, RequestCount or Viewer domain),
+cancellable, and resume on a phase release, a capacity change or a fresh sample; the export runner
+waits at the frame boundary (`WaitingForViewer`, no estimate) and retries instead of failing.
 
 New interactive requests coalesce or supersede equivalent queued requests. For example, scrubbing
 through twenty times should not require evaluating nineteen frames the user no longer wants.
@@ -262,7 +267,10 @@ Snapshot publication rejects older sample serials; allocation failure removes de
 Sample serials are separate from processing-phase release revisions and all image/cache identities.
 Preview retries require a newer fresh usable sample, preserving the active/newest gate and shutdown
 barriers. Completion or own phase disposal is not evidence of a new default epoch. This is default
-propagation, not a second quota ledger or aggregate physical memory accounting.
+propagation, not a second quota ledger or aggregate physical memory accounting. Delivered host
+capacity is measured available memory minus the RAM headroom preference; RAM preview sizes its
+frames in flight from the root's free usable capacity (`previewFramesThatFit`), at least one and at
+most one per hardware thread.
 
 The numeric/controller controls, bounded ordinary-default Full/Half witnesses, affected strict/
 Linux fallback checks and final repository quality pass within the bounded scope recorded in the

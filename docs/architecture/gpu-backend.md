@@ -1106,58 +1106,70 @@ partway through an output with mixed hidden semantics.
 - Preview fallback or reduced precision: expose it in viewer status. Strict final output does not
   degrade silently.
 
-### Conservative processing-phase reservations (first G6B slice)
+### Processing-phase admission by measured capacity and actual need
 
-The first G6B slice introduces a neutral coordinator explicitly injected by application, export
-and scripting composition roots. Owners sharing an allowance must receive the same coordinator;
-independent roots do not implicitly aggregate their budgets. Missing roots refuse before heavy
-work. Host preparation, native execution and final transfer hold checked host/device byte envelopes
-and request-count leases before entering each phase. Shared allowance never grants access to
-another native owner, device generation or cache. Mutable frame-context width remains one.
+One neutral `GpuProcessingPhasePolicy` is explicitly injected by the application, export and
+scripting composition roots. Owners sharing an allowance receive the same policy; independent
+roots do not aggregate. Missing roots refuse before heavy work. Host preparation, native execution
+and final transfer each hold a phase lease before entering the phase. Shared allowance never grants
+access to another native owner, device generation or cache.
 
-These are conservative phase ceilings, not unique allocation charges. Preparation accounts for
-bounded source/coverage quotas and nested borrowing; final output accounts for process, encoded
-output and readback costs. Budget refusal is typed and cannot trigger an unadmitted CPU path.
-Disabled or unavailable GPU providers still require host admission before CPU evaluation. Existing
-GPU coverage, parity and strict final-output behavior remain required under the same policy.
+**Usable capacity.** Usable RAM is the measured available system memory (within an observed
+process/cgroup limit, sampled off the UI thread and captured once per delivered sample) minus the
+RAM headroom preference. Usable VRAM is the driver's live device budget (`VK_EXT_memory_budget`
+heap budget minus heap usage, through VMA) with the root's own allocated native backing credited
+back once, minus the VRAM headroom preference. Without a live budget the documented fallback is the
+device-local heap size minus the headroom. The two headroom values (`memory/ramHeadroomBytes`,
+`memory/vramHeadroomBytes`, default 2 GiB each, 0 to 256 GiB) are the only safety margin; there is
+no fraction, quarter, half-of-remaining share or whole-device ceiling. A policy starts with zero
+headroom until its composition root delivers the preference; the desktop applies the saved value
+at startup and on every Preferences change, and a headless export root applies the 2 GiB default.
 
-Final-evaluator producer budgets distinguish defaults from explicit overrides. An explicit
-`executorBudgets` value is honored verbatim. A rooted default uses the stable device-local heap
-size as its producer image upper ceiling, rather than capturing the startup reusable-cache split;
-omitted request/readback ceilings use the off-UI sampled root's device/host capacity at each
-attempt. An explicit numeric ceiling, including zero, is honored. The phase limits each source and
-executor request to the actual remaining host/device room after held claims, with the exact
-three-way source overlap; it imposes no separate quarter share. Live pins and native resource
-limits still constrain execution. The final owner refreshes its device report during idle polling
-and before executing queued work.
-Unrooted legacy defaults remain unchanged. This does not enlarge an admitted phase or guarantee
-that a composition fits.
+**Claims are needs.** A phase claims fixed output and metadata bytes, three times its minimum
+source bytes (decode, conversion and upload overlap), and on the device its working bytes plus its
+minimum executor bytes (the live-image peak). GPU scene preparation states the source need from
+the reachable decoded sources (one float frame per probed image or video source, the preflight
+live-image peak when an extent is unknown). Requested source and executor sizes are ceilings: a
+phase may grow toward them, but they are not claimed. A native image or buffer that exceeds the
+phase's remaining claim is admitted at allocation against the live device room, and released
+bytes return to the root. Retained products (RAM-preview frames, final products) stay charged while
+they live.
+
+**Waiting, not refusing.** A need that fits the usable capacity but not what other work holds right
+now returns `AwaitingCapacity` with its domain (Host, Device or RequestCount). Before answering, the
+policy asks registered retention owners to evict reusable cache entries. Waiters resume on a phase
+release, a capacity change or a fresh sample (`waitForAdmissionChange`). Only a need larger than the
+whole usable capacity of an otherwise empty root is `BudgetRefused`. Each wait or refusal is logged
+once per second per root with the status and domain names and the capacity, claim, retention and
+admitted-phase counters (`describeAdmission`). The final-export attempt runner waits in place,
+cancellably, and reports `Waiting for capacity`; a refused frame names the counters.
+
+**Latch recovery.** A frame whose native work could not be proven retired latches its phase on the
+device generation. Before the next phase the owner waits for the device to go idle (a device-wide
+fence proof), proves the latched phase retired and releases it; a lost device is reported, never
+released. The generation no longer refuses every later frame.
 
 GPU scene preparation uses CPU preflight for semantic validation without charging hypothetical CPU
-intermediate images against the host source allowance. Retained decoded sources and coverage stay
-bounded by their host allowances; native images and scratch stay bounded by the device lease. Once
-the root scene finishes preparation, the phase retains actual deduplicated source bytes and fixed
-output/coverage headroom, and releases unused source/decode/upload reservation. Nested builders do
-not finish a borrowed phase while sibling sources can still decode. Subsequent uploads acquire
-their actual nonlocal host backing, including allocator requirements, against current host capacity;
-they retain the original upload and device ceilings. Retirement and unproven-work rules are unchanged.
+intermediate images against the host source allowance. Once the root scene finishes preparation,
+the phase keeps its actual deduplicated retained source bytes (charging growth beyond its stated
+need) and releases the rest of its preparation claim. Nested builders do not finish a borrowed phase
+while sibling sources can still decode. Uploads after the handoff, and earlier uploads larger than
+the phase's own remaining claim, acquire their actual nonlocal host backing against live capacity.
+Retirement and unproven-work rules are unchanged.
 A cancelled scene also releases unpublished outputs in retained OCIO effect programs after native
 retirement is proved, before dropping its phase. The program cache keeps compiled shaders for reuse;
 pending submissions and unproven allocations remain held.
 Rooted resident preview queue admission charges no hypothetical pixel backing: the processing
-phase owns that admission before allocation. Scheduler queue/count bounds remain active. This
-avoids charging the whole device ceiling again against an aggregate host allowance and sending
-otherwise GPU-capable requests to CPU evaluation merely because another preview is queued.
-Explicit and unrooted legacy routes retain additive scheduler byte admission.
+phase owns that admission before allocation. Scheduler queue/count bounds remain active.
 
 Before CPU evaluation, a CPU-worker planner supplies the preflight live-image minimum, including
-nested compositions, to phase admission. The phase still requests the caller's full source ceiling;
-the minimum prevents granting a phase already known to fail preflight. It is not an exact allocation
-forecast: transformed bounds, decoded media, and operation scratch remain checked during execution.
+nested compositions, to phase admission. That minimum is the phase's claimed need; the caller's
+source limit is an unclaimed ceiling. It is not an exact allocation forecast: transformed bounds,
+decoded media, and operation scratch remain checked during execution.
 
-#### Preview default propagation follow-on
+#### Preview default propagation
 
-The implemented follow-on distinguishes omitted preview limits from explicit finite ceilings.
+Preview distinguishes omitted limits from explicit finite ceilings.
 `GpuPreviewDisplayServiceOptions::residentExecutorBudgets` is optional: an explicit value preserves
 its byte and structural limits verbatim. An omitted rooted producer uses the configured request
 ceiling, or the device-owner ceiling when the request default is delivered live, rather than a cold
@@ -1191,12 +1203,10 @@ A track matte is the existing Multiply Alpha dispatch over two Layer Output comm
 axes `feature.mask.layer`, `feature.mask.value` and `feature.matte.track` and the effect and Mask
 node ids are fixtured through the production builder with native parity.
 
-A requested executor size is a ceiling, not a need. The phase budget grants a native phase at most
-half of the remaining device room (never less than the phase's stated minimum), so concurrent
-phases such as a Viewer request beside a RAM-preview fill are not refused while most of the device
-is free. GPU scene preparation states its minimum as the plan's preflight live-image peak, at least
-one float frame of the resolved output; a minimum that does not fit the remaining room is still a
-typed Device refusal.
+A requested executor size is a ceiling, not a need: the phase claims its working bytes plus its
+stated minimum (the plan's preflight live-image peak, at least one float frame of the resolved
+output), and concurrent phases such as a Viewer request beside a RAM-preview fill are all admitted
+while their needs fit the usable device capacity.
 
 The resident service keeps construction ceilings separate from live free space. For an omitted
 rooted preview limit, the executor's per-image ceiling uses finite device-local size (or the

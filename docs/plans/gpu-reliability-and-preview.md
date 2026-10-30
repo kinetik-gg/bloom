@@ -700,7 +700,7 @@ Source acceptance does not replace the running user application. The separately 
 development snapshot remains a development build; a verified milestone package and launch are
 distinct coordinator actions.
 
-The [owning GPU contract](../architecture/gpu-backend.md#conservative-processing-phase-reservations-first-g6b-slice)
+The [owning GPU contract](../architecture/gpu-backend.md#processing-phase-admission-by-measured-capacity-and-actual-need)
 defines conservative per-phase host/device/count envelopes and exact retirement/quarantine leases.
 Budget refusal has no unconstrained CPU bypass. This is the first bounded admission/lifetime slice;
 unique physical allocation accounting for cache aliases, published products, external pins and

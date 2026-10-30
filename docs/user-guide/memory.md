@@ -19,13 +19,13 @@ partial, and later requests can evict older least-recently-used frames, shifting
 
 Cache counters describe held products, not total process or driver memory. Active work, temporary
 transfers, live display pins and retirement can hold additional memory. Actual OS process/container
-limits can constrain combined reusable cache retention; complete aggregate reservation accounting remains
-under development. These limits do not guarantee total process memory or prevent every OOM.
+limits constrain combined reusable cache retention. The headroom is the protection against running
+the system out of memory; an allocation the driver or OS still refuses is a typed failure.
 
 Cache-held bytes can fall after eviction or purge while the viewer or another consumer still holds
 the same storage. A bounded rooted packed-host ownership slice tracks those pixel payloads across
 their consumers; it does not change the cache's held/budget reading or measure total application memory.
-The ownership checkpoint counts explicitly rooted pixel payloads. Its retirement follow-on also
+The ownership accounting counts explicitly rooted pixel payloads. Its retirement accounting also
 admits the backing's queue header and keeps both charged after the final consumer hands it to a
 worker. That worker frees published backing before releasing its charge; cache-held cost may
 already be zero while an external pin or queued release still owns memory. The bounded follow-on
@@ -33,35 +33,31 @@ passes its affected ownership and shutdown checks. Legacy storage, other metadat
 allocator overhead and native GPU
 allocations remain separate; these checks do not measure total memory or guarantee release latency.
 
-## Choosing the budgets
+## Headroom: the only memory setting
 
-Set operation-cache and RAM-preview budgets under **Edit → Preferences… → Memory & Caches**.
-**Apply takes effect immediately.** Each nonzero value is that cache's selected target. Changing
-one does not shrink the other. Auxiliary caches do not subtract from those targets.
+Bloom uses the machine. Under **Edit → Preferences… → Memory & Caches** you choose two headroom
+values, the memory Bloom leaves free for the rest of the system:
 
-**Automatic** (stored as 0) chooses stable defaults from physical memory when Bloom receives its
-first usable worker sample. It does not keep reducing the target as RAM fills:
-
-| Physical RAM | Operation target | RAM-preview target | Total |
+| Setting | Key | Default | Range |
 | --- | --- | --- | --- |
-| 8 GiB | 2 GiB | 2 GiB | 4 GiB |
-| 16 GiB | 4.8 GiB | 3.2 GiB | 8 GiB |
-| 32 GiB | 9.6 GiB | 6.4 GiB | 16 GiB |
-| 60 GiB | 18 GiB | 12 GiB | 30 GiB |
+| RAM headroom | `memory/ramHeadroomBytes` | 2 GiB | 0 to 256 GiB |
+| VRAM headroom | `memory/vramHeadroomBytes` | 2 GiB | 0 to 256 GiB |
 
-The initial fallback is 1 GiB for operations and 2 GiB for preview when hardware capacity is
-unknown. Smaller reported machines bound that fallback. Preferences shows resolved targets;
-status shows bytes held against actual cache budgets. Targets are limits on retained results,
-not preallocations or promises that every allocation will succeed.
+Values are decimal byte counts. Missing, malformed or out-of-range values select 2 GiB. Apply takes
+effect immediately.
 
-The settings keys are decimal byte counts:
+**Usable RAM** is the available system memory Bloom measures (within any real OS or container limit)
+minus the RAM headroom. **Usable VRAM** is the graphics driver's live memory budget minus the VRAM
+headroom. The Viewer, RAM preview, playback and exports run as many frames at once as fit usable
+memory. The operation cache and the RAM preview fill what is left and are evicted when active work
+needs the room. When work needs more than is free at that moment, it waits and resumes as soon as
+other work releases memory; it is refused only when one frame cannot fit even with nothing else
+running, and the refusal names the measured numbers.
 
-| Key | Meaning |
-| --- | --- |
-| `playback/operation-cache-bytes` | Selected operation-cache target |
-| `playback/ram-preview-memory-bytes` | Selected RAM-preview target |
-
-For example, 10737418240 and 6442450944 select 10 GiB and 6 GiB independently.
+The earlier per-cache targets `playback/operation-cache-bytes` and
+`playback/ram-preview-memory-bytes` are retired. Bloom ignores saved values for them and does not
+migrate them: they were retention sizes, not safety margins, and the caches now size themselves
+from usable memory.
 
 Decoded video frames have their own retention target, read at startup from
 `playback/decoded-video-cache-bytes` (decimal bytes). Missing or zero selects Automatic: one
@@ -76,19 +72,19 @@ Bloom samples host/process memory on a worker every five seconds. Reusable reten
 zero until the first complete sample establishes process-limit readiness. Status and Preferences
 read the cached result without probing the OS on the interface thread.
 
-An actual OS process/container limit can reduce combined reusable targets. On Linux cgroup v2,
-Bloom uses the smallest observed absolute process/ancestor limit; if all reusable cache targets
-exceed it, those caches share it. The UI explains that constraint and reports the actual allowances.
+An actual OS process/container limit bounds combined reusable retention. On Linux cgroup v2,
+Bloom uses the smallest observed absolute process/ancestor limit; the caches share it. The UI explains that constraint and reports the actual allowances.
 It does not subtract an invented reserve or reduce cache targets whenever free memory falls.
 Fresh complete observations permit immediate recovery. Once a finite limit is observed, stale or
 failed readings cannot silently erase it; removal must be verified in the same hierarchy view.
 Linux memory-v1 and Windows/macOS currently disclose host-only best effort for process limits.
 
-Active rendering has separate admission based on measured available memory, actual process
-headroom, device capability and already-held work. A small retention cache does not by itself mean
-a frame is too large to render. Requests can wait or fail with a diagnostic when actual capacity
-cannot cover their allocations; live pixels and active reservations remain valid. Separate GPU
-owner partitions and final-export limits are still being audited.
+Active rendering is admitted against usable memory (measured capacity minus headroom) and the
+work already admitted. Each frame claims what it needs, not a share of the machine: a 2048×858
+float frame is about 28 MB. A frame that does not fit right now waits for other work to release
+memory and then runs; Bloom refuses it only when it cannot fit usable memory on its own, and
+writes the reason with the measured capacity, the claims held and the cached retention. Live pixels
+and active reservations remain valid.
 For rooted RAM-preview and final pixel storage, Bloom reconciles the exact completed backing that
 the OS has already counted in its free-space reading. This prevents a retained frame from reducing
 available memory and being subtracted again as an owned allocation. A cache's held-byte display is
