@@ -158,6 +158,7 @@ nb::list NativeHost::schemas() const {
     for (const auto& descriptor : facade_->operations.descriptors()) {
         nb::dict row;
         row["id"] = descriptor.schema.typeId;
+        row["description"] = descriptor.schema.description;
         nb::list arguments;
         for (const auto& argument : descriptor.schema.arguments) {
             nb::dict value;

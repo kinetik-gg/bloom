@@ -75,6 +75,10 @@ struct ArgumentSchema final {
 struct OperationSchema final {
     std::string typeId;
     std::vector<ArgumentSchema> arguments;
+    // What the operation does, for agents and artists reading `query operations` or
+    // `Host.schemas()`: its purpose, side effects, outputs, errors with their remedies, and the
+    // undo step it makes. Empty when an operation has not been described yet.
+    std::string description{};
 };
 
 // ADR 0031. Measures every layer of a composition at a time for align and distribute: the CPU

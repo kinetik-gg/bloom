@@ -234,6 +234,7 @@ class Protocol(unittest.TestCase):
         for record in records:
             self.assertTrue(record['arguments'], record['id'])
             self.assertTrue(record['example'].startswith('bloom.ops.'), record['id'])
+            self.assertIsInstance(record['description'], str, record['id'])
             for argument in record['arguments']:
                 self.assertTrue(argument['summary'], f"{record['id']}.{argument['name']}")
                 self.assertEqual(argument['contextual'], argument['context'] != '')

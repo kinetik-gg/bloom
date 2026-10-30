@@ -107,6 +107,7 @@ class PythonApi(unittest.TestCase):
                 self.assertIsNone(p.default)
             # Every operation publishes a call an artist can paste.
             self.assertTrue(schema['example'].startswith('bloom.ops.'), schema['id'])
+            self.assertIsInstance(schema['description'], str, schema['id'])
         with self.assertRaises(bloom.OperationError):
             bloom.ops.layer.add_solid(composition=1, name='bad', color=(0, 0, float('nan'), 1))
         with self.assertRaises(bloom.OperationError):

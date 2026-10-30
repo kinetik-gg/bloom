@@ -616,6 +616,7 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
         for (const auto& descriptor : call.session.operations().descriptors()) {
             auto* record = out.object();
             out.set(record, "id", out.text(descriptor.schema.typeId));
+            out.set(record, "description", out.text(descriptor.schema.description));
             auto* schema = out.array();
             for (const auto& argument : descriptor.schema.arguments) {
                 auto* item = out.object();
