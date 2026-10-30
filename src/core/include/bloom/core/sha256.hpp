@@ -54,7 +54,10 @@ class Sha256Hasher final {
     hash(std::span<const std::byte> bytes) noexcept;
 
   private:
-    void compress(const std::array<std::byte, 64>& block) noexcept;
+    // Compresses `blocks` consecutive 64-byte blocks through the fastest rounds this processor
+    // supports (x86 SHA extensions, Armv8 SHA2, or the portable reference). Every implementation
+    // produces the identical FIPS 180-4 state.
+    void compress(const std::byte* data, std::size_t blocks) noexcept;
 
     std::array<std::uint32_t, 8> state_{
         0x6A09E667U, 0xBB67AE85U, 0x3C6EF372U, 0xA54FF53AU,
@@ -64,5 +67,14 @@ class Sha256Hasher final {
     std::uint64_t totalBytes_ = 0;
     std::size_t bufferedByteCount_ = 0;
 };
+
+namespace detail {
+enum class Sha256Implementation : std::uint8_t { Portable, X86ShaExtensions, ArmSha2 };
+// The rounds Sha256Hasher selected for this processor at first use.
+[[nodiscard]] Sha256Implementation activeSha256Implementation() noexcept;
+// One-shot digest through the portable reference rounds only, so tests can cross-check the
+// accelerated rounds on the same input.
+[[nodiscard]] std::optional<Sha256Digest> portableSha256(std::span<const std::byte> bytes) noexcept;
+} // namespace detail
 
 } // namespace bloom::core

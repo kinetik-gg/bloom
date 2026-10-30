@@ -1,5 +1,6 @@
 #include <bloom/core/sha256.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <iostream>
@@ -7,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -141,6 +143,44 @@ void testCanonicalHexCodec(Expectations& expectations) {
                         "non-hexadecimal digest text is rejected");
 }
 
+// The accelerated rounds (SHA extensions or Armv8 SHA2, selected at run time) must equal the
+// portable reference on every length and on every way of splitting the stream into updates.
+void testAcceleratedRoundsMatchPortableReference(Expectations& expectations) {
+    std::vector<std::byte> message(4096 + 77);
+    std::uint32_t seed = 0x9E3779B9U;
+    for (auto& value : message) {
+        seed = seed * 1664525U + 1013904223U;
+        value = static_cast<std::byte>(seed >> 24U);
+    }
+    const auto all = std::span<const std::byte>(message);
+    bool lengthsMatch = true;
+    for (std::size_t length = 0; length <= 300; ++length) {
+        lengthsMatch = lengthsMatch && bloom::core::Sha256Hasher::hash(all.first(length)) ==
+                                           bloom::core::detail::portableSha256(all.first(length));
+    }
+    lengthsMatch = lengthsMatch &&
+                   bloom::core::Sha256Hasher::hash(all) == bloom::core::detail::portableSha256(all);
+    expectations.expect(lengthsMatch, "accelerated rounds match the portable reference");
+
+    const auto reference = bloom::core::detail::portableSha256(all);
+    bool splitsMatch = true;
+    for (const std::size_t step : {1U, 7U, 63U, 64U, 65U, 1000U, 4096U}) {
+        bloom::core::Sha256Hasher hasher;
+        for (std::size_t offset = 0; offset < all.size(); offset += step) {
+            splitsMatch = hasher.update(all.subspan(offset, std::min(step, all.size() - offset))) &&
+                          splitsMatch;
+        }
+        splitsMatch = splitsMatch && reference.has_value() && hasher.finalize() == *reference;
+    }
+    expectations.expect(splitsMatch, "every update split yields the one-shot digest");
+    expectations.expect(
+        hasDigest(bloom::core::detail::portableSha256(asBytes("abc")),
+                  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+        "the portable reference matches the standard vector");
+    std::cout << "sha256 rounds: "
+              << static_cast<int>(bloom::core::detail::activeSha256Implementation()) << '\n';
+}
+
 } // namespace
 
 int main() {
@@ -150,5 +190,6 @@ int main() {
     testBlockBoundaries(expectations);
     testMillionByteStreamingVector(expectations);
     testCanonicalHexCodec(expectations);
+    testAcceleratedRoundsMatchPortableReference(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

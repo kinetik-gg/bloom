@@ -2,7 +2,25 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstring>
 #include <limits>
+
+#if defined(__x86_64__) || defined(_M_X64)
+#define BLOOM_SHA256_X86 1
+#include <immintrin.h>
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#define BLOOM_SHA256_X86_TARGET
+#else
+#include <cpuid.h>
+#define BLOOM_SHA256_X86_TARGET __attribute__((target("sha,sse4.1,ssse3")))
+#endif
+#endif
+
+#if (defined(__aarch64__) || defined(_M_ARM64)) && defined(__ARM_FEATURE_SHA2)
+#define BLOOM_SHA256_ARM 1
+#include <arm_neon.h>
+#endif
 
 namespace {
 
@@ -76,6 +94,202 @@ void storeBigEndian64(const std::uint64_t value, std::byte* destination) noexcep
     return std::nullopt;
 }
 
+using State = std::array<std::uint32_t, 8>;
+
+constexpr State kInitialState{
+    0x6A09E667U, 0xBB67AE85U, 0x3C6EF372U, 0xA54FF53AU,
+    0x510E527FU, 0x9B05688CU, 0x1F83D9ABU, 0x5BE0CD19U,
+};
+
+void compressPortable(State& state, const std::byte* data, std::size_t blocks) noexcept {
+    for (; blocks != 0; --blocks, data += 64) {
+        std::array<std::uint32_t, 64> schedule{};
+        for (std::size_t index = 0; index < 16; ++index) {
+            schedule[index] = loadBigEndian32(data + index * 4);
+        }
+        for (std::size_t index = 16; index < schedule.size(); ++index) {
+            schedule[index] = smallSigma1(schedule[index - 2]) + schedule[index - 7] +
+                              smallSigma0(schedule[index - 15]) + schedule[index - 16];
+        }
+
+        auto a = state[0];
+        auto b = state[1];
+        auto c = state[2];
+        auto d = state[3];
+        auto e = state[4];
+        auto f = state[5];
+        auto g = state[6];
+        auto h = state[7];
+        for (std::size_t index = 0; index < schedule.size(); ++index) {
+            const auto first =
+                h + bigSigma1(e) + choose(e, f, g) + kRoundConstants[index] + schedule[index];
+            const auto second = bigSigma0(a) + majority(a, b, c);
+            h = g;
+            g = f;
+            f = e;
+            e = d + first;
+            d = c;
+            c = b;
+            b = a;
+            a = first + second;
+        }
+
+        state[0] += a;
+        state[1] += b;
+        state[2] += c;
+        state[3] += d;
+        state[4] += e;
+        state[5] += f;
+        state[6] += g;
+        state[7] += h;
+    }
+}
+
+#if defined(BLOOM_SHA256_X86)
+BLOOM_SHA256_X86_TARGET inline __m128i load128(const void* source) noexcept {
+    return _mm_loadu_si128(static_cast<const __m128i*>(source));
+}
+BLOOM_SHA256_X86_TARGET inline void store128(void* destination, const __m128i value) noexcept {
+    _mm_storeu_si128(static_cast<__m128i*>(destination), value);
+}
+
+// Intel SHA extensions (SHA-NI). The state is kept as ABEF/CDGH lane pairs, the layout
+// sha256rnds2 consumes; the message schedule rotates through four registers.
+BLOOM_SHA256_X86_TARGET void compressX86(State& state, const std::byte* data,
+                                         std::size_t blocks) noexcept {
+    const __m128i byteSwap = _mm_set_epi64x(0x0c0d0e0f08090a0bLL, 0x0405060700010203LL);
+    __m128i swapped = load128(state.data());
+    __m128i state1 = load128(state.data() + 4);
+    swapped = _mm_shuffle_epi32(swapped, 0xB1);
+    state1 = _mm_shuffle_epi32(state1, 0x1B);
+    __m128i state0 = _mm_alignr_epi8(swapped, state1, 8);
+    state1 = _mm_blend_epi16(state1, swapped, 0xF0);
+    for (; blocks != 0; --blocks, data += 64) {
+        const __m128i savedAbef = state0;
+        const __m128i savedCdgh = state1;
+        std::array<__m128i, 4> words{};
+        for (int group = 0; group < 16; ++group) {
+            auto& current = words[static_cast<std::size_t>(group & 3)];
+            if (group < 4) {
+                current = _mm_shuffle_epi8(load128(data + group * 16), byteSwap);
+            }
+            __m128i message = _mm_add_epi32(
+                current, load128(kRoundConstants.data() + static_cast<std::size_t>(group) * 4));
+            state1 = _mm_sha256rnds2_epu32(state1, state0, message);
+            if (group >= 3 && group < 15) {
+                auto& next = words[static_cast<std::size_t>((group + 1) & 3)];
+                const auto& previous = words[static_cast<std::size_t>((group + 3) & 3)];
+                next = _mm_add_epi32(next, _mm_alignr_epi8(current, previous, 4));
+                next = _mm_sha256msg2_epu32(next, current);
+            }
+            message = _mm_shuffle_epi32(message, 0x0E);
+            state0 = _mm_sha256rnds2_epu32(state0, state1, message);
+            if (group >= 1 && group < 13) {
+                auto& previous = words[static_cast<std::size_t>((group + 3) & 3)];
+                previous = _mm_sha256msg1_epu32(previous, current);
+            }
+        }
+        state0 = _mm_add_epi32(state0, savedAbef);
+        state1 = _mm_add_epi32(state1, savedCdgh);
+    }
+    swapped = _mm_shuffle_epi32(state0, 0x1B);
+    state1 = _mm_shuffle_epi32(state1, 0xB1);
+    state0 = _mm_blend_epi16(swapped, state1, 0xF0);
+    state1 = _mm_alignr_epi8(state1, swapped, 8);
+    store128(state.data(), state0);
+    store128(state.data() + 4, state1);
+}
+
+[[nodiscard]] bool x86ShaExtensionsAvailable() noexcept {
+    constexpr unsigned kSsse3 = 1U << 9U;
+    constexpr unsigned kSse41 = 1U << 19U;
+    constexpr unsigned kSha = 1U << 29U;
+#if defined(_MSC_VER) && !defined(__clang__)
+    std::array<int, 4> registers{};
+    __cpuid(registers.data(), 0);
+    if (registers[0] < 7) {
+        return false;
+    }
+    __cpuid(registers.data(), 1);
+    const auto ecx = static_cast<unsigned>(registers[2]);
+    __cpuidex(registers.data(), 7, 0);
+    const auto ebx = static_cast<unsigned>(registers[1]);
+#else
+    unsigned eax = 0;
+    unsigned ebx = 0;
+    unsigned ecx = 0;
+    unsigned edx = 0;
+    if (__get_cpuid_max(0, nullptr) < 7 || __get_cpuid(1, &eax, &ebx, &ecx, &edx) == 0) {
+        return false;
+    }
+    const auto leafOneEcx = ecx;
+    if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx) == 0) {
+        return false;
+    }
+    ecx = leafOneEcx;
+#endif
+    return (ecx & kSsse3) != 0 && (ecx & kSse41) != 0 && (ebx & kSha) != 0;
+}
+#endif
+
+#if defined(BLOOM_SHA256_ARM)
+// Armv8 SHA2 instructions; the state stays in natural ABCD/EFGH order.
+void compressArm(State& state, const std::byte* data, std::size_t blocks) noexcept {
+    uint32x4_t state0 = vld1q_u32(state.data());
+    uint32x4_t state1 = vld1q_u32(state.data() + 4);
+    for (; blocks != 0; --blocks, data += 64) {
+        const uint32x4_t savedAbcd = state0;
+        const uint32x4_t savedEfgh = state1;
+        std::array<uint32x4_t, 4> words{};
+        for (std::size_t group = 0; group < 4; ++group) {
+            words[group] = vreinterpretq_u32_u8(
+                vrev32q_u8(vld1q_u8(reinterpret_cast<const std::uint8_t*>(data + group * 16))));
+        }
+        for (std::size_t group = 0; group < 16; ++group) {
+            auto& current = words[group & 3U];
+            const uint32x4_t message =
+                vaddq_u32(current, vld1q_u32(kRoundConstants.data() + group * 4));
+            if (group < 12) {
+                current = vsha256su0q_u32(current, words[(group + 1) & 3U]);
+            }
+            const uint32x4_t previousAbcd = state0;
+            state0 = vsha256hq_u32(state0, state1, message);
+            state1 = vsha256h2q_u32(state1, previousAbcd, message);
+            if (group < 12) {
+                current =
+                    vsha256su1q_u32(current, words[(group + 2) & 3U], words[(group + 3) & 3U]);
+            }
+        }
+        state0 = vaddq_u32(state0, savedAbcd);
+        state1 = vaddq_u32(state1, savedEfgh);
+    }
+    vst1q_u32(state.data(), state0);
+    vst1q_u32(state.data() + 4, state1);
+}
+#endif
+
+struct SelectedRounds final {
+    void (*compress)(State&, const std::byte*, std::size_t) noexcept;
+    bloom::core::detail::Sha256Implementation kind;
+};
+
+[[nodiscard]] SelectedRounds selectRounds() noexcept {
+#if defined(BLOOM_SHA256_X86)
+    if (x86ShaExtensionsAvailable()) {
+        return {compressX86, bloom::core::detail::Sha256Implementation::X86ShaExtensions};
+    }
+#endif
+#if defined(BLOOM_SHA256_ARM)
+    return {compressArm, bloom::core::detail::Sha256Implementation::ArmSha2};
+#else
+    return {compressPortable, bloom::core::detail::Sha256Implementation::Portable};
+#endif
+}
+
+[[nodiscard]] const SelectedRounds& selectedRounds() noexcept {
+    static const SelectedRounds rounds = selectRounds();
+    return rounds;
+}
 } // namespace
 
 namespace bloom::core {
@@ -124,15 +338,14 @@ bool Sha256Hasher::update(const std::span<const std::byte> bytes) noexcept {
         if (bufferedByteCount_ != bufferedBytes_.size()) {
             return true;
         }
-        compress(bufferedBytes_);
+        compress(bufferedBytes_.data(), 1);
         bufferedByteCount_ = 0;
     }
 
-    while (remaining.size() >= bufferedBytes_.size()) {
-        std::array<std::byte, 64> block{};
-        std::copy_n(remaining.begin(), block.size(), block.begin());
-        compress(block);
-        remaining = remaining.subspan(block.size());
+    const auto blocks = remaining.size() / bufferedBytes_.size();
+    if (blocks != 0) {
+        compress(remaining.data(), blocks);
+        remaining = remaining.subspan(blocks * bufferedBytes_.size());
     }
     std::copy(remaining.begin(), remaining.end(), bufferedBytes_.begin());
     bufferedByteCount_ = remaining.size();
@@ -145,13 +358,13 @@ Sha256Digest Sha256Hasher::finalize() const noexcept {
     if (final.bufferedByteCount_ > 56) {
         std::fill(final.bufferedBytes_.begin() + final.bufferedByteCount_,
                   final.bufferedBytes_.end(), std::byte{0});
-        final.compress(final.bufferedBytes_);
+        final.compress(final.bufferedBytes_.data(), 1);
         final.bufferedByteCount_ = 0;
     }
     std::fill(final.bufferedBytes_.begin() + final.bufferedByteCount_,
               final.bufferedBytes_.begin() + 56, std::byte{0});
     storeBigEndian64(final.totalBytes_ * 8U, final.bufferedBytes_.data() + 56);
-    final.compress(final.bufferedBytes_);
+    final.compress(final.bufferedBytes_.data(), 1);
 
     Sha256Digest::Bytes digestBytes{};
     for (std::size_t index = 0; index < final.state_.size(); ++index) {
@@ -168,46 +381,37 @@ std::optional<Sha256Digest> Sha256Hasher::hash(const std::span<const std::byte> 
     return hasher.finalize();
 }
 
-void Sha256Hasher::compress(const std::array<std::byte, 64>& block) noexcept {
-    std::array<std::uint32_t, 64> schedule{};
-    for (std::size_t index = 0; index < 16; ++index) {
-        schedule[index] = loadBigEndian32(block.data() + index * 4);
-    }
-    for (std::size_t index = 16; index < schedule.size(); ++index) {
-        schedule[index] = smallSigma1(schedule[index - 2]) + schedule[index - 7] +
-                          smallSigma0(schedule[index - 15]) + schedule[index - 16];
-    }
-
-    auto a = state_[0];
-    auto b = state_[1];
-    auto c = state_[2];
-    auto d = state_[3];
-    auto e = state_[4];
-    auto f = state_[5];
-    auto g = state_[6];
-    auto h = state_[7];
-    for (std::size_t index = 0; index < schedule.size(); ++index) {
-        const auto first =
-            h + bigSigma1(e) + choose(e, f, g) + kRoundConstants[index] + schedule[index];
-        const auto second = bigSigma0(a) + majority(a, b, c);
-        h = g;
-        g = f;
-        f = e;
-        e = d + first;
-        d = c;
-        c = b;
-        b = a;
-        a = first + second;
-    }
-
-    state_[0] += a;
-    state_[1] += b;
-    state_[2] += c;
-    state_[3] += d;
-    state_[4] += e;
-    state_[5] += f;
-    state_[6] += g;
-    state_[7] += h;
+void Sha256Hasher::compress(const std::byte* data, const std::size_t blocks) noexcept {
+    selectedRounds().compress(state_, data, blocks);
 }
+
+namespace detail {
+
+Sha256Implementation activeSha256Implementation() noexcept { return selectedRounds().kind; }
+
+std::optional<Sha256Digest> portableSha256(const std::span<const std::byte> bytes) noexcept {
+    constexpr auto maximumMessageBytes = std::numeric_limits<std::uint64_t>::max() / 8U;
+    if (bytes.size() > maximumMessageBytes) {
+        return std::nullopt;
+    }
+    State state = kInitialState;
+    const auto fullBlocks = bytes.size() / 64U;
+    compressPortable(state, bytes.data(), fullBlocks);
+    std::array<std::byte, 128> tail{};
+    const auto remaining = bytes.size() - fullBlocks * 64U;
+    std::copy_n(bytes.data() + fullBlocks * 64U, remaining, tail.begin());
+    tail[remaining] = std::byte{0x80};
+    const std::size_t tailBlocks = remaining + 1 > 56 ? 2 : 1;
+    storeBigEndian64(static_cast<std::uint64_t>(bytes.size()) * 8U,
+                     tail.data() + tailBlocks * 64U - 8U);
+    compressPortable(state, tail.data(), tailBlocks);
+    Sha256Digest::Bytes digestBytes{};
+    for (std::size_t index = 0; index < state.size(); ++index) {
+        storeBigEndian32(state[index], digestBytes.data() + index * 4);
+    }
+    return Sha256Digest::fromBytes(digestBytes);
+}
+
+} // namespace detail
 
 } // namespace bloom::core
