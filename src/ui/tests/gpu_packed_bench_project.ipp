@@ -108,6 +108,7 @@ struct BenchPlayback {
     std::uint64_t transportFrames = 0; // distinct times the transport asked for
     std::uint64_t paintedFrames = 0;   // distinct times the Viewer actually showed Current
     std::uint64_t paintedChanges = 0;  // times the shown Current frame changed (counts loops)
+    double advancedSeconds = 0.0;      // session time advanced, unwrapped across loop restarts
     double uiBusySeconds = 0.0;        // time spent inside event-loop slices on the UI thread
     double maxSliceMs = 0.0;           // the longest single event-loop slice
     std::uint64_t longSlices = 0;      // slices longer than one frame period
@@ -126,6 +127,9 @@ BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController&
     static_cast<void>(session.setCurrentTime(core::RationalTime::fromInteger(0)));
     std::set<std::int64_t> requested, painted;
     std::optional<std::int64_t> lastPainted;
+    const auto area = session.workArea();
+    const double loopSeconds = area.end.toSeconds() - area.start.toSeconds();
+    double previousTime = session.currentTime().toSeconds();
     const auto toKey = [](const core::RationalTime& time) {
         return static_cast<std::int64_t>(std::llround(time.toSeconds() * 1e6));
     };
@@ -144,6 +148,12 @@ BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController&
         if (slice > framePeriod)
             ++result.longSlices;
         requested.insert(toKey(session.currentTime()));
+        const double now = session.currentTime().toSeconds();
+        if (now >= previousTime)
+            result.advancedSeconds += now - previousTime;
+        else if (loopSeconds > 0) // a loop restart: the run went on to the area start
+            result.advancedSeconds += now - previousTime + loopSeconds;
+        previousTime = now;
         const auto shown = viewer.displayedPreviewState();
         if (shown.freshness == ui::FrameFreshness::Current && shown.frame) {
             const auto key = toKey(shown.frame->desiredIdentity().time);
@@ -434,6 +444,8 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
              << ",\"transportFrames\":" << played.transportFrames
              << ",\"paintedFrames\":" << played.paintedFrames
              << ",\"paintedChanges\":" << played.paintedChanges
+             << ",\"realTimeRatio\":"
+             << (played.seconds > 0 ? played.advancedSeconds / played.seconds : 0.0)
              << ",\"playUiBusySeconds\":" << played.uiBusySeconds
              << ",\"playMaxSliceMs\":" << played.maxSliceMs
              << ",\"playLongSlices\":" << played.longSlices << std::setprecision(15)
@@ -463,11 +475,30 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
              << ",\"cacheResidentBytes\":" << frameCache->residentBytes() << std::setprecision(15)
              << ",\"windowEndEpoch\":" << benchEpochSeconds() << std::setprecision(6);
         if (finished && ram.canAutoPlay() && gBenchPlaySeconds > 0) {
+            // Why a cached run might not be cached: document revisions, session snapshot
+            // refreshes and cache hits/misses across the run, and the last frame's diagnostics.
+            const auto revisionBefore = session.snapshot().revision().value();
+            const auto cacheBefore = frameCache->statistics();
+            std::uint64_t snapshotRefreshes = 0;
+            const auto refreshCounter =
+                QObject::connect(&session, &ui::CompositionSession::snapshotChanged,
+                                 [&snapshotRefreshes] { ++snapshotRefreshes; });
             const auto played = benchPlay(session, playback, viewer);
+            QObject::disconnect(refreshCounter);
+            const auto cacheAfter = frameCache->statistics();
+            json << ",\"cachedPlayRevisionChanges\":"
+                 << session.snapshot().revision().value() - revisionBefore
+                 << ",\"cachedPlaySnapshotRefreshes\":" << snapshotRefreshes
+                 << ",\"cachedPlayCacheHits\":" << cacheAfter.hits - cacheBefore.hits
+                 << ",\"cachedPlayCacheMisses\":" << cacheAfter.misses - cacheBefore.misses
+                 << ",\"cachedPlayStaleDrops\":" << cacheAfter.staleDrops - cacheBefore.staleDrops
+                 << ",\"cachedPlayEvictions\":" << cacheAfter.evictions - cacheBefore.evictions;
             json << ",\"cachedPlaySeconds\":" << played.seconds
                  << ",\"cachedTransportFrames\":" << played.transportFrames
                  << ",\"cachedPaintedFrames\":" << played.paintedFrames
                  << ",\"cachedPaintedChanges\":" << played.paintedChanges
+                 << ",\"cachedRealTimeRatio\":"
+                 << (played.seconds > 0 ? played.advancedSeconds / played.seconds : 0.0)
                  << ",\"cachedPresentedFps\":"
                  << (played.seconds > 0
                          ? static_cast<double>(played.paintedChanges) / played.seconds
@@ -479,6 +510,12 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
                          ? static_cast<double>(played.paintedFrames) / played.seconds
                          : 0.0);
         }
+    }
+    {
+        std::string codes;
+        for (const auto& item : controller.state().diagnostics)
+            codes += (codes.empty() ? "" : "; ") + item.code + ": " + item.summary;
+        json << ",\"lastFrameDiagnostics\":" << benchJson(codes);
     }
     const auto after = service.status().counters;
     const auto claims = policy->snapshot().reservations;
