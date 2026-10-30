@@ -13,8 +13,8 @@ namespace {
 
 constexpr auto kAudioEnabledKey = "playback/audio-enabled";
 constexpr auto kLoopPlaybackKey = "playback/loop";
-constexpr auto kOperationCacheBytesKey = "playback/operation-cache-bytes";
-constexpr auto kRamPreviewBytesKey = "playback/ram-preview-memory-bytes";
+constexpr auto kRamHeadroomKey = "memory/ramHeadroomBytes";
+constexpr auto kVramHeadroomKey = "memory/vramHeadroomBytes";
 constexpr auto kMediaDiskCacheEnabledKey = "media/disk-cache-enabled";
 constexpr auto kMediaDiskCacheDirectoryKey = "media/disk-cache-directory";
 constexpr auto kMediaDiskCacheBudgetKey = "media/disk-cache-budget-bytes";
@@ -40,7 +40,7 @@ constexpr auto kEventSoundsKey = "sound/events";
 constexpr auto kInteractionSoundsKey = "sound/interaction";
 constexpr auto kRenderNotificationsKey = "sound/render-notifications";
 
-// The byte-budget readers (preview_frame_cache.cpp, media_disk_cache_settings.cpp) parse the value
+// The byte-budget reader (media_disk_cache_settings.cpp) parse the value
 // through toString().toULongLong() and treat a missing, zero, or unparseable value as "default".
 // Reading and writing through the same spelling keeps a saved override valid on the next launch.
 [[nodiscard]] std::uint64_t byteBudgetFromSettings(const QSettings& settings,
@@ -60,6 +60,13 @@ void writeByteBudget(QSettings& settings, const char* const key, const std::uint
         return;
     }
     settings.setValue(QLatin1String(key), QString::number(static_cast<qulonglong>(bytes)));
+}
+
+// Headroom is stored as a decimal byte string. Garbage, negative or overflowing text reads as the
+// 2 GiB default; a larger-than-maximum number clamps to 256 GiB. Zero is a real value.
+[[nodiscard]] std::uint64_t headroomFromSettings(const QSettings& settings, const char* const key) {
+    const auto text = settings.value(QLatin1String(key)).toString().toStdString();
+    return parseHeadroomText(text).value_or(kHeadroomDefaultBytes);
 }
 
 // QVariant::toDouble() silently yields 0 for a malformed string rather than the caller's default,
@@ -157,8 +164,8 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
     ApplicationPreferences preferences;
     preferences.audioEnabled = settings.value(QLatin1String(kAudioEnabledKey), true).toBool();
     preferences.loopPlayback = settings.value(QLatin1String(kLoopPlaybackKey), true).toBool();
-    preferences.operationCacheBytes = byteBudgetFromSettings(settings, kOperationCacheBytesKey);
-    preferences.ramPreviewBytes = byteBudgetFromSettings(settings, kRamPreviewBytesKey);
+    preferences.ramHeadroomBytes = headroomFromSettings(settings, kRamHeadroomKey);
+    preferences.vramHeadroomBytes = headroomFromSettings(settings, kVramHeadroomKey);
     preferences.mediaDiskCacheEnabled =
         settings.value(QLatin1String(kMediaDiskCacheEnabledKey), true).toBool();
     preferences.mediaDiskCacheDirectory = absoluteDirectoryFromSettings(settings);
@@ -207,8 +214,12 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
 void saveApplicationPreferences(QSettings& settings, const ApplicationPreferences& preferences) {
     settings.setValue(QLatin1String(kAudioEnabledKey), preferences.audioEnabled);
     settings.setValue(QLatin1String(kLoopPlaybackKey), preferences.loopPlayback);
-    writeByteBudget(settings, kOperationCacheBytesKey, preferences.operationCacheBytes);
-    writeByteBudget(settings, kRamPreviewBytesKey, preferences.ramPreviewBytes);
+    settings.setValue(QLatin1String(kRamHeadroomKey),
+                      QString::number(static_cast<qulonglong>(
+                          std::min(preferences.ramHeadroomBytes, kHeadroomMaximumBytes))));
+    settings.setValue(QLatin1String(kVramHeadroomKey),
+                      QString::number(static_cast<qulonglong>(
+                          std::min(preferences.vramHeadroomBytes, kHeadroomMaximumBytes))));
     settings.setValue(QLatin1String(kMediaDiskCacheEnabledKey), preferences.mediaDiskCacheEnabled);
     const auto directoryText = directorySettingText(preferences.mediaDiskCacheDirectory);
     if (directoryText.isEmpty())

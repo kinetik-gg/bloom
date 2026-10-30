@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bloom/ui/headroom_bytes.hpp>
+
 // The application's one typed owner of its global (user-wide, non-project) preferences.
 //
 // Settings used to be read and written ad hoc at each call site: a panel read a QSettings key in
@@ -67,9 +69,10 @@ struct ApplicationPreferences final {
     bool audioEnabled = true;
     bool loopPlayback = true;
 
-    // Memory and caches. Startup-read: a running session does not reconfigure its caches.
-    std::uint64_t operationCacheBytes = 0;
-    std::uint64_t ramPreviewBytes = 0;
+    // Memory and caches. Headroom is what Bloom leaves free for the rest of the computer (0 to 256
+    // GiB each); Bloom uses everything else. Applied live on Apply and OK.
+    std::uint64_t ramHeadroomBytes = kHeadroomDefaultBytes;
+    std::uint64_t vramHeadroomBytes = kHeadroomDefaultBytes;
     bool mediaDiskCacheEnabled = true;
     std::string mediaDiskCacheDirectory;
     std::uint64_t mediaDiskCacheBudgetBytes = 0;

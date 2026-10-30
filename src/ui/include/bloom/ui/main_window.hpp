@@ -156,6 +156,8 @@ class MainWindow final : public QMainWindow {
     void showProjectColorSettings();
     void showPreferences();
     void applyPreferencesToOpenEditors(const ApplicationPreferences& preferences);
+    // The one place committed RAM/VRAM headroom reaches the engine (Apply and OK).
+    void applyHeadroom(const ApplicationPreferences& preferences);
 
     CompositionSession& compositionSession_;
     ProjectHost& projectHost_;

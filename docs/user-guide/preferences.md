@@ -26,20 +26,28 @@ or create, is refused under the field and OK waits.
 | Viewer | Resolution, the background around the composition frame (Solid, Grey, Black, White), the transparency grid inside it, and the safe-areas, centre-cross, thirds, rulers and pixel-grid overlays | Immediately |
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
 | Node Graph | Link style, snap to grid, grid size | Immediately |
-| Memory & Caches | Operation-cache and RAM-preview budgets, media disk cache enable/directory/budget | Memory budgets immediately; disk cache after restart |
+| Memory & Caches | RAM and VRAM headroom, media disk cache enable/directory/budget | Headroom on Apply or OK; disk cache after restart |
 | Performance | Read-only acceleration status | Not a preference |
 
 Immediate changes reach every open panel: the window hands the committed value to each editor,
-which applies it through the same setters its own menus use. Memory budgets update the running cache owners on Apply. Values marked **Restart** (the disk
+which applies it through the same setters its own menus use. Headroom reaches the engine on Apply or OK. Values marked **Restart** (the disk
 cache enable, location and disk-space budget, marked once in the Media disk cache header) are read
 when Bloom starts. Leave the cache directory empty for the default location; **Browse…** picks a
 folder and the reset button beside it returns to the default.
 
-## Memory and disk budgets
+## Memory headroom and disk budget
 
-Each budget, and the timeline layer column width, has a mode: **Automatic** (stored as 0) selects
-the machine-derived default, and **Custom** shows the value to enter. See [Memory](memory.md) for how Bloom derives
-the defaults, and for the two cache ceilings. The disk cache can be purged at any time from
+**RAM headroom** and **VRAM headroom** are the memory Bloom leaves free for the rest of your
+computer; Bloom uses everything else for rendering and caching. Each is a size from 0 to 256 GiB and
+defaults to 2 GiB, so a busy render leaves room before the system runs short and crashes. They are
+stored as decimal byte strings under `memory/ramHeadroomBytes` and `memory/vramHeadroomBytes`; a
+missing, non-numeric or overflowing value reads as 2 GiB, and a number above 256 GiB reads as 256 GiB.
+The older `playback/operation-cache-bytes` and `playback/ram-preview-memory-bytes` preferences are
+no longer settings and are ignored.
+
+The disk cache budget, and the timeline layer column width, have a mode: **Automatic** (stored as 0)
+selects the machine-derived default, and **Custom** shows the value to enter. See
+[Memory](memory.md) for how Bloom derives the defaults. The disk cache can be purged at any time from
 **Edit → Purge… → Purge media cache**, which clears the on-disk store and the applicable in-memory
 decoded media off the interface thread; the source files are never changed.
 

@@ -64,8 +64,8 @@ QWidget* gOwner = nullptr;
     ui::ApplicationPreferences prefs;
     prefs.audioEnabled = false;
     prefs.loopPlayback = false;
-    prefs.operationCacheBytes = 10ULL * 1024 * 1024 * 1024;
-    prefs.ramPreviewBytes = 6ULL * 1024 * 1024 * 1024;
+    prefs.ramHeadroomBytes = 6ULL * 1024 * 1024 * 1024;
+    prefs.vramHeadroomBytes = 512ULL * 1024 * 1024;
     prefs.mediaDiskCacheEnabled = false;
     prefs.timelineTimeFormat = ui::TimelineTimeFormat::Timecode;
     prefs.timelineSnapping = false;
@@ -94,13 +94,14 @@ void testControlsReflectPreferences(Expectations& check) {
     check.expect(loop != nullptr && !loop->isChecked(),
                  "the loop switch reflects the stored value");
 
-    auto* operation = window.findChild<ui::kit::KValueField*>(
-        QStringLiteral("preferencesOperationCacheBytesField"));
-    check.expect(operation != nullptr && operation->value() == 10.0,
-                 "the operation budget is shown in GiB");
-    auto* ram =
-        window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesRamPreviewBytesField"));
-    check.expect(ram != nullptr && ram->value() == 6.0, "the RAM preview budget is shown in GiB");
+    auto* ramHeadroom =
+        window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesRamHeadroomField"));
+    check.expect(ramHeadroom != nullptr && ramHeadroom->value() == 6.0,
+                 "the RAM headroom is shown in GiB");
+    auto* vramHeadroom =
+        window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesVramHeadroomField"));
+    check.expect(vramHeadroom != nullptr && vramHeadroom->value() == 0.5,
+                 "the VRAM headroom is shown in GiB");
 
     auto* format = window.findChild<ui::kit::KDropdown*>(
         QStringLiteral("preferencesTimelineTimeFormatDropdown"));
@@ -158,11 +159,11 @@ void testEditingUpdatesDraftAndApplyState(Expectations& check) {
     grid->setValue(48.0);
     check.expect(window.preferences().nodeGridSize == 48.0, "editing a field updates the draft");
 
-    auto* operation = window.findChild<ui::kit::KValueField*>(
-        QStringLiteral("preferencesOperationCacheBytesField"));
-    operation->setValue(8.0);
-    check.expect(window.preferences().operationCacheBytes == 8ULL * 1024 * 1024 * 1024,
-                 "a GiB budget edit round-trips to the exact byte count");
+    auto* headroom =
+        window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesRamHeadroomField"));
+    headroom->setValue(8.0);
+    check.expect(window.preferences().ramHeadroomBytes == 8ULL * 1024 * 1024 * 1024,
+                 "a GiB headroom edit round-trips to the exact byte count");
 }
 
 void testApplyEmitsAndClearsDirty(Expectations& check) {
@@ -384,78 +385,58 @@ void testSoundsPage(Expectations& check) {
     check.expect(!window.preferences().soundsEnabled, "the master switch edits the draft");
 }
 
-void testAutomaticMemoryBudgetsAreResolved(Expectations& check) {
-    constexpr auto gib = std::size_t{1024} * 1024 * 1024;
-    bloom::runtime::MemoryBudgetLedger ledger(32 * gib, 32 * gib);
-    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{}, nullptr, ledger);
-    const auto* operation = window.findChild<ui::kit::KValueField*>(
-        QStringLiteral("preferencesOperationCacheBytesField"));
-    const auto* ram =
-        window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesRamPreviewBytesField"));
-    const auto* summary = window.findChild<QLabel*>(QStringLiteral("preferencesMemorySummary"));
-    check.expect(operation && ram && operation->displayedValue() == QStringLiteral("Automatic") &&
-                     ram->displayedValue() == QStringLiteral("Automatic"),
-                 "zero memory preferences read Automatic");
-    check.expect(summary && summary->text().contains(QStringLiteral("Operation cache 9.60 GiB")) &&
-                     summary->text().contains(QStringLiteral("RAM preview 6.40 GiB")),
-                 "Automatic exposes its resolved machine budgets");
-    auto preferences = samplePreferences();
-    window.setPreferences(preferences);
-    check.expect(summary && summary->text().contains(QStringLiteral("Operation cache 10.00 GiB")) &&
-                     summary->text().contains(QStringLiteral("RAM preview 6.00 GiB")),
-                 "the summary follows explicit selected budgets");
-    ledger.beginProcessSampling();
-    const auto now = bloom::runtime::MemoryBudgetLedger::Clock::now();
-    static_cast<void>(ledger.applySample(
-        {.machine = {.availableBytes = 32 * gib},
-         .physicalBytes = 32 * gib,
-         .process = {.source = bloom::runtime::ProcessMemorySource::LinuxCgroupV2,
-                     .status = bloom::runtime::ProcessMemoryStatus::Finite,
-                     .sampledAt = now,
-                     .membershipPath = "/fixture",
-                     .domains = {{"/fixture", bloom::runtime::ProcessMemoryLimitKind::Finite,
-                                  8 * gib, 6 * gib}}}},
-        now));
-    window.setPreferences(preferences);
-    check.expect(summary &&
-                     summary->text().contains(QStringLiteral("system memory limit of 8.00 GiB")) &&
-                     operation->value() == 10 && ram->value() == 6,
-                 "a real system limit is disclosed without rewriting selected budgets");
+void testHeadroomFields(Expectations& check) {
+    constexpr auto gib = std::uint64_t{1024} * 1024 * 1024;
+    ui::PreferencesWindow window(owner(), ui::ApplicationPreferences{});
+    auto* ram =
+        window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesRamHeadroomField"));
+    auto* vram =
+        window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesVramHeadroomField"));
+    const auto* hint = window.findChild<QLabel*>(QStringLiteral("preferencesMemoryHint"));
+    check.expect(ram && vram && ram->value() == 2.0 && vram->value() == 2.0 &&
+                     ram->minimum() == 0.0 && ram->maximum() == 256.0,
+                 "the Memory page shows RAM and VRAM headroom, 0 to 256 GiB, defaulting to 2");
+    check.expect(hint && hint->text() == QStringLiteral(
+                             "Headroom is memory Bloom leaves free for the rest of your computer. "
+                             "Bloom uses everything else for rendering and caching."),
+                 "the Memory page explains headroom in one helper line");
+    check.expect(window.findChild<ui::kit::KValueField*>(
+                     QStringLiteral("preferencesOperationCacheBytesField")) == nullptr &&
+                     window.findChild<ui::kit::KValueField*>(
+                         QStringLiteral("preferencesRamPreviewBytesField")) == nullptr,
+                 "the old cache budget fields are gone");
+    ram->setValue(0.0);
+    vram->setValue(1000.0);
+    check.expect(window.preferences().ramHeadroomBytes == 0 &&
+                     window.preferences().vramHeadroomBytes == 256 * gib,
+                 "zero is a real headroom and the field clamps to 256 GiB");
+    auto* memory =
+        window.findChild<ui::kit::KSection*>(QStringLiteral("preferencesMemorySection"));
+    if (memory != nullptr)
+        emit memory->resetRequested();
+    check.expect(window.preferences().ramHeadroomBytes == 2 * gib &&
+                     window.preferences().vramHeadroomBytes == 2 * gib && ram->value() == 2.0 &&
+                     vram->value() == 2.0,
+                 "Restore Defaults on the Memory section restores 2 GiB");
 }
 
 void testLargeBudgetPreferencesRemainExactOnApply(Expectations& check) {
     constexpr auto gib = std::uint64_t{1024} * 1024 * 1024;
     auto preferences = samplePreferences();
-    preferences.operationCacheBytes = 4096 * gib;
-    preferences.ramPreviewBytes = 8192 * gib;
     preferences.mediaDiskCacheBudgetBytes = 16384 * gib;
     ui::PreferencesWindow window(owner(), preferences);
-    const auto* operation = window.findChild<ui::kit::KValueField*>(
-        QStringLiteral("preferencesOperationCacheBytesField"));
-    const auto* ram =
-        window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesRamPreviewBytesField"));
     const auto* disk = window.findChild<ui::kit::KValueField*>(
         QStringLiteral("preferencesMediaDiskCacheBudgetField"));
-    check.expect(operation && operation->value() == 4096 && ram && ram->value() == 8192 && disk &&
-                     disk->value() == 16384,
-                 "memory and disk budgets have no arbitrary GiB display ceiling");
+    check.expect(disk && disk->value() == 16384, "the disk budget has no arbitrary GiB ceiling");
     ui::ApplicationPreferences applied;
     QObject::connect(&window, &ui::PreferencesWindow::preferencesApplied, &window,
                      [&](const auto& value) { applied = value; });
     window.findChild<QAbstractButton*>(QStringLiteral("preferencesAudioEnabledSwitch"))
         ->setChecked(true);
     window.findChild<QAbstractButton*>(QStringLiteral("preferencesApplyButton"))->click();
-    check.expect(applied.operationCacheBytes == preferences.operationCacheBytes &&
-                     applied.ramPreviewBytes == preferences.ramPreviewBytes &&
-                     applied.mediaDiskCacheBudgetBytes == preferences.mediaDiskCacheBudgetBytes,
+    check.expect(applied.mediaDiskCacheBudgetBytes == preferences.mediaDiskCacheBudgetBytes &&
+                     applied.ramHeadroomBytes == preferences.ramHeadroomBytes,
                  "an unrelated Apply preserves large saved byte counts exactly");
-    auto* editable = window.findChild<ui::kit::KValueField*>(
-        QStringLiteral("preferencesOperationCacheBytesField"));
-    editable->setValue(editable->maximum());
-    check.expect(window.preferences().operationCacheBytes ==
-                     std::min<std::uint64_t>(std::numeric_limits<std::uint64_t>::max(),
-                                             std::numeric_limits<std::size_t>::max()),
-                 "the largest supported field value converts without overflow");
 }
 
 void testPreferenceLabelsRemainReadable(Expectations& check) {
@@ -731,7 +712,7 @@ int main(int argc, char** argv) {
     testTimelineKeyframesAndGraphAreMutuallyExclusive(check);
     testRestartBadgesAndRail(check);
     testSoundsPage(check);
-    testAutomaticMemoryBudgetsAreResolved(check);
+    testHeadroomFields(check);
     testLargeBudgetPreferencesRemainExactOnApply(check);
     testPreferenceLabelsRemainReadable(check);
     testWindowFitsItsContent(check);

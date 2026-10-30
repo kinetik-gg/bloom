@@ -56,8 +56,8 @@ void testFullRoundTrip(Expectations& check) {
     ui::ApplicationPreferences prefs;
     prefs.audioEnabled = false;
     prefs.loopPlayback = false;
-    prefs.operationCacheBytes = 10ULL * 1024 * 1024 * 1024;
-    prefs.ramPreviewBytes = 6ULL * 1024 * 1024 * 1024;
+    prefs.ramHeadroomBytes = 6ULL * 1024 * 1024 * 1024;
+    prefs.vramHeadroomBytes = 512ULL * 1024 * 1024;
     prefs.mediaDiskCacheEnabled = false;
     prefs.mediaDiskCacheDirectory = directory.filePath(QStringLiteral("media-cache")).toStdString();
     prefs.mediaDiskCacheBudgetBytes = 2ULL * 1024 * 1024 * 1024;
@@ -88,6 +88,46 @@ void testFullRoundTrip(Expectations& check) {
     check.expect(reloaded == prefs, "every global preference round-trips through QSettings");
 }
 
+void testHeadroomPreferences(Expectations& check) {
+    constexpr auto gib = std::uint64_t{1024} * 1024 * 1024;
+    QTemporaryDir directory;
+    auto settings = openSettings(directory);
+    const auto defaults = ui::loadApplicationPreferences(settings);
+    check.expect(defaults.ramHeadroomBytes == 2 * gib && defaults.vramHeadroomBytes == 2 * gib &&
+                     ui::defaultApplicationPreferences().ramHeadroomBytes == 2 * gib,
+                 "RAM and VRAM headroom default to 2 GiB");
+
+    ui::ApplicationPreferences prefs;
+    prefs.ramHeadroomBytes = 0;
+    prefs.vramHeadroomBytes = 256 * gib;
+    ui::saveApplicationPreferences(settings, prefs);
+    check.expect(settings.value(QStringLiteral("memory/ramHeadroomBytes")).toString() ==
+                         QStringLiteral("0") &&
+                     settings.value(QStringLiteral("memory/vramHeadroomBytes")).toString() ==
+                         QString::number(256 * gib),
+                 "headroom is stored as decimal byte strings under the memory/ keys");
+    check.expect(ui::loadApplicationPreferences(settings) == prefs,
+                 "zero and the 256 GiB maximum round-trip");
+
+    for (const auto* bad : {"garbage", "-5", "1.5", "", " 7", "0x10", "99999999999999999999"}) {
+        settings.setValue(QStringLiteral("memory/ramHeadroomBytes"), QString::fromLatin1(bad));
+        check.expect(ui::loadApplicationPreferences(settings).ramHeadroomBytes == 2 * gib,
+                     "garbage or overflowing headroom reads as the 2 GiB default");
+    }
+    settings.setValue(QStringLiteral("memory/ramHeadroomBytes"), QString::number(900 * gib));
+    check.expect(ui::loadApplicationPreferences(settings).ramHeadroomBytes == 256 * gib,
+                 "headroom above the maximum clamps to 256 GiB");
+
+    settings.clear();
+    settings.setValue(QStringLiteral("playback/operation-cache-bytes"), QStringLiteral("1024"));
+    settings.setValue(QStringLiteral("playback/ram-preview-memory-bytes"), QStringLiteral("2048"));
+    ui::saveApplicationPreferences(settings, ui::loadApplicationPreferences(settings));
+    check.expect(ui::loadApplicationPreferences(settings) == ui::defaultApplicationPreferences() &&
+                     settings.value(QStringLiteral("playback/operation-cache-bytes")).toString() ==
+                         QStringLiteral("1024"),
+                 "the old cache-budget keys are ignored (neither read nor rewritten)");
+}
+
 void testSoundDefaultsAndBounds(Expectations& check) {
     QTemporaryDir directory;
     auto settings = openSettings(directory);
@@ -115,9 +155,6 @@ void testInvalidValuesFallBack(Expectations& check) {
     settings.setValue(QStringLiteral("viewer/resolution"), QStringLiteral("nonsense"));
     settings.setValue(QStringLiteral("viewer/background"), QStringLiteral("nonsense"));
     settings.setValue(QStringLiteral("nodes/grid-size"), QStringLiteral("not-a-number"));
-    settings.setValue(QStringLiteral("playback/operation-cache-bytes"),
-                      QStringLiteral("not-a-number"));
-    settings.setValue(QStringLiteral("playback/ram-preview-memory-bytes"), QStringLiteral("-5"));
     settings.setValue(QStringLiteral("media/disk-cache-budget-bytes"), QStringLiteral("0"));
 
     const auto loaded = ui::loadApplicationPreferences(settings);
@@ -131,9 +168,6 @@ void testInvalidValuesFallBack(Expectations& check) {
                      !loaded.viewerTransparencyGrid,
                  "an unrecognized background reads as Solid with the grid off");
     check.expect(loaded.nodeGridSize == 16.0, "an unparseable grid size reads as 16");
-    check.expect(loaded.operationCacheBytes == 0,
-                 "an unparseable operation-cache budget reads as the default");
-    check.expect(loaded.ramPreviewBytes == 0, "a negative RAM-preview budget reads as the default");
     check.expect(loaded.mediaDiskCacheBudgetBytes == 0,
                  "an explicit zero disk budget reads as the default");
 }
@@ -227,16 +261,16 @@ void testZeroBudgetClearsOverride(Expectations& check) {
     QTemporaryDir directory;
     auto settings = openSettings(directory);
     ui::ApplicationPreferences prefs;
-    prefs.operationCacheBytes = 1024;
+    prefs.mediaDiskCacheBudgetBytes = 1024;
     ui::saveApplicationPreferences(settings, prefs);
-    check.expect(settings.contains(QStringLiteral("playback/operation-cache-bytes")),
+    check.expect(settings.contains(QStringLiteral("media/disk-cache-budget-bytes")),
                  "a non-zero budget is written as an override");
 
-    prefs.operationCacheBytes = 0;
+    prefs.mediaDiskCacheBudgetBytes = 0;
     ui::saveApplicationPreferences(settings, prefs);
-    check.expect(!settings.contains(QStringLiteral("playback/operation-cache-bytes")),
+    check.expect(!settings.contains(QStringLiteral("media/disk-cache-budget-bytes")),
                  "a zero budget clears the override so the machine default applies");
-    check.expect(ui::loadApplicationPreferences(settings).operationCacheBytes == 0,
+    check.expect(ui::loadApplicationPreferences(settings).mediaDiskCacheBudgetBytes == 0,
                  "a cleared budget reads back as the default");
 }
 
@@ -272,6 +306,7 @@ int main(int argc, char** argv) {
     Expectations check;
     testDefaultsRoundTrip(check);
     testFullRoundTrip(check);
+    testHeadroomPreferences(check);
     testSoundDefaultsAndBounds(check);
     testInvalidValuesFallBack(check);
     testLegacyCheckerboardMigrates(check);

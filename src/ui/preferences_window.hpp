@@ -1,6 +1,5 @@
 #pragma once
 
-#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/kit/dialog.hpp>
 
@@ -43,12 +42,9 @@ class PreferencesWindow final : public kit::KDialog {
 
   public:
     // `accelerationStatus` may be null, in which case the Performance page reports the CPU-only
-    // truth. Both injected providers are borrowed and must outlive the dialog. Memory reads use
-    // only cached ledger state; the dialog never samples the operating system.
-    PreferencesWindow(
-        QWidget& owner, const ApplicationPreferences& current,
-        const AccelerationStatusProvider* accelerationStatus = nullptr,
-        const runtime::MemoryBudgetLedger& memoryLedger = runtime::processMemoryBudgetLedger());
+    // truth. The injected provider is borrowed and must outlive the dialog.
+    PreferencesWindow(QWidget& owner, const ApplicationPreferences& current,
+                      const AccelerationStatusProvider* accelerationStatus = nullptr);
 
     [[nodiscard]] ApplicationPreferences preferences() const;
     // Pushes a value into every control. Signals are blocked while refreshing, so this never
@@ -108,7 +104,6 @@ class PreferencesWindow final : public kit::KDialog {
                                const QString& label, bool restartRequired);
 
     void refreshControls();
-    void refreshMemorySummary();
     void fitPagesToContent();
     // A page is a Properties panel body: its margins and section spacing, on Background, scrolling.
     static void setPageMargins(QVBoxLayout& layout);
@@ -131,8 +126,6 @@ class PreferencesWindow final : public kit::KDialog {
     ApplicationPreferences draft_;
     ApplicationPreferences applied_;
     const AccelerationStatusProvider* accelerationStatus_ = nullptr;
-    const runtime::MemoryBudgetLedger& memoryLedger_;
-    QLabel* memorySummary_ = nullptr;
     QStackedWidget* pages_ = nullptr;
     bool fitted_ = false; // the first show sizes the window to its content
     QListWidget* categoryRail_ = nullptr;

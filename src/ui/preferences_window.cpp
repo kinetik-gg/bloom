@@ -193,12 +193,10 @@ kit::KValueField* PreferencesWindow::addAutomaticRow(QVBoxLayout* layout, QWidge
 }
 
 PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreferences& current,
-                                     const AccelerationStatusProvider* const accelerationStatus,
-                                     const runtime::MemoryBudgetLedger& memoryLedger)
+                                     const AccelerationStatusProvider* const accelerationStatus)
     : kit::KDialog(tr("Preferences"), QStringLiteral("preferencesWindow"), owner, Qt::WindowModal,
                    Width::Wide),
-      draft_(current), applied_(current), accelerationStatus_(accelerationStatus),
-      memoryLedger_(memoryLedger) {
+      draft_(current), applied_(current), accelerationStatus_(accelerationStatus) {
 
     auto* body = new QHBoxLayout;
     body->setSpacing(kit::px(kit::Spacing::L));
@@ -240,8 +238,6 @@ PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreference
     contentLayout()->addLayout(body, 1);
 
     const auto pages = buildPages();
-    connect(performanceRefreshTimer_, &QTimer::timeout, this,
-            &PreferencesWindow::refreshMemorySummary);
     for (const auto& page : pages)
         pages_->addWidget(page.widget);
     // Grouped as Blender groups its categories: what everything uses, the editors, the machine.
@@ -410,27 +406,6 @@ void PreferencesWindow::refreshControls() {
     for (const auto& sync : syncCallbacks_) {
         sync();
     }
-    refreshMemorySummary();
-}
-
-void PreferencesWindow::refreshMemorySummary() {
-    if (memorySummary_ == nullptr)
-        return;
-    const auto allocation =
-        memoryLedger_.allocate(draft_.operationCacheBytes, draft_.ramPreviewBytes);
-    auto summary =
-        tr("Selected budgets: Operation cache %1 GiB · RAM preview %2 GiB.")
-            .arg(static_cast<double>(allocation.operationCacheByteBudget) / kBytesPerGiB, 0, 'f', 2)
-            .arg(static_cast<double>(allocation.previewFrameCacheByteBudget) / kBytesPerGiB, 0, 'f',
-                 2);
-    const auto state = memoryLedger_.state();
-    if (state.awaitingProcessSample)
-        summary += tr("\nChecking system memory limits…");
-    else if (state.processCacheCeilingBytes)
-        summary += tr("\nA system memory limit of %1 GiB applies across caches.")
-                       .arg(static_cast<double>(*state.processCacheCeilingBytes) / kBytesPerGiB, 0,
-                            'f', 2);
-    memorySummary_->setText(summary);
 }
 
 void PreferencesWindow::commitPreferences() {
@@ -561,46 +536,38 @@ QWidget* PreferencesWindow::buildMemoryPage() {
                                            QStringLiteral("preferences/sections/memory/collapsed"));
     memory->setBodyPadding(kit::px(kit::Spacing::XS));
     resetSection(*memory, [](ApplicationPreferences& draft, const ApplicationPreferences& base) {
-        draft.operationCacheBytes = base.operationCacheBytes;
-        draft.ramPreviewBytes = base.ramPreviewBytes;
+        draft.ramHeadroomBytes = base.ramHeadroomBytes;
+        draft.vramHeadroomBytes = base.vramHeadroomBytes;
     });
     auto* memoryRows = memory->bodyLayout();
 
-    auto* operation = addAutomaticRow(
-        memoryRows, content, QStringLiteral("preferencesOperationCacheBytesField"),
-        tr("Operation cache budget"), kMaximumBudgetGiB, 2, QStringLiteral("GiB"), 1.0);
-    operation->setValue(static_cast<double>(draft_.operationCacheBytes) / kBytesPerGiB);
-    connect(operation, &kit::KValueField::valueChanged, this, [this](const double value) {
-        draft_.operationCacheBytes = budgetBytesFromGiB(value);
-        refreshMemorySummary();
-        updateApplyEnabled();
-    });
-    refreshCallbacks_.push_back([this, operation] {
-        const QSignalBlocker blocker(operation);
-        operation->setValue(static_cast<double>(draft_.operationCacheBytes) / kBytesPerGiB);
-    });
+    const auto addHeadroomRow = [&](const QString& objectName, const QString& label,
+                                    std::uint64_t ApplicationPreferences::*member) {
+        auto* field = addValueFieldRow(memoryRows, content, objectName, label, 0.0,
+                                       static_cast<double>(kHeadroomMaximumBytes) / kBytesPerGiB,
+                                       2, QStringLiteral("GiB"), false);
+        field->setValue(static_cast<double>(draft_.*member) / kBytesPerGiB);
+        connect(field, &kit::KValueField::valueChanged, this, [this, member](const double value) {
+            draft_.*member =
+                std::min(budgetBytesFromGiB(value), kHeadroomMaximumBytes);
+            updateApplyEnabled();
+        });
+        refreshCallbacks_.push_back([this, field, member] {
+            const QSignalBlocker blocker(field);
+            field->setValue(static_cast<double>(draft_.*member) / kBytesPerGiB);
+        });
+    };
+    addHeadroomRow(QStringLiteral("preferencesRamHeadroomField"), tr("RAM headroom"),
+                   &ApplicationPreferences::ramHeadroomBytes);
+    addHeadroomRow(QStringLiteral("preferencesVramHeadroomField"), tr("VRAM headroom"),
+                   &ApplicationPreferences::vramHeadroomBytes);
 
-    auto* ram =
-        addAutomaticRow(memoryRows, content, QStringLiteral("preferencesRamPreviewBytesField"),
-                        tr("RAM preview budget"), kMaximumBudgetGiB, 2, QStringLiteral("GiB"), 1.0);
-    ram->setValue(static_cast<double>(draft_.ramPreviewBytes) / kBytesPerGiB);
-    connect(ram, &kit::KValueField::valueChanged, this, [this](const double value) {
-        draft_.ramPreviewBytes = budgetBytesFromGiB(value);
-        refreshMemorySummary();
-        updateApplyEnabled();
-    });
-    refreshCallbacks_.push_back([this, ram] {
-        const QSignalBlocker blocker(ram);
-        ram->setValue(static_cast<double>(draft_.ramPreviewBytes) / kBytesPerGiB);
-    });
-
-    // Under the budgets they explain: what Automatic means, and what the budgets come to.
-    auto* hint = new kit::KLabel(tr("Automatic chooses a budget for this machine."), content);
+    auto* hint = new kit::KLabel(
+        tr("Headroom is memory Bloom leaves free for the rest of your computer. Bloom uses "
+           "everything else for rendering and caching."),
+        content);
     hint->setObjectName(QStringLiteral("preferencesMemoryHint"));
     addHelperRow(memoryRows, content, hint);
-    memorySummary_ = new kit::KLabel(content);
-    memorySummary_->setObjectName(QStringLiteral("preferencesMemorySummary"));
-    addHelperRow(memoryRows, content, static_cast<kit::KLabel*>(memorySummary_));
 
     auto* disk = properties::makeSection(
         layout, content, QStringLiteral("preferencesMediaCacheSection"), tr("Media disk cache"),
@@ -695,6 +662,9 @@ QWidget* PreferencesWindow::buildMemoryPage() {
         const QSignalBlocker blocker(budget);
         budget->setValue(static_cast<double>(draft_.mediaDiskCacheBudgetBytes) / kBytesPerGiB);
     });
+    auto* budgetHint = new kit::KLabel(tr("Automatic chooses a budget for this machine."), content);
+    budgetHint->setObjectName(QStringLiteral("preferencesMediaDiskCacheBudgetHint"));
+    addHelperRow(diskRows, content, budgetHint);
 
     layout->addStretch(1);
     return wrapPage(content, QStringLiteral("preferencesMemoryPage"));
