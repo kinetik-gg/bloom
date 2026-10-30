@@ -313,8 +313,11 @@ def harness_measure(args, project, resolution, playback, log):
         command.append("--cache100-half")
     elif resolution == "Quarter":
         command.append("--quarter")
+    # Playback is timed in playback runs and after Full fills; other fills skip it.
+    seconds = args.play_seconds if playback or resolution == "Full" else 0
+    command += ["--bench-play-seconds", str(seconds)]
     if playback:
-        command += ["--bench-playback", "--bench-play-seconds", str(args.play_seconds)]
+        command.append("--bench-playback")
     code, output, sampler, wall = run_measured(command, bench_env(), args.timeout + 300,
                                                args.lock)
     log.write(f"$ {' '.join(command)}\n{output}\n")
@@ -390,6 +393,7 @@ def build_projects(args, root, selected, projects_dir, log):
                              "label": f"{entry['tier']} {entry['format']}".upper(),
                              "width": entry["width"], "height": entry["height"]})
     report = projects_dir / "build-report.json"
+    failures = {}
     if jobs:
         projects_dir.mkdir(parents=True, exist_ok=True)
         spec_file = projects_dir / "build-jobs.json"
@@ -402,15 +406,20 @@ def build_projects(args, root, selected, projects_dir, log):
                                 env=env, capture_output=True, text=True)
         log.write(output.stdout + output.stderr)
         built = json.loads(report.read_text()) if report.is_file() else []
-        failed = [row for row in built if not row.get("ok")]
-        if output.returncode != 0 or failed:
-            raise SystemExit(f"project build failed: {failed or output.stderr[-2000:]}")
+        if not built:
+            raise SystemExit(f"project build failed: {output.stderr[-2000:]}")
         for row in built:
-            stamp = Path(row["project"]).with_suffix(".jobs.json")
-            stamp.write_text(json.dumps(row["exportJobs"]))
+            if row.get("ok"):
+                stamp = Path(row["project"]).with_suffix(".jobs.json")
+                stamp.write_text(json.dumps(row["exportJobs"]))
+            else:
+                # A medium Bloom cannot import is a result, not a reason to stop the run.
+                failures[row["project"]] = row.get("error")
     for item in plan:
         stamp = item["project"].with_suffix(".jobs.json")
         item["exportJobs"] = json.loads(stamp.read_text()) if stamp.is_file() else {}
+        if not stamp.is_file():
+            item["buildError"] = failures.get(str(item["project"]), "the project was not built")
     return plan
 
 
@@ -429,6 +438,8 @@ def summarise(measurements):
             value = m.get("playbackFps")
             rows.append((key, f"playback {m['resolution']} {m['cache']}",
                          f"{value:.1f} fps" if value is not None else "error", m))
+        elif m["kind"] == "build":
+            rows.append((key, "project build", f"error: {m.get('error')}", m))
         else:
             value = m.get("secondsPerFrame")
             rows.append((key, f"export {m['export']}",
@@ -508,7 +519,12 @@ def command_run(args):
     selected = [(i, e) for i, e in selected if i in usable]
     projects_dir = work / "projects" / re.sub(r"[^A-Za-z0-9]+", "_", root.name or "root")
     plan = build_projects(args, root, selected, projects_dir, log)
+    if args.build_only:
+        for item in plan:
+            print(f"project {item['project']} exports={item['exportJobs']}")
+        return 0
     results = {"schema": "bloom-bench-results/1", "startedAt": stamp, "label": args.label,
+               "note": args.note,
                "suite": args.suite, "machine": machine_info(), "bloom": bloom_revision(build_dir),
                "media": {"root": str(root), "verification": verification["status"],
                          "assets": verification["assets"]},
@@ -533,6 +549,9 @@ def command_run(args):
         entry = item["entry"]
         files = media_files(root, entry)
         print(f"{item['assetId']} {item['variant']}", flush=True)
+        if "buildError" in item:
+            record(item, "build", {"error": item["buildError"]})
+            continue
         for resolution in resolutions:
             for cache in caches:
                 dropped = drop_page_cache(files) if cache == "cold" else None
@@ -632,6 +651,25 @@ def command_compare(args):
     return 1 if comparison["regressions"] or comparison["cpuFallbackMeasurements"] else 0
 
 
+def command_merge(args):
+    """Concatenate the measurements of several runs (for example tiers run separately)."""
+    documents = [json.loads(Path(path).read_text()) for path in args.results]
+    merged = dict(documents[0])
+    merged["measurements"] = [m for document in documents for m in document["measurements"]]
+    merged["mergedFrom"] = [{"startedAt": d["startedAt"], "label": d.get("label"),
+                             "note": d.get("note"), "bloom": d["bloom"]} for d in documents]
+    merged["media"] = dict(documents[0]["media"])
+    merged["media"]["assets"] = {k: v for d in documents for k, v in d["media"]["assets"].items()}
+    statuses = {d["media"]["verification"] for d in documents}
+    merged["media"]["verification"] = ("verified-exact" if statuses == {"verified-exact"} else
+                                       "regenerated-compatible" if "failed" not in statuses
+                                       else "failed")
+    Path(args.output).write_text(json.dumps(merged, indent=1) + "\n")
+    Path(args.output).with_suffix(".md").write_text(summarise(merged["measurements"]) + "\n")
+    print(f"merged {len(documents)} runs, {len(merged['measurements'])} measurements")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -647,6 +685,7 @@ def main():
     run.add_argument("--loader", help="Vulkan loader (default: the build's dependency prefix)")
     run.add_argument("--gpu-lock-file", help="flock this file around every Bloom process")
     run.add_argument("--label", help="suffix for the results file, e.g. 'nas'")
+    run.add_argument("--note", help="free text stored in the results, e.g. memory limits")
     run.add_argument("--tier", action="append", choices=spec.TIER_ORDER)
     run.add_argument("--format", action="append",
                      choices=spec.IMAGE_FORMATS + spec.VIDEO_FORMATS)
@@ -659,6 +698,8 @@ def main():
     run.add_argument("--play-seconds", type=float, default=6.0)
     run.add_argument("--timeout", type=int, default=1800, help="per process, seconds")
     run.add_argument("--rebuild-projects", action="store_true")
+    run.add_argument("--build-only", action="store_true",
+                     help="verify the media and build the projects, measure nothing")
     run.add_argument("--baseline", help="compare against this results JSON")
     run.add_argument("--threshold", type=float, default=10.0, help="regression threshold, %%")
     chk = sub.add_parser("chart", help="colour/format accuracy checks with the chart")
@@ -669,12 +710,15 @@ def main():
     chk.add_argument("--gpu-lock-file")
     chk.add_argument("--label")
     chk.add_argument("--tier", action="append", choices=("1080p", "2160p", "4320p"))
+    mrg = sub.add_parser("merge", help="merge results files into one")
+    mrg.add_argument("results", nargs="+")
+    mrg.add_argument("-o", "--output", required=True)
     cmp = sub.add_parser("compare", help="compare two results files")
     cmp.add_argument("current")
     cmp.add_argument("baseline")
     cmp.add_argument("--threshold", type=float, default=10.0)
     args = parser.parse_args()
-    sys.exit({"run": command_run, "chart": command_chart,
+    sys.exit({"run": command_run, "chart": command_chart, "merge": command_merge,
               "compare": command_compare}[args.command](args))
 
 

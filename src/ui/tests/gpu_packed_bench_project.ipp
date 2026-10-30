@@ -374,7 +374,7 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
              << ",\"peakInFlight\":" << ram.peakInFlightFrames()
              << ",\"cacheResidentBytes\":" << frameCache->residentBytes() << std::setprecision(15)
              << ",\"windowEndEpoch\":" << benchEpochSeconds() << std::setprecision(6);
-        if (finished && ram.canAutoPlay()) {
+        if (finished && ram.canAutoPlay() && gBenchPlaySeconds > 0) {
             const auto played = benchPlay(session, playback, viewer);
             json << ",\"cachedPlaySeconds\":" << played.seconds
                  << ",\"cachedTransportFrames\":" << played.transportFrames
