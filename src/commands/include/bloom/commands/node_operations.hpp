@@ -4,6 +4,8 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/node_layout.hpp>
 
+#include <array>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <set>
@@ -66,12 +68,16 @@ class AddNode final : public Operation {
     [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
         return compositionId_;
     }
+    // The card extents the Node editor measured, so a clear cursor point is judged against what is
+    // actually drawn; cards it omits use the command-side estimate.
+    void setMeasuredSizes(document::NodeCardSizes sizes) { sizes_ = std::move(sizes); }
 
   private:
     document::CompositionId compositionId_;
     std::string nodeTypeId_;
     document::Vec2d layoutPosition_;
     const document::NodeDefinitionRegistry& registry_;
+    document::NodeCardSizes sizes_;
 };
 
 // Sets a node parameter's constant, first binding it when the definition declares it optional and
@@ -304,6 +310,23 @@ class RenameGroup final : public Operation {
     document::CompositionId compositionId_;
     document::NodeGroupId groupId_;
     std::string name_;
+};
+
+// A frame's tint (task N1, item 5), or none for the neutral frame. Presentation only.
+class SetGroupColor final : public Operation {
+  public:
+    SetGroupColor(document::CompositionId compositionId, document::NodeGroupId groupId,
+                  std::optional<std::array<std::uint8_t, 3>> color)
+        : compositionId_(compositionId), groupId_(groupId), color_(color) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    // A frame's colour is layout; the compiler never reads it, so no cache is invalidated.
+    [[nodiscard]] bool renderAffecting() const noexcept override { return false; }
+
+  private:
+    document::CompositionId compositionId_;
+    document::NodeGroupId groupId_;
+    std::optional<std::array<std::uint8_t, 3>> color_;
 };
 
 class SetGroupMembers final : public Operation {

@@ -3045,6 +3045,36 @@ OperationRegistry OperationRegistry::builtIn() {
                                          std::nullopt);
         });
 
+    add("bloom.node-group.set-color",
+        {compositionArgument(), need("group", ValueKind::Id, StableId{1}, "The group to tint."),
+         maybe("color", ValueKind::Vec3, document::Vec3d{217.0, 124.0, 124.0},
+               "Frame colour as (r, g, b) in 0..255. Omit to clear it to the neutral frame.")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto group = id(args, op, "group", error);
+            const auto color = vec3(args, op, "color", error, false);
+            if (!composition || !group || error) {
+                return error;
+            }
+            std::optional<std::array<std::uint8_t, 3>> tint;
+            if (color.has_value()) {
+                const std::array<double, 3> channels{color->x, color->y, color->z};
+                std::array<std::uint8_t, 3> bytes{};
+                for (std::size_t index = 0; index < channels.size(); ++index) {
+                    if (channels[index] < 0.0 || channels[index] > 255.0) {
+                        return failure(op, "color", "expects each channel in 0..255");
+                    }
+                    bytes[index] = static_cast<std::uint8_t>(std::lround(channels[index]));
+                }
+                tint = bytes;
+            }
+            return OperationCreateResult(std::make_unique<commands::SetGroupColor>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::NodeGroupId::fromRaw(*group), tint),
+                                         std::nullopt);
+        });
+
     add("bloom.node-group.set-members",
         {compositionArgument(), need("group", ValueKind::Id, StableId{1}, "The group to edit."),
          nodeSetArgument("members")},

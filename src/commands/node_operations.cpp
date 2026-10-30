@@ -1,4 +1,5 @@
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/commands/operations.hpp>
 
 #include "node_operation_support.hpp"
@@ -150,16 +151,15 @@ OperationResult AddNode::apply(document::Draft& draft) const {
     if (!composition->graph().addNode(std::move(node)))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Node could not be inserted");
-    // The requested point is still authoritative when it is clear. When it is occupied, the
-    // document-side spatial index moves only this new card to the nearest free slot; existing
-    // authoring positions are never rewritten by AddNode.
-    auto occupied = composition->nodeLayout();
-    const auto defaults = document::defaultNodeLayout(composition->graph().nodes());
-    for (const auto& existing : composition->graph().nodes())
-        if (existing.id != *nodeId && !occupied.contains(existing.id))
-            occupied.emplace(existing.id, defaults.at(existing.id));
-    const auto placement = document::findNearestFreeNodePosition(
-        occupied, {}, document::kConservativeNodeCardSize, layoutPosition_);
+    // The requested point is still authoritative when it is clear: it is where the artist pointed
+    // (task N1, item 3). When the card would touch another, only this new card moves, to the
+    // nearest grid position kNodeLayoutGap past its neighbour (item 4); existing authoring
+    // positions are never rewritten by AddNode.
+    composition->nodeLayout()[*nodeId] = {layoutPosition_, 128.0, false, false};
+    const auto floor = nodeCardFloorSizes(*composition, sizes_);
+    const auto placement = placeNodeCard(*composition, estimatedNodeCardSize(*composition, *nodeId),
+                                         layoutPosition_, nodeCardSizes(*composition, sizes_),
+                                         {*nodeId}, kNodeLayoutGrid, &floor, floor.at(*nodeId));
     composition->nodeLayout()[*nodeId] = {placement, 128.0, false, false};
     // A Layer node gets its layer IDENTITY here, at creation, rather than on its first connection
     // to Merge (task FIX1, item B). The alternative -- waiting for the Merge link -- would leave a

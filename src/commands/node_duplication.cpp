@@ -1,8 +1,12 @@
 #include <bloom/commands/node_operations.hpp>
 
+#include <bloom/commands/node_layout_placement.hpp>
+
 #include "node_operation_support.hpp"
 
 #include <algorithm>
+#include <limits>
+#include <set>
 #include <type_traits>
 
 namespace bloom::commands {
@@ -260,6 +264,34 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         if (!graph.addEdge(edge))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Duplicated internal edge could not be inserted");
+    }
+    // An in-place duplicate (a zero offset: the Timeline's Duplicate) would put every copy exactly
+    // on top of its original. The copies move together, as one block, to the nearest clear grid
+    // position (task N1, items 4 and 9); a nonzero offset is the editor's own duplicate-and-place
+    // gesture and is kept as given.
+    if (offset_.x == 0.0 && offset_.y == 0.0 && !nodeIds.empty()) {
+        const auto sizes = nodeCardSizes(*composition);
+        std::set<document::NodeId> copies;
+        double left = std::numeric_limits<double>::infinity();
+        double top = std::numeric_limits<double>::infinity();
+        double right = -std::numeric_limits<double>::infinity();
+        double bottom = -std::numeric_limits<double>::infinity();
+        for (const auto& [unused, copy] : nodeIds) {
+            copies.insert(copy);
+            const auto position = composition->nodeLayout().at(copy).position;
+            const auto size = sizes.at(copy);
+            left = std::min(left, position.x);
+            top = std::min(top, position.y);
+            right = std::max(right, position.x + size.width);
+            bottom = std::max(bottom, position.y + size.height);
+        }
+        const auto placed = placeNodeCard(*composition, {right - left, bottom - top}, {left, top},
+                                          sizes, copies, kNodeLayoutGrid);
+        for (const auto copy : copies) {
+            auto& record = composition->nodeLayout().at(copy);
+            record.position.x += placed.x - left;
+            record.position.y += placed.y - top;
+        }
     }
     if (const auto failure = detail::validateGraph(*composition))
         return *failure;
