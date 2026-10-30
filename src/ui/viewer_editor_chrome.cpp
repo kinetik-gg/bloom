@@ -188,6 +188,8 @@ void ViewerEditor::rebuildCompositionSelector() {
     compositionSelector_->clearItems();
     const auto compositions = session_.snapshot().project().compositions();
     const bool empty = compositions.empty();
+    transportHasComposition_ = session_.composition() != nullptr;
+    applyTransportAvailability();
     compositionSelector_->setEnabled(!empty);
     compositionSelector_->setMutedValue(empty);
     if (empty) {

@@ -1,6 +1,7 @@
 #include <bloom/ui/kit/accessibility.hpp>
 
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/progress_bar.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/range_selector.hpp>
 #include <bloom/ui/kit/slider.hpp>
@@ -125,6 +126,17 @@ class RadioGroupAccessible final : public QAccessibleWidget {
 
     [[nodiscard]] KRadioGroup* group() const { return static_cast<KRadioGroup*>(widget()); }
 
+    // The value is the selected option's label; a group reflecting objects that disagree reads
+    // "Mixed", which no option claims.
+    [[nodiscard]] QString text(const QAccessible::Text type) const override {
+        if (type == QAccessible::Value) {
+            if (group()->currentIndex() < 0 || group()->currentIndex() >= group()->count())
+                return group()->count() > 0 ? QObject::tr("Mixed") : QString{};
+            return group()->optionText(group()->currentIndex());
+        }
+        return QAccessibleWidget::text(type);
+    }
+
     [[nodiscard]] int childCount() const override { return group()->count(); }
 
     [[nodiscard]] QAccessibleInterface* child(const int index) const override {
@@ -155,6 +167,49 @@ class RadioGroupAccessible final : public QAccessibleWidget {
 
   private:
     mutable QHash<int, QAccessible::Id> children_;
+};
+
+// KProgressBar as a progress bar: a determinate bar reports completed over total through the value
+// interface; a busy bar reports the busy state and no number.
+class ProgressBarAccessible final : public QAccessibleWidget, public QAccessibleValueInterface {
+  public:
+    explicit ProgressBarAccessible(KProgressBar* bar)
+        : QAccessibleWidget(bar, QAccessible::ProgressBar) {}
+
+    [[nodiscard]] KProgressBar* bar() const { return static_cast<KProgressBar*>(widget()); }
+
+    void* interface_cast(const QAccessible::InterfaceType type) override {
+        if (type == QAccessible::ValueInterface)
+            return static_cast<QAccessibleValueInterface*>(this);
+        return QAccessibleWidget::interface_cast(type);
+    }
+
+    [[nodiscard]] QAccessible::State state() const override {
+        QAccessible::State value = QAccessibleWidget::state();
+        value.busy = bar()->busy();
+        return value;
+    }
+
+    [[nodiscard]] QString text(const QAccessible::Text type) const override {
+        if (type == QAccessible::Value)
+            return bar()->busy() ? QObject::tr("Busy")
+                                 : QObject::tr("%1%").arg(qRound(bar()->fraction() * 100.0));
+        return QAccessibleWidget::text(type);
+    }
+
+    [[nodiscard]] QVariant currentValue() const override {
+        return bar()->busy() ? QVariant{} : QVariant::fromValue(bar()->completed());
+    }
+    void setCurrentValue(const QVariant&) override {}
+    [[nodiscard]] QVariant maximumValue() const override {
+        return bar()->busy() ? QVariant{} : QVariant::fromValue(bar()->total());
+    }
+    [[nodiscard]] QVariant minimumValue() const override {
+        return QVariant::fromValue(std::uint64_t{0});
+    }
+    [[nodiscard]] QVariant minimumStepSize() const override {
+        return QVariant::fromValue(std::uint64_t{1});
+    }
 };
 
 // One tab of a KTabBar, a page tab; selected while current.
@@ -337,7 +392,8 @@ class RangeSelectorAccessible final : public QAccessibleWidget, public QAccessib
     [[nodiscard]] QString text(const QAccessible::Text type) const override {
         if (type == QAccessible::Value)
             return QObject::tr("%1 to %2")
-                .arg(QString::number(range()->lowerValue()), QString::number(range()->upperValue()));
+                .arg(QString::number(range()->lowerValue()),
+                     QString::number(range()->upperValue()));
         return QAccessibleWidget::text(type);
     }
 
@@ -373,6 +429,8 @@ QAccessibleInterface* kitAccessibleFactory(const QString& className, QObject* ob
         return new DropdownAccessible(static_cast<KDropdown*>(object));
     if (className == QLatin1String(KRadioGroup::staticMetaObject.className()))
         return new RadioGroupAccessible(static_cast<KRadioGroup*>(object));
+    if (className == QLatin1String(KProgressBar::staticMetaObject.className()))
+        return new ProgressBarAccessible(static_cast<KProgressBar*>(object));
     if (className == QLatin1String(KTabBar::staticMetaObject.className()))
         return new TabBarAccessible(static_cast<KTabBar*>(object));
     if (className == QLatin1String(KValueField::staticMetaObject.className()))

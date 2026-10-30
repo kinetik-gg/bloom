@@ -284,6 +284,7 @@ void ViewerEditor::updatePlaybackButton(const PlaybackState state) {
         playPauseButton_->setToolTip(tr("Play (Space)"));
     }
     playPauseButton_->setProperty("bloomPlaybackCached", cached);
+    applyTransportAvailability();
 }
 
 void ViewerEditor::updateRamPreviewButton() {
@@ -323,6 +324,7 @@ void ViewerEditor::updateLoopButton() {
     loopButton_->setToolTip(looping ? tr("Looping: playback wraps to the start of the work area")
                                     : tr("Not looping: playback stops on the last frame"));
     loopButton_->setAccessibleName(looping ? tr("Looping on") : tr("Looping off"));
+    applyTransportAvailability();
 }
 
 void ViewerEditor::refreshZoomDropdown() {

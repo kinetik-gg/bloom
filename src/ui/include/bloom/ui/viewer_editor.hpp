@@ -497,6 +497,10 @@ class ViewerEditor final : public QWidget,
     bool triggerApplicationCommand(const QString& objectName);
     [[nodiscard]] std::unique_ptr<QMenu> canvasContextMenu(QPointF point);
     void rebuildCompositionSelector();
+    // The transport (step, play/pause, loop) needs a composition: with none open the controls are
+    // disabled and their tooltips say why. The step controls are also disabled while a widget that
+    // owns the arrow keys has focus (transportKeysDeferred_).
+    void applyTransportAvailability();
     void rebuildObjectSelector();
     void updateCompositionActions();
     // Select acts on anchors while a path's anchors are being edited (the Pen tool, a mask, or an
@@ -806,6 +810,9 @@ class ViewerEditor final : public QWidget,
     // policy actually resolved to ("Auto · ¼"), which for Auto is visible nowhere else.
     QLabel* resolutionReadout_ = nullptr;
     QToolButton* stepToStartButton_ = nullptr;
+    bool transportKeysDeferred_ = false;
+    // Cached: the focus handler runs during teardown, when the session may already be gone.
+    bool transportHasComposition_ = false;
     QToolButton* stepBackButton_ = nullptr;
     QToolButton* playPauseButton_ = nullptr;
     QToolButton* stepForwardButton_ = nullptr;

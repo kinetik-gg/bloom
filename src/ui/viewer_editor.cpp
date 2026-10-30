@@ -7,12 +7,12 @@
 #include <bloom/ui/viewer_gpu_resident_overlay.hpp>
 #include <memory>
 
-#include "text_font_choices.hpp"
 #include "composition_editor_support.hpp"
 #include "layer_drop.hpp"
 #include "layer_mask_support.hpp"
-#include "viewer_editor_text_layout.hpp"
+#include "text_font_choices.hpp"
 #include "viewer_editor_internal.hpp"
+#include "viewer_editor_text_layout.hpp"
 #include "viewer_timecode_readout.hpp"
 #include "viewer_tool_geometry.hpp"
 
@@ -75,8 +75,8 @@
 #include <QWheelEvent>
 #include <QWindow>
 #include <bloom/render/path_raster.hpp>
-#include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <numbers>
 
@@ -649,18 +649,46 @@ void ViewerEditor::wireTransport() {
                     break;
                 }
             }
-            for (auto* action :
-                 {stepBackwardAction_, stepForwardAction_, stepToStartAction_, stepToEndAction_}) {
-                action->setEnabled(!deferred);
-            }
-            // The visible step buttons mirror their action's enabled state exactly, so the same
-            // reconciliation is visible on the mouse affordance too rather than showing a clickable
-            // button that would silently do nothing.
-            stepBackButton_->setEnabled(!deferred);
-            stepForwardButton_->setEnabled(!deferred);
-            stepToStartButton_->setEnabled(!deferred);
-            stepToEndButton_->setEnabled(!deferred);
+            transportKeysDeferred_ = deferred;
+            applyTransportAvailability();
         });
+    transportHasComposition_ = session_.composition() != nullptr;
+    applyTransportAvailability();
+}
+
+void ViewerEditor::applyTransportAvailability() {
+    const bool hasComposition = transportHasComposition_;
+    const bool stepsEnabled = hasComposition && !transportKeysDeferred_;
+    for (auto* action :
+         {stepBackwardAction_, stepForwardAction_, stepToStartAction_, stepToEndAction_}) {
+        if (action != nullptr)
+            action->setEnabled(stepsEnabled);
+    }
+    // The visible buttons mirror their action's enabled state exactly, so the mouse affordance
+    // never shows a clickable button that would silently do nothing.
+    const auto apply = [hasComposition](QToolButton* button, const bool enabled) {
+        if (button == nullptr)
+            return;
+        constexpr const char* kBase = "bloomTransportBaseToolTip";
+        const QString unavailable =
+            QCoreApplication::translate("ViewerEditor", " (unavailable: no composition is open)");
+        const QString current = button->toolTip();
+        if (!hasComposition) {
+            if (!current.endsWith(unavailable)) {
+                button->setProperty(kBase, current);
+                button->setToolTip(current + unavailable);
+            }
+        } else if (current.endsWith(unavailable)) {
+            button->setToolTip(button->property(kBase).toString());
+        }
+        button->setEnabled(enabled);
+    };
+    apply(stepBackButton_, stepsEnabled);
+    apply(stepForwardButton_, stepsEnabled);
+    apply(stepToStartButton_, stepsEnabled);
+    apply(stepToEndButton_, stepsEnabled);
+    apply(playPauseButton_, hasComposition);
+    apply(loopButton_, hasComposition);
 }
 
 void ViewerEditor::seekToFrame(const std::uint64_t frameIndex) {
@@ -1035,8 +1063,8 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                     // The composition background (or the grid) sits inside the frame only, under
                     // the image; the image composites over it in display space, exactly as the
                     // GPU present composites.
-                    drawFrameBackground(painter, contentRect(), displayRect,
-                                        frameBackgroundColor(), transparencyGrid_);
+                    drawFrameBackground(painter, contentRect(), displayRect, frameBackgroundColor(),
+                                        transparencyGrid_);
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                     const auto& fullWindow = bufferView->displayWindow;
                     const QRectF dataRect{
@@ -1330,15 +1358,17 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         setFocus(Qt::MouseFocusReason);
     if (!dragActive_ && !panActive_) {
         if (const auto geometry = currentDisplayGeometry();
-            geometry.has_value() && (event->button() == Qt::MiddleButton ||
-                                     (event->button() == Qt::LeftButton && tool() == ViewerTool::Hand))) {
+            geometry.has_value() &&
+            (event->button() == Qt::MiddleButton ||
+             (event->button() == Qt::LeftButton && tool() == ViewerTool::Hand))) {
             beginPan(event->button(), event->position(), *geometry);
             event->accept();
             return;
         }
     }
 
-    if (!dragActive_ && !panActive_ && tool() == ViewerTool::Zoom && event->button() == Qt::LeftButton) {
+    if (!dragActive_ && !panActive_ && tool() == ViewerTool::Zoom &&
+        event->button() == Qt::LeftButton) {
         if (const auto geometry = currentDisplayGeometry()) {
             transform_ =
                 zoomAboutPoint(transform_, canvasRect(), geometry->extent, geometry->pixelAspect,
@@ -1577,8 +1607,8 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
         return;
     if (!dragActive_ && !panActive_ && event->modifiers() == Qt::NoModifier) {
         // The bare letters are the app-wide tool keys (toolForKey); Escape returns to Select.
-        const auto next =
-            event->key() == Qt::Key_Escape ? std::optional(ViewerTool::Select) : toolForKey(event->key());
+        const auto next = event->key() == Qt::Key_Escape ? std::optional(ViewerTool::Select)
+                                                         : toolForKey(event->key());
         if (next) {
             selectTool(*next);
             event->accept();

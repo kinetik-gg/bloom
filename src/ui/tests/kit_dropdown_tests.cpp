@@ -25,6 +25,7 @@
 #include <QString>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <bloom/ui/kit/progress_bar.hpp>
 
 #include <algorithm>
 #include <cstdlib>
@@ -225,8 +226,7 @@ void testTheStateMachineAndDisabledDropdown(Expectations& expectations) {
     expectations.expect(dropdown.cursor().shape() == Qt::ArrowCursor,
                         "a disabled dropdown does not show the pointing hand");
     dropdown.setEnabled(true);
-    expectations.expect(dropdown.cursor().shape() == Qt::PointingHandCursor,
-                        "an enabled one does");
+    expectations.expect(dropdown.cursor().shape() == Qt::PointingHandCursor, "an enabled one does");
 }
 
 // task U8, issue #131, fix 3: the design sheet's dropdown chrome -- bordered closed field with the
@@ -254,7 +254,8 @@ void testTheClosedFieldIsBorderedWithTheVendoredDoubleChevron(Expectations& expe
     bool sawBorder = false;
     for (int y = 0; y < image.height(); ++y)
         for (int x = 0; x < image.width(); ++x) {
-            sawFill = sawFill || near(image.pixelColor(x, y), kit::color(kit::Color::SurfaceRaised));
+            sawFill =
+                sawFill || near(image.pixelColor(x, y), kit::color(kit::Color::SurfaceRaised));
             sawBorder = sawBorder || near(image.pixelColor(x, y), kit::color(kit::Color::Border));
         }
     expectations.expect(sawFill && sawBorder,
@@ -355,6 +356,32 @@ void testTheKitControlsAreAccessible(Expectations& expectations) {
         expectations.expect(options->indexOfChild(right) == 1 && options->child(1) == right,
                             "the children are stable");
     }
+    expectations.expect(options != nullptr &&
+                            options->text(QAccessible::Value) == QStringLiteral("Left"),
+                        "a radio group's value is its selected option");
+    group.setMixed();
+    expectations.expect(options != nullptr &&
+                            options->text(QAccessible::Value) == QStringLiteral("Mixed") &&
+                            options->childCount() == 2 && !options->child(0)->state().checked &&
+                            !options->child(1)->state().checked,
+                        "a mixed radio group reads Mixed and checks no option");
+
+    kit::KProgressBar bar(&fixture.host);
+    bar.setProgress(25, 100);
+    auto* progress = QAccessible::queryAccessibleInterface(&bar);
+    auto* progressValue = progress != nullptr ? progress->valueInterface() : nullptr;
+    expectations.expect(
+        progress != nullptr && progress->role() == QAccessible::ProgressBar &&
+            progressValue != nullptr && progressValue->currentValue().toULongLong() == 25 &&
+            progressValue->maximumValue().toULongLong() == 100 &&
+            progressValue->minimumValue().toULongLong() == 0 &&
+            progress->text(QAccessible::Value) == QStringLiteral("25%") && !progress->state().busy,
+        "a determinate progress bar reports value, range and percentage");
+    bar.setBusy();
+    expectations.expect(progress != nullptr && progress->state().busy &&
+                            progress->text(QAccessible::Value) == QStringLiteral("Busy") &&
+                            !progressValue->currentValue().isValid(),
+                        "a busy progress bar reports the busy state and no number");
 }
 
 void testARadioGroupKeepsADisabledCurrentAndEntersFromMixed(Expectations& expectations) {

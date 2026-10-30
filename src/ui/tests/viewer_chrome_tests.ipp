@@ -23,9 +23,13 @@ constexpr std::array<FooterRank, 12> kFooterRanks{{{"viewerLookToggle", 1},
 // After every collapse rank, the frame field drops its duration (CompactFrameField).
 constexpr int kCompactFrameFieldRank = 11;
 static_assert(kFooterRanks.back().rank < kCompactFrameFieldRank);
-constexpr std::array<const char*, 5> kNeverCollapses{
-    "timelineStepBackButton", "playPauseButton", "timelineStepForwardButton",
-    "timelineLoopIndicator", "viewerTimeReadout"};
+// Chrome controls that are not ranked on their own: the overflow button itself, and Clear ROI,
+// which shares the ROI toggle's rank and is hidden while no region exists.
+constexpr std::array<const char*, 2> kUnrankedFooterControls{"viewerFooterOverflowButton",
+                                                             "viewerRoiClear"};
+constexpr std::array<const char*, 5> kNeverCollapses{"timelineStepBackButton", "playPauseButton",
+                                                     "timelineStepForwardButton",
+                                                     "timelineLoopIndicator", "viewerTimeReadout"};
 
 void testViewerFooterLayoutAtEveryWidth(Expectations& expectations) {
     using namespace bloom;
@@ -90,6 +94,24 @@ void testViewerFooterLayoutAtEveryWidth(Expectations& expectations) {
                                      "ROI, transparency grid, channel, then the rest, in that "
                                      "order" +
                                          at);
+        // Every control the footer places has a rank: a new footer control with none fails here
+        // instead of collapsing in an order nobody chose.
+        if (width == 1920)
+            for (auto* child :
+                 footer->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly)) {
+                if (!child->property("chromeControl").toBool())
+                    continue;
+                const auto name = child->objectName().toStdString();
+                const bool ranked = std::ranges::any_of(
+                    kFooterRanks, [&](const auto& entry) { return name == entry.name; });
+                const bool fixed = std::ranges::any_of(
+                    kNeverCollapses, [&](const char* entry) { return name == entry; });
+                expectations.expect(
+                    ranked || fixed ||
+                        std::ranges::any_of(kUnrankedFooterControls,
+                                            [&](const char* entry) { return name == entry; }),
+                    "footer control '" + name + "' has a collapse rank");
+            }
         expectations.expect(overflow->isHidden() == (highestCollapsed == 0),
                             "View options appears exactly when something collapsed" + at);
         if (width == 1920) {
@@ -170,8 +192,7 @@ void testViewerFooterControlsShareOneVocabulary(Expectations& expectations) {
     expectations.expect(exposure->isNonDefault() && reset->isEnabled(),
                         "a changed exposure is marked and can be reset");
     reset->trigger();
-    expectations.expect(exposure->value() == 0.0 &&
-                            !exposure->isNonDefault() &&
+    expectations.expect(exposure->value() == 0.0 && !exposure->isNonDefault() &&
                             !reset->isEnabled(),
                         "Reset Exposure and Gamma returns both to their defaults");
     exposure->setValue(-2.0);
@@ -233,13 +254,22 @@ void testViewerEmptyProjectChrome(Expectations& expectations) {
                             !layers->isEnabled() &&
                             layers->toolTip().contains(QStringLiteral("layer")),
                         "the layer selector says there is nothing to select, disabled");
-    expectations.expect(viewer->timeReadoutTextForTest() == QStringLiteral("00:00:00:00") &&
-                            !viewer->findChild<QWidget*>("viewerTimeReadout")->isEnabled() &&
-                            viewer->findChild<ui::kit::KLabel*>("timelineTimeReadout")->tone() ==
-                                ui::kit::Color::Faint &&
-                            viewer->findChild<ui::kit::KLabel*>("viewerTimeReadoutDuration")
-                                ->isHidden(),
-                        "the readout shows a disabled zero in its own format, never a dash");
+    expectations.expect(
+        viewer->timeReadoutTextForTest() == QStringLiteral("00:00:00:00") &&
+            !viewer->findChild<QWidget*>("viewerTimeReadout")->isEnabled() &&
+            viewer->findChild<ui::kit::KLabel*>("timelineTimeReadout")->tone() ==
+                ui::kit::Color::Faint &&
+            viewer->findChild<ui::kit::KLabel*>("viewerTimeReadoutDuration")->isHidden(),
+        "the readout shows a disabled zero in its own format, never a dash");
+    // The transport has nothing to act on: disabled, and each control's tooltip says why.
+    for (const char* name :
+         {"viewerStepToStartButton", "timelineStepBackButton", "playPauseButton",
+          "timelineStepForwardButton", "viewerStepToEndButton", "timelineLoopIndicator"}) {
+        auto* transport = viewer->findChild<QToolButton*>(QString::fromLatin1(name));
+        expectations.expect(transport != nullptr && !transport->isEnabled() &&
+                                transport->toolTip().contains(QStringLiteral("no composition")),
+                            std::string{name} + " is disabled with a reason without a composition");
+    }
 
     auto* invitation = viewer->findChild<QWidget*>("viewerEmptyState");
     auto* button = viewer->findChild<ui::kit::KButton*>("viewerNewCompositionButton");
@@ -247,12 +277,11 @@ void testViewerEmptyProjectChrome(Expectations& expectations) {
                             button->variant() == ui::kit::KButton::Variant::Primary,
                         "the empty canvas shows the invitation with a primary New Composition");
     const QRectF canvas = viewer->canvasRectForTest();
-    expectations.expect(invitation != nullptr &&
-                            std::abs(invitation->geometry().center().x() - canvas.center().x()) <=
-                                1 &&
-                            std::abs(invitation->geometry().center().y() - canvas.center().y()) <=
-                                1,
-                        "the invitation is centred on the canvas");
+    expectations.expect(
+        invitation != nullptr &&
+            std::abs(invitation->geometry().center().x() - canvas.center().x()) <= 1 &&
+            std::abs(invitation->geometry().center().y() - canvas.center().y()) <= 1,
+        "the invitation is centred on the canvas");
     if (button != nullptr)
         button->click();
     expectations.expect(newCompositionRuns == 1,
@@ -304,7 +333,8 @@ void testViewerHasNoToolColumn(Expectations& expectations) {
     fixture.viewer.resize(500, ui::kit::px(ui::kit::Size::ViewerMinHeight));
     fixture.viewer.show();
     QCoreApplication::processEvents();
-    expectations.expect(fixture.viewer.minimumHeight() == ui::kit::px(ui::kit::Size::ViewerMinHeight),
+    expectations.expect(fixture.viewer.minimumHeight() ==
+                            ui::kit::px(ui::kit::Size::ViewerMinHeight),
                         "the Viewer's minimum height is its canvas floor");
     expectations.expect(fixture.viewer.findChild<QWidget*>("viewerToolColumn") == nullptr,
                         "the Viewer has no tool column");
@@ -348,19 +378,19 @@ void testViewerMenusAreOrganisedAndShared(Expectations& expectations) {
     expectations.expect(actualSize->text() == QStringLiteral("100%"),
                         "the 100% command has one name everywhere");
     auto* guides = fixture.viewer.findChild<QMenu*>("viewerGuidesMenu");
-    for (const char* name : {"viewerSafeAreasAction", "viewerCentreCrossAction", "viewerThirdsAction",
-                             "viewerRulers", "viewerPixelGridAction", "viewerCustomSafeAreasAction"})
-        expectations.expect(
-            guides->actions().contains(fixture.viewer.findChild<QAction*>(QString::fromLatin1(name))),
-            std::string{name} + " lives under View > Guides");
+    for (const char* name :
+         {"viewerSafeAreasAction", "viewerCentreCrossAction", "viewerThirdsAction", "viewerRulers",
+          "viewerPixelGridAction", "viewerCustomSafeAreasAction"})
+        expectations.expect(guides->actions().contains(
+                                fixture.viewer.findChild<QAction*>(QString::fromLatin1(name))),
+                            std::string{name} + " lives under View > Guides");
     // Footer toggles are the View menu's actions, so their checked states cannot disagree.
     auto* roi = fixture.viewer.findChild<QToolButton*>("viewerRoiToggle");
     auto* look = fixture.viewer.findChild<QToolButton*>("viewerLookToggle");
-    expectations.expect(roi->defaultAction() != nullptr &&
-                            view->actions().contains(roi->defaultAction()) &&
-                            look->defaultAction() != nullptr &&
-                            view->actions().contains(look->defaultAction()),
-                        "the ROI and Look toggles are View's own actions");
+    expectations.expect(
+        roi->defaultAction() != nullptr && view->actions().contains(roi->defaultAction()) &&
+            look->defaultAction() != nullptr && view->actions().contains(look->defaultAction()),
+        "the ROI and Look toggles are View's own actions");
     // The Zoom and Resolution submenus mirror their footer dropdowns.
     auto* zoomMenu = fixture.viewer.findChild<QMenu*>("viewerZoomMenu");
     Q_EMIT zoomMenu->aboutToShow();
@@ -374,10 +404,9 @@ void testViewerMenusAreOrganisedAndShared(Expectations& expectations) {
     // Select names its target.
     auto* select = fixture.viewer.findChild<QMenu*>("viewerSelectMenu");
     Q_EMIT select->aboutToShow();
-    expectations.expect(
-        fixture.viewer.findChild<QAction*>("viewerSelectAllAction")->text() ==
-            QStringLiteral("Select All Layers"),
-        "Select names the layers it acts on");
+    expectations.expect(fixture.viewer.findChild<QAction*>("viewerSelectAllAction")->text() ==
+                            QStringLiteral("Select All Layers"),
+                        "Select names the layers it acts on");
     // Add: layers, then shapes, then Import and Add.
     auto* add = fixture.viewer.findChild<QMenu*>("viewerAddMenu");
     const auto entries = add->actions();
@@ -387,8 +416,8 @@ void testViewerMenusAreOrganisedAndShared(Expectations& expectations) {
                         "Add groups Solid/Text, the shapes, and Import and Add");
     // The canvas context menu reuses the same zoom actions and offers Add and Guides.
     fixture.viewer.findChild<QAction*>("viewerFitAction")->trigger();
-    auto context = fixture.viewer.canvasContextMenuForTest(fixture.viewer.contentRectForTest().topLeft() +
-                                                          QPointF(4, 4));
+    auto context = fixture.viewer.canvasContextMenuForTest(
+        fixture.viewer.contentRectForTest().topLeft() + QPointF(4, 4));
     const auto items = context->actions();
     expectations.expect(items.contains(fixture.viewer.findChild<QAction*>("viewerFitAction")) &&
                             items.contains(actualSize) && items.contains(add->menuAction()) &&
@@ -400,11 +429,11 @@ void testViewerMenusAreOrganisedAndShared(Expectations& expectations) {
     fixture.session.clearSelection();
     toolReady(fixture, expectations);
     (void)fixture.viewer.grab();
-    auto onLayer = fixture.viewer.canvasContextMenuForTest(fixture.viewer.canvasRectForTest().center());
+    auto onLayer =
+        fixture.viewer.canvasContextMenuForTest(fixture.viewer.canvasRectForTest().center());
     expectations.expect(onLayer->actions().size() > 0 &&
                             onLayer->actions().front()->objectName() ==
                                 QStringLiteral("viewerContextSelectLayerAction"),
                         "a right-click on a layer offers to select it first");
     toolShutdown(fixture, expectations);
 }
-

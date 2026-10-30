@@ -1,5 +1,7 @@
 #include <bloom/ui/kit/progress_bar.hpp>
 
+#include <bloom/ui/kit/accessibility.hpp>
+
 #include <bloom/ui/kit/painting.hpp>
 
 #include <QPainter>
@@ -15,6 +17,7 @@ constexpr double kSweepShare = 1.0 / 3.0;
 } // namespace
 
 KProgressBar::KProgressBar(QWidget* parent) : QWidget(parent) {
+    installKitAccessibility();
     setObjectName(QStringLiteral("kProgressBar"));
     setFocusPolicy(Qt::NoFocus);
     setFixedHeight(px(Size::ProgressTrack));

@@ -8,8 +8,10 @@ namespace bloom::ui::kit {
 
 // Installs the kit's accessibility interfaces once per application: KDropdown reads as a combo box
 // (its value, whether its list is open, and an action that opens it), KRadioGroup as a group of
-// radio buttons, one accessible child per option carrying its checked and disabled states,
-// KValueField as a spin box and KSlider/KRangeSelector as sliders, each with the value interface
+// radio buttons, one accessible child per option carrying its checked and disabled states (the
+// group's value is the selected option, or Mixed when none is),
+// KProgressBar as a progress bar (a determinate bar reports completed over total, a busy bar the
+// busy state), KValueField as a spin box and KSlider/KRangeSelector as sliders, each with the value interface
 // (current, minimum, maximum and step).
 // Every kit control that has one calls this from its constructor.
 void installKitAccessibility();

@@ -24,6 +24,7 @@
 #include <bloom/ui/frame_export_controller.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/split_handle.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/layer_alignment_actions.hpp>
 #include <bloom/ui/licenses_window.hpp>
 #include <bloom/ui/main_window.hpp>
@@ -955,6 +956,59 @@ void testDisplayedViewerStatusPolicy(Expectations& expectations) {
         "destroyed selected viewer clears its probe and falls back to first visible viewer");
 }
 
+// Priority rows never let a hosted control leave its row: at each window width, every visible
+// chrome control in every panel's header and footer, and every visible control in the context bar,
+// lies inside the row that hosts it (a control that does not fit collapses into the overflow menu
+// instead). Panels are shown one at a time so each gets the narrow widths.
+void testPriorityRowsKeepControlsInside(Expectations& expectations) {
+    bloom::ui::test::WindowFixture fixture;
+    auto* workspace = fixture.window->workspaceHost();
+    const auto escapes = [](QWidget& row, const bool onlyChromeControls) {
+        std::string offenders;
+        const QRect bounds = row.rect();
+        for (auto* control : row.findChildren<QWidget*>()) {
+            if (!control->isVisibleTo(&row) || control->isWindow())
+                continue;
+            if (onlyChromeControls ? !control->property("chromeControl").toBool()
+                                   : !(qobject_cast<QAbstractButton*>(control) != nullptr ||
+                                       qobject_cast<kit::KDropdown*>(control) != nullptr ||
+                                       qobject_cast<kit::KValueField*>(control) != nullptr))
+                continue;
+            const QRect placed(control->mapTo(&row, QPoint()), control->size());
+            if (!bounds.contains(placed))
+                offenders += ' ' + control->objectName().toStdString();
+        }
+        return offenders;
+    };
+    for (const char* editor :
+         {"bloom.viewer", "bloom.timeline", "bloom.nodes", "bloom.assets", "bloom.properties"}) {
+        workspace->resetToSingleArea(editor);
+        for (const int width : {640, 800, 1000, 1280, 1920}) {
+            fixture.window->resize(width, 900);
+            QTest::qWait(30);
+            QApplication::processEvents();
+            const std::string at = std::string{editor} + " at " + std::to_string(width) + " px";
+            for (auto* area : fixture.window->findChildren<EditorArea*>()) {
+                for (const char* rowName : {"editorHeader", "editorFooter"}) {
+                    auto* row = area->findChild<QWidget*>(QString::fromLatin1(rowName));
+                    if (row == nullptr || !row->isVisible())
+                        continue;
+                    const auto offenders = escapes(*row, true);
+                    expectations.expect(offenders.empty(), std::string{rowName} +
+                                                               " keeps its "
+                                                               "controls inside: " +
+                                                               at + offenders);
+                }
+            }
+            if (auto* bar = fixture.window->contextBar(); bar != nullptr && bar->isVisible()) {
+                const auto offenders = escapes(*bar, false);
+                expectations.expect(offenders.empty(),
+                                    "the context bar keeps its controls inside: " + at + offenders);
+            }
+        }
+    }
+}
+
 // A transient notice clears itself; a persistent one does not. The five-second life is asserted by
 // driving the timer rather than by waiting on the wall clock.
 void testWindowStatusBarMessagesClearThemselves(Expectations& expectations) {
@@ -1187,6 +1241,7 @@ int main(int argc, char** argv) {
     testWindowStatusBarMessagesClearThemselves(expectations);
     try {
         testDisplayedViewerStatusPolicy(expectations);
+        testPriorityRowsKeepControlsInside(expectations);
         testContextBarIsAFixedSurfaceUnderTheMenuBar(expectations);
         testMediaPurgeDropsCompletedSourceFrames(expectations);
     } catch (const std::exception& error) {
