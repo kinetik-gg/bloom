@@ -266,7 +266,7 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     layout->addWidget(previewState_);
     compileDetails_ = new kit::KButton(tr("Details"), this);
     compileDetails_->setObjectName(QStringLiteral("windowStatusBarCompileDetails"));
-    compileDetails_->setVariant(kit::KButton::Variant::Ghost);
+    compileDetails_->setVariant(kit::KButton::Variant::Secondary);
     compileDetails_->setControlSize(kit::KButton::ControlSize::Compact);
     compileDetails_->setAccessibleName(tr("Why the composition cannot render"));
     compileDetails_->hide();
@@ -570,7 +570,7 @@ void WindowStatusBar::openCompileFailure() {
     compileFailurePopup_ = popup;
     const int border = std::max(1, static_cast<int>(std::lround(kit::kHairlineWidth)));
     panel->resize(panel->preferredSize());
-    popup->openFor(*this, panel->preferredSize() + QSize(2 * border, 2 * border));
+    popup->openFor(*this, panel->preferredSize().grownBy(QMargins(border, border, border, border)));
 }
 
 void WindowStatusBar::applyPreviewStateForTest(const CompositionPreviewState& preview) {
