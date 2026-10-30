@@ -83,10 +83,12 @@ QMenu* mirrorMenu(const QString& title, const QString& objectName, kit::KDropdow
     const auto sync = [menu, dropdown, objectPrefix, label] {
         syncMirror(*menu, *dropdown, objectPrefix, label);
     };
-    // The menu follows the dropdown as it changes -- its items, its availability and its value --
-    // rather than re-reading it every time it is about to show.
+    // The menu follows the dropdown as it changes -- its items, its availability and its value.
     QObject::connect(dropdown, &kit::KDropdown::itemsChanged, owner, sync);
     QObject::connect(dropdown, &kit::KDropdown::currentIndexChanged, owner, sync);
+    // A rebuild under a QSignalBlocker (display/view, channel, zoom, resolution) emits neither
+    // signal, so the menu also re-reads the dropdown as it opens, from View or View options.
+    QObject::connect(menu, &QMenu::aboutToShow, owner, sync);
     QObject::connect(menu, &QMenu::triggered, owner, [menu, dropdown](QAction* action) {
         // Choosing in the menu is the artist's choice, exactly as choosing in the dropdown is.
         if (menu->actions().contains(action))

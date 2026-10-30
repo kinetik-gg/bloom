@@ -391,6 +391,23 @@ void testViewerMenusAreOrganisedAndShared(Expectations& expectations) {
         roi->defaultAction() != nullptr && view->actions().contains(roi->defaultAction()) &&
             look->defaultAction() != nullptr && view->actions().contains(look->defaultAction()),
         "the ROI and Look toggles are View's own actions");
+    // A dropdown rebuilt with its signals blocked (as the display/view list is when the colour
+    // configuration resolves) still shows every item in its mirror menu once that menu opens.
+    {
+        auto* displayView = fixture.viewer.findChild<ui::kit::KDropdown*>("viewerDisplayView");
+        auto* displayViewMenu = fixture.viewer.findChild<QMenu*>("viewerDisplayViewMenu");
+        {
+            const QSignalBlocker blocker(displayView);
+            displayView->clearItems();
+            for (const char* name : {"sRGB", "Display P3", "Rec.1886"})
+                displayView->addItem(QString::fromLatin1(name), QStringList{});
+            displayView->setCurrentIndex(1);
+        }
+        Q_EMIT displayViewMenu->aboutToShow();
+        const auto mirrored = displayViewMenu->actions();
+        expectations.expect(mirrored.size() == 3 && mirrored[1]->isChecked(),
+                            "a blocked display/view rebuild reaches its menu when it opens");
+    }
     // The Zoom and Resolution submenus mirror their footer dropdowns.
     auto* zoomMenu = fixture.viewer.findChild<QMenu*>("viewerZoomMenu");
     Q_EMIT zoomMenu->aboutToShow();
