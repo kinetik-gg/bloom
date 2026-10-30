@@ -143,7 +143,7 @@ void addProjectOperations(std::vector<OperationDescriptor>& descriptors) {
         {composition(),
          fromContext("time", ValueKind::Time, ContextSource::Time, std::int64_t{0},
                      "Time. For an animated parameter only: the key time of the default key, a "
-                     "whole frame count or an exact [numerator, denominator] in seconds, as "
+                     "whole number or an exact [numerator, denominator] in seconds, as "
                      "bloom.animation.set-keyframe-at-time-for-parameter takes it. Defaults to "
                      "the playhead."),
          need("parameter", ValueKind::Id, StableId{1},

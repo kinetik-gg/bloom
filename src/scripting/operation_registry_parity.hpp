@@ -186,7 +186,7 @@ class Reader final {
             return std::nullopt;
         const auto result = rationalOf(*value);
         if (!result)
-            reject(name, "expects a whole frame count or an exact [numerator, denominator] time");
+            reject(name, "expects a whole number or an exact [numerator, denominator] time");
         return result;
     }
 

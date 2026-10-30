@@ -157,11 +157,12 @@ void addFromAssets() {
     if (nestedIds.empty())
         return;
     const auto nested = nestedIds.front();
-    auto layers = fixture.run("bloom.layer.add-from-assets",
-                              {{"composition", Value(StableId{fixture.main.value()})},
-                               {"time", Value(std::int64_t{1})},
-                               {"compositions", Value(ids({nested.value(), nested.value()}))},
-                               {"sequence", Value(true)}});
+    auto layers =
+        fixture.run("bloom.layer.add-from-assets",
+                    {{"composition", Value(StableId{fixture.main.value()})},
+                     {"time", Value(ValueArray{Value(std::int64_t{1}), Value(std::int64_t{1})})},
+                     {"compositions", Value(ids({nested.value(), nested.value()}))},
+                     {"sequence", Value(true)}});
     expect(layers.succeeded(), "two nested-composition layers are added in one step");
     const auto made = Fixture::outputs<document::LayerId>(layers, "layer");
     expect(made.size() == 2, "one layer output per item");
