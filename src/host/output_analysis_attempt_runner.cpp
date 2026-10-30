@@ -276,16 +276,8 @@ struct OutputAnalysisAttemptRunnerState final {
     // Set once Resolving succeeds and cleared when the Cpu evaluation task is submitted. While it
     // is set, the runner may be deferring on the GPU provider's lazy bootstrap.
     std::shared_ptr<const ResolvedAttemptInputsV1> resolvedInputs;
-    std::optional<std::chrono::steady_clock::time_point> gpuGateDeadline;
     bool completed = false;
 };
-
-// Bounded deferral for the GPU provider's lazy bootstrap. The gate is owner-driven: tryComplete()
-// simply reports "not yet" while the provider boots and the authoring surface's existing poll
-// loop re-drives it. A provider that never reaches a terminal state cannot wedge an export
-// forever, so after this bound the evaluation proceeds and the truthful CPU fallback runs.
-constexpr auto kGpuBootstrapDeferralLimit = std::chrono::seconds(5);
-
 
 } // namespace detail
 
@@ -367,25 +359,20 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
         }
 
         // GPU bootstrap gate: defer the evaluation stage until the provider's lazy bootstrap is
-        // terminal, so the first real export on a supported device is genuinely GPU instead of a
-        // CPU fallback that raced the bootstrap. This is owner-driven -- tryComplete() simply
-        // reports "not yet" and the authoring surface's existing poll loop re-drives it -- so no
-        // worker is blocked and no CPU task is submitted while waiting. The bound keeps a wedged
-        // provider from stalling an export forever.
+        // terminal, so the first frame of an export on a supported device is genuinely GPU. This
+        // is owner-driven -- tryComplete() simply reports "not yet" and the authoring surface's
+        // existing poll loop re-drives it -- so no worker is blocked and no CPU task is submitted
+        // while waiting. There is no time bound: a fixed 5 s bound let frame 0 race a bootstrap
+        // that was queued behind other provider roots and render on the CPU. The bootstrap itself
+        // ends on failure, cancellation or shutdown (prepared() is then true and an unavailable
+        // device takes the labelled CPU fallback), and the artist can still stop the export.
         const auto& provider = state_->request.gpuProvider;
         if (provider != nullptr && !provider->prepared()) {
-            if (!state_->gpuGateDeadline.has_value()) {
-                state_->gpuGateDeadline =
-                    std::chrono::steady_clock::now() + detail::kGpuBootstrapDeferralLimit;
-            }
-            if (std::chrono::steady_clock::now() < *state_->gpuGateDeadline) {
-                return std::nullopt;
-            }
+            return std::nullopt;
         }
 
         auto resolved = std::move(state_->resolvedInputs);
         state_->resolvedInputs.reset();
-        state_->gpuGateDeadline.reset();
         const auto preset = state_->request.preset;
         auto* ledger = state_->ledger;
         auto gpuProvider = state_->request.gpuProvider; // shared ownership travels with the task
@@ -870,7 +857,6 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
             .resolvingHandle = {},
             .buildHandle = std::nullopt,
             .resolvedInputs = nullptr,
-            .gpuGateDeadline = std::nullopt,
             .completed = false,
         });
 
