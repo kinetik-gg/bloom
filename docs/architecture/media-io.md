@@ -1779,30 +1779,49 @@ preserves complete frames already published.
 Lossy video uses `DecodedSemanticTolerance`. Its exact UTF-8 profile is:
 
 ```text
-bloom.video-rgba16-srgb.v1;first-last;absolute-max=22938;mean-ceil=1967;alpha-max=64;timing=exact;stream-layout=exact;pcm=exact
+bloom.video-rgba16-srgb.v2;first-last;reference=declared-sampling;absolute-max=22938;mean-ceil=1967;alpha-max=64;timing=exact;stream-layout=exact;pcm=exact
 ```
 
-SHA-256: `822d817ff9130218c44a4bd91de7327b349722681bb15f534894259138be3c56`.
-The maximum and mean thresholds use unsigned 16-bit sample units. Alpha is checked separately;
-TIFF requires exact equality. These are acceptance bounds, not predicted errors. An export outside
+SHA-256: `15e8c88900528492844693ec44fe2261d5a713ec96b4498c1b2ec65c611290d3`.
+The maximum and mean thresholds use unsigned 16-bit sample units. Alpha is checked separately
+against the reference alpha; TIFF requires exact equality.
+
+The comparison models the codec's own chroma sampling (`reference=declared-sampling`). The
+reopened stream declares its sample format, matrix, range and chroma siting. Bloom takes the
+RGBA16 reference the encoder received through that sample format with the encoder's own conversion,
+using the declared matrix, range and siting. It then reconstructs the reference and the decoded
+frame to RGBA16 with one siting-aware conversion and compares them. 4:2:0 and 4:2:2 chroma
+decimation is therefore not counted as codec error, so a small saturated feature passes. The
+luma, alpha and every chroma sample the codec kept are still compared, and the bounds are
+unchanged. A real encoding error still fails: corrupted or drifting samples, a sample layout that
+decimates chroma differently from the encoder's input, or a declared matrix, range or siting that
+differs from what the encoder did. Unspecified siting means co-sited left (the H.273 default, and
+what Bloom's reader assumes). An unspecified matrix means BT.709. A Y'CbCr stream that declares a
+non-Y'CbCr matrix is refused. The encoder converts with exactly the matrix, range and siting it
+declares: subsampled chroma is written co-sited left and tagged, and 4:4:4 (ProRes 4444, DNxHR
+444) has no siting. Version 1 compared against the unsampled reference. It failed a 10x10
+saturated red square in ProRes 4:2:2 because the edge pixels that share a chroma sample with
+black reconstruct with about 40% of their red. Version 1's SHA-256 was
+`822d817ff9130218c44a4bd91de7327b349722681bb15f534894259138be3c56`. These are acceptance bounds, not predicted errors. An export outside
 the bound fails closed. AAC uses the exact profile
 `bloom.aac-f32.v1;sample-count=exact;priming=trim;absolute-max=0.25;rms=0.05`; video with AAC binds
 the SHA-256 of the two profile strings concatenated in video-then-audio order. PCM has no tolerance
 digest and uses `ByteExact`; TIFF uses `DecodedSemanticExact`.
 AAC profile SHA-256: `2c4c461185d7d9ba7741afefbc076060b7e55cb9b75e39d15a934eea133c03d8`.
-Combined video/AAC SHA-256: `5c263e8aa7f06b4b4586185df6e8a7d27d3590d1ffa9cc4e5162733c3f447546`.
+Combined video/AAC SHA-256: `88e3e40e56e68e465d0250f2e45f26b26959f8ce5ab1f8f723be88bceefd8d7e`.
 
 Wire protocol version 3 adds encode begin, frame/audio acknowledgements, finish/QC and bounded
 artifact chunks. `EncodeSettingsV1` canonical encoding orders container, codec, profile, audio codec,
 dimensions, rational rate, frame/sample counts, sample rate, channels, BWF description, determinism
-and tolerance digest after its versioned domain. Execution byte limits are excluded from semantic
-identity. The 256×128, 48-frame HQ/PCM fixture record is 146 bytes and independently derives
-`3eb779c366d82c3f12d9fabeb1dce7deff69e740e7db866fe619db7a4d804da2`.
+and tolerance digest after its versioned domain; version 2 (#369) adds the colour tags and the bit
+rate. Execution byte limits are excluded from semantic identity. The 256×128, 48-frame HQ/PCM
+fixture record (video tolerance profile v2) is 166 bytes and independently derives
+`7e8bea8770830d7257eba98ee80d465a1d0106bbc3e06665f8d171d99b1baa2f`.
 
 Media analysis binds the frozen preset byte (4 = ProRes, 5 = DNxHR, 6 = PCM, 7 = H.264 review), settings digest and
 all eleven ordered preservation facets. COLOR-5 binds the chosen display/view identity and look
 effect count. Its HQ/PCM fixture advances from 579 to 759 bytes and independently derives
-`881bec4a9feff91651f94191980833942eb3e0708fa814dcc2af9e20a36599d9`.
+`1253f309292cb3999ba7f1f81b46b38e3260d59c64dd37bac17a5b70dfb47b9d`.
 The neutral display record remains 224 bytes, SHA-256
 `b473d0289aa343bc89b1465c4779c557c687e3ee724d5aae337d9829f8e949b1`.
 The [COLOR-5 identity oracle](color5-identity-oracle.md) constructs these records independently.

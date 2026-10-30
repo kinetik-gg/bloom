@@ -61,8 +61,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     bloom_find_dependency(FFmpeg)
     set(BLOOM_OPENH264_SHIM_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/lib")
     add_subdirectory(openh264_shim)
+    # The declared-sampling reopen comparison (tolerance profile v2): the encoder's output
+    # conversion and the verifier's reference, shared by both provider builds and its unit test.
+    add_library(bloom_media_ffmpeg_reopen_compare STATIC ffmpeg_reopen_compare.cpp)
+    target_include_directories(bloom_media_ffmpeg_reopen_compare PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_features(bloom_media_ffmpeg_reopen_compare PUBLIC cxx_std_20)
+    target_link_libraries(bloom_media_ffmpeg_reopen_compare PUBLIC FFmpeg::swscale FFmpeg::avutil)
+    bloom_enable_warnings(bloom_media_ffmpeg_reopen_compare)
     add_library(bloom_media_ffmpeg_worker_provider STATIC ffmpeg_provider.cpp)
     target_link_libraries(bloom_media_ffmpeg_worker_provider PRIVATE bloom_media_provider bloom_platform_process
+                          bloom_media_ffmpeg_reopen_compare
                           FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample
                           "${BLOOM_DEPENDENCY_PREFIX}/lib/libopenh264.so")
     bloom_enable_warnings(bloom_media_ffmpeg_worker_provider)
@@ -207,6 +215,7 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_library(bloom_media_ffmpeg_fixture_worker_provider STATIC ffmpeg_provider.cpp)
     target_compile_definitions(bloom_media_ffmpeg_fixture_worker_provider PRIVATE BLOOM_MEDIA_FIXTURE_GENERATOR)
     target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider PRIVATE bloom_media_provider bloom_platform_process
+                          bloom_media_ffmpeg_reopen_compare
                           FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample
                           "${BLOOM_DEPENDENCY_PREFIX}/lib/libopenh264.so")
     bloom_enable_warnings(bloom_media_ffmpeg_fixture_worker_provider)
@@ -225,6 +234,13 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_dependencies(bloom_media_generate_fixtures bloom_media_openh264_test_runtime)
     endif()
     bloom_enable_warnings(bloom_media_generate_fixtures)
+    add_executable(bloom_media_reopen_compare_test tests/reopen_compare_tests.cpp)
+    target_link_libraries(bloom_media_reopen_compare_test PRIVATE bloom_media_ffmpeg_reopen_compare)
+    set_target_properties(bloom_media_reopen_compare_test PROPERTIES
+                          BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+    bloom_enable_warnings(bloom_media_reopen_compare_test)
+    bloom_add_test(NAME bloom.media.reopen-compare COMMAND bloom_media_reopen_compare_test
+                   LABELS unit media TIMEOUT 60)
     add_executable(bloom_media_encode_test "${PROJECT_SOURCE_DIR}/src/media/provider/tests/encode_tests.cpp")
     if(bloom_openh264_test_runtime_available)
         target_compile_definitions(bloom_media_encode_test PRIVATE

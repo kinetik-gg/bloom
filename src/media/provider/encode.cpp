@@ -50,12 +50,12 @@ Digest encodeTolerance(const EncodeSettingsV1& v) {
     if (!v.videoCodec.empty() && v.audioCodec == "aac") {
         core::Sha256Hasher hasher;
         (void)hasher.update(
-            std::as_bytes(std::span(kVideoToleranceV1.data(), kVideoToleranceV1.size())));
+            std::as_bytes(std::span(kVideoToleranceV2.data(), kVideoToleranceV2.size())));
         (void)hasher.update(
             std::as_bytes(std::span(kAacToleranceV1.data(), kAacToleranceV1.size())));
         return hasher.finalize();
     }
-    const auto profile = v.videoCodec.empty() ? kAacToleranceV1 : kVideoToleranceV1;
+    const auto profile = v.videoCodec.empty() ? kAacToleranceV1 : kVideoToleranceV2;
     return digestBytes(std::as_bytes(std::span(profile.data(), profile.size())));
 }
 Result<Digest> digest(const EncodeSettingsV1& v) {

@@ -1,4 +1,5 @@
 #include "ffmpeg_provider.hpp"
+#include "ffmpeg_reopen_compare.hpp"
 #include <algorithm>
 #include <array>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>

@@ -145,7 +145,7 @@ int main() {
         // version 2) + eleven explicit (facet byte,state byte,NUL-terminated UTF-8 description)
         // tuples: 759 bytes. See tests/color5_identity_oracle.py.
         check(std::string(hex.data(), hex.size()) ==
-                  "9c6f6e49b187b4da4054db5c4f3dee0e38a9a22f8eb1b5c1f9a8f52e2b5e384c",
+                  "1253f309292cb3999ba7f1f81b46b38e3260d59c64dd37bac17a5b70dfb47b9d",
               "media analysis frozen oracle");
 #endif
         check(report.implementationNote.starts_with(p::kProResExportNote) &&

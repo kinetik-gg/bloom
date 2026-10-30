@@ -135,6 +135,9 @@ GPU** or **Some frames rendered on the CPU**. A check that failed or warned (tim
 audio, file names, whether the saved file changed, whether it could be put in place) says so in a
 sentence with what was expected and found. A frame that had to be evaluated on the CPU is never
 shown as a GPU frame.
+The **File opens** check decodes the movie and compares it with what Bloom rendered, after taking
+the codec's own 4:2:2 or 4:2:0 colour sampling into account, so small saturated detail such as thin
+coloured text passes while damaged pixels or wrong colour tags still fail the export.
 
 **Add to Assets when done** adds the checked result to Assets (a movie as a video asset,
 a sequence as a sequence, a still as an image, a WAV as audio) with one undoable import. A file

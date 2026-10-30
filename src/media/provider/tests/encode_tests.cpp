@@ -7,6 +7,7 @@
 #include <fstream>
 #include <numeric>
 #include <stdexcept>
+#include <string_view>
 #include <unistd.h>
 #include <utility>
 using namespace bloom::media::provider;
@@ -20,6 +21,9 @@ template <typename T> T get(Result<T> result) {
         throw std::runtime_error(e->detail);
     return std::get<T>(std::move(result));
 }
+// The MCP repro: black with a centred 10x10 saturated red square, whose left edge falls on an
+// odd column and so shares every 4:2:2/4:2:0 chroma sample with black.
+bool redSquare = false;
 FrameProduct image(const EncodeSettingsV1& settings, std::uint64_t index) {
     FrameProduct frame;
     frame.format = PixelFormat::Rgba16;
@@ -36,10 +40,13 @@ FrameProduct image(const EncodeSettingsV1& settings, std::uint64_t index) {
     for (std::uint32_t y = 0; y < plane.height; ++y)
         for (std::uint32_t x = 0; x < plane.width; ++x)
             for (unsigned c = 0; c < 4; ++c) {
-                const auto value = c == 3 ? (settings.profile.starts_with("4444")
-                                                 ? (x < settings.width / 2 ? 20000U : 50000U)
-                                                 : 65535U)
-                                          : (x + index < settings.width / 2 ? 20000U : 40000U);
+                const bool inside = x + 5 >= settings.width / 2 && x < settings.width / 2 + 5 &&
+                                    y + 5 >= settings.height / 2 && y < settings.height / 2 + 5;
+                const auto value = c == 3      ? (settings.profile.starts_with("4444") && !redSquare
+                                                      ? (x < settings.width / 2 ? 20000U : 50000U)
+                                                      : 65535U)
+                                   : redSquare ? (inside && c == 0 ? 65535U : 0U)
+                                               : (x + index < settings.width / 2 ? 20000U : 40000U);
                 const auto offset = static_cast<std::size_t>(y) * plane.stride +
                                     static_cast<std::size_t>(x) * 8U +
                                     static_cast<std::size_t>(c) * 2U;
@@ -290,11 +297,80 @@ void tests(const std::filesystem::path& directory) {
     ok(retry.video(image(settings, 1)));
     test::check(get(retry.finish()).frames == 2, "fresh encode retries cleanly");
 }
+// Every lossy preset reopens a tiny saturated feature within tolerance profile v2: the verifier
+// models the codec's own chroma sampling instead of failing what 4:2:2/4:2:0 removes by design.
+void chromaSampling(const std::filesystem::path& directory) {
+    redSquare = true;
+    EncodeSettingsV1 settings;
+    settings.width = 640;
+    settings.height = 360;
+    settings.frames = 12;
+    for (const auto* profile : {"proxy", "lt", "422", "hq", "4444", "4444xq"}) {
+        settings.profile = profile;
+        (void)run(settings, directory / (std::string("red-square-prores-") + profile + ".mov"));
+    }
+    settings.videoCodec = "dnxhd";
+    settings.container = "mxf";
+    for (const auto* profile : {"dnxhr_lb", "dnxhr_sq", "dnxhr_hq", "dnxhr_hqx", "dnxhr_444"}) {
+        settings.profile = profile;
+        (void)run(settings, directory / (std::string("red-square-") + profile + ".mxf"));
+    }
+    settings.profile = "dnxhd";
+    settings.width = 1920;
+    settings.height = 1080;
+    settings.rate = {25, 1};
+    (void)run(settings, directory / "red-square-dnxhd.mxf");
+    settings = {};
+    settings.width = 640;
+    settings.height = 360;
+    settings.frames = 12;
+    settings.videoCodec = "h264";
+    settings.profile = "high";
+#ifdef BLOOM_OPENH264_TEST_RUNTIME
+    if (std::filesystem::is_directory(BLOOM_OPENH264_TEST_RUNTIME)) {
+        EncodeSessionOptionsV1 openh264;
+        openh264.openh264Directory = BLOOM_OPENH264_TEST_RUNTIME;
+        (void)run(settings, directory / "red-square-h264.mov", std::move(openh264));
+    } else
+        std::cout << "SKIP: H.264 red square — Cisco OpenH264 binary is not staged\n";
+#else
+    std::cout << "SKIP: H.264 red square — Cisco OpenH264 binary is not staged\n";
+#endif
+    if (!std::filesystem::exists("/dev/dri/renderD128") &&
+        !std::filesystem::exists("/dev/dri/renderD129")) {
+        std::cout << "SKIP: VA-API red square — no render node\n";
+        return;
+    }
+    for (const auto& [codec, profile] :
+         {std::pair{"h264", "high"}, std::pair{"hevc", "main"}, std::pair{"hevc", "main10"}}) {
+        settings.videoCodec = codec;
+        settings.profile = profile;
+        EncodeSessionOptionsV1 vaapi;
+        vaapi.vaapi = true;
+        // Only the driver refusing (the encoder, its context or a frame upload) skips; a
+        // verification failure is a test failure.
+        try {
+            (void)run(settings,
+                      directory /
+                          (std::string("red-square-") + codec + "-" + profile + "-vaapi.mov"),
+                      std::move(vaapi));
+        } catch (const std::runtime_error& error) {
+            const std::string_view detail = error.what();
+            if (!detail.starts_with("VA-API") &&
+                detail != "Encoder refused profile or stream layout" &&
+                detail != "Encoder is not in the intake")
+                throw;
+            std::cout << "SKIP: VA-API " << codec << ' ' << profile
+                      << " red square — the driver refused: " << error.what() << '\n';
+        }
+    }
+}
 } // namespace
 int main(int argc, char** argv) {
     try {
         test::check(argc == 2, "test output directory");
         tests(argv[1]);
+        chromaSampling(argv[1]);
         // Issue #352: one 8K UHD ProRes frame exports and passes reopen quality check.
         EncodeSettingsV1 eightK;
         eightK.width = 7680;

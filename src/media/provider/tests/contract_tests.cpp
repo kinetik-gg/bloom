@@ -78,8 +78,8 @@ void encodeIdentity() {
     oracle.integer(0, 4);
     oracle.integer(3, 1);
     const std::string tolerance =
-        "bloom.video-rgba16-srgb.v1;first-last;absolute-max=22938;mean-ceil=1967;alpha-max=64;"
-        "timing=exact;stream-layout=exact;pcm=exact";
+        "bloom.video-rgba16-srgb.v2;first-last;reference=declared-sampling;absolute-max=22938;"
+        "mean-ceil=1967;alpha-max=64;timing=exact;stream-layout=exact;pcm=exact";
     oracle.hash(digestBytes(std::as_bytes(std::span(tolerance.data(), tolerance.size()))));
     test::check(oracle.hex.size() / 2 == 166, "frozen EncodeSettingsV1 byte size");
     test::check(oracle.finish() == std::get<Digest>(digest(settings)),

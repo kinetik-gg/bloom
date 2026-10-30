@@ -138,13 +138,12 @@ int videoProfile(const EncodeSettingsV1& s) {
             Error::Unavailable);
     return 0;
 }
-// The RGB -> YUV coefficients for the tagged matrix (#369): BT.2020 for matrix 9/10, otherwise
-// BT.709, which is also what an untagged or unknown matrix has always used.
-int swsMatrix(const EncodeSettingsV1& s) {
-    return s.colour.matrix == 9 || s.colour.matrix == 10 ? SWS_CS_BT2020 : SWS_CS_ITU709;
-}
 bool hardwareCodec(const EncodeSettingsV1& s) {
     return s.videoCodec == "h264" || s.videoCodec == "hevc";
+}
+// The software sample layout uploaded to a VA-API encoder.
+AVPixelFormat hardwareSamples(const EncodeSettingsV1& s) {
+    return s.profile == "main10" ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
 }
 // "<container>/<codec>" of a reopened artifact. MOV and MP4 share one demuxer; the major brand
 // tells them apart ("qt  " for QuickTime).
@@ -255,8 +254,7 @@ struct Encoder::State {
                             Error::Unavailable);
                     auto* frames = reinterpret_cast<AVHWFramesContext*>(track.hardwareFrames->data);
                     frames->format = AV_PIX_FMT_VAAPI;
-                    frames->sw_format =
-                        settings.profile == "main10" ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
+                    frames->sw_format = hardwareSamples(settings);
                     frames->width = c.width;
                     frames->height = c.height;
                     frames->initial_pool_size = 4;
@@ -276,6 +274,14 @@ struct Encoder::State {
             c.colorspace =
                 static_cast<AVColorSpace>(tag(settings.colour.matrix, AVCOL_SPC_UNSPECIFIED));
             c.color_range = static_cast<AVColorRange>(tag(settings.colour.range, AVCOL_RANGE_MPEG));
+            // Subsampled chroma is written co-sited left (the H.273 default every intaken codec
+            // and Bloom's own reader assume) and declared, so a reader never has to guess.
+            const auto* samples = av_pix_fmt_desc_get(
+                c.pix_fmt == AV_PIX_FMT_VAAPI ? hardwareSamples(settings) : c.pix_fmt);
+            require(samples != nullptr, "Output sample format unavailable", Error::Unavailable);
+            c.chroma_sample_location = samples->log2_chroma_w != 0 || samples->log2_chroma_h != 0
+                                           ? AVCHROMA_LOC_LEFT
+                                           : AVCHROMA_LOC_UNSPECIFIED;
             c.sample_aspect_ratio = {1, 1};
         } else {
             require(name == "pcm_s16le" || name == "pcm_s24le" || name == "aac",
@@ -314,17 +320,12 @@ struct Encoder::State {
             track.frame->height = c.height;
             require(av_frame_get_buffer(track.frame, 32) >= 0, "Encode frame allocation",
                     Error::Oversized);
-            track.scale = sws_getContext(c.width, c.height, AV_PIX_FMT_RGBA64LE, c.width, c.height,
-                                         static_cast<AVPixelFormat>(track.frame->format),
-                                         SWS_BICUBIC | SWS_BITEXACT, nullptr, nullptr, nullptr);
+            // The conversion is exactly what the stream declares: its matrix, range and siting.
+            track.scale = declaredConversion(
+                c.width, c.height, AV_PIX_FMT_RGBA64LE,
+                static_cast<AVPixelFormat>(track.frame->format),
+                {c.colorspace, c.color_range, c.chroma_sample_location}, kOutputConversionFlags);
             require(track.scale, "Output pixel conversion unavailable", Error::Unavailable);
-            if (settings.videoCodec != "tiff") {
-                const auto* coefficients = sws_getCoefficients(swsMatrix(settings));
-                require(sws_setColorspaceDetails(track.scale, coefficients, 1, coefficients,
-                                                 c.color_range == AVCOL_RANGE_JPEG ? 1 : 0, 0,
-                                                 1 << 16, 1 << 16) >= 0,
-                        "Output range conversion unavailable");
-            }
         } else {
             require(swr_alloc_set_opts2(&track.resample, &c.ch_layout, c.sample_fmt, c.sample_rate,
                                         &c.ch_layout, AV_SAMPLE_FMT_FLTP, c.sample_rate, 0,
@@ -479,58 +480,42 @@ struct Encoder::State {
         packets(track, &f);
         audioSubmitted += static_cast<unsigned>(f.nb_samples);
     }
-    void compare(const AVFrame& decoded, const Bytes& reference, EncodeQcV1& qc) {
+    // Tolerance profile v2: the reference goes through the sample format and the sampling the
+    // reopened stream declares, so 4:2:0/4:2:2 chroma decimation is not counted as codec error
+    // while a wrong sample layout, matrix, range or siting still is.
+    void compare(const AVFrame& decoded, const Bytes& reference, EncodeQcV1& qc,
+                 const DeclaredSampling& declared) {
         require(decoded.width == static_cast<int>(settings.width) &&
                     decoded.height == static_cast<int>(settings.height),
                 "Reopened dimensions differ");
-        Bytes rgba(static_cast<std::size_t>(settings.width) * settings.height * 8U);
-        auto* scale = sws_getContext(decoded.width, decoded.height,
-                                     static_cast<AVPixelFormat>(decoded.format), decoded.width,
-                                     decoded.height, AV_PIX_FMT_RGBA64LE,
-                                     SWS_BICUBIC | SWS_BITEXACT, nullptr, nullptr, nullptr);
-        require(scale, "Reopen conversion unavailable");
-        const auto cleanup =
-            std::unique_ptr<SwsContext, decltype(&sws_freeContext)>(scale, sws_freeContext);
         if (settings.videoCodec != "tiff") {
-            const auto* coefficients = sws_getCoefficients(swsMatrix(settings));
-            require(
-                sws_setColorspaceDetails(scale, coefficients,
-                                         videoTrack.codec->color_range == AVCOL_RANGE_JPEG ? 1 : 0,
-                                         coefficients, 1, 0, 1 << 16, 1 << 16) >= 0,
-                "Reopen range conversion unavailable");
+            // The codec's own subsampling, not whatever the stream claims: the decoded layout must
+            // decimate chroma exactly as the encoder's input did.
+            const auto* actual = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(decoded.format));
+            const auto* written =
+                av_pix_fmt_desc_get(static_cast<AVPixelFormat>(videoTrack.frame->format));
+            require(actual && written && (actual->flags & AV_PIX_FMT_FLAG_RGB) == 0 &&
+                        actual->log2_chroma_w == written->log2_chroma_w &&
+                        actual->log2_chroma_h == written->log2_chroma_h,
+                    "Reopened chroma sampling differs");
         }
-        std::uint8_t* data[4]{reinterpret_cast<std::uint8_t*>(rgba.data()), nullptr, nullptr,
-                              nullptr};
-        int strides[4]{static_cast<int>(settings.width * 8U), 0, 0, 0};
-        require(sws_scale(scale, decoded.data, decoded.linesize, 0, decoded.height, data,
-                          strides) == decoded.height,
-                "Reopen conversion failed");
-        require(reference.size() == rgba.size(), "Reopen reference size mismatch");
-        std::uint64_t sum = 0, count = 0;
+        auto measure = measureReopen(decoded, std::span<const std::byte>(reference), declared);
+        require(measure.failure.empty(), measure.failure.c_str());
         const bool alpha = settings.videoCodec == "tiff" ||
                            (settings.videoCodec == "prores_ks" && videoTrack.codec->profile >= 4);
-        for (std::size_t i = 0; i < rgba.size(); i += 2) {
-            const auto u16 = [&](const Bytes& bytes) {
-                return std::to_integer<unsigned>(bytes[i]) |
-                       (std::to_integer<unsigned>(bytes[i + 1]) << 8U);
-            };
-            const auto a = u16(rgba), b = u16(reference);
-            const auto error = a > b ? a - b : b - a;
-            if (i % 8 == 6) {
-                if (alpha)
-                    require(error <= (settings.videoCodec == "tiff" ? 0U : 64U),
-                            "Reopened alpha exceeds tolerance");
-                continue;
-            }
-            qc.maximumError = std::max(qc.maximumError, error);
-            sum += error;
-            ++count;
-        }
+        if (alpha)
+            require(measure.alphaMaximum <= (settings.videoCodec == "tiff" ? 0U : 64U),
+                    "Reopened alpha exceeds tolerance");
+        qc.maximumError = std::max(qc.maximumError, measure.maximum);
         qc.meanError =
-            std::max(qc.meanError, static_cast<std::uint32_t>((sum + count - 1) / count));
+            std::max(qc.meanError,
+                     static_cast<std::uint32_t>((measure.sum + measure.count - 1) / measure.count));
+        const auto& rgba = measure.rgba;
         require(settings.videoCodec == "tiff" ? rgba == reference
                                               : qc.maximumError <= 22938 && qc.meanError <= 1967,
-                "Reopened pixels exceed tolerance profile");
+                ("Reopened pixels exceed tolerance profile (max=" +
+                 std::to_string(qc.maximumError) + " mean=" + std::to_string(qc.meanError) + ")")
+                    .c_str());
         const auto digest = digestBytes(rgba);
         if (qc.frames == 0)
             qc.firstFrame = digest;
@@ -568,7 +553,7 @@ struct Encoder::State {
                         avcodec_send_packet(input.codec, input.packet) >= 0 &&
                         avcodec_receive_frame(input.codec, input.frame) >= 0,
                     "TIFF reopen failed");
-            compare(*input.frame, firstReference, qc);
+            compare(*input.frame, firstReference, qc, {});
             qc.frames = 1;
         } else {
             verifyVideo(qc);
@@ -609,6 +594,8 @@ struct Encoder::State {
         qc.colour = {parameters.color_primaries, parameters.color_trc, parameters.color_space,
                      parameters.color_range};
         qc.container = containerToken(*input.format, parameters);
+        const DeclaredSampling declared{parameters.color_space, parameters.color_range,
+                                        parameters.chroma_location};
         decoder(input, stream, nullptr);
         bool eof = false;
         while (next(input, 0, eof)) {
@@ -619,7 +606,8 @@ struct Encoder::State {
                                  settings.rate.numerator),
                 "Reopened video timing differs");
             if (qc.frames == 0 || qc.frames + 1 == settings.frames)
-                compare(*input.frame, qc.frames == 0 ? firstReference : lastReference, qc);
+                compare(*input.frame, qc.frames == 0 ? firstReference : lastReference, qc,
+                        declared);
             ++qc.frames;
             av_frame_unref(input.frame);
         }

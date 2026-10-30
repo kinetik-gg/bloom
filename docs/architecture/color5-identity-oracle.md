@@ -53,7 +53,7 @@ facets = [
 ]
 analysis_record = (
     b"BloomMediaOutputAnalysisV1\x04"
-    + bytes.fromhex("3eb779c366d82c3f12d9fabeb1dce7deff69e740e7db866fe619db7a4d804da2")
+    + bytes.fromhex("7e8bea8770830d7257eba98ee80d465a1d0106bbc3e06665f8d171d99b1baa2f")
     + b"".join(bytes((facet, state)) + description.encode("utf-8") + b"\0" for facet, state, description in facets)
 )
 records = {
