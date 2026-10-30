@@ -202,7 +202,8 @@ int serve(scripting::Session& session) {
                     .setSelection = {},
                     .activateComposition = {},
                     .transport = {},
-                    .setViewer = {}},
+                    .setViewer = {},
+                    .setColorSettings = {}},
              .serverVersion = BLOOM_VERSION,
              .limits = mcp::kMcpMessageLimits});
         corePointer = &core;
