@@ -20,10 +20,12 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/swatch_button.hpp>
 #include <bloom/ui/kit/theme.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/tool_controller.hpp>
 
 #include <QDir>
@@ -31,6 +33,8 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPainter>
+
+#include <set>
 
 using namespace bloom;
 using namespace bloom::ui;
@@ -647,6 +651,83 @@ void testPlaybackCost() {
     expect(visibleProperties < 50, "and the rows on screen are far fewer than the layers");
 }
 
+// #401 in the composition panels together (Nodes, Properties, Timeline), 25 layers, one of them
+// animated, selected and expanded: 120 playback ticks request no layout at all, and repaint only
+// the value cells whose numbers move.
+class PlaybackChurn final : public QObject {
+  public:
+    int layoutRequests = 0;
+    int paints = 0;
+    int colorChipPaints = 0;
+    std::set<const QWidget*> paintedFields;
+    bool counting = false;
+
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (counting && event->type() == QEvent::LayoutRequest)
+            ++layoutRequests;
+        if (counting && event->type() == QEvent::Paint)
+            ++paints;
+        if (counting && event->type() == QEvent::Paint &&
+            qobject_cast<const kit::KColorChip*>(watched) != nullptr)
+            ++colorChipPaints;
+        if (counting && event->type() == QEvent::Paint)
+            if (const auto* field = qobject_cast<const kit::KValueField*>(watched))
+                paintedFields.insert(field);
+        return false;
+    }
+};
+
+void testPlaybackChurn() {
+    Surfaces surfaces;
+    for (int index = 0; index < 25; ++index)
+        expect(addDefaultSolidLayer(surfaces.session), "the fixture adds a solid layer");
+    QCoreApplication::processEvents();
+    auto* stack = surfaces.layerStack();
+    const auto layer = stack->entries().front().layerId;
+    surfaces.session.selectLayer(layer);
+    const auto boundary = surfaces.session.boundaryNodeForLayer(layer);
+    const auto* node = surfaces.session.composition()->graph().findNode(*boundary);
+    const auto binding = std::ranges::find(node->parameters, document::kPositionParameterRole,
+                                           &document::ParameterBinding::role);
+    for (const int at : {0, 100}) {
+        (void)surfaces.session.setCurrentTime(frame(at));
+        expect(surfaces.session.toggleKeyframeForParameter(binding->parameterId),
+               "the fixture keys Position");
+    }
+    (void)surfaces.session.setCurrentTime(frame(100));
+    expect(surfaces.session.setSelectedPosition(10, 20), "the second key moves the layer");
+    (void)surfaces.session.setCurrentTime(frame(0));
+    QCoreApplication::processEvents();
+    if (auto* row = surfaces.layerRow(0))
+        if (auto* disclosure = qobject_cast<kit::KRow*>(row)->disclosureButton())
+            click(disclosure);
+    QTest::qWait(100);
+    PlaybackChurn churn;
+    QCoreApplication::instance()->installEventFilter(&churn);
+    const auto structure = TimelinePropertyRow::structureBindCount();
+    const auto rebuilds = surfaces.properties->work().fullRebuilds;
+    churn.counting = true;
+    constexpr int kTicks = 120;
+    for (int tick = 1; tick <= kTicks; ++tick) {
+        (void)surfaces.session.setCurrentTime(frame(tick % 100));
+        QCoreApplication::processEvents();
+    }
+    QCoreApplication::processEvents();
+    churn.counting = false;
+    QCoreApplication::instance()->removeEventFilter(&churn);
+    expect(churn.layoutRequests == 0,
+           "playback ticks request no layout (got " + std::to_string(churn.layoutRequests) + ")");
+    expect(TimelinePropertyRow::structureBindCount() == structure,
+           "a tick never rebuilds a timeline row's structure");
+    expect(surfaces.properties->work().fullRebuilds == rebuilds,
+           "a tick never rebuilds Properties");
+    // Position X and Y, in Properties and in the timeline row: the only numbers that move.
+    expect(churn.colorChipPaints == 0, "a colour that does not change never repaints");
+    expect(churn.paintedFields.size() <= 4, "only the animated value cells repaint (got " +
+                                                std::to_string(churn.paintedFields.size()) + ")");
+}
+
 // The review captures: every state at 2000 and at 900 pixels wide.
 void captureStates(const int width) {
     if (qEnvironmentVariable("BLOOM_TIMELINE_LAYERS_CAPTURE_DIR").isEmpty())
@@ -720,6 +801,7 @@ int main(int argc, char** argv) {
     testKeys();
     testSourceNames();
     testPlaybackCost();
+    testPlaybackChurn();
     captureStates(2000);
     captureStates(900);
     if (failures != 0)

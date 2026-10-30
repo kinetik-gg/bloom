@@ -448,9 +448,10 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
     });
     color_->setObjectName("timelinePropertyColor");
     properties::bindValueEdit(session_, *color_, [this] { return entry_.parameterId; });
+    // A live edit (another surface's drag or typing) shows here at once, values only.
     connect(&session_, &CompositionSession::liveValueChanged, this, [this] {
-        if (!binding_ && entry_.parameterId.isValid())
-            scheduleRefresh();
+        if (!binding_ && entry_.parameterId.isValid() && isVisible())
+            bind(entry_);
     });
     // Task DRIVE-1's read-only display for a driven parameter. It occupies the value columns the
     // editors would have, so a driven row is the same row with a different thing in it.
@@ -525,8 +526,8 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
             &TimelinePropertyRow::scheduleRefresh);
 }
 
-// #401: the playhead, a live value and a driven value can all change in one playback tick. A row
-// re-reads its values at most once per event-loop turn, and only while it is on screen: a pooled
+// #401: the playhead and a driven value can both change in one playback tick. A row re-reads its
+// values at most once per event-loop turn, and only while it is on screen: a pooled
 // row the layer stack has hidden does no per-tick work at all (it is re-bound when it is shown).
 void TimelinePropertyRow::scheduleRefresh() {
     if (refreshPending_ || !isVisible() || !entry_.parameterId.isValid())
@@ -543,6 +544,17 @@ std::uint64_t TimelinePropertyRow::bindCount() noexcept { return bindCount_; }
 
 void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
     ++bindCount_;
+    // #401: re-binding the row it already shows (a playback tick, a live or driven value) updates
+    // values only. The indent, the label, the disclosure and the selector's items are structure:
+    // touching them would request a layout on every tick.
+    const bool restructure =
+        !structured_ || entry.rowKind != entry_.rowKind || entry.depth != entry_.depth ||
+        entry.parameterId != entry_.parameterId || entry.component != entry_.component ||
+        entry.role != entry_.role || entry.name != entry_.name ||
+        entry.expanded != entry_.expanded || entry.layerId != entry_.layerId;
+    structured_ = true;
+    if (restructure)
+        ++structureBindCount_;
     binding_ = true;
     entry_ = entry;
     setProperty("parameterId",
@@ -556,20 +568,23 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
     // by since its parameter row, so BOTH land their value columns (diamond_ and the cells) at the
     // same x. A group's own label stays unbounded (below) since it has no value column to align.
     const int depth = std::max(1, entry.depth);
-    indent_->changeSize(propertyRowIndent(depth), 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
-    layout()->invalidate();
-    const int labelWidth = (componentRow || depth >= 3)
-                               ? kit::px(kit::Size::PropertyLabelCompact) - kPropertyIndentStep
-                               : kit::px(kit::Size::PropertyLabelCompact);
-    label_->setFixedWidth(labelWidth);
-    label_->setMaximumWidth(group ? QWIDGETSIZE_MAX : labelWidth);
-    label_->setText(entry.name);
-    disclosure_->setVisible(group);
-    disclosure_->setIcon(kit::icon(
-        entry.expanded ? kit::IconId::CaretDown : kit::IconId::CaretRight, kit::IconRole::Chrome));
-    disclosure_->setAccessibleName(tr("Toggle %1").arg(entry.name));
-    label_->setFont(kit::font(group ? kit::TypeRole::UiSmall : kit::TypeRole::Ui));
-    label_->setToolTip(entry.name);
+    if (restructure) {
+        indent_->changeSize(propertyRowIndent(depth), 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+        layout()->invalidate();
+        const int labelWidth = (componentRow || depth >= 3)
+                                   ? kit::px(kit::Size::PropertyLabelCompact) - kPropertyIndentStep
+                                   : kit::px(kit::Size::PropertyLabelCompact);
+        label_->setFixedWidth(labelWidth);
+        label_->setMaximumWidth(group ? QWIDGETSIZE_MAX : labelWidth);
+        label_->setText(entry.name);
+        disclosure_->setVisible(group);
+        disclosure_->setIcon(
+            kit::icon(entry.expanded ? kit::IconId::CaretDown : kit::IconId::CaretRight,
+                      kit::IconRole::Chrome));
+        disclosure_->setAccessibleName(tr("Toggle %1").arg(entry.name));
+        label_->setFont(kit::font(group ? kit::TypeRole::UiSmall : kit::TypeRole::Ui));
+        label_->setToolTip(entry.name);
+    }
     setEnabled(true);
     if (group) {
         for (auto* cell : cells_)
@@ -607,10 +622,12 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         const bool selector = !items.empty() && role != document::kBlendModeParameterRole;
         alignment_->setVisible(selector);
         if (selector) {
-            alignment_->clearItems();
-            alignment_->setAccessibleName(entry.name);
-            for (const auto& [name, stored] : items)
-                alignment_->addItem(name, QVariant::fromValue(stored));
+            if (restructure) {
+                alignment_->clearItems();
+                alignment_->setAccessibleName(entry.name);
+                for (const auto& [name, stored] : items)
+                    alignment_->addItem(name, QVariant::fromValue(stored));
+            }
             const auto* constant =
                 record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
             const auto* value = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;

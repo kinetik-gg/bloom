@@ -389,6 +389,8 @@ class TimelineLayerRow final : public kit::KRow {
         // opens the label menu under it.
         label_ = new kit::KSwatchButton(this);
         label_->setObjectName(QStringLiteral("timelineLayerLabel"));
+        // A cell of the dense switch strip (ToggleCell, not Control, tall).
+        label_->setProperty("layerSwitch", true);
         label_->setToolTip(labelToolTip());
         label_->setAccessibleName(TimelineEditor::tr("Label"));
         retainSize(*label_);
@@ -2247,7 +2249,6 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         minLayerColumnWidth(),
         settings.value(QLatin1StringView(kLayerColumnWidthSetting), layerColumnWidth()).toInt());
     graphEditor_ = settings.value(QStringLiteral("timeline/graph-editor"), false).toBool();
-    hideShyLayers_ = settings.value(QStringLiteral("timeline/hide-shy-layers"), false).toBool();
     if (graphEditor_)
         keyframesVisible_ = false;
     keyframesAction_->setChecked(keyframesVisible_);
@@ -2281,7 +2282,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     columnHeaderLayout->setContentsMargins(0, 0, 0, 0);
     columnHeaderLayout->setSpacing(0);
     columnHeaders_ = new TimelineColumnHeaders(columnHeaderRow);
-    columnHeaders_->setHideShy(hideShyLayers_);
+    loadHideShyLayers();
     connect(columnHeaders_, &TimelineColumnHeaders::hideShyToggled, this,
             &TimelineEditor::setHideShyLayers);
     connect(columnHeaders_, &TimelineColumnHeaders::labelFilterRequested, this,
@@ -2353,6 +2354,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         revealed_.clear();
         labelFilter_.clear();
         columnHeaders_->setLabelFilterActive(false);
+        loadHideShyLayers();
         rebuild();
     });
     connect(stack_, &TimelineLayerStack::shyChanged, this, &TimelineEditor::rebuild);
@@ -2429,10 +2431,21 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     updateHistoryActions();
 }
 
+// Hide Shy Layers is per-composition session state (as in After Effects, where each composition
+// has its own switch), persisted with the workspace UI state rather than in the project.
+QString TimelineEditor::hideShySetting(const document::CompositionId composition) {
+    return QStringLiteral("timeline/hide-shy-layers/%1").arg(composition.value());
+}
+
+void TimelineEditor::loadHideShyLayers() {
+    hideShyLayers_ = QSettings().value(hideShySetting(session_.compositionId()), false).toBool();
+    columnHeaders_->setHideShy(hideShyLayers_);
+}
+
 void TimelineEditor::setHideShyLayers(const bool hide) {
     hideShyLayers_ = hide;
     columnHeaders_->setHideShy(hide);
-    QSettings().setValue(QStringLiteral("timeline/hide-shy-layers"), hide);
+    QSettings().setValue(hideShySetting(session_.compositionId()), hide);
     rebuild();
 }
 

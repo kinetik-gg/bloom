@@ -36,6 +36,8 @@ class KDiamond : public QWidget {
     using QWidget::QWidget;
     enum class Fill { None, Half, Full };
     void setIndicator(bool animated, Fill fill) {
+        if (animated_ == animated && fill_ == fill)
+            return;
         animated_ = animated;
         fill_ = fill;
         update();

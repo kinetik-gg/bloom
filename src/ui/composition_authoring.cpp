@@ -159,6 +159,9 @@ KeyframeDiamond::KeyframeDiamond(CompositionSession& session, std::string role, 
 }
 
 void KeyframeDiamond::setRole(std::string role) {
+    // #401: re-binding the same role (every playback tick) is not a reason to re-ask the session.
+    if (role_ == role)
+        return;
     role_ = std::move(role);
     refresh();
 }
@@ -173,6 +176,8 @@ void KeyframeDiamond::setParameterId(const document::ParameterId parameterId) {
 }
 
 void KeyframeDiamond::setComponent(std::optional<document::AnimationComponent> component) {
+    if (component_ == component)
+        return;
     component_ = component;
     refresh();
 }

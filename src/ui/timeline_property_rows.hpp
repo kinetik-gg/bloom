@@ -40,6 +40,8 @@ class TimelinePropertyRow final : public QWidget {
     std::function<void(document::ParameterId)> toggleParameter;
     // #401 test seam: how many times any property row has re-read its values.
     [[nodiscard]] static std::uint64_t bindCount() noexcept;
+    // ...and how many of those re-built the row's structure (indent, label, items): never a tick.
+    [[nodiscard]] static std::uint64_t structureBindCount() noexcept { return structureBindCount_; }
 
   protected:
     // Pressing the row's own background selects the row (TimelineLayerStack::selectRow).
@@ -50,6 +52,8 @@ class TimelinePropertyRow final : public QWidget {
     void scheduleRefresh();
     bool refreshPending_ = false;
     static inline std::uint64_t bindCount_ = 0;
+    static inline std::uint64_t structureBindCount_ = 0;
+    bool structured_ = false;
     void bindDriven(bool driven);
     CompositionSession& session_;
     TimelineLayerEntry entry_;

@@ -157,8 +157,10 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     void setSnappingEnabled(bool enabled);
     void setGraphEditorEnabled(bool enabled);
     // The master Shy toggle: hides layers whose Shy switch is on from the layer list (After
-    // Effects' Hide Shy Layers). Layout only; persisted under timeline/hide-shy-layers.
+    // Effects' Hide Shy Layers). Layout only; per composition, under timeline/hide-shy-layers/<id>.
     void setHideShyLayers(bool hide);
+    void loadHideShyLayers();
+    [[nodiscard]] static QString hideShySetting(document::CompositionId composition);
     void setLabelFilter(std::set<int> labels);
     // timeline_editor_keys.cpp: After Effects' Timeline keys (property reveals, J/K, [ and ]).
     void createTimelineKeys();
