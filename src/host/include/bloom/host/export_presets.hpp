@@ -36,8 +36,8 @@ class TaskScheduler;
 // snapshot(), availabilityFor() and defaultPreset() read in-memory state only and are safe on the
 // UI thread; the user-preset store and every encoder probe run on scheduler workers.
 //
-// Export runs on Linux in this version. On macOS and Windows every preset is listed and editable,
-// and its platform availability is PlatformNotSupported (tracked by #371 and #370).
+// Export runs on Linux, macOS and Windows (ADR 0035): each platform's media provider chain ends
+// in the bundled FFmpeg worker, so no preset is refused for the operating system it runs on.
 namespace bloom::host {
 
 // Categories in catalogue order: video first. Image sequences are first-class presets in their own
@@ -65,8 +65,8 @@ enum class ExportAvailabilityCode : std::uint8_t {
     HardwareEncoderMissing = 5,
     // The supervised media worker could not be started on this computer.
     WorkerUnavailable = 6,
-    // Export runs on Linux in this version (macOS #371, Windows #370). Start is unavailable; the
-    // queue stays fully editable.
+    // Never produced (ADR 0035: every platform exports). Kept only until the desktop UI drops its
+    // references; do not produce it.
     PlatformNotSupported = 7,
     // Project-dependent: a named deliverable needs the built-in ACES CG config.
     RequiresAcesConfig = 8,
@@ -145,7 +145,7 @@ struct ExportEncoderStatus final {
     bool mediaWorker = false;
     // The VA-API render node whose driver opened the encode entry points (#369).
     std::string vaapiRenderNode;
-    // This build's platform runs exports (Linux in this version).
+    // Ignored (ADR 0035: every platform exports). Kept only until the desktop UI stops setting it.
     bool exportPlatform = false;
     // True once the first worker probe has answered.
     bool probed = false;
@@ -285,15 +285,6 @@ exportSettingsFromJson(std::string_view json);
 // A built-in preset by id (pure; independent of encoders and of any catalogue instance). Its
 // platformAvailability is not evaluated here.
 [[nodiscard]] std::optional<ExportPreset> builtInExportPreset(std::string_view id);
-
-// This build's platform answer for ExportEncoderStatus::exportPlatform.
-[[nodiscard]] constexpr bool exportPlatformSupported() noexcept {
-#if defined(__linux__)
-    return true;
-#else
-    return false;
-#endif
-}
 
 class ExportPresetCatalogue final {
   public:

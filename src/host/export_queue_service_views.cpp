@@ -17,7 +17,6 @@ using document::ExportFormat;
 
 constexpr std::string_view kLockedReason =
     "Stop the job to change it; it keeps the settings it started with";
-constexpr std::string_view kPlatformReason = "Export runs on Linux in this version";
 
 ExportCommandAvailability yes() { return {true, ExportUnavailableCode::None, {}}; }
 ExportCommandAvailability no(const ExportUnavailableCode code, std::string reason) {
@@ -279,7 +278,6 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
     snapshot->catalogueRevision = catalogue->revision;
     snapshot->runner = state.runner;
     snapshot->activeJob = state.active;
-    const bool platform = catalogue->encoders.exportPlatform;
     const bool shuttingDown = state.runner == ExportRunnerState::ShuttingDown;
     const auto noProject = no(ExportUnavailableCode::NoProject, "No project is open");
     const auto readOnly = no(ExportUnavailableCode::ReadOnlyProject, "The project is read-only");
@@ -328,9 +326,6 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
                 startRefusal = std::move(value);
             }
         };
-        if (!platform)
-            refuseStart(
-                no(ExportUnavailableCode::PlatformNotSupported, std::string(kPlatformReason)));
         if (shuttingDown)
             refuseStart(no(ExportUnavailableCode::ShuttingDown, "Bloom is shutting down"));
         if (isActive(runtime.state))
@@ -378,10 +373,6 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
                                           sample != state.samples.end() &&
                                           sample->second.fingerprint == confirmation->second;
             if (output.enabled && !isActive(runtime.state)) {
-                if (!outputView.availability.available &&
-                    outputView.availability.code == ExportAvailabilityCode::PlatformNotSupported)
-                    refuseStart(no(ExportUnavailableCode::PlatformNotSupported,
-                                   std::string(kPlatformReason)));
                 for (const auto& issue : outputView.preflight) {
                     if (issue.code == ExportPreflightCode::DestinationCheckPending)
                         refuseStart(
@@ -533,9 +524,7 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
             ? yes()
             : no(ExportUnavailableCode::NothingToStart,
                  firstStartRefusal.empty() ? "No enabled job can start" : firstStartRefusal);
-    if (!platform)
-        startAll = no(ExportUnavailableCode::PlatformNotSupported, std::string(kPlatformReason));
-    else if (shuttingDown)
+    if (shuttingDown)
         startAll = no(ExportUnavailableCode::ShuttingDown, "Bloom is shutting down");
     put(commands, ExportCommand::StartAll, startAll);
     put(commands, ExportCommand::StopAll,

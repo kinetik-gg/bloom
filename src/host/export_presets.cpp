@@ -21,7 +21,6 @@ using F = output::OutputFacetIdV1;
 using S = output::OutputPreservationStateV1;
 using Facets = std::array<S, output::kOutputAnalysisFacetCountV1>;
 
-constexpr std::string_view kPlatformReason = "Export runs on Linux in this version";
 constexpr std::string_view kReviewDisplay = "Rec.1886 Rec.709 - Display";
 constexpr std::string_view kReviewView = "ACES 1.0 - SDR Video";
 constexpr std::string_view kAcesInterchange = "ACES2065-1";
@@ -390,9 +389,6 @@ std::optional<ExportPreset> builtInExportPreset(const std::string_view id) {
 
 ExportAvailability exportPlatformAvailability(const document::ExportOutputSettings& settings,
                                               const ExportEncoderStatus& encoders) {
-    if (!encoders.exportPlatform)
-        return unavailable(ExportAvailabilityCode::PlatformNotSupported,
-                           std::string(kPlatformReason));
     const auto format = settings.format;
     if (format == ExportFormat::Dpx)
         return unavailable(ExportAvailabilityCode::NoQualifiedEncoder,
@@ -630,7 +626,6 @@ ExportDefaultPreset ExportPresetCatalogue::defaultPreset() const {
 
 void ExportPresetCatalogue::setEncoderStatus(ExportEncoderStatus status) {
     std::scoped_lock lock(state_->mutex);
-    status.exportPlatform = state_->options.initialEncoders.exportPlatform;
     state_->encoders = std::move(status);
     state_->changed();
 }
@@ -645,7 +640,6 @@ void ExportPresetCatalogue::refreshEncoders(runtime::TaskScheduler& scheduler) {
             auto status = probeExportEncoders(initial);
             if (const auto self = weak.lock()) {
                 std::scoped_lock lock(self->mutex);
-                status.exportPlatform = initial.exportPlatform;
                 self->encoders = std::move(status);
                 self->changed();
             }

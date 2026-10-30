@@ -64,8 +64,8 @@ class TaskScheduler;
 // one progress source. Cancel, pause and retry belong to the Export panel; the Jobs row offers
 // only "Show in Export".
 //
-// Platforms: export runs on Linux in this version. On macOS (#371) and Windows (#370) the queue is
-// fully editable and Start, Start All and Retry are unavailable with PlatformNotSupported.
+// Platforms: export runs on Linux, macOS and Windows alike (ADR 0035). The media provider chain
+// degrades silently to the bundled FFmpeg worker; no command is refused for the operating system.
 namespace bloom::host {
 
 class ExportRunBackend;
@@ -349,7 +349,8 @@ enum class ExportUnavailableCode : std::uint8_t {
     // Reveal: nothing has been published at this destination in this session.
     NotPublished = 21,
     CompositionMissing = 22,
-    // Export runs on Linux in this version (macOS #371, Windows #370).
+    // Never produced (ADR 0035: every platform exports). Kept only until the desktop UI drops its
+    // references; do not produce it.
     PlatformNotSupported = 23,
     // An existing destination under AskBeforeReplacing has not been confirmed.
     NeedsReplaceConfirmation = 24,
@@ -641,7 +642,7 @@ inline constexpr std::size_t kExportQueueSubscriptionCapacity = 8;
 // one output and a destination. It is never saved in the project and never enters undo; it is a
 // runtime job with the same preflight, verification, GPU priority, replacement policy (an
 // existing destination is never replaced silently: pass Replace explicitly, or the run refuses)
-// and PlatformNotSupported behaviour as any other job. Its tasks are owned and grouped like any
+// and availability behaviour as any other job. Its tasks are owned and grouped like any
 // run, it stops with stop(job), and it leaves the snapshot once it is terminal and the caller has
 // acknowledged its result.
 

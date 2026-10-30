@@ -338,7 +338,6 @@ void retiredTransientJobs() {
         }
     } release{queue, captures};
     host::ExportEncoderStatus encoders;
-    encoders.exportPlatform = true;
     encoders.probed = true;
     queue = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
         .session = *server.session->hostSession(),
