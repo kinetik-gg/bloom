@@ -23,6 +23,9 @@ class EncodeSessionV1 final {
     EncodeSessionV1(const EncodeSessionV1&) = delete;
     EncodeSessionV1& operator=(const EncodeSessionV1&) = delete;
     [[nodiscard]] std::optional<Unavailable> begin(const EncodeSettingsV1& settings);
+    // Frames and audio blocks are written in order without waiting for the worker's
+    // acknowledgement (a bounded number stay unread); a refused product surfaces as the error of a
+    // later call, and finish/read/close first collect every outstanding acknowledgement.
     [[nodiscard]] std::optional<Unavailable> video(FrameProduct frame);
     [[nodiscard]] std::optional<Unavailable> audio(AudioBlock block);
     [[nodiscard]] Result<EncodeQcV1> finish();

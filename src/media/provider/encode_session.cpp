@@ -74,20 +74,34 @@ struct EncodeSessionV1::State {
         process.reset();
         return e;
     }
-    Payload exchange(MessageKind kind, Payload payload, MessageKind expected) {
+    // Frame and audio messages are written without waiting for their acknowledgements, so the
+    // worker encodes one product while the host prepares the next. The worker answers strictly in
+    // order; every other request first collects the outstanding acknowledgements, and a failed
+    // acknowledgement surfaces on the next call. The bound keeps the unread replies far below the
+    // pipe buffer.
+    static constexpr std::size_t kMaxUnacknowledged = 16;
+    std::size_t unacknowledged = 0;
+    std::optional<Unavailable> send(MessageKind kind, Payload payload) {
         if (terminal)
             return *terminal;
         if (cancel && cancel())
-            return stop({Error::Cancelled, "Encode cancelled"});
+            return std::get<Unavailable>(stop({Error::Cancelled, "Encode cancelled"}));
         if (!process)
-            return stop({Error::UnexpectedMessage, "Encode session is not running"});
+            return std::get<Unavailable>(
+                stop({Error::UnexpectedMessage, "Encode session is not running"}));
         const auto deadline = std::chrono::steady_clock::now() + options.timeout;
         const auto request = encodeMessage({kind, session, ++sequence, std::move(payload)});
         if (const auto* e = std::get_if<Unavailable>(&request))
-            return stop(*e);
+            return std::get<Unavailable>(stop(*e));
         const auto written = process->write(std::get<Bytes>(request), deadline, cancel);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&written))
-            return stop(processFailure(*e));
+            return std::get<Unavailable>(stop(processFailure(*e)));
+        return std::nullopt;
+    }
+    Payload receive(MessageKind request, MessageKind expected) {
+        if (terminal)
+            return *terminal;
+        const auto deadline = std::chrono::steady_clock::now() + options.timeout;
         std::array<std::byte, 4> prefix{};
         auto received = process->read(prefix, deadline, cancel);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&received))
@@ -96,7 +110,7 @@ struct EncodeSessionV1::State {
         if (const auto* e = std::get_if<Unavailable>(&length))
             return stop(*e);
         // Encode replies never contain an unbounded frame; fail before allocating hostile lengths.
-        if (kind != MessageKind::Handshake &&
+        if (request != MessageKind::Handshake &&
             std::get<std::uint32_t>(length) > kEncodeChunkBytes + 4096)
             return stop({Error::Oversized, "Oversized encode response"});
         Bytes response(prefix.begin(), prefix.end());
@@ -111,6 +125,29 @@ struct EncodeSessionV1::State {
         if (const auto* e = std::get_if<Unavailable>(&result))
             return stop(*e);
         return result;
+    }
+    std::optional<Unavailable> collect(const std::size_t keep) {
+        while (unacknowledged > keep) {
+            --unacknowledged;
+            if (const auto error = failure(receive(MessageKind::Frame, MessageKind::Ack)))
+                return error;
+        }
+        return std::nullopt;
+    }
+    std::optional<Unavailable> post(MessageKind kind, Payload payload) {
+        if (const auto error = collect(kMaxUnacknowledged - 1))
+            return error;
+        if (const auto error = send(kind, std::move(payload)))
+            return error;
+        ++unacknowledged;
+        return std::nullopt;
+    }
+    Payload exchange(MessageKind kind, Payload payload, MessageKind expected) {
+        if (const auto error = collect(0))
+            return *error;
+        if (const auto error = send(kind, std::move(payload)))
+            return *error;
+        return receive(kind, expected);
     }
 };
 EncodeSessionV1::EncodeSessionV1(EncodeSessionOptionsV1 options,
@@ -182,10 +219,10 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
     return failure(s.exchange(MessageKind::EncodeBegin, settings, MessageKind::Ack));
 }
 std::optional<Unavailable> EncodeSessionV1::video(FrameProduct frame) {
-    return failure(state_->exchange(MessageKind::Frame, std::move(frame), MessageKind::Ack));
+    return state_->post(MessageKind::Frame, std::move(frame));
 }
 std::optional<Unavailable> EncodeSessionV1::audio(AudioBlock block) {
-    return failure(state_->exchange(MessageKind::Audio, std::move(block), MessageKind::Ack));
+    return state_->post(MessageKind::Audio, std::move(block));
 }
 Result<EncodeQcV1> EncodeSessionV1::finish() {
     return take<EncodeQcV1>(
