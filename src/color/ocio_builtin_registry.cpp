@@ -328,8 +328,48 @@ findUniqueDisplayViewForColorSpace(const OCIO::ConstConfigRcPtr& config,
     return found;
 }
 
+// The Viewer's default pair: the config's default display with a view that applies no tone
+// mapping. A config's own default view may be a look or tone map (the ACES 1.3 CG config defaults
+// to "ACES 1.0 - SDR Video"), which would make a plain sRGB image look graded before the artist
+// chose anything. The view is identified by its name or its view transform's name, ignoring case
+// and punctuation: "Un-tone-mapped" (the OCIO ACES configs), then "Standard" (the Blender
+// convention). A view whose color space is data (such as "Raw") never qualifies. A config with
+// no identifiable view keeps its own default pair.
+[[nodiscard]] DisplayViewPair viewerDefaultDisplayView(const OCIO::ConstConfigRcPtr& config,
+                                                       const DisplayViewPair& defaultPair) {
+    const auto normalized = [](const char* const text) {
+        std::string result;
+        for (const char* cursor = text; cursor != nullptr && *cursor != '\0'; ++cursor) {
+            const auto byte = static_cast<unsigned char>(*cursor);
+            if (std::isalnum(byte) != 0)
+                result.push_back(static_cast<char>(std::tolower(byte)));
+        }
+        return result;
+    };
+    const char* const display = defaultPair.display.c_str();
+    const int viewCount = config->getNumViews(display);
+    for (const std::string_view wanted :
+         {std::string_view("untonemapped"), std::string_view("standard")}) {
+        for (int viewIndex = 0; viewIndex < viewCount; ++viewIndex) {
+            const char* const view = config->getView(display, viewIndex);
+            if (view == nullptr || *view == '\0')
+                continue;
+            const char* const transform = config->getDisplayViewTransformName(display, view);
+            if (normalized(view) != wanted && normalized(transform) != wanted)
+                continue;
+            const char* const colorSpaceName = config->getDisplayViewColorSpaceName(display, view);
+            const OCIO::ConstColorSpaceRcPtr colorSpace =
+                colorSpaceName == nullptr ? nullptr : config->getColorSpace(colorSpaceName);
+            if (colorSpace && !colorSpace->isData())
+                return DisplayViewPair{defaultPair.display, std::string(view)};
+        }
+    }
+    return defaultPair;
+}
+
 [[nodiscard]] std::optional<std::vector<bloom::color::DisplayViewEntry>>
 enumerateDisplayViews(const OCIO::ConstConfigRcPtr& config, const DisplayViewPair& defaultPair,
+                      const DisplayViewPair& viewerPair,
                       bloom::color::OcioBuiltInInvalidReason& invalidReason) {
     const int displayCount = config->getNumDisplays();
     if (displayCount < 0 || static_cast<std::size_t>(displayCount) > kMaximumDisplays) {
@@ -362,12 +402,16 @@ enumerateDisplayViews(const OCIO::ConstConfigRcPtr& config, const DisplayViewPai
             }
             result.push_back({std::string(display), std::string(view), std::string(colourSpace),
                               std::string_view(display) == defaultPair.display &&
-                                  std::string_view(view) == defaultPair.view});
+                                  std::string_view(view) == defaultPair.view,
+                              std::string_view(display) == viewerPair.display &&
+                                  std::string_view(view) == viewerPair.view});
         }
     }
     const auto defaultFound = std::find_if(result.begin(), result.end(),
                                            [](const auto& entry) { return entry.isDefault; });
-    if (defaultFound == result.end()) {
+    const auto viewerFound = std::find_if(result.begin(), result.end(),
+                                          [](const auto& entry) { return entry.isViewerDefault; });
+    if (defaultFound == result.end() || viewerFound == result.end()) {
         invalidReason = bloom::color::OcioBuiltInInvalidReason::DisplayViewNotUniquelyMapped;
         return std::nullopt;
     }
@@ -633,7 +677,9 @@ resolveOcioBuiltIn(const OcioConfigLocatorKind locatorKind, const std::string_vi
     }
 
     OcioBuiltInInvalidReason displayEnumerationReason = OcioBuiltInInvalidReason::None;
-    const auto displays = enumerateDisplayViews(config, *displayView, displayEnumerationReason);
+    const auto viewerDisplayView = viewerDefaultDisplayView(config, *displayView);
+    const auto displays =
+        enumerateDisplayViews(config, *displayView, viewerDisplayView, displayEnumerationReason);
     if (!displays.has_value()) {
         auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
         result.recomputedRevision_ = recomputed;
