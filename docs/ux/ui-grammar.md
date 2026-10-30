@@ -169,44 +169,74 @@ ruler, lanes, graph editor, work area and navigator. Other surfaces compose kit 
 
 ## Export panel
 
-The Export panel (`exportEditor`, editor id `bloom.export`) is one scrolling list of collapsible job
-rows (`exportJobList`). There is no detail pane, no splitter, no run strip and no table: a job's
-settings sit under the job, so selection is never hidden state. The header (`exportHeader`) has
-**Add composition** (`exportAddCompositionButton`, Secondary, shown once the list has a job),
-**Remove finished** (Secondary, shown only when something finished), **Stop All** (Danger, shown only
-while something runs) and **Start All** (`exportStartAllButton`). Start All is the only Primary of
-the panel and exists only while a job is ready, so a list with nothing ready has no Primary; the
-empty state's own Primary is **Add composition** (`exportAddActiveButton`) over "Nothing to render
-yet." and how else to add one. A note (`exportPlatformNote`) says where export cannot run, and
-`exportStartNote` says what a Start All started and what waits for the artist's OK.
+The Export panel (`exportEditor`, editor id `bloom.export`) is the After Effects Render Queue in
+Bloom's components. The panel header (`exportHeader`) holds the editor picker and **Add
+composition** (`exportAddCompositionButton`, Secondary, shown once the list has a job); on the right
+**Stop All** (`exportStopAllButton`, Danger, shown only while something renders) and **Start All**
+(`exportStartAllButton`), then the maximize button. Start All is the only Primary of the panel and
+is Primary and enabled only while a checked job is ready; otherwise it is a disabled Secondary with
+its reason. The empty state's own Primary is **Add composition** (`exportAddActiveButton`) under
+"Nothing to render yet." and "Or drag compositions here from Assets."
 
-A job row (`exportJobRow`) is a `kit::KRow` header on the Assets row recipe (Size::ListRow, hover,
-selection ring): caret, label colour chip, the **Include in Start All** switch, name (edited in
-place with `kit::KInlineEdit`, by double click or F2), composition, range chip, status, a fixed
-`KProgressBar` with the frame count and time left while it runs, **one job button** and the
-overflow menu. The job button is Secondary and shows the one verb that fits the state: Start,
-Pause, Resume, Stop or Retry; the rest (and Duplicate, Move, Remove, Copy as command) are in the
-menu with their reasons as tooltips. Below about 880 px the header folds onto two lines. The body
-holds the **Render** group (`exportRenderSection`), one output row each (`exportOutputRow`), **Add
-output** (Secondary, with a format menu) and, only once the job has run, **Result** and a folded
-**Log** (`exportResults`). Every row inside is a `KPropertyRow`, so labels and fields line up on
-the Properties label column across the Render group and every output.
+**Current Render** (`exportCurrentRender`) is a strip on the Surface fill above the list, folded by
+default (a per-user setting): caret, the UiSmallStrong title and one Muted line, "Rendering SC020 ·
+frame 404 of 2156 · 0:28 elapsed · about 2 min left" or "Idle" (with the platform's reason where
+export cannot run). Opened, it adds a `KProgressBar` no wider than `Size::DialogWideWidth`.
 
-An output row has its own header (caret, switch, format, where it saves, state, menu) over a body
-with **Format**, **Save to** (a `KPathField` with browse inside it and a small Secondary **?**
-for the name tokens), **If a file is there**, a folded **Quality** group with only the settings of
-the chosen format (Colour space, Display and View are `KDropdown`s of what the project offers)
-and **After render**. The question "A file called X is already in Y." is an inline row at the top
-of the output with **Replace it** and **Choose another name** (both Secondary), and the job opens
-itself when it asks; Start All never opens a second dialog.
+The render list (`exportRenderList`) is the Assets row system: a `QTreeWidget` with real column
+headers, rows of `Size::AssetRow`, one `Size::AssetIndent` per level (the caret column), text one
+header padding in from its cell, and the row background painted across the viewport. A job and its
+lines share one band and the bands alternate, so each job reads as a block. Columns, sized to their
+content: **Render** (the row's caret, then a `KCheckBox` centred in its cell: include in Start All),
+**#**, **Composition** (Foreground), **Status**, **Started**, **Render Time** (Muted), then an
+untitled cell that takes the slack and holds the row's ⋯ button (`exportJobMenuButton`), so no
+column stretches across a wide panel. Below the panel's width for them, Started and then Render
+Time hide, and Composition and Status narrow. Status words are plain: Queued, Needs output, Needs
+attention, Waiting for your OK, Getting ready, Rendering 25%, Paused while you work in the Viewer,
+Checking the file, Done, Done, with a note, Failed, Stopped. Every status is Muted ink; only Failed
+uses Error. While a job runs, a thin `KProgressBar` sits after its words in the Status cell. There
+is no label colour and no switch. A job row drags to a new place (an Accent line shows where), and
+compositions dropped from Assets become jobs at that line, as one undo entry.
 
-Status words are plain (Ready, Needs a location, Needs attention, Waiting for your OK, Up next,
-Getting ready, Rendering 32%, Paused while you work in the Viewer, Checking the file, Done, Done,
-with a note, Failed, Stopped). Every status is Muted ink; only Failed uses Error, and a finished
-job or a note gets a check or info glyph in Muted ink, never green or amber. A reason a control
-cannot run is a visible Muted line in the job or output it concerns; the tooltip repeats it.
-Failure lines never carry stage, code or facet numbers: the raw text is behind **Show details** and
-**Copy details**.
+An open job shows one line per setting, each a spanned child row with its own caret:
+
+- `Render Settings:` (`exportRenderSettingsLine`): ▾ (`exportRangePicks`: Work area, Whole
+  composition, Current frame) and the range as a `KButton::Variant::Link`
+  (`exportRenderSettingsLink`), which opens **Render Settings**.
+- `Output Module:` (`exportOutputModuleLine`), one per output: ▾ (`exportPresetPicks`: the formats,
+  video first, then image sequences), the preset as a Link (`exportOutputModuleLink`) that opens
+  **Output Module**, **+** and **−** (`exportAddOutputButton`, `exportRemoveOutputButton`; − is
+  disabled with its reason on the last output), and `Output To:` with ▾ (`exportDestinationPicks`:
+  Default name and recent folders) and the resolved destination as a Link (`exportOutputToLink`)
+  that opens `kit::chooseFile` in Save mode. On a narrow panel Output To folds onto a second row
+  under its own right-aligned label.
+
+The line labels are right-aligned in one shared column, so every value starts at one x; the
+module links share one width, so +, − and Output To line up across outputs. A line's caret opens
+one Muted summary (`exportSummaryLine`) under its values: the frames and timecode, the first and
+last file, the estimated size and free space, and what blocks it. A Link is plate-less Accent text,
+AccentHover and underlined under the pointer, Muted when disabled, with the focus border only on
+keyboard focus; the ▾ quick picks are plate-less carets.
+
+**Render Settings** (`exportRenderSettingsDialog`) and **Output Module**
+(`exportOutputModuleDialog`) are `KDialog`s of `Width::Wide` built from `KSection` groups holding
+two `KForm` columns side by side, as After Effects groups them; fields keep their content width.
+Render Settings has one group, `Composition “SC020”`: Range (Work area, Whole composition, Custom,
+One frame) on the left; Start, End (frame `KValueField`s with their timecode for Custom and One
+frame, readouts otherwise) and Duration on the right. Output Module has the preset's own group
+(`“ProRes 422 HQ”`: Format, If a file is there | Post-render, Cached frames), **Quality** (Profile,
+Compression, Look, Audio | Color space, or Display and View; only what applies to the format) and,
+for image sequences, **Numbering** (Start number or Use the frame numbers | Digits). OK writes
+every change as one undoable edit; Cancel writes nothing.
+
+When an output's file exists under Ask first, the job reads **Waiting for your OK**, and Start
+(in the ⋯ menu) or Start All asks once with `kit::confirm` (`exportReplaceConfirm`): "Replace
+SC020.mov?" with Replace (Danger), Choose another name and Cancel (the default). The ⋯ menu holds
+the verbs that fit the state (Start; Pause and Stop; Resume and Stop; Stop; Render again),
+**Details…**, Duplicate, Remove, Move up, Move down, Copy as bloom-cli command and Copy as Python.
+**Details…** (`exportJobDetailsDialog`) holds the result sentence, the plain verification lines, a
+Show in folder per saved output and the log, with **Copy details** for bug reports; raw codes and
+the host's own wording appear only in what Copy details copies.
 
 ## Status bar, context bar and tools
 
