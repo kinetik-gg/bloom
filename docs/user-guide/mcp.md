@@ -117,6 +117,9 @@ The client's working directory resolves relative project and output paths. The s
 process-local session at startup. Transactions change that session's command history; they do not
 automatically save the `.bloom` document. Render/export publication writes the requested outputs.
 
+The running application can also host the server itself; start it and manage its port and token
+from the [MCP Server panel](mcp-server-panel.md).
+
 ## Connect and discover
 
 Send `initialize` with `protocolVersion`, `capabilities` and `clientInfo`, then send the

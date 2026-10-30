@@ -53,6 +53,11 @@ class WorkspaceHost final : public QFrame {
                               std::string_view assetsEditorId, std::string_view timelineEditorId,
                               std::string_view propertiesEditorId, std::size_t activeIndex = 0);
 
+    // Makes the area that hosts `editorId` active, or splits a new one off the active area to host
+    // it. Restores a maximized area first. Returns nullptr when nothing could be shown.
+    EditorArea* revealEditor(std::string_view editorId, Qt::Orientation orientation = Qt::Vertical,
+                             double newAreaFraction = 0.4);
+
     EditorArea* splitActiveArea(Qt::Orientation orientation);
     EditorArea* splitArea(EditorArea& area, Qt::Orientation orientation,
                           std::string initialEditorId = {}, double newAreaFraction = 0.5);

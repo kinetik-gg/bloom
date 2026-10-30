@@ -28,6 +28,7 @@ struct ApplicationPreferences;
 class AccelerationStatusProvider;
 class CachePurgeController;
 class CompositionPreviewController;
+class McpServerAdapter;
 class CompositionSession;
 class EditorRegistry;
 class FrameExportController;
@@ -108,6 +109,10 @@ class MainWindow final : public QMainWindow {
     // ADR 0031: the fixed contextual bar under the menu bar, and Window > Context Bar.
     [[nodiscard]] ContextBar* contextBar() const noexcept { return contextBar_; }
     [[nodiscard]] QAction* contextBarAction() const noexcept { return contextBarAction_; }
+    // The application's MCP server adapter (ADR 0034): enables Window > MCP Server and the status
+    // bar indicator, and reveals the MCP Server panel when either asks. Borrowed; null removes it.
+    void setMcpServer(McpServerAdapter* adapter);
+    [[nodiscard]] QAction* mcpServerAction() const noexcept { return mcpServerAction_; }
     // Test-only seam (same terms as the other test/diagnostic accessors): applies committed
     // preferences exactly as the Preferences dialog's approved path does, without presenting the
     // modal dialog, so a test can assert the View action mirror and the open-editor propagation.
@@ -131,6 +136,7 @@ class MainWindow final : public QMainWindow {
     void createFileMenu(QMenu& fileMenu);
     void createCompositionMenu(QMenu& compositionMenu);
     void createViewMenu(QMenu& viewMenu);
+    void revealMcpServerPanel();
     void createHelpMenu(QMenu& helpMenu);
     // Edit | Purge… command bodies. Neither touches project truth, the command stack, or undo.
     void purgePreviewCache();
@@ -185,6 +191,8 @@ class MainWindow final : public QMainWindow {
     WindowStatusBar* statusStrip_ = nullptr;
     ContextBar* contextBar_ = nullptr;
     QAction* contextBarAction_ = nullptr;
+    QAction* mcpServerAction_ = nullptr;
+    QPointer<McpServerAdapter> mcpServer_;
     WorkspaceHost* workspaceHost_ = nullptr;
     QWidget* readOnlyPlaceholderPage_ = nullptr;
     QLabel* readOnlyPlaceholderFileNameLabel_ = nullptr;

@@ -20,6 +20,7 @@ struct MediaDiskCacheStatistics;
 } // namespace bloom::media::cache
 
 namespace bloom::ui::kit {
+class KButton;
 class KLabel;
 }
 
@@ -27,6 +28,7 @@ namespace bloom::ui {
 
 class CompositionPreviewController;
 class CompositionSession;
+class McpServerAdapter;
 class ViewerEditor;
 struct CompositionPreviewState;
 
@@ -118,6 +120,12 @@ class WindowStatusBar final : public kit::KSurface {
         return memoryReserveBytes_;
     }
 
+    // The MCP indicator (ADR 0034): shown only while the server runs or has failed, and a click asks
+    // the adapter to reveal the MCP Server panel. Null removes it.
+    void setMcpServer(McpServerAdapter* adapter);
+    [[nodiscard]] QString mcpIndicatorTextForTest() const;
+    [[nodiscard]] bool mcpIndicatorVisibleForTest() const;
+
     // Test/diagnostic surface only, mirroring ViewerEditor's own *ForTest precedent.
     [[nodiscard]] QString colorChipTextForTest() const;
     [[nodiscard]] QString previewStateTextForTest() const;
@@ -140,6 +148,7 @@ class WindowStatusBar final : public kit::KSurface {
     void refreshProbeCell(const ProbeReadout& readout);
     void refreshMediaDiskCacheCell();
     void refreshMessage();
+    void refreshMcpIndicator();
     // Observes the application-owned worker snapshot. This surface never samples the OS.
     void observeMemoryBudget();
     void reportMemoryState(const runtime::MemoryBudgetState& state);
@@ -168,6 +177,8 @@ class WindowStatusBar final : public kit::KSurface {
     QLabel* mediaDiskCacheCell_ = nullptr;
     QLabel* message_ = nullptr;
     QToolButton* exportCancel_ = nullptr;
+    kit::KButton* mcpIndicator_ = nullptr;
+    QPointer<McpServerAdapter> mcpServer_;
     QLabel* version_ = nullptr;
     QLabel* probe_ = nullptr;
     QTimer* transientTimer_ = nullptr;

@@ -1,4 +1,5 @@
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/mcp_server_editor.hpp>
 
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/node_editor.hpp>
@@ -58,7 +59,8 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
                                RamPreviewController* const ramPreview, ProjectHost* projectHost,
                                const ViewerGpuDependencies* const gpuDependencies,
                                std::shared_ptr<host::GpuExportProvider> gpuExportProvider,
-                               scripting::LiveSessionHost* const liveSession) {
+                               scripting::LiveSessionHost* const liveSession,
+                               McpServerAdapter* const mcpServer) {
     std::shared_ptr<ScriptPanelRuntime> script;
 #ifdef BLOOM_BUILD_PYTHON
     if (projectHost) {
@@ -109,7 +111,8 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
                "bloom.properties", "Properties",
                [&session](QWidget* parent) { return new PropertiesEditor(session, parent); }) &&
            addEditor("bloom.script", "Script",
-                     [script](QWidget* parent) { return new ScriptPanel(script, parent); });
+                     [script](QWidget* parent) { return new ScriptPanel(script, parent); }) &&
+           registerMcpServerEditor(registry, mcpServer);
 }
 
 } // namespace bloom::ui

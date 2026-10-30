@@ -465,6 +465,10 @@ target_sources(
         preferences_window_sounds.cpp
         frameless_window_support.cpp
         jobs_editor.cpp
+        mcp_server_adapter.cpp
+        mcp_server_editor.cpp
+        mcp_server_service_port.cpp
+        mcp_server_text.cpp
         licenses_window.cpp
         main_window.cpp
         assets_editor.cpp
@@ -627,6 +631,10 @@ target_sources(
             include/bloom/ui/h264_encoder_service.hpp
             include/bloom/ui/frameless_window_support.hpp
             include/bloom/ui/jobs_editor.hpp
+            include/bloom/ui/mcp_server_adapter.hpp
+            include/bloom/ui/mcp_server_editor.hpp
+            include/bloom/ui/mcp_server_service_port.hpp
+            include/bloom/ui/mcp_server_text.hpp
             include/bloom/ui/interaction_sounds.hpp
             include/bloom/ui/licenses_window.hpp
             include/bloom/ui/system_notifier.hpp
@@ -699,6 +707,7 @@ target_link_libraries(
         bloom_media_audio
         Qt6::Widgets
 )
+target_link_libraries(bloom_ui PUBLIC bloom_mcp)
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache)
 # ADR 0034: the live session adapter feeds scripting::LiveSessionHost.
 target_link_libraries(bloom_ui PUBLIC bloom_scripting)

@@ -522,6 +522,13 @@ QWidget* PreferencesWindow::buildGeneralPage() {
         loop->setChecked(draft_.loopPlayback);
     });
 
+    // The MCP server's port and auto-start live in the MCP Server panel only; a link, not a copy.
+    auto* mcpLink = new kit::KButton(tr("MCP server settings are in the MCP Server panel"), content);
+    mcpLink->setObjectName(QStringLiteral("preferencesMcpLink"));
+    mcpLink->setVariant(kit::KButton::Variant::Secondary);
+    connect(mcpLink, &QAbstractButton::clicked, this, &PreferencesWindow::mcpSettingsRequested);
+    layout->addWidget(mcpLink, 0, Qt::AlignLeft);
+
     layout->addStretch(1);
     return wrapPage(content, QStringLiteral("preferencesGeneralPage"));
 }

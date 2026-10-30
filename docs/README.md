@@ -65,6 +65,7 @@ gate, so production service-backed RAM fill defaults to width one. See the
   and distributing layers.
 - [Scripting Bloom with Python](user-guide/python.md) — Python package, transactions and embedding.
 - [Using Bloom from an agent](user-guide/mcp.md) — stdio MCP tools and request limits.
+- [MCP Server panel](user-guide/mcp-server-panel.md) — start or stop the in-app MCP server, port, token and clients.
 - [Headless scripting](user-guide/scripting.md) — `bloom-cli`, JSON transactions, and headless
   frame/range rendering.
 

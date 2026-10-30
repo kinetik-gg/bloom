@@ -58,6 +58,8 @@ class PreferencesWindow final : public kit::KDialog {
     // The Sounds page's "Play test sound": carries the edited (unsaved) values so the volume the
     // artist hears is the one they are choosing.
     void soundTestRequested(const ApplicationPreferences& draft);
+    // The General page's link to the MCP Server panel, where the port and auto-start are edited.
+    void mcpSettingsRequested();
 
   protected:
     // The Performance page follows the cached acceleration status only while the dialog is

@@ -1223,6 +1223,31 @@ selector's arrow, Page and Home/End keys move its active handle, Tab moves to th
 before focus leaves, and handles that sit on each other are told apart by the first move's
 direction. Preview rendering runs independently of these control readbacks.
 
+## MCP Server panel
+
+Editor `bloom.mcp-server`, "MCP Server" (ADR 0034, section 7). It holds no server state: it reads the
+snapshot through the application's `McpServerAdapter` (`changed()`), issues commands through it and
+never pumps. It is built from kit parts only: `KSection` bodies with `KPropertyRow` rows, `KButton`
+(Primary for Start, Secondary otherwise), `KValueField` in integer mode, `KSwitch` with a
+`KCheckLabel`, `KMenuButton`, `KRow` for the clients list and `kit::confirm` for Regenerate.
+Inline reasons use `KLabel` in the Error tone under the control they belong to; nothing is disabled
+without its reason in the tooltip and under the control.
+
+| Object name | Part |
+| --- | --- |
+| `mcpServerEditor` | the panel |
+| `mcpServerSection`, `mcpAccessSection`, `mcpClientsSection`, `mcpActivitySection` | `KSection`s |
+| `mcpStatus`, `mcpStartStopButton`, `mcpStartReason` | status line, the one Start/Stop button, its reason |
+| `mcpPortField`, `mcpPortReason` | port field (0..999999 so out-of-range values get `validateMcpPort`'s reason) and its inline reason |
+| `mcpAutoStartSwitch`, `mcpAutoStartLabel` | Start when Bloom opens |
+| `mcpToken`, `mcpTokenRevealButton`, `mcpTokenCopyButton`, `mcpTokenRegenerateButton`, `mcpTokenReason`, `mcpRevealTimer` | token row; the reveal timer is 30 s |
+| `mcpCopyConfigButton`, `mcpCopyConfigMenu`, `mcpCopyConfig_<kind>_<token|placeholder>` | copy client config, four kinds by two disclosures |
+| `mcpClientsList`, `mcpClientsHeader`, `mcpClientRow`, `mcpClientName`, `mcpClientVersion`, `mcpClientSince`, `mcpClientLastActivity`, `mcpClientInFlight`, `mcpClientLastTool`, `mcpNoClients`, `mcpProjectLine` | connected clients |
+| `mcpActivityList` | activity, appended with `activity(afterId)` |
+| `windowMcpServerAction`, `windowStatusBarMcp`, `preferencesMcpLink` | Window menu action, status bar indicator (shown only while running or failed), Preferences link |
+
+Narrow panels hide the clients columns in this order: last tool, in flight, version.
+
 ## Text fields
 
 `KTextField` is the kit's one text field: a `Field` well in the control body with `Spacing::S`

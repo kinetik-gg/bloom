@@ -417,6 +417,29 @@ EditorArea* WorkspaceHost::splitActiveArea(Qt::Orientation orientation) {
     return splitArea(*activeArea_, orientation, activeArea_->editorId());
 }
 
+EditorArea* WorkspaceHost::revealEditor(const std::string_view editorId,
+                                        const Qt::Orientation orientation,
+                                        const double newAreaFraction) {
+    if (editorId.empty() || surfaceRetirementGate_.isPending())
+        return nullptr;
+    if (maximizedArea_ != nullptr) {
+        restoreMaximizedArea();
+        emit maximizeStateChanged(false);
+    }
+    for (auto* area : findChildren<EditorArea*>()) {
+        if (area->editorId() == editorId) {
+            setActiveArea(area);
+            return area;
+        }
+    }
+    if (activeArea_ == nullptr)
+        return nullptr;
+    auto* created = splitArea(*activeArea_, orientation, std::string(editorId), newAreaFraction);
+    if (created != nullptr)
+        setActiveArea(created);
+    return created;
+}
+
 EditorArea* WorkspaceHost::splitArea(EditorArea& area, Qt::Orientation orientation,
                                      std::string initialEditorId, double newAreaFraction) {
     if (isAreaMaximized() || areaCount() >= maximumAreaCount || !containsArea(rootWidget_, &area)) {

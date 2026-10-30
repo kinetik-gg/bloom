@@ -7,6 +7,7 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dialog_prompts.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/mcp_server_adapter.hpp>
 #include <bloom/ui/context_bar.hpp>
 #include <bloom/ui/layer_alignment_actions.hpp>
 #include <bloom/ui/preferences_aware.hpp>
@@ -746,6 +747,13 @@ void MainWindow::showPreferences() {
                 emit preferencesChanged();
             });
     connect(&dialog, &PreferencesWindow::soundTestRequested, this, &MainWindow::soundTestRequested);
+    connect(&dialog, &PreferencesWindow::mcpSettingsRequested, this, [this, &dialog] {
+        dialog.reject();
+        if (mcpServer_ != nullptr)
+            mcpServer_->requestReveal();
+        else
+            statusStrip_->showTransientMessage(tr("The MCP server is not available in this build"));
+    });
     dialog.exec();
 }
 
@@ -990,6 +998,11 @@ void MainWindow::createWorkspaceActions() {
             [this] { workspaceHost_->toggleMaximizeActiveArea(); });
 
     windowMenu_->addSeparator();
+    mcpServerAction_ = windowMenu_->addAction(tr("MCP Server"));
+    mcpServerAction_->setObjectName(QStringLiteral("windowMcpServerAction"));
+    mcpServerAction_->setEnabled(false);
+    mcpServerAction_->setToolTip(tr("The MCP server is not available in this build"));
+    connect(mcpServerAction_, &QAction::triggered, this, &MainWindow::revealMcpServerPanel);
     contextBarAction_ = windowMenu_->addAction(tr("Context Bar"));
     contextBarAction_->setObjectName(QStringLiteral("windowContextBarAction"));
     contextBarAction_->setCheckable(true);
@@ -1011,6 +1024,28 @@ void MainWindow::createWorkspaceActions() {
     connect(workspaceHost_, &WorkspaceHost::activeAreaChanged, this,
             [this] { updateWorkspaceActions(); });
     updateWorkspaceActions();
+}
+
+void MainWindow::setMcpServer(McpServerAdapter* const adapter) {
+    if (mcpServer_ == adapter)
+        return;
+    if (mcpServer_ != nullptr)
+        disconnect(mcpServer_, nullptr, this, nullptr);
+    mcpServer_ = adapter;
+    if (adapter != nullptr)
+        connect(adapter, &McpServerAdapter::revealRequested, this,
+                &MainWindow::revealMcpServerPanel);
+    mcpServerAction_->setEnabled(adapter != nullptr);
+    mcpServerAction_->setToolTip(adapter != nullptr ? tr("Show the MCP Server panel")
+                                                    : tr("The MCP server is not available in this build"));
+    statusStrip_->setMcpServer(adapter);
+}
+
+void MainWindow::revealMcpServerPanel() {
+    if (workspaceHost_ == nullptr)
+        return;
+    if (workspaceHost_->revealEditor("bloom.mcp-server") == nullptr && statusStrip_ != nullptr)
+        statusStrip_->showTransientMessage(tr("The MCP Server panel could not be shown"));
 }
 
 void MainWindow::updateWorkspaceActions() {

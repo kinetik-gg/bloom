@@ -1,4 +1,8 @@
+#include <bloom/ui/mcp_server_text.hpp>
+
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/mcp_server_adapter.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <algorithm>
 #include <cmath>
@@ -265,6 +269,13 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     layout->addWidget(mediaDiskCacheCell_);
     layout->addWidget(probe_, 1);
     layout->addWidget(message_, 1);
+    mcpIndicator_ = new kit::KButton(this);
+    mcpIndicator_->setObjectName(QStringLiteral("windowStatusBarMcp"));
+    mcpIndicator_->setVariant(kit::KButton::Variant::Secondary);
+    mcpIndicator_->setControlSize(kit::KButton::ControlSize::Compact);
+    mcpIndicator_->setAccessibleName(tr("MCP server"));
+    mcpIndicator_->hide();
+    layout->addWidget(mcpIndicator_);
     exportCancel_ = new kit::KMenuButton(this);
     exportCancel_->setObjectName(QStringLiteral("windowStatusBarCancelExport"));
     exportCancel_->setText(tr("Cancel"));
@@ -667,5 +678,41 @@ bool WindowStatusBar::eventFilter(QObject* watched, QEvent* event) {
     }
     return KSurface::eventFilter(watched, event);
 }
+
+} // namespace bloom::ui
+
+namespace bloom::ui {
+
+void WindowStatusBar::setMcpServer(McpServerAdapter* const adapter) {
+    if (mcpServer_ == adapter)
+        return;
+    if (mcpServer_ != nullptr)
+        disconnect(mcpServer_, nullptr, this, nullptr);
+    disconnect(mcpIndicator_, nullptr, this, nullptr);
+    mcpServer_ = adapter;
+    if (adapter != nullptr) {
+        connect(adapter, &McpServerAdapter::changed, this, &WindowStatusBar::refreshMcpIndicator);
+        connect(mcpIndicator_, &QAbstractButton::clicked, adapter, &McpServerAdapter::requestReveal);
+    }
+    refreshMcpIndicator();
+}
+
+void WindowStatusBar::refreshMcpIndicator() {
+    const auto snapshot = mcpServer_ != nullptr ? mcpServer_->snapshot() : nullptr;
+    const bool running = snapshot && snapshot->state == mcp::McpServerState::Running;
+    const bool failed = snapshot && !running && snapshot->failure.has_value();
+    mcpIndicator_->setVisible(running || failed);
+    if (running) {
+        const auto port = snapshot->endpoint ? snapshot->endpoint->port : snapshot->preferences.port;
+        mcpIndicator_->setText(tr("MCP :%1").arg(port));
+        mcpIndicator_->setToolTip(mcppanel::statusText(*snapshot));
+    } else if (failed) {
+        mcpIndicator_->setText(tr("MCP failed"));
+        mcpIndicator_->setToolTip(mcppanel::statusText(*snapshot));
+    }
+}
+
+QString WindowStatusBar::mcpIndicatorTextForTest() const { return mcpIndicator_->text(); }
+bool WindowStatusBar::mcpIndicatorVisibleForTest() const { return !mcpIndicator_->isHidden(); }
 
 } // namespace bloom::ui

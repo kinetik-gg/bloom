@@ -25,6 +25,7 @@ class TaskScheduler;
 namespace bloom::ui {
 
 class CompositionPreviewController;
+class McpServerAdapter;
 class RamPreviewController;
 class CompositionSession;
 class ProjectHost;
@@ -77,6 +78,6 @@ class EditorRegistry final {
     CompositionPreviewController& previewController, RamPreviewController* ramPreview = nullptr,
     ProjectHost* projectHost = nullptr, const ViewerGpuDependencies* gpuDependencies = nullptr,
     std::shared_ptr<host::GpuExportProvider> gpuExportProvider = {},
-    scripting::LiveSessionHost* liveSession = nullptr);
+    scripting::LiveSessionHost* liveSession = nullptr, McpServerAdapter* mcpServer = nullptr);
 
 } // namespace bloom::ui

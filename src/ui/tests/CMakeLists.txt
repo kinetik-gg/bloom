@@ -2155,3 +2155,29 @@ target_link_libraries(bloom_layer_alignment_parity_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_layer_alignment_parity_test)
 bloom_add_test(NAME bloom.ui.layer-alignment-parity COMMAND bloom_layer_alignment_parity_test
                LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The MCP Server panel (ADR 0034, section 7) over a scripted port.
+add_executable(bloom_mcp_server_panel_test mcp_server_panel_tests.cpp)
+target_include_directories(bloom_mcp_server_panel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_mcp_server_panel_test PRIVATE bloom_ui bloom_mcp_testing bloom_runtime_compiler Qt6::Test)
+bloom_enable_warnings(bloom_mcp_server_panel_test)
+bloom_add_test(
+    NAME bloom.ui.mcp-server-panel
+    COMMAND bloom_mcp_server_panel_test
+    LABELS ui unit
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+)
+
+add_executable(bloom_mcp_panel_capture mcp_panel_capture.cpp)
+target_include_directories(bloom_mcp_panel_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_mcp_panel_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_mcp_panel_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_mcp_panel_capture)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.mcp_panel_capture.dpr${scale} COMMAND bloom_mcp_panel_capture)
+    set_tests_properties(bloom.ui.mcp_panel_capture.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;grammar" TIMEOUT 120)
+endforeach()
