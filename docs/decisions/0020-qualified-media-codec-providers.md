@@ -4,6 +4,16 @@ Status: proposed
 
 Date: 2026-08-25
 
+## Amendment: provider fallback chain on every platform (2026-10-31)
+
+[ADR 0035](0035-media-provider-fallback-chain.md) admits the FFmpeg worker on Linux, macOS and
+Windows and orders providers per platform: the platform media framework first (Media Foundation,
+VideoToolbox/AVFoundation), the bundled LGPL FFmpeg worker last (on Linux: VA-API, then software).
+Selection is per operation and degrades silently; the serving provider and every fallback are
+recorded as provenance. The "typed `Unavailable`" fallback for macOS and Windows below is
+superseded. Qualification stays per provider: a fallback never borrows the platform provider's
+evidence.
+
 ## Accepted MEDIA-K1 amendment: contract and supervised worker (2026-09-17)
 
 Owner decisions dated 2026-09-16 admit the general provider worker now. Linux's first real

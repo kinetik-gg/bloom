@@ -2,7 +2,7 @@
 
 Status: working research
 
-Updated: 2026-10-25
+Updated: 2026-10-31
 
 ## v0 implemented boundary
 
@@ -143,10 +143,47 @@ round-tripping, external codec processes, or a general proxy service. Files are 
 the closed sRGB/override rule in `color-management.md`, not by embedded profiles. The broader
 research below does not supersede this implemented boundary.
 
+## Media provider chain (ADR 0035, 2026-10-31)
+
+Each operating system orders its media providers; the bundled FFmpeg worker is the last provider
+everywhere, so no format FFmpeg serves is ever refused for the platform:
+
+| Platform | Chain |
+| --- | --- |
+| Windows | Media Foundation (slot; no provider yet, reports NotInstalled) → FFmpeg |
+| macOS | VideoToolbox/AVFoundation (`bloom-media-videotoolbox-worker`) → FFmpeg |
+| Linux | FFmpeg with VA-API (when hardware is requested) → FFmpeg software |
+
+`MediaProviderChainV1` (`provider_chain.hpp`) selects per operation -- decode or encode of one codec
+family, plus the container for encode -- using each provider's handshake declarations. A provider
+that is not installed, does not declare the operation, or fails it with a typed error other than
+Cancelled, Shutdown or SourceChanged is skipped silently. Encode selection happens in
+`EncodeSessionV1::begin()`: each candidate is a full launch/handshake/`EncodeBegin` attempt whose
+refusal reaps the worker before any frame is sent; the serving provider is then pinned. Decode asks
+the platform provider first and retires it for the source on its first failure, after which FFmpeg
+answers (the same sticky rule as the VA-API preview decoder). `MediaProviderProvenanceV1` records
+the serving provider and every fallback in `SequenceExportResultV1::mediaProvider`, in the export QC
+evidence (tool, version, pipeline and the ProRes implementation note follow the serving provider)
+and in `FrameDecodeProvenance`; it is diagnostics, never artist text. `PlatformNotSupported` is no
+longer produced.
+
+Worker generations sit beside the application: `libexec/bloom/media/<generation>/` on Linux,
+`Bloom.app/Contents/libexec/bloom/media/<generation>/` on macOS, and
+`<Bloom.exe dir>\media\<generation>\` on Windows, located from the executable the operating
+system reports, with the build-tree worker as the development fallback. A macOS or Windows
+developer build without an FFmpeg package builds no FFmpeg worker; Linux and qualified builds
+require it.
+
+Not done: a Media Foundation provider (Windows therefore has no H.264/HEVC encoder until a bundled
+software encoder lands), the Windows staged-artifact publication provider, mid-stream encode
+fallback, and VideoToolbox HEVC encode. The Windows and macOS branches are not compiled or run in
+Linux validation.
+
 ## FFmpeg dependency intake (2026-09-17)
 
-The Linux candidate is FFmpeg 8.1.2, selected from the maintained 8.1 release line for this
-intake. MEDIA-3 and MEDIA-4 consume its shared libraries exclusively in `bloom-media-worker`;
+FFmpeg 8.1.2 was selected from the maintained 8.1 release line for this intake, first for Linux
+and, since ADR 0035, for macOS and Windows too. MEDIA-3 and MEDIA-4 consume its shared libraries
+exclusively in `bloom-media-worker`;
 the desktop `bloom` target must not link or load `libav*`. The dependency review and worker
 implementation are separate qualification boundaries.
 
@@ -164,9 +201,11 @@ assembles it with NASM 2.16.03, a source-built, build-host-only tool installed o
 dependency prefix that is never linked or shipped.
 
 FFmpeg ProRes is a non-authorized preview/workflow capability only. It is not evidence of Apple
-authorization, certification, patent clearance, or delivery qualification. The Linux worker's
-eventual private runtime may use `$ORIGIN/../lib` rpath resolution for its own bundled shared
-libraries; the desktop binary receives no FFmpeg rpath. Source, license, security, and review
+authorization, certification, patent clearance, or delivery qualification. The worker resolves its
+own bundled shared libraries privately (Linux `$ORIGIN/lib`, macOS `@loader_path/lib` with
+`@rpath` install names, Windows DLLs beside the worker); the desktop binary receives no FFmpeg
+search path. VA-API is Linux-only; the macOS and Windows FFmpeg builds omit the Linux x86-64
+OpenH264 link-time stub, and Windows builds use FFmpeg's MSVC toolchain from an MSYS2 shell. Source, license, security, and review
 records remain under `dependencies/licenses/ffmpeg/` and the lock is the authority for the exact
 configuration.
 
@@ -736,8 +775,8 @@ remains alive. Bootstrap/library verification and session construction hold no U
 refresh generations reject construction that finishes after invalidation. Unbound headless sessions
 release on their calling worker.
 The current qualification scope is Linux. macOS verifies video sources through the same
-identity memo before each path-based worker call; Windows retains the explicit worker unavailable
-fallback and verifies through the same memo. Neither is described as qualified by this Linux implementation.
+identity memo before each path-based worker call; Windows runs the FFmpeg worker through the
+Windows supervisor and verifies through the same memo. Neither is described as qualified by this Linux implementation.
 
 **Controls.** `media/disk-cache-enabled` (default on), `media/disk-cache-budget-bytes`, and
 `media/disk-cache-directory` in QSettings; **Edit → Purge… → Purge media cache** clears every entry
@@ -892,7 +931,13 @@ not a filesystem/network sandbox or authorization to launch untrusted executable
 media-file access capabilities and additional sandbox policy belong to real-provider intake.
 Poll-based pipe I/O shares a monotonic deadline. Cancellation sends a message, waits its grace,
 sends SIGTERM, waits again, then SIGKILL and reaps. No global host signal handler or detached
-watchdog thread is installed. macOS/Windows return typed process `Unavailable`.
+watchdog thread is installed. macOS uses the same POSIX design without kernel rlimits. Windows
+(ADR 0035) uses byte-mode named pipes with overlapped I/O under the same deadline and cancellation,
+a gate pipe whose inherited handle the child reads from `BLOOM_PROCESS_GATE`, an explicit inherited
+handle list (its pipe ends, the gate and `NUL` for stderr), and a job object with the
+committed-memory limit, one active process and kill-on-close; stop is message, grace, closed stdin,
+grace, `TerminateJobObject`. Windows refuses the descriptor-based source snapshot and streamed
+staged output, so the host takes its path and chunk-copy routes there.
 
 The fake build identity hashes the boundary/provider source generation and compiler configuration;
 its dependency identity separately hashes the reviewed lock bytes at configure time.
@@ -915,7 +960,10 @@ The synthetic test worker needs no codec library and is not installed. MEDIA-3 p
 reviewed shared FFmpeg closure in its worker generation's private directory. The desktop must
 continue to pass `desktop-no-ffmpeg`; loader paths and codec-bearing worker targets must never
 be propagated through `bloom_media_provider`.
-macOS and Windows packaging policies will be qualified with their process/provider backends.
+macOS installs `bloom-media-worker` and its `lib/` dylibs (unmodified, `@rpath` install names,
+worker rpath `@loader_path/lib`) and `bloom-media-videotoolbox-worker` inside
+`Bloom.app/Contents/libexec/bloom/media/`; Windows installs the worker with its FFmpeg DLLs beside
+it under `bin\media\ffmpeg-v1\`, never beside `Bloom.exe` (ADR 0035).
 
 ### Internal Boundary
 
