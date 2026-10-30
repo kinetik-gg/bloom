@@ -81,32 +81,44 @@ GpuProofOutcome testNativeHeadlessQueueVideoDisplay(Expectations& expectations,
             return GpuProofOutcome::Skipped;
         }
     }
-    auto session = buildSolidSession(expectations);
+    // 1280x720: DNxHR needs a broadcast-sized picture. ProRes in MOV carries every colour tag;
+    // DNxHR in MXF carries only the matrix, and its ColourTags check must expect exactly that.
+    auto session = buildSolidSession(expectations, 1280, 720);
     TempDirectory directory;
     expectations.expect(session != nullptr && directory.isValid(),
                         "headless queue: the session and temp directory exist");
     if (session == nullptr || !directory.isValid())
         return GpuProofOutcome::Ran;
-    const auto destination = bloom::core::fileUriFromAbsolutePath(directory.path() / "queue.mov");
-    expectations.expect(destination.has_value(), "headless queue: the destination is a file URI");
-    if (!destination)
+    const auto outputJson = [&](const std::string_view format, const std::string_view profile,
+                                const std::string_view file) -> std::optional<std::string> {
+        const auto destination = bloom::core::fileUriFromAbsolutePath(directory.path() / file);
+        if (!destination)
+            return std::nullopt;
+        return std::string(R"({"preset":"","settings":{"format":")") + std::string(format) +
+               R"(","codecProfile":")" + std::string(profile) +
+               R"(","compression":"","outputColorSpace":"","display":"","view":"",)"
+               R"("bakeLook":true,"includeAudio":false,"useCachedFrames":false,)"
+               R"("audioSampleRate":48000,"encoder":"automatic",)"
+               R"("naming":{"framePadding":4,"pattern":"<base>.####.<ext>"}},)"
+               R"("destination":{"portability":"external","path":")" +
+               *destination +
+               R"(","overwrite":"replace"},"enabled":true,"importIntoAssets":false})";
+    };
+    const auto prores = outputJson("prores-mov", "hq", "queue.mov");
+    const auto dnxhr = outputJson("dnxhr-mxf", "hqx", "queue.mxf");
+    expectations.expect(prores && dnxhr, "headless queue: the destinations are file URIs");
+    if (!prores || !dnxhr)
         return GpuProofOutcome::Ran;
-    const auto output =
-        R"({"preset":"","settings":{"format":"prores-mov","codecProfile":"hq","compression":"",)"
-        R"("outputColorSpace":"","display":"","view":"","bakeLook":true,"includeAudio":false,)"
-        R"("useCachedFrames":false,"audioSampleRate":48000,"encoder":"automatic",)"
-        R"("naming":{"framePadding":4,"pattern":"<base>.####.<ext>"}},)"
-        R"("destination":{"portability":"external","path":")" +
-        *destination + R"(","overwrite":"replace"},"enabled":true,"importIntoAssets":false})";
     const auto composition = session->snapshot().project().compositions().front().id();
     const auto added = session->executeJsonOperation(
-        "bloom.export.add-job", {{"composition", scripting::StableId{composition.value()}},
-                                 {"name", "queue"},
-                                 {"range", "composition"},
-                                 {"outputs", scripting::ValueArray{scripting::Value(output)}}});
+        "bloom.export.add-job",
+        {{"composition", scripting::StableId{composition.value()}},
+         {"name", "queue"},
+         {"range", "composition"},
+         {"outputs", scripting::ValueArray{scripting::Value(*prores), scripting::Value(*dnxhr)}}});
     const auto job = added.succeeded() ? added.command->outputId<document::ExportJobId>("exportJob")
                                        : std::nullopt;
-    expectations.expect(job.has_value(), "headless queue: the ProRes job is added");
+    expectations.expect(job.has_value(), "headless queue: the ProRes and DNxHR job is added");
     if (!job)
         return GpuProofOutcome::Ran;
 
@@ -122,28 +134,39 @@ GpuProofOutcome testNativeHeadlessQueueVideoDisplay(Expectations& expectations,
     }
     expectations.expect(framesBeforeBootstrap == 0,
                         "headless queue: no frame runs before the provider bootstrap completes");
-    expectations.expect(finished.has_value() && finished->state == host::ExportJobState::Done &&
-                            finished->outputs.size() == 1 &&
-                            finished->outputs.front().verification.has_value(),
-                        "headless queue: the ProRes job finishes and is verified");
-    if (!finished || finished->outputs.empty() || !finished->outputs.front().verification)
+    expectations.expect(
+        finished.has_value() && finished->state == host::ExportJobState::Done &&
+            finished->outputs.size() == 2,
+        "headless queue: the ProRes and DNxHR outputs finish and pass verification");
+    if (!finished)
         return GpuProofOutcome::Ran;
-    const auto& provenance = finished->outputs.front().verification->provenance;
-    // Every frame of the composition range is evaluated on the GPU and its display transform runs
-    // in the GPU combined readback; none takes the CPU reference path.
     const auto frames = finished->resolvedRange
                             ? finished->resolvedRange->last - finished->resolvedRange->first + 1
                             : 0;
-    expectations.expect(frames > 0 && provenance.gpuFrames == frames &&
-                            provenance.cpuReferenceFrames == 0,
-                        "headless queue: every frame is evaluated on the GPU");
-    expectations.expect(provenance.gpuDisplayFrames == frames && provenance.cpuDisplayFrames == 0,
-                        "headless queue: every display transform runs on the GPU");
-    if (provenance.cpuDisplayFrames != 0 || provenance.gpuFrames != frames)
-        std::cerr << "headless queue provenance: frames=" << frames
-                  << " gpuFrames=" << provenance.gpuFrames
-                  << " cpuReferenceFrames=" << provenance.cpuReferenceFrames
-                  << " gpuDisplayFrames=" << provenance.gpuDisplayFrames
-                  << " cpuDisplayFrames=" << provenance.cpuDisplayFrames << '\n';
+    for (const auto& output : finished->outputs) {
+        expectations.expect(
+            output.verification.has_value() &&
+                output.verification->overall == host::ExportCheckOutcome::Passed,
+            "headless queue: each output passes verification, colour tags included");
+        if (!output.verification)
+            continue;
+        const auto& provenance = output.verification->provenance;
+        // Every frame is evaluated on the GPU and its display transform runs in the GPU combined
+        // readback; none takes the CPU reference path.
+        expectations.expect(frames > 0 && provenance.gpuFrames == frames &&
+                                provenance.cpuReferenceFrames == 0,
+                            "headless queue: every frame is evaluated on the GPU");
+        expectations.expect(provenance.gpuDisplayFrames == frames &&
+                                provenance.cpuDisplayFrames == 0,
+                            "headless queue: every display transform runs on the GPU");
+        if (provenance.cpuDisplayFrames != 0 || provenance.gpuFrames != frames ||
+            output.verification->overall != host::ExportCheckOutcome::Passed)
+            std::cerr << "headless queue output " << output.record.settings.codecProfile
+                      << ": overall=" << static_cast<int>(output.verification->overall)
+                      << " frames=" << frames << " gpuFrames=" << provenance.gpuFrames
+                      << " cpuReferenceFrames=" << provenance.cpuReferenceFrames
+                      << " gpuDisplayFrames=" << provenance.gpuDisplayFrames
+                      << " cpuDisplayFrames=" << provenance.cpuDisplayFrames << '\n';
+    }
     return GpuProofOutcome::Ran;
 }

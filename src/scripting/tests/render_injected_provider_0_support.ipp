@@ -171,8 +171,10 @@ optionsFor(const std::filesystem::path& loader) {
 
 // A real session whose composition is inside the currently prepared-GPU subset (a translated solid
 // layer), so Render::run genuinely evaluates on the device when one is available.
-[[nodiscard]] std::unique_ptr<scripting::Session> buildSolidSession(Expectations& expectations) {
-    const auto format = document::CompositionFormat::create(32, 32);
+[[nodiscard]] std::unique_ptr<scripting::Session>
+buildSolidSession(Expectations& expectations, const std::uint32_t width = 32,
+                  const std::uint32_t height = 32) {
+    const auto format = document::CompositionFormat::create(width, height);
     expectations.expect(format.has_value(), "native render: the composition format is valid");
     if (!format.has_value()) {
         return nullptr;
