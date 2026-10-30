@@ -5,11 +5,11 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
-#include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/platform/user_data_directory.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/session.hpp>
@@ -39,7 +39,10 @@ struct HeadlessExportQueue::State {
     std::optional<ExportCalls> calls;
 };
 
-HeadlessExportQueue::HeadlessExportQueue(Session& session) : state_(std::make_unique<State>()) {
+HeadlessExportQueue::HeadlessExportQueue(
+    Session& session, std::shared_ptr<runtime::GpuOcioContextResolver> ocioResolver,
+    std::filesystem::path vulkanLoader)
+    : state_(std::make_unique<State>()) {
     auto& s = *state_;
     const auto projectFolder = session.displayPath().empty()
                                    ? std::filesystem::path{}
@@ -47,7 +50,10 @@ HeadlessExportQueue::HeadlessExportQueue(Session& session) : state_(std::make_un
     if (!projectFolder.empty())
         s.media.setAssetBaseDirectory(projectFolder);
     runtime::GpuProcessFrameEvaluatorOptions gpuOptions;
-    gpuOptions.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
+    // The packaging definitions live on the executable, not on this library: a resolver made here
+    // would always be null and leave every display-referred output on the CPU reference path.
+    gpuOptions.ocioResolver = std::move(ocioResolver);
+    gpuOptions.loaderPath = std::move(vulkanLoader);
     gpuOptions.mediaContextProvider = [state = state_.get()] {
         return runtime::GpuSceneMediaContext::fromEvaluator(state->media);
     };
