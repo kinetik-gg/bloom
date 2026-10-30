@@ -1,11 +1,22 @@
 // #399: a presentation edit -- card position, width and collapse, a group frame, a layer's name and
 // label color, the composition and project names -- compiles to the same plan content, and the
 // operation cache answers every operation of the next frame without evaluating anything.
+[[nodiscard]] document::Project presentationProject() {
+    auto options = singleLayerOptions();
+    options.format = requireValue(document::CompositionFormat::create(4, 2), "layout extent");
+    auto project = makeProject(options);
+    require(project.findComposition(kCompositionId)
+                ->parameters()
+                .setSource(kFirstPosition, document::ConstantValueSource{document::Vec2d{2, 1}}),
+            "center the layer");
+    return project;
+}
+
 void testPresentationEditKeepsPlanAndOperationCache(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     require(runtime::registerBuiltInNodeDefinitions(registry), "presentation built-ins");
     registry.freeze();
-    document::Document document(muteProject());
+    document::Document document(presentationProject());
     const runtime::SnapshotCompiler compiler(registry);
     const auto before = document.snapshot();
     const auto first = compiler.compile({before, kCompositionId}, runtime::CancellationToken{});
@@ -72,9 +83,15 @@ void testPresentationEditKeepsPlanAndOperationCache(Expectations& expectations) 
                         "a mute changes the evaluation inputs");
     const auto mutedPlan =
         compiler.compile({*muted.snapshot, kCompositionId}, runtime::CancellationToken{});
-    runtime::OperationCacheStatistics mutedStatistics;
-    const auto mutedFrame = evaluator.evaluate(
-        mutedPlan.plan, request, runtime::CancellationToken{}, {}, nullptr, &mutedStatistics);
-    expectations.expect(mutedFrame.frame() && mutedStatistics.misses > 0,
-                        "the muted frame is evaluated again");
+    expectations.expect(mutedPlan.plan != nullptr && !(*mutedPlan.plan == *first.plan),
+                        "a mute compiles a different plan");
+    auto mutedRequest = request;
+    if (mutedPlan.plan)
+        mutedRequest.output = mutedPlan.plan->output();
+    const auto mutedFrame =
+        evaluator.evaluate(mutedPlan.plan, mutedRequest, runtime::CancellationToken{});
+    expectations.expect(mutedFrame.frame() && warm.frame() &&
+                            !std::ranges::equal(warm.frame()->processImage().pixels(),
+                                                mutedFrame.frame()->processImage().pixels()),
+                        "the muted frame is not served from the pre-mute cache");
 }

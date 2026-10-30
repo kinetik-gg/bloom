@@ -108,8 +108,9 @@ void testClassification(TestContext& test) {
     }),
                 "a stack entry is an evaluation input");
 
-    test.expect(nodeMuted(NodeLayout{{kFirstLayerNodeId, NodeLayoutRecord{.muted = true}}},
-                          kFirstLayerNodeId) &&
+    NodeLayoutRecord mutedRecord;
+    mutedRecord.muted = true;
+    test.expect(nodeMuted(NodeLayout{{kFirstLayerNodeId, mutedRecord}}, kFirstLayerNodeId) &&
                     !nodeMuted(NodeLayout{}, kFirstLayerNodeId),
                 "nodeMuted reads the one evaluated layout field");
 }
@@ -208,6 +209,8 @@ void testEvaluationCommands(TestContext& test) {
     expectAffecting(test, fixture,
                     fixture.run<SetLayerEnabled>(kCompositionId, kFirstLayerId, false),
                     "disabling a layer invalidates");
+    // Disabling also mutes the layer's card, so restore it before muting it on its own.
+    test.expect(fixture.stack.undo().changed(), "the layer is enabled again");
     expectAffecting(test, fixture,
                     fixture.run<SetNodeMuted>(kCompositionId, kFirstLayerNodeId, true),
                     "muting a node invalidates");

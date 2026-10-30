@@ -58,7 +58,7 @@ void testPresentationEditsRetainEvaluationWork(Expectations& expectations) {
     const auto invocationsBefore = invocationCount.load();
     const auto compilesBefore = planCache->statistics().compiles;
     const auto cacheSizeBefore = controller.frameCache().size();
-    const auto retained = [&](const std::string_view what) {
+    const auto retained = [&](const std::string& what) {
         expectations.expect(session.evaluationSnapshot().revision() == evalRevision, what);
         expectations.expect(invocationCount.load() == invocationsBefore &&
                                 controller.state().frame == frameBefore &&
