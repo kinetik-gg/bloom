@@ -324,6 +324,24 @@ document::ExportDestination transientDestination(const std::string& path, yyjson
     return destination;
 }
 
+void McpServerCore::State::retire(RetiredTransient job) {
+    const std::lock_guard lock(retiredMutex);
+    std::erase_if(retired, [&](const RetiredTransient& entry) {
+        return entry.generation != job.generation || entry.view.id == job.view.id;
+    });
+    retired.push_back(std::move(job));
+    while (retired.size() > kRetiredTransientJobs)
+        retired.pop_front();
+}
+
+std::vector<McpServerCore::State::RetiredTransient>
+McpServerCore::State::retiredJobs(const std::uint64_t generation) {
+    const std::lock_guard lock(retiredMutex);
+    std::erase_if(retired,
+                  [&](const RetiredTransient& entry) { return entry.generation != generation; });
+    return {retired.begin(), retired.end()};
+}
+
 TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                                 host::ExportTransientJobRequest request) {
     const auto& stop = call.control.stop;
@@ -395,6 +413,8 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                     if (queue == nullptr || current != generation)
                         return;
                     auto batch = queue->log(job, 0);
+                    // Read after the call returns (export.status, export.log, export.wait).
+                    core.retire({generation, *view, batch});
                     log = std::move(batch.entries);
                     if (log.size() > kTransientLogEntries)
                         log.erase(log.begin(),
@@ -557,7 +577,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
             throw InvalidInput("format is cli-json or python");
         onOwner(
             core,
-            [&](host::ExportQueueService* queue, std::uint64_t) {
+            [&](host::ExportQueueService* queue, const std::uint64_t generation) {
                 if (queue == nullptr) {
                     missing = true;
                     return;
@@ -587,6 +607,11 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                     for (const auto& job : snapshot->jobs)
                         out.append(jobs, jobValue(out, job));
                     out.set(result, "jobs", jobs);
+                    auto* retired = out.array();
+                    for (const auto& job : core.retiredJobs(generation))
+                        if (!findJob(*snapshot, job.view.id))
+                            out.append(retired, jobValue(out, job.view));
+                    out.set(result, "recentTransientJobs", retired);
                     auto* commands = out.object();
                     out.set(
                         commands, "startAll",
@@ -633,7 +658,19 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                     break;
                 }
                 case McpTool::ExportLog: {
-                    const auto batch = queue->log(jobArgument(), after);
+                    const auto job = jobArgument();
+                    auto batch = queue->log(job, after);
+                    // A finished transient job the queue already retired.
+                    if (!findJob(*queue->snapshot(), job))
+                        for (auto& retired : core.retiredJobs(generation))
+                            if (retired.view.id == job) {
+                                batch = std::move(retired.log);
+                                batch.gap = batch.gap && !batch.entries.empty() &&
+                                            after + 1 < batch.entries.front().sequence;
+                                std::erase_if(batch.entries, [&](const auto& entry) {
+                                    return entry.sequence <= after;
+                                });
+                            }
                     out.set(result, "gap", out.boolean(batch.gap));
                     out.set(result, "lastSequence", out.number(batch.lastSequence));
                     auto* entries = logEntries(out, batch.entries);
@@ -698,7 +735,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
         std::uint64_t revision = 0;
         onOwner(
             core,
-            [&](host::ExportQueueService* queue, std::uint64_t) {
+            [&](host::ExportQueueService* queue, const std::uint64_t generation) {
                 if (queue == nullptr) {
                     missing = true;
                     return;
@@ -709,6 +746,10 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                 revision = snapshot->revision;
                 if (job) {
                     view = findJob(*snapshot, *job);
+                    if (!view)
+                        for (const auto& retired : core.retiredJobs(generation))
+                            if (retired.view.id == *job)
+                                view = retired.view;
                     unknown = !view;
                     done = view && !host::isActive(view->state);
                 } else {

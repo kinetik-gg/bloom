@@ -1,5 +1,7 @@
 #include <bloom/host/testing/fake_export_runner.hpp>
 
+#include <fstream>
+
 namespace bloom::host::testing {
 namespace {
 
@@ -81,6 +83,9 @@ class FakeRun final : public ExportRun {
                 auto& output = outputs_[index];
                 output.verification = verification(output, !failVerification);
                 output.published.push_back(request_.outputs[index].destination.firstPath);
+                if (script_.writeDestinations && !failVerification)
+                    std::ofstream(request_.outputs[index].destination.firstPath, std::ios::binary)
+                        << "fake";
                 output.state = failVerification ? ExportOutputState::Failed
                                : script_.outcome == FakeExportScript::Outcome::SucceedWithWarnings
                                    ? ExportOutputState::PublishedWithWarnings

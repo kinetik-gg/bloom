@@ -114,6 +114,21 @@ struct McpServerCore::State {
     std::mutex captureMutex;
     std::uint64_t captureCounter = 0;
 
+    // The newest kRetiredTransientJobs transient render/export/capture jobs, oldest first: each
+    // job's final view and whole run log, kept after the call returned and the queue retired the
+    // job, so export.status, export.log and export.wait still read it. Each belongs to the export
+    // queue generation that ran it; a replaced project (a new generation) releases them.
+    struct RetiredTransient final {
+        std::uint64_t generation = 0;
+        host::ExportJobView view;
+        host::ExportLogBatch log;
+    };
+    std::mutex retiredMutex;
+    std::deque<RetiredTransient> retired;
+    void retire(RetiredTransient job);
+    // The retired jobs of `generation` (oldest first); releases those of any other generation.
+    [[nodiscard]] std::vector<RetiredTransient> retiredJobs(std::uint64_t generation);
+
     [[nodiscard]] scripting::LiveSessionHost* liveHost() const noexcept;
     // Follows the live session's current generation's command events (no-op for stdio).
     void syncEvents();
@@ -135,6 +150,8 @@ struct McpServerCore::State {
 // ---- Transient export queue jobs (tools_export.cpp)
 // At most this many of a transient run's newest log entries are returned with its result.
 inline constexpr std::size_t kTransientLogEntries = 64;
+// At most this many finished transient jobs stay readable after their call returned.
+inline constexpr std::size_t kRetiredTransientJobs = 32;
 
 struct TransientResult final {
     std::uint64_t job = 0;

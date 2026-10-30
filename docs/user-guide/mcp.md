@@ -294,9 +294,12 @@ queue.
 `render`, `export` and `capture` run as transient export jobs in the desktop application. Their
 results, on success and on failure, carry `job` (the transient job id) and `log` (the run's newest
 64 log entries, each `{sequence, sinceStartMs, severity, code, frame, message}` as `export.log`
-gives them), so the detail a failure points to is in the answer itself. While such a job runs,
-`export.status` lists it with `transient: true` and `export.log` reads it by its id; the job is
-retired when the call returns.
+gives them), so the detail a failure points to is in the answer itself. A capture carries them
+too; a capture on `bloom-mcp` renders without a queue job and has neither. While such a job runs,
+`export.status` lists it in `jobs` with `transient: true`. The queue retires the job when the call
+returns, but Bloom keeps the newest 32 finished ones: `export.status` lists them in
+`recentTransientJobs`, and `export.log` and `export.wait` still read each one by its id. Opening or
+creating another project releases them.
 
 Still presets are `PngRgba8SrgbV1`, `FlatExrRgba32fLinRec709SceneV1` and `TiffRgba16SrgbV1`. MEDIA-4
 presets are `ProResMovV1`, `DnxhrMxfV1` and `PcmWavV1`. ProRes output retains its existing

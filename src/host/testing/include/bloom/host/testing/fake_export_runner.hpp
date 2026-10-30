@@ -33,6 +33,9 @@ struct FakeExportScript final {
     std::uint32_t waitingForViewerPolls = 0;
     Outcome outcome = Outcome::Succeed;
     std::uint64_t failAtFrame = 0;
+    // Writes a small placeholder file at each output's first path when it publishes, for a
+    // caller that reads the published file back (MCP capture).
+    bool writeDestinations = false;
 };
 
 class FakeExportRunBackend final : public ExportRunBackend {

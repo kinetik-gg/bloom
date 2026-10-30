@@ -454,6 +454,8 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
             frame = mapping.value()->nearestFrameIndex(*call.context.time);
     }
     const auto path = nextCapturePath(core);
+    // The live capture's transient job (job id and run log, as render and export carry).
+    std::optional<TransientResult> transient;
     call.summary =
         "composition " + std::to_string(compositionId) + " frame " + std::to_string(frame);
     if (call.live != nullptr) {
@@ -470,7 +472,7 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
         request.presetId = preset->id;
         request.name = "MCP capture";
         request.destination = transientDestination(path.string(), nullptr);
-        static_cast<void>(runTransientJob(core, call, std::move(request)));
+        transient = runTransientJob(core, call, std::move(request));
     } else {
         const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
         const auto& stop = call.control.stop;
@@ -499,6 +501,10 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
     out.set(value, "digest", out.text(digestFile(path)));
     out.set(value, "width", out.number(composition->format().width()));
     out.set(value, "height", out.number(composition->format().height()));
+    if (transient) {
+        out.set(value, "job", out.number(transient->job));
+        out.set(value, "log", logEntries(out, transient->log));
+    }
     const auto uri = core::fileUriFromAbsolutePath(std::filesystem::absolute(path));
     if (bytes <= kMcpInlineImageBytes) {
         std::ifstream input(path, std::ios::binary);

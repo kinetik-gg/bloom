@@ -2,13 +2,19 @@
 // transport: the export queue's absence, and (live host) the session and UI seams of
 // live_ui_port.hpp.
 
+#include <bloom/host/export_queue.hpp>
+#include <bloom/host/testing/fake_export_runner.hpp>
 #include <bloom/mcp/server_core.hpp>
+#include <bloom/output/output_export_resource_ledger.hpp>
+#include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/events.hpp>
 #include <bloom/scripting/live_session_host.hpp>
 #include <bloom/scripting/session.hpp>
 
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <optional>
@@ -114,7 +120,9 @@ struct Live final {
     std::unique_ptr<mcp::McpProtocolSession> protocol;
     int nextId = 1;
 
-    explicit Live(mcp::McpLiveUiPort ui) {
+    // No export queue unless `exports` binds one (as in a window that has not created one).
+    explicit Live(mcp::McpLiveUiPort ui, std::optional<mcp::McpExportAccess> exports = {},
+                  std::filesystem::path captures = {}) {
         host.replace({events, session->publicationCoordinator(), session->artifactCoordinator()},
                      {.renderSource = session->renderSourceSnapshot(),
                       .context = session->operationContext(),
@@ -124,15 +132,17 @@ struct Live final {
                       .readOnly = false});
         core = std::make_unique<mcp::McpServerCore>(mcp::McpCoreDependencies{
             .session = std::ref(host),
-            .exports = {.run =
-                            [](const mcp::McpExportAccess::Work& work, const std::stop_token&) {
-                                work(nullptr, 1);
-                                return true;
-                            },
-                        .callerIsOwner = false},
+            .exports = exports ? std::move(*exports)
+                               : mcp::McpExportAccess{.run =
+                                                          [](const mcp::McpExportAccess::Work& work,
+                                                             const std::stop_token&) {
+                                                              work(nullptr, 1);
+                                                              return true;
+                                                          },
+                                                      .callerIsOwner = false},
             .scheduler = scheduler,
             .gpuProvider = nullptr,
-            .captureDirectory = {},
+            .captureDirectory = std::move(captures),
             .ui = std::move(ui),
             .serverVersion = "test",
             .limits = mcp::kMcpMessageLimits});
@@ -290,6 +300,110 @@ void liveSeams() {
     expect(contains(result, R"("kind":"project.saved")"), "events list project.saved: " + result);
 }
 
+// The id after the first `"job":` of a response.
+std::uint64_t jobOf(const std::string& response) {
+    const auto at = response.find(R"("job":)");
+    return at == std::string::npos ? 0 : std::stoull(response.substr(at + 6));
+}
+
+// A finished transient render/export/capture job stays readable after its call returned and the
+// queue retired it (export.log, export.status, export.wait), and capture carries its job and log.
+void retiredTransientJobs() {
+    const auto captures =
+        std::filesystem::temp_directory_path() /
+        ("bloom-mcp-core-tools-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(captures);
+    auto fake = std::make_shared<host::testing::FakeExportRunBackend>();
+    std::unique_ptr<host::ExportQueueService> queue;
+    std::uint64_t generation = 1;
+    mcp::McpExportAccess exports{
+        .run =
+            [&](const mcp::McpExportAccess::Work& work, const std::stop_token&) {
+                work(queue.get(), generation);
+                return true;
+            },
+        .callerIsOwner = true};
+    runtime::NodeDefinitionRegistry registry;
+    const runtime::SnapshotCompiler compiler{registry};
+    Live server({}, std::move(exports), captures);
+    // The queue borrows the server's session and scheduler: it goes first.
+    struct Release final {
+        std::unique_ptr<host::ExportQueueService>& queue;
+        std::filesystem::path folder;
+        ~Release() {
+            queue.reset();
+            std::error_code ignored;
+            std::filesystem::remove_all(folder, ignored);
+        }
+    } release{queue, captures};
+    host::ExportEncoderStatus encoders;
+    encoders.exportPlatform = true;
+    encoders.probed = true;
+    queue = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
+        .session = *server.session->hostSession(),
+        .scheduler = server.scheduler,
+        .compiler = compiler,
+        .publications = *server.session->publicationCoordinator(),
+        .artifacts = *server.session->artifactCoordinator(),
+        .ledger = std::make_shared<output::ExportResourceLedgerV1>(),
+        .gpu = nullptr,
+        .retirement = nullptr,
+        .presets = host::ExportPresetCatalogue::create(
+            {.userDataDirectory = std::nullopt, .initialEncoders = encoders}),
+        .limits = {},
+        .displayProcessor = nullptr,
+        .scratchDirectory = {},
+        .backend = fake});
+
+    fake->push({.outcome = host::testing::FakeExportScript::Outcome::FailRendering});
+    const auto destination = (captures / "failed.png").string();
+    const auto failed = server.call("render", R"({"composition":1,"frame":0,)"
+                                              R"("preset":"PngRgba8SrgbV1","destination":")" +
+                                                  destination + R"("})");
+    const auto job = jobOf(failed);
+    expect(contains(failed, R"("succeeded":false)") && job != 0 && contains(failed, R"("log":[)"),
+           "a failed render carries its job and log: " + failed);
+    const auto id = std::to_string(job);
+    const auto log = server.call("export.log", R"({"job":)" + id + "}");
+    expect(contains(log, "export.fake.started") && !contains(log, R"("lastSequence":0)"),
+           "export.log reads the finished transient job after the call returned: " + log);
+    const auto after = server.call("export.log", R"({"job":)" + id + R"(,"afterSequence":1})");
+    expect(contains(after, R"("entries":[)") && !contains(after, R"("sequence":1,)"),
+           "export.log honours afterSequence on a retired job: " + after);
+    auto status = server.call("export.status", "{}");
+    expect(contains(status, R"("recentTransientJobs":[{"id":)" + id) &&
+               contains(status, R"("transient":true)"),
+           "export.status lists the retired transient job: " + status);
+    const auto wait = server.call("export.wait", R"({"job":)" + id + R"(,"timeoutMs":1000})");
+    expect(contains(wait, R"("finished":true)"), "export.wait finds the retired job: " + wait);
+
+    fake->push({.writeDestinations = true});
+    const auto capture = server.call("capture", R"({"composition":1,"frame":0})");
+    const auto captureJob = jobOf(capture);
+    expect(contains(capture, R"("isError":false)") && captureJob != 0 && captureJob != job &&
+               contains(capture, R"("log":[{)"),
+           "a capture carries its transient job and log: " + capture);
+    expect(contains(server.call("export.log", R"({"job":)" + std::to_string(captureJob) + "}"),
+                    R"("entries":[{)"),
+           "export.log reads the capture's retired job");
+
+    // 33 more retire the oldest: the ring keeps the newest 32.
+    for (int index = 0; index < 33; ++index) {
+        fake->push({.outcome = host::testing::FakeExportScript::Outcome::FailRendering});
+        static_cast<void>(server.call("render", R"({"composition":1,"frame":0,)"
+                                                R"("preset":"PngRgba8SrgbV1","destination":")" +
+                                                    destination + R"("})"));
+    }
+    expect(contains(server.call("export.log", R"({"job":)" + id + "}"), R"("entries":[])"),
+           "the ring is bounded: the oldest retired job is released");
+    // A replaced project (a new queue generation) releases every retired job.
+    generation = 2;
+    status = server.call("export.status", "{}");
+    expect(contains(status, R"("recentTransientJobs":[])"),
+           "a new queue generation releases the retired jobs: " + status);
+}
+
 } // namespace
 
 int main() {
@@ -297,6 +411,7 @@ int main() {
         exportWithoutQueue();
         unboundSeams();
         liveSeams();
+        retiredTransientJobs();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;
