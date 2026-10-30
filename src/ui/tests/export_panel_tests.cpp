@@ -1,37 +1,40 @@
-// The Export panel (ADR 0033) from hand-built snapshots: the adapter's single drain, the sounds on
-// success and failure, the rows and their status wording for every state, a calm Waiting for the
-// Viewer, typed availability reasons on every control, the replace confirmation, the Linux-only
-// note, an absent size estimate, and one command per gesture.
+// The Export panel (ADR 0033) as After Effects' Render Queue, from hand-built snapshots: the
+// adapter's single drain and its sounds, the render list's columns and order, the Render check box
+// and Start All, the Render Settings and Output Module links and their dialogs (OK is one edit,
+// Cancel nothing), + and −, the ▾ quick picks, the replace question, drag to reorder, drops from
+// Assets, the Current Render strip, Details…, plain words everywhere, and the narrow layout.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 #include "asset_drop.hpp"
-#include "export_job_results.hpp"
-#include "export_job_row.hpp"
-#include "export_output_row.hpp"
+#include "export_job_details.hpp"
+#include "export_job_lines.hpp"
+#include "export_output_module_dialog.hpp"
 #include "export_panel_text.hpp"
+#include "export_render_list.hpp"
+#include "export_render_settings_dialog.hpp"
 #include "export_test_support.hpp"
 #include "window_fixture.hpp"
 
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
-#include <bloom/ui/asset_controller.hpp>
-#include <bloom/ui/project_host.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
-#include <bloom/ui/composition_session.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
+#include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/export_editor.hpp>
 #include <bloom/ui/export_queue_edits.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/progress_bar.hpp>
 #include <bloom/ui/kit/section.hpp>
-#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
-#include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/theme.hpp>
-#include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/ui_feedback.hpp>
@@ -39,20 +42,22 @@
 
 #include <QAction>
 #include <QApplication>
-#include <QLabel>
-#include <QMenu>
+#include <QClipboard>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QGuiApplication>
 #include <QDragEnterEvent>
 #include <QDragLeaveEvent>
-#include <QImage>
-#include <QTemporaryDir>
 #include <QDropEvent>
+#include <QHeaderView>
+#include <QImage>
+#include <QLabel>
+#include <QMenu>
 #include <QMimeData>
 #include <QPlainTextEdit>
-#include <QScrollArea>
-#include <QScrollBar>
 #include <QSettings>
-#include <QSplitter>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
 #include <QTreeWidget>
@@ -91,6 +96,9 @@ class FakeNotifier final : public Notifier {
     std::vector<SystemNotification> posted;
 };
 
+[[nodiscard]] document::ExportJobId J(const std::uint64_t id) { return document::ExportJobId::fromRaw(id); }
+[[nodiscard]] document::ExportOutputId O(const std::uint64_t id) { return document::ExportOutputId::fromRaw(id); }
+
 struct Rig {
     document::NewProject seed = document::makeNewProject("Export Test", "Main",
                                                          core::RationalTime::fromInteger(10));
@@ -107,7 +115,7 @@ struct Rig {
     ExportEditor* editor = nullptr;
     bool active = true;
 
-    explicit Rig(const bool withEditor = true) {
+    explicit Rig(const bool withEditor = true, const QSize size = QSize(900, 760)) {
         auto fakePlayer = std::make_unique<FakePlayer>();
         auto fakeNotifier = std::make_unique<FakeNotifier>();
         player = fakePlayer.get();
@@ -116,12 +124,12 @@ struct Rig {
                                                 [this] { return active; });
         adapter = std::make_unique<ExportQueueAdapter>(port, feedback.get());
         if (withEditor)
-            open();
+            open(size);
     }
-    void open() {
+    void open(const QSize size = QSize(900, 760)) {
         (void)registerExportEditor(registry, session, adapter.get());
         area = std::make_unique<EditorArea>(registry, "bloom.export", QString{});
-        area->resize(900, 760);
+        area->resize(size);
         area->show();
         QApplication::processEvents();
         editor = area->findChild<ExportEditor*>();
@@ -130,33 +138,25 @@ struct Rig {
     template <typename T> T* find(const char* name) const {
         return area->findChild<T*>(QString::fromLatin1(name));
     }
-    [[nodiscard]] ep::JobRow* row(const std::uint64_t id) const {
-        return editor != nullptr ? editor->jobRow(document::ExportJobId::fromRaw(id)) : nullptr;
+    [[nodiscard]] ep::RenderList* list() const { return editor->renderList(); }
+    [[nodiscard]] QTreeWidgetItem* item(const std::uint64_t job) const { return editor->jobItem(J(job)); }
+    [[nodiscard]] QString cell(const std::uint64_t job, const int column) const {
+        auto* row = item(job);
+        return row != nullptr ? row->text(column) : QString{};
     }
-    [[nodiscard]] ep::OutputRow* output(const std::uint64_t job, const std::uint64_t output) const {
-        const auto* shown = row(job);
-        return shown != nullptr ? shown->outputRow(document::ExportOutputId::fromRaw(output)) : nullptr;
-    }
-    // Opens a job and one of its outputs, and the output's Quality group.
-    ep::OutputRow* open(const std::uint64_t job, const std::uint64_t output) const {
-        if (auto* shown = row(job))
-            shown->setExpanded(true);
-        auto* out = this->output(job, output);
-        if (out != nullptr) {
-            out->setExpanded(true);
-            out->qualitySection()->setCollapsed(false);
-        }
+    // Opens a job, so its lines show.
+    void openJob(const std::uint64_t job) const {
+        editor->setJobExpanded(J(job), true);
         QApplication::processEvents();
-        return out;
     }
-    // The texts the artist can read right now.
+    // The texts the artist can read right now, in the panel and in any dialog over it.
     [[nodiscard]] QStringList visibleTexts() const {
         QStringList texts;
         for (auto* label : area->findChildren<QLabel*>())
-            if (label->isVisibleTo(area.get()) && !label->text().isEmpty())
+            if (label->isVisibleTo(label->window()) && label->window()->isVisible() && !label->text().isEmpty())
                 texts.push_back(label->text());
         for (auto* button : area->findChildren<kit::KButton*>())
-            if (button->isVisibleTo(area.get()))
+            if (button->isVisibleTo(button->window()) && button->window()->isVisible())
                 texts.push_back(button->text());
         return texts;
     }
@@ -180,6 +180,48 @@ struct Rig {
         publish([this](host::ExportQueueSnapshot& snapshot) { fillThreeJobs(snapshot, composition()); });
     }
 };
+
+host::ExportJobView jobIn(Rig& rig, const std::uint64_t id, const host::ExportJobState state,
+                          const std::uint64_t output = 0) {
+    auto job = makeJob(id, "Shot " + std::to_string(id), rig.composition(),
+                       {makeOutput(output != 0 ? output : id * 10 + 1)});
+    job.state = state;
+    return job;
+}
+
+// The dialog of type T the panel just opened over its window, or nullptr.
+template <typename T> T* openDialog(const Rig& rig) {
+    QApplication::processEvents();
+    for (auto* dialog : rig.area->findChildren<T*>())
+        if (dialog->isVisible())
+            return dialog;
+    return nullptr;
+}
+
+kit::KDialog* openPrompt(const Rig& rig, const char* name) {
+    QApplication::processEvents();
+    for (auto* dialog : rig.area->findChildren<kit::KDialog*>(QString::fromLatin1(name)))
+        if (dialog->isVisible())
+            return dialog;
+    return nullptr;
+}
+
+QStringList actionTexts(const QMenu& menu, const bool sections = false) {
+    QStringList texts;
+    for (auto* action : menu.actions())
+        if (action->isSeparator() ? sections && !action->text().isEmpty() : true)
+            if (!action->text().isEmpty())
+                texts.push_back(action->text());
+    return texts;
+}
+
+QAction* actionNamed(const QMenu& menu, const QString& text) {
+    for (auto* action : menu.actions())
+        if (action->text() == text || action->objectName() == text)
+            return action;
+    return nullptr;
+}
+
 void adapterTests(TestContext& context) {
     Rig rig(false);
     int changes = 0;
@@ -218,7 +260,6 @@ void adapterTests(TestContext& context) {
     rig.adapter->drain();
     context.expect(rig.player->played.size() == 2, "an event is announced once");
 }
-
 
 void jobsLink(TestContext& context) {
     Rig rig(false);
@@ -270,7 +311,6 @@ void jobsLink(TestContext& context) {
     while (!scheduler.isQuiescent() && timer.elapsed() < 5000)
         QTest::qWait(10);
 }
-
 
 void addingRevealsAndSelects(TestContext& context) {
     Rig rig(false);
@@ -346,7 +386,6 @@ void menusAndAssets(TestContext& context) {
     }
 }
 
-
 void editsAreUndoable(TestContext& context) {
     Rig rig(false);
     ExportQueueEdits edits(
@@ -407,1007 +446,63 @@ void editsAreUndoable(TestContext& context) {
                    "the added output has the chosen format");
     (void)rig.session.undo();
     context.expect(jobs()[0].outputs.size() == 1, "one undo removes the output added with a format");
+    // The Output Module dialog's OK: a new format, its settings, the overwrite rule and the import
+    // flag are one edit, so one undo puts every one of them back.
+    const auto before = jobs()[0].outputs[0];
+    auto settings = before.settings;
+    settings.format = document::ExportFormat::Png;
+    settings.useCachedFrames = false;
+    auto destination = before.destination;
+    destination.overwrite = document::ExportOverwritePolicy::Replace;
+    context.expect(formats.editOutput(output, outputEdit([&](auto& edit) {
+                       edit.presetId = std::string("builtin:png-sequence");
+                       edit.settings = settings;
+                       edit.destination = destination;
+                       edit.importIntoAssets = true;
+                   })).accepted,
+                   "the Output Module dialog's changes are accepted as one edit");
+    const auto after = jobs()[0].outputs[0];
+    context.expect(after.presetId == "builtin:png-sequence" && after.settings.format == document::ExportFormat::Png &&
+                       !after.settings.useCachedFrames &&
+                       after.destination.overwrite == document::ExportOverwritePolicy::Replace &&
+                       after.importIntoAssets,
+                   "every change of the dialog is in the project");
+    (void)rig.session.undo();
+    context.expect(jobs()[0].outputs[0] == before, "one undo reverts the whole Output Module edit");
+    // Render Settings' OK is one edit of the range.
+    context.expect(edits.editJob(job, jobEdit([](auto& edit) {
+                       edit.range = document::ExportRange{document::ExportRangeKind::Custom, 10, 20};
+                   })).accepted &&
+                       jobs()[0].render.range.kind == document::ExportRangeKind::Custom,
+                   "the Render Settings range is one edit");
+    (void)rig.session.undo();
+    context.expect(jobs()[0].render.range.kind == document::ExportRangeKind::WorkArea, "and one undo");
 }
 
-
-
-// ---------------------------------------------------------------------------------------------
-// The job list
-
-host::ExportJobView jobIn(Rig& rig, const std::uint64_t id, const host::ExportJobState state,
-                          const std::uint64_t output = 0) {
-    auto job = makeJob(id, "Shot " + std::to_string(id), rig.composition(),
-                       {makeOutput(output != 0 ? output : id * 10 + 1)});
-    job.state = state;
-    return job;
+void addJobsIsOneUndo(TestContext& context) {
+    Rig rig(false);
+    ExportQueueEdits edits(
+        rig.session,
+        [] {
+            host::ExportDefaultPreset preset;
+            preset.presetId = "builtin:h264-mp4";
+            preset.destination = host::defaultExportDestination(preset.settings.format);
+            return preset;
+        },
+        [](const std::string& id) { return std::optional(ExportPresetChoice{id, {}}); });
+    const auto jobs = [&] { return rig.session.snapshot().project().exportQueue().jobs; };
+    context.expect(edits.addJob(rig.composition()).accepted && jobs().size() == 1, "a first job exists");
+    const auto first = jobs()[0].id;
+    const auto result = edits.addJobs({rig.composition(), rig.composition(), rig.composition()}, std::size_t{0});
+    context.expect(result.accepted && result.addedJobs.size() == 3 && jobs().size() == 4,
+                   "three compositions add three jobs and report them in order");
+    context.expect(jobs()[0].id == result.addedJobs[0] && jobs()[2].id == result.addedJobs[2] && jobs()[3].id == first,
+                   "they are placed at the index given");
+    (void)rig.session.undo();
+    context.expect(jobs().size() == 1 && jobs()[0].id == first, "one undo removes all three");
+    (void)rig.session.redo();
+    context.expect(jobs().size() == 4 && jobs()[0].id == result.addedJobs[0], "one redo brings them back");
 }
-
-void listStructure(TestContext& context) {
-    Rig rig;
-    context.expect(rig.editor != nullptr, "the Export editor is created by the registry");
-    // One list: no splitter, no detail pane, no separate progress strip, no table.
-    context.expect(rig.area->findChild<QSplitter*>() == nullptr, "there is no splitter");
-    context.expect(rig.area->findChild<QWidget*>("exportDetailPane") == nullptr &&
-                       rig.area->findChild<QWidget*>("exportRunStrip") == nullptr &&
-                       rig.area->findChild<QTreeWidget*>() == nullptr,
-                   "there is no detail pane, run strip or tree");
-    rig.threeJobs();
-    context.expect(rig.editor->jobRows().size() == 3, "three jobs make three rows");
-    auto* first = rig.row(1);
-    context.expect(first != nullptr && first->nameText() == "Shot 010", "the name shows");
-    context.expect(first->compositionText() == "Main", "the composition shows");
-    context.expect(first->rangeText().contains("Work area") && first->rangeText().contains("0–239"),
-                   "the range chip reads the range");
-    context.expect(first->statusText() == "Rendering 50%", "a rendering job reads its percent");
-    context.expect(rig.row(2)->statusText() == "Up next", "a queued job reads Up next");
-    context.expect(rig.row(3)->statusText() == "Failed", "a failed job reads Failed");
-    context.expect(rig.row(3)->findChild<QLabel*>("exportJobStatus")->toolTip().contains("verification"),
-                   "a failure reads as a plain sentence in its status tooltip");
-
-    // New jobs open; their outputs stay folded until asked.
-    context.expect(first->expanded() && first->outputRows().size() == 1 &&
-                       !first->outputRows()[0]->expanded(),
-                   "a job opens with its output folded");
-    auto* output = first->outputRows()[0];
-    context.expect(output->destinationSummary().contains("out.mp4") &&
-                       output->statusText() == "Writing 50%",
-                   "a folded output shows its format, where it saves and its state");
-    context.expect(!rig.shown("exportOutputBody"), "a folded output hides its settings");
-    QTest::mouseClick(output->findChild<QWidget*>("exportOutputDisclosure"), Qt::LeftButton);
-    context.expect(output->expanded() && rig.shown("exportOutputBody"),
-                   "the caret opens an output's settings");
-    context.expect(output->formatText() == "H.264 MP4", "an open output names its format");
-    // Folding the job hides its whole body; its header stays.
-    QTest::mouseClick(first->findChild<QWidget*>("exportJobDisclosure"), Qt::LeftButton);
-    context.expect(!first->expanded() && !first->findChild<QWidget*>("exportJobBody")->isVisibleTo(rig.area.get()) &&
-                       first->findChild<QWidget*>("exportJobHeader")->isVisibleTo(rig.area.get()),
-                   "the job's caret folds the body and keeps the header");
-    // A job that finishes folds itself away; one that fails stays open to say why.
-    rig.row(2)->setExpanded(true);
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        snapshot.jobs[1].state = host::ExportJobState::Done;
-        snapshot.jobs[2].outputs[0].state = host::ExportOutputState::Failed;
-    });
-    context.expect(!rig.row(2)->expanded() && rig.row(3)->expanded(),
-                   "a finished job folds and a failed job stays open");
-    // The Render group and the outputs sit in the open job, in that order.
-    context.expect(rig.row(3)->renderSection() != nullptr &&
-                       rig.row(3)->findChild<QWidget*>("exportRangeKind") != nullptr,
-                   "an open job holds its Render group");
-}
-
-void emptyState(TestContext& context) {
-    Rig rig;
-    auto* text = rig.find<QLabel>("exportEmptyText");
-    context.expect(text != nullptr && text->isVisibleTo(rig.area.get()) &&
-                       text->text() == "Nothing to render yet.",
-                   "an empty list says there is nothing to render, in plain words");
-    auto* add = rig.find<kit::KButton>("exportAddActiveButton");
-    context.expect(add != nullptr && add->text() == "Add composition" &&
-                       add->variant() == kit::KButton::Variant::Primary,
-                   "the empty state offers Add composition as its Primary");
-    context.expect(rig.find<QLabel>("exportEmptyHelp")->text().contains("Assets") &&
-                       rig.find<QLabel>("exportEmptyHelp")->text().contains("Ctrl+M"),
-                   "the empty state says how else to add one");
-    context.expect(!rig.shown("exportStartAllButton") && rig.visiblePrimaries() == 1,
-                   "an empty list has Add composition as its only Primary, and no Start All");
-    const auto words = rig.visibleTexts().join('\n');
-    context.expect(!words.contains("queue", Qt::CaseInsensitive),
-                   "the empty state does not use the word queue");
-}
-
-void contextualButton(TestContext& context) {
-    using State = host::ExportJobState;
-    struct Case {
-        State state;
-        const char* text;
-    };
-    const Case cases[] = {{State::Ready, "Start"},        {State::Waiting, "Stop"},
-                          {State::Preparing, "Stop"},     {State::Rendering, "Pause"},
-                          {State::Pausing, "Stop"},       {State::Paused, "Resume"},
-                          {State::Verifying, "Stop"},     {State::Stopping, "Stop"},
-                          {State::Done, "Retry"},         {State::DoneWithWarnings, "Retry"},
-                          {State::Failed, "Retry"},       {State::Stopped, "Retry"}};
-    Rig rig;
-    for (const auto& item : cases) {
-        rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-            snapshot.jobs = {jobIn(rig, 1, item.state)};
-        });
-        auto* row = rig.row(1);
-        auto* button = row != nullptr ? row->jobButton() : nullptr;
-        context.expect(button != nullptr && button->text() == item.text,
-                       (std::string("the job button for state ") + std::to_string(static_cast<int>(item.state)) +
-                        " is " + item.text).c_str());
-        // One job button, whatever the state; its variant is never Primary.
-        context.expect(row != nullptr && row->findChildren<kit::KButton*>("exportJobButton").size() == 1 &&
-                           button->variant() == kit::KButton::Variant::Secondary,
-                       "there is one job button and it is Secondary");
-    }
-    // A rendering job that cannot pause offers Stop instead; a refused verb says why.
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto job = jobIn(rig, 1, State::Rendering);
-        refuse(job.commands, host::ExportCommand::Pause, host::ExportUnavailableCode::NotRendering,
-               "It is not rendering yet.");
-        snapshot.jobs = {job};
-    });
-    context.expect(rig.row(1)->jobButton()->text() == "Stop", "a job that cannot pause offers Stop");
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto job = jobIn(rig, 1, State::Ready);
-        refuse(job.commands, host::ExportCommand::Start, host::ExportUnavailableCode::PreflightBlocked,
-               "Choose where to save this output.");
-        snapshot.jobs = {job};
-    });
-    auto* button = rig.row(1)->jobButton();
-    context.expect(button->text() == "Start" && !button->isEnabled() &&
-                       button->toolTip() == "Choose where to save this output.",
-                   "a refused Start stays Start, disabled, with the reason");
-    // Each verb sends its command.
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) { snapshot.jobs = {jobIn(rig, 1, State::Ready)}; });
-    rig.port.calls.clear();
-    QTest::mouseClick(rig.row(1)->jobButton(), Qt::LeftButton);
-    context.expect(rig.port.calls == std::vector<std::string>{"start 1"}, "Start starts the job");
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) { snapshot.jobs = {jobIn(rig, 1, State::Rendering)}; });
-    rig.port.calls.clear();
-    QTest::mouseClick(rig.row(1)->jobButton(), Qt::LeftButton);
-    context.expect(rig.port.calls == std::vector<std::string>{"pause 1"}, "Pause pauses the job");
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) { snapshot.jobs = {jobIn(rig, 1, State::Paused)}; });
-    rig.port.calls.clear();
-    QTest::mouseClick(rig.row(1)->jobButton(), Qt::LeftButton);
-    context.expect(rig.port.calls == std::vector<std::string>{"resume 1"}, "Resume resumes the job");
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) { snapshot.jobs = {jobIn(rig, 1, State::Waiting)}; });
-    rig.port.calls.clear();
-    QTest::mouseClick(rig.row(1)->jobButton(), Qt::LeftButton);
-    context.expect(rig.port.calls == std::vector<std::string>{"stop 1"}, "Stop stops the job");
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) { snapshot.jobs = {jobIn(rig, 1, State::Failed)}; });
-    rig.port.calls.clear();
-    QTest::mouseClick(rig.row(1)->jobButton(), Qt::LeftButton);
-    context.expect(rig.port.calls == std::vector<std::string>{"retry 1"}, "Retry runs the job again");
-    // The whole set stays reachable from the overflow menu.
-    const auto menu = rig.row(1)->buildMenu();
-    QStringList names;
-    for (auto* action : menu->actions())
-        names.push_back(action->objectName());
-    for (const auto* name : {"exportStartAction", "exportPauseAction", "exportResumeAction", "exportStopAction",
-                             "exportRetryAction", "exportDuplicateAction", "exportMoveUpAction",
-                             "exportMoveDownAction", "exportRemoveAction", "exportCopyCliAction",
-                             "exportCopyPythonAction"})
-        context.expect(names.contains(QString::fromLatin1(name)), name);
-}
-
-void startAllAndPrimary(TestContext& context) {
-    using State = host::ExportJobState;
-    Rig rig;
-    context.expect(!rig.shown("exportStartAllButton"), "Start All is hidden with nothing in the list");
-    // Jobs but none ready: no Start All, so no Primary.
-    rig.threeJobs();
-    context.expect(!rig.shown("exportStartAllButton") && rig.visiblePrimaries() == 0,
-                   "Start All is hidden while no job is ready, and then nothing is Primary");
-    context.expect(rig.shown("exportStopAllButton") &&
-                       rig.find<kit::KButton>("exportStopAllButton")->variant() == kit::KButton::Variant::Danger,
-                   "Stop All appears, as Danger, while a job runs");
-    // One ready job: Start All is the only Primary.
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        snapshot.jobs = {jobIn(rig, 1, State::Ready), jobIn(rig, 2, State::Ready)};
-        snapshot.activeJob.reset();
-        refuse(snapshot.commands, host::ExportCommand::StopAll, host::ExportUnavailableCode::NothingToStop,
-               "No job is running.");
-    });
-    auto* startAll = rig.find<kit::KButton>("exportStartAllButton");
-    context.expect(rig.shown("exportStartAllButton") && startAll->variant() == kit::KButton::Variant::Primary,
-                   "Start All shows, as Primary, while a job is ready");
-    context.expect(rig.visiblePrimaries() == 1, "Start All is the only Primary");
-    context.expect(!rig.shown("exportStopAllButton"), "Stop All is hidden while nothing runs");
-    // Start All starts what can run and asks no second question.
-    rig.port.calls.clear();
-    QTest::mouseClick(startAll, Qt::LeftButton);
-    context.expect(rig.port.calls == std::vector<std::string>{"startAll"} &&
-                       QApplication::activeModalWidget() == nullptr,
-                   "Start All starts the jobs that can run, with no dialog");
-    // A job waiting for the artist's OK is left waiting, and the header says so.
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto waiting = jobIn(rig, 2, State::Ready);
-        waiting.outputs[0].preflight.push_back({.code = host::ExportPreflightCode::DestinationExists,
-                                                .target = host::ExportPreflightTarget::Destination,
-                                                .severity = host::ExportPreflightSeverity::NeedsConfirmation,
-                                                .reason = "out.mp4 already exists."});
-        refuse(waiting.commands, host::ExportCommand::Start,
-               host::ExportUnavailableCode::NeedsReplaceConfirmation, "Replace existing files?");
-        snapshot.jobs = {jobIn(rig, 1, State::Ready), waiting};
-    });
-    QTest::mouseClick(rig.find<kit::KButton>("exportStartAllButton"), Qt::LeftButton);
-    context.expect(rig.editor->startNoteText() == "1 started, 1 waiting for your OK",
-                   "the header says what started and what waits for the OK");
-    context.expect(rig.visiblePrimaries() == 1, "still one Primary with a job waiting for the OK");
-    // The jobs that were waiting are answered: the note goes away.
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        snapshot.jobs = {jobIn(rig, 1, State::Ready), jobIn(rig, 2, State::Ready)};
-    });
-    context.expect(rig.editor->startNoteText().isEmpty(), "the note leaves when nobody waits");
-    // A job that cannot start is not ready: Start All hides once only such jobs remain.
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto job = jobIn(rig, 1, State::Ready);
-        refuse(job.commands, host::ExportCommand::Start, host::ExportUnavailableCode::PreflightBlocked,
-               "Choose where to save this output.");
-        snapshot.jobs = {job};
-    });
-    context.expect(!rig.shown("exportStartAllButton") && rig.visiblePrimaries() == 0,
-                   "Start All is hidden when the only job cannot start");
-    context.expect(rig.row(1)->statusText() == "Needs attention" || rig.row(1)->statusText() == "Needs a location",
-                   "and that job says what it needs");
-}
-
-void statusWording(TestContext& context) {
-    using State = host::ExportJobState;
-    Rig rig;
-    const auto statusOf = [&](const State state, const host::ExportDeviceRoute route = host::ExportDeviceRoute::None) {
-        auto job = jobIn(rig, 1, state);
-        job.progress.route = route;
-        if (state == State::Failed)
-            job.failure = host::ExportFailure{.reason = "boom", .summary = "It failed."};
-        return ep::jobStatus(job);
-    };
-    context.expect(statusOf(State::Ready).text == "Ready", "Ready");
-    context.expect(statusOf(State::Waiting).text == "Up next", "Waiting reads Up next");
-    context.expect(statusOf(State::Preparing).text == "Getting ready", "Preparing reads Getting ready");
-    context.expect(statusOf(State::Rendering).text == "Rendering", "Rendering");
-    context.expect(statusOf(State::Rendering, host::ExportDeviceRoute::WaitingForViewer).text ==
-                       "Paused while you work in the Viewer",
-                   "waiting for the Viewer is a calm plain sentence");
-    context.expect(statusOf(State::Rendering, host::ExportDeviceRoute::CpuReference).text ==
-                       "Rendering (slower: no GPU available)",
-                   "the CPU route says why it is slower");
-    context.expect(statusOf(State::Rendering, host::ExportDeviceRoute::RecoveringGpu).text == "Reconnecting GPU",
-                   "recovering the GPU reads Reconnecting GPU");
-    context.expect(statusOf(State::Verifying).text == "Checking the file", "Verifying reads Checking the file");
-    context.expect(statusOf(State::Done).text == "Done", "Done");
-    context.expect(statusOf(State::DoneWithWarnings).text == "Done, with a note", "Done, with a note");
-    context.expect(statusOf(State::Failed).text == "Failed", "Failed");
-    context.expect(statusOf(State::Stopped).text == "Stopped", "Stopped");
-    // A ready job that cannot start has its own words.
-    const auto refused = [&](const host::ExportUnavailableCode code, const bool locationMissing) {
-        auto job = jobIn(rig, 1, State::Ready);
-        refuse(job.commands, host::ExportCommand::Start, code, "reason");
-        if (locationMissing)
-            job.outputs[0].preflight.push_back({.code = host::ExportPreflightCode::DestinationMissing,
-                                                .target = host::ExportPreflightTarget::Destination,
-                                                .severity = host::ExportPreflightSeverity::Blocking,
-                                                .reason = "Choose where to save this output."});
-        return ep::jobStatus(job).text;
-    };
-    context.expect(refused(host::ExportUnavailableCode::DestinationCheckPending, false) ==
-                       "Checking where it saves…",
-                   "a pending check reads Checking where it saves");
-    context.expect(refused(host::ExportUnavailableCode::NeedsReplaceConfirmation, false) == "Waiting for your OK",
-                   "a replace question reads Waiting for your OK");
-    context.expect(refused(host::ExportUnavailableCode::PreflightBlocked, true) == "Needs a location",
-                   "a missing location reads Needs a location");
-    context.expect(refused(host::ExportUnavailableCode::PreflightBlocked, false) == "Needs attention",
-                   "any other blocker reads Needs attention");
-    // Neutral ink for every status; only a failure is red.
-    for (int value = 1; value <= 12; ++value) {
-        auto job = jobIn(rig, 1, static_cast<State>(value));
-        if (job.state == State::Failed)
-            job.failure = host::ExportFailure{.reason = "boom"};
-        const auto status = ep::jobStatus(job);
-        context.expect(!status.text.isEmpty(), "every job state has status text");
-        const auto ink = ep::toneColor(status.tone);
-        context.expect(ink != kit::Color::Warn && ink != kit::Color::Ok, "no status is amber or green");
-        context.expect((ink == kit::Color::Error) == (job.state == State::Failed),
-                       "only Failed is red");
-    }
-    // Output states.
-    const auto outputOf = [&](const host::ExportOutputState state, const State jobState) {
-        auto job = jobIn(rig, 1, jobState);
-        job.outputs[0].state = state;
-        job.progress.outputCount = 1;
-        job.progress.fraction = 0.32;
-        return ep::outputStatus(job.outputs[0], job).text;
-    };
-    context.expect(outputOf(host::ExportOutputState::Pending, State::Waiting) == "Up next", "an output waits as Up next");
-    context.expect(outputOf(host::ExportOutputState::Pending, State::Ready) == "Ready", "a ready output reads Ready");
-    context.expect(outputOf(host::ExportOutputState::Rendering, State::Rendering) == "Writing 32%",
-                   "a writing output shows its percent");
-    context.expect(outputOf(host::ExportOutputState::Published, State::Done) == "Saved", "a published output reads Saved");
-    context.expect(outputOf(host::ExportOutputState::Failed, State::Failed) == "Failed", "a failed output reads Failed");
-    // No state's wording is an engine word.
-    for (const auto* word : {"Published", "Verifying", "Preparing", "Not ready", "Needs confirmation"})
-        for (int value = 1; value <= 12; ++value) {
-            auto job = jobIn(rig, 1, static_cast<State>(value));
-            if (job.state == State::Failed)
-                job.failure = host::ExportFailure{.reason = "boom"};
-            context.expect(ep::jobStatus(job).text != word, "no status uses an internal word");
-        }
-}
-
-void waitingForViewer(TestContext& context) {
-    Rig rig;
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto job = makeJob(1, "Shot 010", rig.composition(), {makeOutput(11)});
-        job.state = host::ExportJobState::Rendering;
-        job.progress.framesTotal = 240;
-        job.progress.framesCompleted = 60;
-        job.progress.elapsed = std::chrono::milliseconds(31000);
-        job.progress.route = host::ExportDeviceRoute::WaitingForViewer;
-        job.progress.remaining = std::chrono::milliseconds(9000); // never shown while waiting
-        snapshot.jobs = {job};
-        snapshot.activeJob = job.id;
-    });
-    auto* row = rig.row(1);
-    context.expect(row->statusText() == "Paused while you work in the Viewer",
-                   "waiting for the Viewer says so in plain words");
-    context.expect(row->progressShown() && !row->progressText().contains("left"),
-                   "waiting for the Viewer shows progress and no ETA");
-    context.expect(row->findChild<kit::KProgressBar*>()->busy(), "waiting for the Viewer shows a busy bar");
-    const auto status = ep::jobStatus(rig.port.snapshot()->jobs[0]);
-    context.expect(ep::toneColor(status.tone) == kit::Color::Muted,
-                   "waiting for the Viewer is neutral ink, never an error colour");
-}
-
-void progressInTheRow(TestContext& context) {
-    Rig rig;
-    rig.threeJobs();
-    auto* row = rig.row(1);
-    context.expect(row->progressShown(), "a rendering job shows its progress in its own row");
-    context.expect(row->progressText().startsWith("121 / 240") && row->progressText().contains("about 0:42 left"),
-                   "the row shows the frame count and the time left");
-    auto* bar = row->findChild<kit::KProgressBar*>();
-    context.expect(bar != nullptr && !bar->busy() && bar->completed() == 120 && bar->total() == 240,
-                   "the bar fills with the frames done");
-    const auto words = rig.visibleTexts().join('\n');
-    context.expect(words.contains("Elapsed 0:07"), "elapsed time is shown in the open job");
-    context.expect(!rig.row(2)->progressShown() && !rig.row(3)->progressShown(),
-                   "a job that is not running shows no progress");
-    // Settings are locked while it renders, and the row says so.
-    context.expect(row->reasonsText().contains("Settings are locked while this job renders"),
-                   "a running job says its settings are locked");
-}
-
-void replacePromptInline(TestContext& context) {
-    Rig rig;
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto output = makeOutput(11);
-        output.preflight.push_back({.code = host::ExportPreflightCode::DestinationExists,
-                                    .target = host::ExportPreflightTarget::Destination,
-                                    .severity = host::ExportPreflightSeverity::NeedsConfirmation,
-                                    .reason = "out.mp4 already exists."});
-        auto job = makeJob(1, "Shot 010", rig.composition(), {output});
-        refuse(job.commands, host::ExportCommand::Start,
-               host::ExportUnavailableCode::NeedsReplaceConfirmation, "Replace existing files?");
-        snapshot.jobs = {job};
-    });
-    auto* row = rig.row(1);
-    auto* output = rig.output(1, 11);
-    context.expect(row->statusText() == "Waiting for your OK", "the job says it waits for the OK");
-    context.expect(row->expanded() && output->expanded(),
-                   "the job and the output open on their own when they ask");
-    context.expect(output->replacePromptText() == "A file called out.mp4 is already in renders.",
-                   "the prompt names the file and the folder");
-    auto* replace = output->findChild<kit::KButton*>("exportReplaceButton");
-    auto* other = output->findChild<kit::KButton*>("exportChooseNameButton");
-    context.expect(replace != nullptr && replace->text() == "Replace it" && replace->isVisibleTo(rig.area.get()) &&
-                       replace->variant() == kit::KButton::Variant::Secondary,
-                   "Replace it is a Secondary button in the output");
-    context.expect(other != nullptr && other->text() == "Choose another name" &&
-                       other->variant() == kit::KButton::Variant::Secondary,
-                   "Choose another name is Secondary too");
-    context.expect(rig.visiblePrimaries() == 0 && !rig.shown("exportStartAllButton"),
-                   "no button of the prompt is Primary, and Start All waits");
-    rig.port.calls.clear();
-    QTest::mouseClick(replace, Qt::LeftButton);
-    context.expect(rig.port.calls == std::vector<std::string>{"confirmReplace 1 11"},
-                   "Replace it calls confirmReplace(job, output)");
-    QTest::mouseClick(other, Qt::LeftButton);
-    context.expect(QApplication::activeModalWidget() == nullptr, "the prompt opens no dialog");
-    // Answered: the prompt leaves and the job is ready.
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto& job = snapshot.jobs[0];
-        job.outputs[0].replaceConfirmed = true;
-        job.commands = allAvailable();
-    });
-    context.expect(rig.output(1, 11)->replacePromptText().isEmpty() && rig.row(1)->statusText() == "Ready" &&
-                       rig.shown("exportStartAllButton"),
-                   "once answered the prompt leaves and the job is ready");
-}
-
-void visibleReasons(TestContext& context) {
-    Rig rig;
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto output = makeOutput(11);
-        output.preflight.push_back({.code = host::ExportPreflightCode::DestinationMissing,
-                                    .target = host::ExportPreflightTarget::Destination,
-                                    .severity = host::ExportPreflightSeverity::Blocking,
-                                    .reason = "Choose where to save this output."});
-        auto job = makeJob(1, "Shot 010", rig.composition(), {output});
-        refuse(job.commands, host::ExportCommand::Start, host::ExportUnavailableCode::PreflightBlocked,
-               "Choose where to save this output.");
-        refuse(job.commands, host::ExportCommand::AddOutput, host::ExportUnavailableCode::OutputLimitReached,
-               "A job holds at most 16 outputs.");
-        job.outputs[0].commands = allAvailable();
-        refuse(job.outputs[0].commands, host::ExportCommand::RemoveOutput, host::ExportUnavailableCode::LastOutput,
-               "A job keeps at least one output.");
-        snapshot.jobs = {job};
-        refuse(snapshot.commands, host::ExportCommand::StopAll, host::ExportUnavailableCode::NothingToStop,
-               "No job is running.");
-        refuse(snapshot.commands, host::ExportCommand::RemoveFinished,
-               host::ExportUnavailableCode::NothingFinished, "No job has finished.");
-    });
-    auto* row = rig.row(1);
-    rig.open(1, 11);
-    context.expect(row->statusText() == "Needs a location", "the status names what is missing");
-    context.expect(rig.shown("exportStartReason") &&
-                       row->findChild<QLabel*>("exportStartReason")->text() == "Choose where to save this output.",
-                   "the reason Start cannot run is a visible line in the job");
-    context.expect(rig.output(1, 11)->reasonsText().contains("Choose where to save this output."),
-                   "the output shows its own blocker under Save to");
-    context.expect(rig.shown("exportAddOutputReason") &&
-                       row->findChild<QLabel*>("exportAddOutputReason")->text() == "A job holds at most 16 outputs." &&
-                       !row->findChild<kit::KButton*>("exportAddOutputButton")->isEnabled(),
-                   "a reached output limit is said next to Add output");
-    auto menu = rig.output(1, 11)->buildMenu();
-    QAction* remove = nullptr;
-    for (auto* action : menu->actions())
-        if (action->objectName() == "exportRemoveOutputAction")
-            remove = action;
-    context.expect(remove != nullptr && !remove->isEnabled() && remove->text().contains("keeps at least one") ,
-                   "Remove output says in its own text why it is off when it is the last");
-    context.expect(!rig.shown("exportStopAllButton") && !rig.shown("exportRemoveFinishedButton"),
-                   "buttons that have nothing to do are not shown disabled");
-    // A running job's controls are off, with the reason in the job.
-    rig.threeJobs();
-    context.expect(rig.row(1)->reasonsText().contains("Settings are locked while this job renders"),
-                   "locked settings are explained in the row");
-    auto* name = rig.row(1)->findChild<kit::KDropdown*>("exportRangeKind");
-    context.expect(name != nullptr && !name->isEnabled() && name->toolTip().contains("locked"),
-                   "a running job's controls are disabled with the reason");
-}
-
-void noRawCodes(TestContext& context) {
-    Rig rig;
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto job = makeJob(1, "Shot 010", rig.composition(), {makeOutput(11)});
-        job.state = host::ExportJobState::Failed;
-        job.failure = host::ExportFailure{
-            .code = host::ExportFailureCode::AnalysisRefused,
-            .output = job.outputs[0].id,
-            .frame = std::nullopt,
-            .diagnosticCode = "output.analysis.facet=3",
-            .reason = "This format cannot keep everything the frame needs. Choose OpenEXR.",
-            .summary = std::string(host::exportFailureSummary(host::ExportFailureCode::AnalysisRefused))};
-        job.outputs[0].state = host::ExportOutputState::Failed;
-        host::ExportOutputVerification verification;
-        verification.output = job.outputs[0].id;
-        verification.overall = host::ExportCheckOutcome::Failed;
-        verification.checks.push_back({.check = host::ExportCheck::AnalysisPolicy,
-                                       .outcome = host::ExportCheckOutcome::Failed,
-                                       .code = "output.analysis.facet=3"});
-        job.outputs[0].verification = verification;
-        snapshot.jobs = {job};
-    });
-    rig.open(1, 11);
-    auto visible = rig.visibleTexts();
-    for (auto* widget : rig.area->findChildren<QWidget*>())
-        if (widget->isVisibleTo(rig.area.get()))
-            visible.push_back(widget->toolTip());
-    const auto all = visible.join('\n');
-    context.expect(all.contains("OpenEXR"), "the failure line is a sentence with a remedy");
-    for (const auto* raw : {"stage=", "code=", "facet", "output.analysis", "export.", "0x", "digest", "Digest",
-                            "CPU reference", "preflight", "publication", "verification:"})
-        context.expect(!all.contains(QString::fromLatin1(raw)), (std::string("no raw word in view: ") + raw).c_str());
-    // The raw detail lives only behind Show details, and can be copied.
-    auto* details = rig.find<QPlainTextEdit>("exportFailureDetails");
-    context.expect(details != nullptr && details->toPlainText().contains("facet=3") &&
-                       !details->isVisibleTo(rig.area.get()),
-                   "raw detail is behind Show details, closed by default");
-    auto* toggle = rig.find<kit::KButton>("exportDetailsToggle");
-    context.expect(toggle != nullptr && toggle->text() == "Show details" &&
-                       toggle->variant() == kit::KButton::Variant::Secondary,
-                   "Show details is a Secondary button");
-    toggle->setChecked(true);
-    context.expect(details->isVisibleTo(rig.area.get()), "Show details opens the raw text");
-    auto* copy = rig.find<kit::KButton>("exportCopyDetailsButton");
-    context.expect(copy != nullptr && copy->variant() == kit::KButton::Variant::Secondary,
-                   "Copy details is a Secondary button");
-}
-
-void resultsInPlainWords(TestContext& context) {
-    QSettings().remove(QStringLiteral("export/job/log/collapsed"));
-    Rig rig;
-    rig.threeJobs();
-    // A failed job: the sentence, then what the check found, in plain words.
-    context.expect(rig.row(3)->results()->summaryText().startsWith("Couldn't save Shot 030."),
-                   "a failed job says it couldn't save");
-    const auto lines = rig.row(3)->results()->lineTexts().join('\n');
-    context.expect(lines.contains("wrong number of frames") && lines.contains("expected 240, found 239"),
-                   "a failed check reads expected against found");
-    // A job that ran and passed.
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto job = makeJob(1, "Shot 010", rig.composition(), {makeOutput(11)});
-        job.state = host::ExportJobState::Done;
-        job.outputs[0].state = host::ExportOutputState::Published;
-        host::ExportOutputVerification verification;
-        verification.output = job.outputs[0].id;
-        verification.overall = host::ExportCheckOutcome::Passed;
-        for (const auto check : {host::ExportCheck::Reopen, host::ExportCheck::FrameCount, host::ExportCheck::ColourTags,
-                                 host::ExportCheck::Timing, host::ExportCheck::ArtifactDigest})
-            verification.checks.push_back({.check = check, .outcome = host::ExportCheckOutcome::Passed});
-        verification.artifacts.publishedArtifacts = 1;
-        verification.artifacts.totalBytes = 38'000'000;
-        verification.artifacts.firstPath = "/project/renders/out.mp4";
-        verification.provenance.gpuFrames = 240;
-        verification.provenance.framesReused = 40;
-        job.outputs[0].verification = verification;
-        job.outputs[0].import.status = host::ExportAssetImportStatus::Failed;
-        job.outputs[0].import.reason = "The project is read-only.";
-        snapshot.jobs = {job};
-        snapshot.activeJob.reset();
-    });
-    rig.row(1)->setExpanded(true);
-    auto* results = rig.row(1)->results();
-    context.expect(results->isVisibleTo(rig.area.get()), "a job that ran shows its result");
-    context.expect(results->summaryText().startsWith("Saved 1 file,") &&
-                       results->summaryText().endsWith("checked and matches what you asked for."),
-                   "the result is one plain sentence");
-    const auto passed = results->lineTexts();
-    context.expect(passed.contains("File opens") && passed.contains("Right number of frames") &&
-                       passed.contains("Rendered on the GPU"),
-                   "the checks read as File opens, Right number of frames, Rendered on the GPU");
-    context.expect(std::ranges::any_of(passed, [](const QString& line) { return line.startsWith("Colours tagged"); }),
-                   "the colour tags read as Colours tagged as ...");
-    context.expect(std::ranges::any_of(passed, [](const QString& line) { return line.contains("40 of 280 frames reused"); }),
-                   "reused frames are reported");
-    context.expect(!passed.join('\n').contains("Timing") && !passed.join('\n').contains("Digest"),
-                   "a passed check that needs no words is not listed");
-    context.expect(std::ranges::any_of(passed, [](const QString& line) {
-                       return line.startsWith("Couldn't add to Assets: The project is read-only.");
-                   }),
-                   "an import that failed is said separately, in neutral ink");
-    auto* show = results->findChild<kit::KButton*>("exportShowInFolderButton");
-    context.expect(show != nullptr && show->variant() == kit::KButton::Variant::Secondary,
-                   "a saved output has a Secondary Show in folder");
-    // The Log is folded by default.
-    context.expect(results->logSection()->isCollapsed(), "the Log is folded by default");
-}
-
-void formatSettings(TestContext& context) {
-    QSettings().remove(QStringLiteral("export/output/quality/collapsed"));
-    Rig rig;
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        snapshot.jobs = {makeJob(1, "Movie", rig.composition(), {makeOutput(11)}),
-                         makeJob(2, "Frames", rig.composition(),
-                                 {makeOutput(21, "builtin:exr-sequence", document::ExportFormat::OpenExr,
-                                             "seq/shot.####.exr")}),
-                         makeJob(3, "Sound", rig.composition(),
-                                 {makeOutput(31, "builtin:wav", document::ExportFormat::Wav, "a.wav")})};
-    });
-    auto* movie = rig.output(1, 11);
-    context.expect(movie->qualitySection()->isCollapsed(), "Quality is folded by default");
-    rig.open(1, 11);
-    rig.open(2, 21);
-    rig.open(3, 31);
-    const auto labelsOf = [&](ep::OutputRow* row) {
-        QStringList labels;
-        for (auto* label : row->findChildren<QLabel*>("propertiesRowLabel"))
-            if (label->isVisibleTo(rig.area.get()))
-                labels.push_back(label->toolTip().isEmpty() ? label->text() : label->toolTip());
-        return labels;
-    };
-    const auto movieLabels = labelsOf(rig.output(1, 11));
-    for (const auto* label : {"Format", "Save to", "Quality target", "Use", "Display", "View", "Include the look",
-                              "Cached frames", "Include audio", "Sample rate", "After render"})
-        context.expect(movieLabels.contains(QString::fromLatin1(label)),
-                       (std::string("a movie shows ") + label).c_str());
-    for (const auto* label : {"Compression", "Colour space", "File numbering", "File names", "Bake look",
-                              "Reuse cached frames", "Encoder", "Bit rate"})
-        context.expect(!movieLabels.contains(QString::fromLatin1(label)),
-                       (std::string("a movie does not show ") + label).c_str());
-    const auto imageLabels = labelsOf(rig.output(2, 21));
-    for (const auto* label : {"Compression", "Colour space", "File numbering", "File names", "Include the look"})
-        context.expect(imageLabels.contains(QString::fromLatin1(label)),
-                       (std::string("an EXR sequence shows ") + label).c_str());
-    for (const auto* label : {"Quality target", "Use", "Display", "View", "Include audio", "Sample rate"})
-        context.expect(!imageLabels.contains(QString::fromLatin1(label)),
-                       (std::string("an EXR sequence does not show ") + label).c_str());
-    const auto soundLabels = labelsOf(rig.output(3, 31));
-    context.expect(soundLabels.contains("Sample rate") && !soundLabels.contains("Include the look") &&
-                       !soundLabels.contains("Compression") && !soundLabels.contains("Quality target"),
-                   "a sound file shows only its sample rate");
-    // Colour space, Display and View are dropdowns of what the project offers, never text boxes.
-    auto* image = rig.output(2, 21);
-    auto* space = image->findChild<kit::KDropdown*>("exportColourSpace");
-    context.expect(space != nullptr && image->findChild<kit::KLineEdit*>("exportColourSpace") == nullptr &&
-                       space->count() >= 2 && space->itemText(0) == "Working colour space",
-                   "Colour space is a dropdown that starts with the working space");
-    auto* display = rig.output(1, 11)->findChild<kit::KDropdown*>("exportDisplay");
-    auto* view = rig.output(1, 11)->findChild<kit::KDropdown*>("exportView");
-    context.expect(display != nullptr && view != nullptr &&
-                       rig.output(1, 11)->findChild<kit::KLineEdit*>("exportDisplay") == nullptr &&
-                       rig.output(1, 11)->findChild<kit::KLineEdit*>("exportView") == nullptr &&
-                       display->itemText(0) == "Project default" && view->itemText(0) == "Project default",
-                   "Display and View are dropdowns that start with the project default");
-    rig.port.calls.clear();
-    if (space->count() >= 2) {
-        space->chooseIndex(1);
-        context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "editOutput 2 21 settings",
-                       "choosing a colour space is one command");
-    }
-    rig.port.calls.clear();
-    if (display->count() >= 2) {
-        display->chooseIndex(1);
-        context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "editOutput 1 11 settings",
-                       "choosing a display is one command");
-    }
-    rig.port.calls.clear();
-    auto* cached = rig.output(1, 11)->findChild<kit::KSwitch*>("exportUseCachedFrames");
-    cached->setChecked(!cached->isChecked());
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "editOutput 1 11 settings",
-                   "Reuse cached frames is one command");
-    rig.port.calls.clear();
-    image->findChild<kit::KDropdown*>("exportSequenceStartMode")->chooseIndex(1);
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "editOutput 2 21 settings",
-                   "File numbering from a number is one command");
-}
-
-void rangeFields(TestContext& context) {
-    Rig rig;
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        snapshot.jobs = {makeJob(1, "Shot 010", rig.composition(), {makeOutput(11)})};
-    });
-    const auto fieldsShown = [&](const bool first, const bool last, const bool frame) {
-        auto* row = rig.row(1);
-        return row->findChild<kit::KValueField*>("exportRangeFirst")->isVisibleTo(rig.area.get()) == first &&
-               row->findChild<kit::KValueField*>("exportRangeLast")->isVisibleTo(rig.area.get()) == last &&
-               row->findChild<kit::KValueField*>("exportRangeFrame")->isVisibleTo(rig.area.get()) == frame;
-    };
-    context.expect(fieldsShown(false, false, false), "Work area has no frame fields");
-    auto* kind = rig.row(1)->findChild<kit::KDropdown*>("exportRangeKind");
-    context.expect(kind->itemText(0) == "Work area" && kind->itemText(1) == "Whole composition" &&
-                       kind->itemText(2) == "Custom frames" && kind->itemText(3) == "One frame",
-                   "the range choices read in plain words");
-    rig.port.calls.clear();
-    kind->chooseIndex(2);
-    const auto custom = static_cast<int>(document::ExportRangeKind::Custom);
-    const auto one = static_cast<int>(document::ExportRangeKind::Frame);
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0].starts_with("editJob 1 range=" + std::to_string(custom) + ":"),
-                   "choosing Custom frames is one command");
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        snapshot.jobs[0].record.render.range = {document::ExportRangeKind::Custom, 10, 40};
-    });
-    context.expect(fieldsShown(true, true, false), "Custom frames shows First and Last");
-    rig.port.calls.clear();
-    auto* last = rig.row(1)->findChild<kit::KValueField*>("exportRangeLast");
-    last->setIntegerValue(80);
-    emit last->editFinished();
-    context.expect(rig.port.calls.size() == 1 &&
-                       rig.port.calls[0] == "editJob 1 range=" + std::to_string(custom) + ":10-80",
-                   "editing the last frame is one command");
-    rig.port.calls.clear();
-    last->setIntegerValue(5);
-    emit last->editFinished();
-    context.expect(rig.port.calls.empty() && rig.row(1)->reasonsText().contains("last frame comes before"),
-                   "a last frame before the first is refused in the row");
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        snapshot.jobs[0].record.render.range = {document::ExportRangeKind::Frame, 7, 7};
-    });
-    context.expect(fieldsShown(false, false, true), "One frame shows a Frame field only");
-    rig.port.calls.clear();
-    auto* frame = rig.row(1)->findChild<kit::KValueField*>("exportRangeFrame");
-    frame->setIntegerValue(12);
-    emit frame->editFinished();
-    context.expect(rig.port.calls.size() == 1 &&
-                       rig.port.calls[0] == "editJob 1 range=" + std::to_string(one) + ":12-12",
-                   "editing the frame is one command");
-}
-
-void addOutputWithFormat(TestContext& context) {
-    Rig rig;
-    rig.threeJobs();
-    auto* row = rig.row(2);
-    context.expect(row->outputRows().size() == 1, "the job starts with one output");
-    rig.port.calls.clear();
-    row->addOutputWithFormat("builtin:prores-422hq-mov");
-    context.expect(rig.port.calls == std::vector<std::string>{"addOutput 2 builtin:prores-422hq-mov"},
-                   "Add output with a format is one command that names the format");
-    context.expect(row->outputRows().size() == 2, "the new output appears");
-    auto* added = row->outputRows().back();
-    context.expect(added->expanded() && added->formatText() == "ProRes 422 HQ",
-                   "the new output opens in the format that was chosen");
-    // The menu lists the same groups as the Format dropdown, video first.
-    auto* button = row->findChild<kit::KButton*>("exportAddOutputButton");
-    context.expect(button != nullptr && button->variant() == kit::KButton::Variant::Secondary &&
-                       button->toolTip() == "Render this job in another format too.",
-                   "Add output is Secondary and says what it does");
-    // Remove output goes through the output's overflow menu.
-    rig.port.calls.clear();
-    auto menu = added->buildMenu();
-    for (auto* action : menu->actions())
-        if (action->objectName() == "exportRemoveOutputAction")
-            action->trigger();
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0].starts_with("removeOutput 2 "),
-                   "Remove output is one command");
-}
-
-void editsAreOneCommand(TestContext& context) {
-    Rig rig;
-    rig.threeJobs();
-    rig.port.calls.clear();
-    // Rename in place: double click or F2, commit with Return or Escape.
-    auto* row = rig.row(2);
-    row->startRename();
-    auto* rename = row->findChild<kit::KLineEdit*>("exportJobRename");
-    context.expect(rename != nullptr && rename->isVisibleTo(rig.area.get()), "F2 opens the name for editing");
-    rename->setText("Hero");
-    emit rename->inlineEdit()->accepted("Hero", kit::KInlineEdit::Ending::Escape);
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "editJob 2 name=Hero",
-                   "renaming a job is one command");
-    context.expect(!rename->isVisibleTo(rig.area.get()), "the name goes back to a label");
-    rig.port.calls.clear();
-    row->findChild<kit::KSwitch*>("exportJobEnabled")->setChecked(false);
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "editJob 2 enabled=0",
-                   "the Include in Start All switch is one command");
-    rig.port.calls.clear();
-    rig.open(2, 21)->findChild<kit::KSwitch*>("exportOutputEnabled")->setChecked(false);
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "editOutput 2 21 enabled=0",
-                   "an output's switch is one command");
-    rig.port.calls.clear();
-    const auto moveMenu = row->buildMenu();
-    for (auto* action : moveMenu->actions())
-        if (action->objectName() == "exportMoveUpAction")
-            action->trigger();
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "moveJob 2 0",
-                   "Move up is one MoveJob");
-    rig.port.calls.clear();
-    auto* range = row->findChild<kit::KDropdown*>("exportRangeKind");
-    range->chooseIndex(2);
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0].starts_with("editJob 2 range="),
-                   "choosing a custom range is one command");
-    rig.port.calls.clear();
-    auto* format = rig.output(2, 21)->findChild<kit::KDropdown*>("exportPresetPicker");
-    format->chooseIndex(format->findData(QString("builtin:prores-422hq-mov")));
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0].starts_with("applyPreset 2 21"),
-                   "choosing a format applies it in one command");
-    // Video first, then image sequences, as disabled group titles.
-    context.expect(format->itemText(0) == "Video" && !format->isItemEnabled(0),
-                   "the format list starts with the Video group");
-    int sequences = -1;
-    for (int i = 0; i < format->count(); ++i)
-        if (format->itemText(i) == "Image sequences")
-            sequences = i;
-    context.expect(sequences > 0, "Image sequences is the second group");
-    rig.port.calls.clear();
-    rig.output(2, 21)->findChild<kit::KSwitch*>("exportImportIntoAssets")->setChecked(true);
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "editOutput 2 21 import=1",
-                   "Add to Assets when done is one per-output command");
-    // A job label colour clears from the overflow menu.
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        snapshot.jobs[1].record.labelColor = std::array<std::uint8_t, 3>{200, 120, 60};
-    });
-    rig.port.calls.clear();
-    const auto labelMenu = rig.row(2)->buildMenu();
-    for (auto* action : labelMenu->actions())
-        if (action->objectName() == "exportClearLabelAction")
-            action->trigger();
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "editJob 2 label=clear",
-                   "Remove label colour is one command");
-    // A refusal is shown in the row, not swallowed.
-    rig.port.nextEdit = {false, "Edits are locked while the job runs.", std::nullopt, std::nullopt, {}};
-    rig.row(2)->findChild<kit::KSwitch*>("exportJobEnabled")->setChecked(false);
-    context.expect(rig.row(2)->reasonsText().contains("Edits are locked while the job runs."),
-                   "a refused edit shows its reason");
-    rig.port.nextEdit = {true, {}, std::nullopt, std::nullopt, {}};
-}
-
-void destinationFields(TestContext& context) {
-    Rig rig;
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto output = makeOutput(11);
-        output.preflight.push_back({.code = host::ExportPreflightCode::DestinationCheckPending,
-                                    .target = host::ExportPreflightTarget::Destination,
-                                    .severity = host::ExportPreflightSeverity::Blocking,
-                                    .reason = "Checking destination."});
-        snapshot.jobs = {makeJob(1, "Shot 010", rig.composition(), {output})};
-    });
-    auto* output = rig.open(1, 11);
-    context.expect(output->reasonsText().contains("Checking where it saves…"),
-                   "a pending destination says Checking where it saves");
-    context.expect(!rig.shown("exportReplaceBox"), "the replace prompt is gone when nothing exists");
-    context.expect(!rig.shown("exportEstimate"), "an absent estimate shows nothing");
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        snapshot.jobs[0].outputs[0].estimatedBytes = 12'000'000;
-        snapshot.jobs[0].outputs[0].freeBytesAtDestination = 200'000'000'000;
-    });
-    auto* facts = rig.find<QLabel>("exportEstimate");
-    context.expect(facts->isVisibleTo(rig.area.get()) && facts->text().startsWith("About ") &&
-                       facts->text().contains("free"),
-                   "a given estimate and the free space are shown under Save to");
-    context.expect(output->resolvedText().contains("out.mp4"), "the resolved file shows under Save to");
-    // A sequence says what it writes.
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto seq = makeOutput(21, "builtin:exr-sequence", document::ExportFormat::OpenExr, "seq/shot.####.exr");
-        seq.destination.fileCount = 240;
-        seq.destination.firstPath = "/project/seq/shot.0000.exr";
-        seq.destination.lastPath = "/project/seq/shot.0239.exr";
-        snapshot.jobs = {makeJob(1, "Shot 010", rig.composition(), {seq})};
-    });
-    context.expect(rig.output(1, 21)->resolvedText().contains("shot.0000.exr") &&
-                       rig.output(1, 21)->resolvedText().contains("shot.0239.exr (240 files)"),
-                   "a sequence shows its first and last file and the count");
-    // Browse is inside the field, and the tokens help is a small Secondary "?".
-    auto* field = rig.output(1, 21)->findChild<kit::KPathField*>("exportDestination");
-    context.expect(field != nullptr && field->findChild<QAction*>("exportBrowseAction") != nullptr &&
-                       rig.output(1, 21)->findChild<kit::KButton*>("exportBrowseButton") == nullptr,
-                   "Browse lives inside the Save to field");
-    auto* help = rig.output(1, 21)->findChild<kit::KButton*>("exportTokenHelpButton");
-    context.expect(help != nullptr && help->text() == "?" && help->variant() == kit::KButton::Variant::Secondary,
-                   "the name tokens help is a small Secondary ? button");
-    context.expect(!rig.visibleTexts().join('\n').contains("Tokens:"),
-                   "the tokens paragraph is not always on screen");
-    // Typing a path is one command.
-    rig.port.calls.clear();
-    field->setText("/exports/out.mp4");
-    emit field->editingFinished();
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0].starts_with("editOutput 1 21"),
-                   "typing where to save is one command");
-    const auto overwrite = rig.output(1, 21)->findChild<kit::KDropdown*>("exportOverwrite");
-    context.expect(overwrite->itemText(0) == "Ask me first" && overwrite->itemText(1) == "Replace it" &&
-                       overwrite->itemText(2) == "Don't render",
-                   "the overwrite choices read in plain words");
-}
-
-void platformNotSupported(TestContext& context) {
-    Rig rig;
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        snapshot.jobs = {makeJob(1, "Shot 010", rig.composition(), {makeOutput(11)})};
-        for (const auto command : {host::ExportCommand::StartAll})
-            refuse(snapshot.commands, command, host::ExportUnavailableCode::PlatformNotSupported,
-                   "Export runs on Linux in this version");
-        refuse(snapshot.jobs[0].commands, host::ExportCommand::Start,
-               host::ExportUnavailableCode::PlatformNotSupported, "Export runs on Linux in this version");
-    });
-    auto* note = rig.find<QLabel>("exportPlatformNote");
-    context.expect(note != nullptr && note->isVisibleTo(rig.area.get()) &&
-                       note->text() == "Export runs on Linux in this version",
-                   "an unsupported platform says so under the header");
-    context.expect(!rig.find<kit::KButton>("exportStartAllButton")->isEnabled() &&
-                       !rig.row(1)->jobButton()->isEnabled(),
-                   "Start and Start All are disabled");
-    rig.row(1)->startRename();
-    context.expect(rig.row(1)->findChild<kit::KLineEdit*>("exportJobRename")->isVisibleTo(rig.area.get()),
-                   "editing still works where export cannot run");
-    context.expect(rig.row(1)->statusText() == "Ready", "an unsupported platform does not turn a job into a fault");
-}
-
-void logAndVerification(TestContext& context) {
-    Rig rig;
-    rig.threeJobs();
-    rig.port.logs[3] = {{.sequence = 1, .sinceStart = std::chrono::milliseconds(1000),
-                         .code = "frame.ok", .message = "Frame 1 written"}};
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        snapshot.jobs[2].logEntryCount = 1;
-        snapshot.jobs[2].lastLogSequence = 1;
-    });
-    auto* results = rig.row(3)->results();
-    context.expect(results != nullptr && results->logText().contains("Frame 1 written"),
-                   "the log shows the run's entries");
-    rig.port.logs[3].push_back({.sequence = 2, .sinceStart = std::chrono::milliseconds(2000),
-                                .code = "frame.ok", .message = "Frame 2 written"});
-    rig.port.logGap = true;
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) { snapshot.jobs[2].lastLogSequence = 2; });
-    context.expect(results->logText().contains("Frame 2 written") &&
-                       results->logText().contains("Earlier entries were trimmed"),
-                   "new entries append and a trimmed gap is reported");
-    context.expect(results->logText().count("Frame 1 written") == 1, "entries are not re-read");
-}
-
-void narrowAndWide(TestContext& context) {
-    Rig rig;
-    rig.threeJobs();
-    context.expect(!rig.row(1)->twoLineHeader(), "a wide header is one line");
-    rig.area->resize(420, 760);
-    QApplication::processEvents();
-    context.expect(rig.row(1)->twoLineHeader() && rig.row(2)->twoLineHeader(),
-                   "a narrow header folds onto two lines");
-    auto* scroll = rig.find<QScrollArea>("exportJobList");
-    context.expect(scroll != nullptr && !scroll->horizontalScrollBar()->isVisible(),
-                   "a narrow list needs no horizontal scrolling");
-    rig.row(1)->setExpanded(true);
-    rig.open(1, 11);
-    context.expect(scroll->widget()->width() <= scroll->viewport()->width(),
-                   "an open job fits a narrow list: nothing is pushed past the edge");
-    rig.area->resize(900, 760);
-    QApplication::processEvents();
-    context.expect(!rig.row(1)->twoLineHeader(), "the header is one line again when wide");
-}
-
-void emptyAndAdd(TestContext& context) {
-    Rig rig;
-    auto* add = rig.find<kit::KButton>("exportAddActiveButton");
-    context.expect(add != nullptr && add->isEnabled(), "Add composition is enabled");
-    QTest::mouseClick(add, Qt::LeftButton);
-    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0].starts_with("addJobs "),
-                   "Add composition adds a job");
-    context.expect(rig.editor->jobRows().size() == 1, "the new job appears in the list");
-    context.expect(rig.editor->selectedJob().has_value(), "the new job is selected");
-    context.expect(rig.shown("exportAddCompositionButton") &&
-                       rig.find<kit::KButton>("exportAddCompositionButton")->variant() ==
-                           kit::KButton::Variant::Secondary,
-                   "with jobs, the header offers Add composition as a Secondary button");
-    // A refusal leaves the button with its reason.
-    Rig closed;
-    closed.publish([](host::ExportQueueSnapshot& snapshot) {
-        refuse(snapshot.commands, host::ExportCommand::AddJob, host::ExportUnavailableCode::QueueFull,
-               "The queue is full.");
-    });
-    context.expect(!closed.find<kit::KButton>("exportAddActiveButton")->isEnabled() &&
-                       closed.find<kit::KButton>("exportAddActiveButton")->toolTip() == "The queue is full.",
-                   "Add gives the queue's reason when it cannot add");
-}
-
-void dragFromAssets(TestContext& context) {
-    Rig rig;
-    rig.threeJobs();
-    rig.port.calls.clear();
-    QMimeData mime;
-    mime.setData(kCompositionMimeType, QByteArray::number(static_cast<qulonglong>(rig.composition().value())));
-    const QPoint where(60, 90);
-    QDragEnterEvent enter(where, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(rig.editor, &enter);
-    context.expect(enter.isAccepted(), "the list accepts a composition dragged from Assets");
-    QDropEvent drop(where, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(rig.editor, &drop);
-    context.expect(drop.isAccepted() && rig.port.calls.size() == 1 && rig.port.calls[0].starts_with("addJobs "),
-                   "dropping a composition from Assets adds a job");
-    context.expect(rig.editor->jobRows().size() == 4, "the dropped composition is a new row");
-    // Anything else is refused.
-    QMimeData other;
-    other.setText("not a composition");
-    QDragEnterEvent refused(where, Qt::CopyAction, &other, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(rig.editor, &refused);
-    context.expect(!refused.isAccepted(), "a drag that is not a composition is refused");
-    // Over the empty page too.
-    Rig empty;
-    mime.setData(kCompositionMimeType, QByteArray::number(static_cast<qulonglong>(empty.composition().value())));
-    QDragEnterEvent emptyEnter(where, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(empty.editor, &emptyEnter);
-    QDropEvent emptyDrop(where, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(empty.editor, &emptyDrop);
-    context.expect(empty.port.calls.size() == 1, "a drop on the empty list adds a job too");
-}
-
-void panelsNeverPump(TestContext& context) {
-    Rig rig;
-    rig.threeJobs();
-    const int pumps = rig.port.pumps;
-    // Selecting, editing and refreshing a panel never pumps; a second panel changes nothing.
-    rig.editor->selectJob(document::ExportJobId::fromRaw(2));
-    (void)rig.adapter->start(document::ExportJobId::fromRaw(2));
-    context.expect(rig.port.pumps == pumps, "panels and commands never pump; only drain() does");
-}
-
-void availabilityReasons(TestContext& context) {
-    Rig rig;
-    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
-        auto job = makeJob(1, "Shot 010", rig.composition(), {makeOutput(11)});
-        refuse(job.commands, host::ExportCommand::Start, host::ExportUnavailableCode::PreflightBlocked,
-               "Choose a destination.");
-        refuse(job.commands, host::ExportCommand::Retry, host::ExportUnavailableCode::NotFinished,
-               "Only a finished job can run again.");
-        snapshot.jobs = {job};
-    });
-    auto* start = rig.row(1)->jobButton();
-    context.expect(!start->isEnabled() && start->toolTip() == "Choose a destination.",
-                   "Start gives its reason (as a tooltip and as a line in the job)");
-    context.expect(rig.row(1)->reasonsText().contains("Choose a destination."), "and as a visible line");
-    // The overflow menu lists reasons as tooltips.
-    const auto menu = rig.row(1)->buildMenu();
-    bool reasoned = false;
-    for (auto* action : menu->actions())
-        if (action->objectName() == "exportRetryAction")
-            reasoned = !action->isEnabled() && action->toolTip().contains("finished");
-    context.expect(reasoned, "a menu action that cannot run carries its reason");
-}
-
-// ---------------------------------------------------------------------------------------------
-// Dragging compositions from Assets
 
 void dropManyFromAssets(TestContext& context) {
     QTemporaryDir directory;
@@ -1487,7 +582,7 @@ void dropManyFromAssets(TestContext& context) {
         const auto [entered, dropped] = dropAt(mime.get(), QPoint(40, 60));
         context.expect(entered && dropped && port.calls == std::vector<std::string>{"addJobs " + std::to_string(comps[1].value())},
                        "dropping one composition adds one job");
-        context.expect(editor->jobRows().size() == 1 && editor->selectedJob().has_value(),
+        context.expect(editor->jobOrder().size() == 1 && editor->selectedJob().has_value(),
                        "the new job is shown and selected");
         context.expect(!editor->dropIndicatorShown(), "the highlight is gone after the drop");
     }
@@ -1505,7 +600,7 @@ void dropManyFromAssets(TestContext& context) {
                            snap->jobs[1].record.composition == comps[0] &&
                            snap->jobs[2].record.composition == comps[1],
                        "the jobs are in the order of the drag");
-        context.expect(editor->jobRows().size() == 3 && editor->selectedJob() == snap->jobs[0].id,
+        context.expect(editor->jobOrder().size() == 3 && editor->selectedJob() == snap->jobs[0].id,
                        "all three are shown and the first is selected");
     }
     // Footage in the selection is ignored; footage alone is refused.
@@ -1532,21 +627,21 @@ void dropManyFromAssets(TestContext& context) {
         });
         adapter.drain();
         QApplication::processEvents();
-        auto* list = area.findChild<QScrollArea*>("exportJobList");
-        const auto rows = editor->jobRows();
-        context.expect(rows.size() == 3, "three jobs are listed");
-        const auto toEditor = [&](const int listY) { return editor->mapFrom(list->widget(), QPoint(40, listY)); };
+        auto* list = editor->renderList();
+        context.expect(list->topLevelItemCount() == 3, "three jobs are listed");
+        const auto rect = [&](const int row) { return list->visualItemRect(list->topLevelItem(row)); };
+        const auto toEditor = [&](const int listY) { return list->viewport()->mapTo(editor, QPoint(40, listY)); };
         std::unique_ptr<QMimeData> mime(payload({comps[1], comps[2]}));
         // Just below the first job's centre line: after job one.
-        const auto between = toEditor(rows[0]->geometry().bottom());
+        const auto between = toEditor(rect(0).bottom());
         context.expect(editor->dropIndexAt(between) == 1, "the pointer between jobs one and two means index 1");
         QDragEnterEvent enter(between, Qt::CopyAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(editor, &enter);
-        context.expect(editor->dropIndicatorShown() && editor->dropIndicatorY() == rows[1]->geometry().top(),
+        context.expect(editor->dropIndicatorShown() && std::abs(editor->dropIndicatorY() - rect(1).top()) <= kit::px(kit::Spacing::XXS),
                        "a line shows at the top of job two");
-        const auto afterAll = toEditor(rows[2]->geometry().bottom() + 40);
+        const auto afterAll = toEditor(rect(2).bottom() + 40);
         context.expect(editor->dropIndexAt(afterAll) == 3, "below the last job means the end");
-        const auto beforeAll = toEditor(rows[0]->geometry().top());
+        const auto beforeAll = toEditor(rect(0).top());
         context.expect(editor->dropIndexAt(beforeAll) == 0, "above the first job means the start");
         port.calls.clear();
         QDropEvent drop(between, Qt::CopyAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
@@ -1565,30 +660,723 @@ void dropManyFromAssets(TestContext& context) {
         QTest::qWait(10);
 }
 
-void addJobsIsOneUndo(TestContext& context) {
-    Rig rig(false);
-    ExportQueueEdits edits(
-        rig.session,
-        [] {
-            host::ExportDefaultPreset preset;
-            preset.presetId = "builtin:h264-mp4";
-            preset.destination = host::defaultExportDestination(preset.settings.format);
-            return preset;
-        },
-        [](const std::string& id) { return std::optional(ExportPresetChoice{id, {}}); });
-    const auto jobs = [&] { return rig.session.snapshot().project().exportQueue().jobs; };
-    context.expect(edits.addJob(rig.composition()).accepted && jobs().size() == 1, "a first job exists");
-    const auto first = jobs()[0].id;
-    const auto result = edits.addJobs({rig.composition(), rig.composition(), rig.composition()}, std::size_t{0});
-    context.expect(result.accepted && result.addedJobs.size() == 3 && jobs().size() == 4,
-                   "three compositions add three jobs and report them in order");
-    context.expect(jobs()[0].id == result.addedJobs[0] && jobs()[2].id == result.addedJobs[2] && jobs()[3].id == first,
-                   "they are placed at the index given");
-    (void)rig.session.undo();
-    context.expect(jobs().size() == 1 && jobs()[0].id == first, "one undo removes all three");
-    (void)rig.session.redo();
-    context.expect(jobs().size() == 4 && jobs()[0].id == result.addedJobs[0], "one redo brings them back");
+
+// ---------------------------------------------------------------------------------------------
+// The render list
+
+void columnsAndOrder(TestContext& context) {
+    Rig rig;
+    context.expect(rig.editor != nullptr, "the Export editor is created by the registry");
+    rig.threeJobs();
+    auto* list = rig.list();
+    QStringList titles;
+    for (int column = 0; column < ep::ActionsColumn; ++column)
+        titles.push_back(list->headerItem()->text(column));
+    context.expect(titles == QStringList{"Render", "#", "Composition", "Status", "Started", "Render Time"},
+                   "the columns are Render, #, Composition, Status, Started and Render Time, in that order");
+    context.expect(!list->header()->isHidden(), "the list has real column headers");
+    context.expect(rig.editor->jobOrder() == std::vector{J(1), J(2), J(3)}, "the rows are in queue order");
+    context.expect(rig.cell(1, ep::NumberColumn) == "1" && rig.cell(3, ep::NumberColumn) == "3",
+                   "# is the queue order");
+    context.expect(rig.cell(1, ep::CompositionColumn) == "Shot 010", "Composition names the job");
+    context.expect(rig.editor->statusCell(J(1))->text() == "Rendering 50%", "a rendering job reads its percent");
+    context.expect(rig.editor->statusCell(J(2))->text() == "Queued", "a waiting job reads Queued");
+    context.expect(rig.editor->statusCell(J(3))->text() == "Failed", "a failed job reads Failed");
+    context.expect(rig.editor->statusCell(J(1))->barShown() && !rig.editor->statusCell(J(2))->barShown() &&
+                       !rig.editor->statusCell(J(3))->barShown(),
+                   "only the rendering job has a bar, in its Status cell");
+    context.expect(rig.area->findChildren<kit::KColorChip*>().isEmpty(), "there is no label colour");
+    bool onlyChecks = true;
+    for (auto* toggle : rig.area->findChildren<kit::KSwitch*>())
+        onlyChecks = onlyChecks && qobject_cast<kit::KCheckBox*>(toggle) != nullptr;
+    context.expect(onlyChecks, "there are no switches, only the Render check boxes");
+    // The check box is centred in its cell, after the row's caret.
+    auto* check = rig.editor->renderCheck(J(1));
+    const auto box = check->box()->geometry().center().x();
+    context.expect(std::abs(box - check->width() / 2) <= 1, "the Render check box is centred in its column");
+    // Every row's text starts under its column title.
+    const auto header = list->header();
+    for (const int column : {ep::NumberColumn, ep::CompositionColumn})
+        context.expect(list->visualItemRect(rig.item(1)).isValid() &&
+                           list->visualRect(list->model()->index(list->indexOfTopLevelItem(rig.item(1)), column))
+                                   .left() ==
+                               header->sectionViewportPosition(column),
+                       "a cell lines up with its column title");
+    // A job opens to Render Settings and one Output Module line per output, folded by default.
+    context.expect(!rig.item(1)->isExpanded(), "a job starts folded");
+    rig.openJob(1);
+    auto* settings = rig.editor->renderSettingsLine(J(1));
+    auto* module = rig.editor->outputLine(J(1), O(11));
+    context.expect(settings != nullptr && settings->isVisibleTo(rig.area.get()) &&
+                       settings->link()->text().contains("Work area"),
+                   "an open job shows its Render Settings line with the range as a link");
+    context.expect(module != nullptr && module->moduleLink()->text() == "H.264 MP4" &&
+                       module->destinationLink()->text() == "renders/out.mp4",
+                   "the Output Module line names the format and Output To where it saves");
+    context.expect(settings->link()->variant() == kit::KButton::Variant::Link &&
+                       module->moduleLink()->variant() == kit::KButton::Variant::Link &&
+                       module->destinationLink()->variant() == kit::KButton::Variant::Link,
+                   "the values are kit links");
+    // The labels share one right-aligned column, so the values start at one x.
+    const auto valueX = [&](QWidget* widget) { return widget->mapTo(list->viewport(), QPoint(0, 0)).x(); };
+    context.expect(valueX(settings->picks()) == valueX(module->presetsButton()),
+                   "Render Settings and Output Module values start at the same x");
+    if (valueX(settings->picks()) != list->valueLeft())
+        std::fprintf(stderr, "values at %d, list says %d, line at %d\n", valueX(settings->picks()), list->valueLeft(),
+                     valueX(settings));
+    context.expect(valueX(settings->picks()) == list->valueLeft(), "where the list says values start");
+    // A line's disclosure shows what it comes to.
+    rig.item(1)->child(0)->setExpanded(true);
+    QApplication::processEvents();
+    auto* summary = rig.editor->summaryLine(rig.item(1)->child(0));
+    context.expect(summary != nullptr && summary->isVisibleTo(rig.area.get()) &&
+                       summary->text().contains("240 frames"),
+                   "Render Settings opens to its frames");
 }
+
+void renderCheckAndStartAll(TestContext& context) {
+    Rig rig;
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
+        snapshot.jobs = {jobIn(rig, 1, host::ExportJobState::Ready), jobIn(rig, 2, host::ExportJobState::Ready)};
+    });
+    auto* startAll = rig.find<kit::KButton>("exportStartAllButton");
+    context.expect(startAll->isEnabled() && startAll->variant() == kit::KButton::Variant::Primary,
+                   "Start All is the Primary while a job is ready");
+    context.expect(rig.visiblePrimaries() <= 1, "one Primary at most");
+    auto* check = rig.editor->renderCheck(J(1))->box();
+    context.expect(check->isChecked(), "a job is checked: Start All includes it");
+    rig.port.calls.clear();
+    QTest::mouseClick(check, Qt::LeftButton);
+    context.expect(rig.port.calls == std::vector<std::string>{"editJob 1 enabled=0"},
+                   "unchecking Render is one edit of Include in Start All");
+    rig.publish([](host::ExportQueueSnapshot& snapshot) {
+        for (auto& job : snapshot.jobs) {
+            job.record.enabled = false;
+        }
+    });
+    context.expect(!startAll->isEnabled() && startAll->variant() != kit::KButton::Variant::Primary,
+                   "with every job unchecked Start All waits and is not the Primary");
+    context.expect(!startAll->toolTip().isEmpty(), "and says why");
+    rig.publish([](host::ExportQueueSnapshot& snapshot) { snapshot.jobs[1].record.enabled = true; });
+    context.expect(startAll->isEnabled() && startAll->variant() == kit::KButton::Variant::Primary,
+                   "one checked job makes Start All the Primary again");
+    rig.port.calls.clear();
+    QTest::mouseClick(startAll, Qt::LeftButton);
+    context.expect(rig.port.calls == std::vector<std::string>{"startAll"}, "Start All starts the queue");
+    // Stop All shows only while something renders.
+    context.expect(rig.find<kit::KButton>("exportStopAllButton")->property("chromeSuppressed").toBool(),
+                   "Stop All is hidden while nothing renders");
+}
+
+void renderSettingsDialog(TestContext& context) {
+    Rig rig;
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) { snapshot.jobs = {jobIn(rig, 1, host::ExportJobState::Ready)}; });
+    rig.openJob(1);
+    rig.port.calls.clear();
+    QTest::mouseClick(rig.editor->renderSettingsLine(J(1))->link(), Qt::LeftButton);
+    auto* dialog = openDialog<ep::RenderSettingsDialog>(rig);
+    context.expect(dialog != nullptr, "the Render Settings link opens the Render Settings dialog");
+    if (dialog == nullptr)
+        return;
+    context.expect(dialog->windowTitle() == "Render Settings", "it is called Render Settings");
+    auto* group = dialog->findChild<kit::KSection*>("exportRenderSettingsComposition");
+    context.expect(group != nullptr && group->title() == QStringLiteral("Composition “Main”"),
+                   "its group names the composition, as After Effects does");
+    context.expect(dialog->startText().startsWith("0:00:00:00") && dialog->durationText().contains("240 frames"),
+                   "it reads where the range starts and how long it is");
+    context.expect(!dialog->startField()->isVisibleTo(dialog), "a work area has no frame fields");
+    // Cancel changes nothing.
+    dialog->rangeKind()->setCurrentIndex(dialog->rangeKind()->findData(static_cast<int>(document::ExportRangeKind::Custom)));
+    dialog->button(kit::KDialog::Role::Reject)->click();
+    QApplication::processEvents();
+    context.expect(rig.port.calls.empty(), "Cancel changes nothing");
+    // A custom range, with its timecode, is one edit on OK.
+    rig.editor->openRenderSettings(J(1));
+    dialog = openDialog<ep::RenderSettingsDialog>(rig);
+    if (dialog == nullptr)
+        return;
+    dialog->rangeKind()->setCurrentIndex(dialog->rangeKind()->findData(static_cast<int>(document::ExportRangeKind::Custom)));
+    context.expect(dialog->startField()->isVisibleTo(dialog) && dialog->endField()->isVisibleTo(dialog),
+                   "Custom shows start and end frame fields");
+    dialog->startField()->setIntegerValue(24);
+    dialog->endField()->setIntegerValue(47);
+    context.expect(dialog->startText() == "0:00:01:00" && dialog->durationText().contains("24 frames"),
+                   "the fields read as timecode and a duration");
+    dialog->endField()->setIntegerValue(10);
+    context.expect(!dialog->button(kit::KDialog::Role::Accept)->isEnabled(),
+                   "an end before the start is refused under its field");
+    dialog->endField()->setIntegerValue(47);
+    dialog->button(kit::KDialog::Role::Accept)->click();
+    QApplication::processEvents();
+    context.expect(rig.port.calls == std::vector<std::string>{"editJob 1 range=3:24-47"},
+                   "OK writes the range as one edit");
+    // One frame hides the end.
+    rig.editor->openRenderSettings(J(1));
+    dialog = openDialog<ep::RenderSettingsDialog>(rig);
+    if (dialog == nullptr)
+        return;
+    dialog->rangeKind()->setCurrentIndex(dialog->rangeKind()->findData(static_cast<int>(document::ExportRangeKind::Frame)));
+    context.expect(!dialog->endShown() && dialog->durationText().contains("1 frame"), "One frame has no end");
+    dialog->button(kit::KDialog::Role::Reject)->click();
+    QApplication::processEvents();
+}
+
+void outputModuleDialog(TestContext& context) {
+    Rig rig;
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
+        auto job = makeJob(1, "Shot 010", rig.composition(),
+                           {makeOutput(11), makeOutput(12, "builtin:prores-422hq-mov", document::ExportFormat::ProResMov,
+                                                       "Exports/Shot 010.mov")});
+        snapshot.jobs = {job};
+    });
+    rig.openJob(1);
+    rig.port.calls.clear();
+    QTest::mouseClick(rig.editor->outputLine(J(1), O(12))->moduleLink(), Qt::LeftButton);
+    auto* dialog = openDialog<ep::OutputModuleDialog>(rig);
+    context.expect(dialog != nullptr, "the Output Module link opens the Output Module dialog");
+    if (dialog == nullptr)
+        return;
+    context.expect(dialog->mainSection()->title() == QStringLiteral("“ProRes 422 HQ”"),
+                   "its first group names the preset");
+    context.expect(!rig.visibleTexts().join('\n').contains("olour"),
+                   "visible copy is American English (Color, not Colour)");
+    // Grouped formats, video first.
+    QStringList items;
+    for (int index = 0; index < dialog->format()->count(); ++index)
+        items.push_back(dialog->format()->itemText(index));
+    context.expect(items.size() >= 2 && items.front() == "Video" && !dialog->format()->isItemEnabled(0) &&
+                       items.indexOf("Image sequences") > items.indexOf("ProRes 422 HQ"),
+                   "formats are grouped, video first, then image sequences");
+    // ProRes: a profile, display and view, audio; no compression, colour space or numbering.
+    context.expect(dialog->shows(dialog->profile()) && !dialog->shows(dialog->compression()) &&
+                       dialog->shows(dialog->display()) && dialog->shows(dialog->view()) &&
+                       !dialog->shows(dialog->colourSpace()) && dialog->shows(dialog->includeAudio()) &&
+                       dialog->shows(dialog->bakeLook()) && !dialog->shows(dialog->startNumber()),
+                   "ProRes shows only what applies to it");
+    context.expect(dialog->shows(dialog->cachedFrames()) && dialog->shows(dialog->importIntoAssets()) &&
+                       dialog->shows(dialog->overwrite()),
+                   "cached frames, post-render and If a file is there are always there");
+    // Choosing OpenEXR takes its settings and shows what applies to it.
+    dialog->format()->chooseIndex(dialog->format()->findData(QStringLiteral("builtin:exr-sequence")));
+    QApplication::processEvents();
+    context.expect(dialog->mainSection()->title() == QStringLiteral("“OpenEXR sequence”"),
+                   "the group follows the chosen preset");
+    context.expect(dialog->shows(dialog->compression()) && dialog->shows(dialog->colourSpace()) &&
+                       !dialog->shows(dialog->display()) && !dialog->shows(dialog->includeAudio()) &&
+                       dialog->shows(dialog->startNumber()) && dialog->shows(dialog->padding()),
+                   "OpenEXR shows compression, colour space and numbering");
+    dialog->importIntoAssets()->setChecked(true);
+    dialog->overwrite()->setCurrentIndex(
+        dialog->overwrite()->findData(static_cast<int>(document::ExportOverwritePolicy::Replace)));
+    dialog->button(kit::KDialog::Role::Accept)->click();
+    QApplication::processEvents();
+    context.expect(rig.port.calls ==
+                       std::vector<std::string>{"editOutput 1 12 preset=builtin:exr-sequence settings "
+                                                "destination=Exports/Shot 010.mov policy=2 import=1"},
+                   "OK writes every change as one edit");
+    // Cancel changes nothing.
+    rig.port.calls.clear();
+    dialog = rig.editor->openOutputModule(J(1), O(11));
+    QApplication::processEvents();
+    if (dialog == nullptr)
+        return;
+    dialog->cachedFrames()->setChecked(false);
+    dialog->button(kit::KDialog::Role::Reject)->click();
+    QApplication::processEvents();
+    context.expect(rig.port.calls.empty(), "Cancel changes nothing");
+    // OK with nothing changed writes nothing.
+    dialog = rig.editor->openOutputModule(J(1), O(11));
+    QApplication::processEvents();
+    if (dialog != nullptr)
+        dialog->button(kit::KDialog::Role::Accept)->click();
+    QApplication::processEvents();
+    context.expect(rig.port.calls.empty(), "OK without a change writes nothing");
+}
+
+void everyFormatIsOffered(TestContext& context) {
+    Rig rig;
+    auto catalogue = makeCatalogue();
+    auto& hevc = catalogue->presets.emplace_back(makePreset("builtin:hevc-mp4", "HEVC MP4",
+                                                            host::ExportPresetCategory::Video,
+                                                            document::ExportFormat::HevcMp4));
+    hevc.platformAvailability.available = false;
+    hevc.platformAvailability.reason = "HEVC needs a VA-API render node with HEVC encode";
+    auto output = makeOutput(11, "builtin:hevc-mp4", document::ExportFormat::HevcMp4, "Exports/a.mp4");
+    output.availability.available = false;
+    output.availability.reason = "HEVC needs a VA-API render node with HEVC encode";
+    output.availability.remedy = host::ExportRemedy::InstallOpenH264;
+    ep::OutputModuleDialog dialog(output, catalogue, {}, *rig.editor);
+    const int index = dialog.format()->findData(QStringLiteral("builtin:hevc-mp4"));
+    context.expect(index >= 0 && dialog.format()->itemText(index) == "HEVC MP4" && dialog.format()->isItemEnabled(index),
+                   "a format the engine reports unavailable is listed like any other");
+    QStringList texts;
+    for (auto* label : dialog.findChildren<QLabel*>())
+        texts.push_back(label->text());
+    for (auto* button : dialog.findChildren<kit::KButton*>())
+        texts.push_back(button->text());
+    const auto all = texts.join('\n');
+    context.expect(!all.contains("not available") && !all.contains("VA-API") && !all.contains("Install") &&
+                       !all.contains("Locate"),
+                   "the dialog never says unavailable and never offers to install an encoder");
+}
+
+void addAndRemoveOutputs(TestContext& context) {
+    Rig rig;
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
+        snapshot.jobs = {jobIn(rig, 1, host::ExportJobState::Ready)};
+    });
+    rig.openJob(1);
+    auto* line = rig.editor->outputLine(J(1), O(11));
+    context.expect(!line->removeButton()->isEnabled() &&
+                       line->removeButton()->toolTip() == "A job keeps at least one output.",
+                   "− is disabled on the last output, with the reason");
+    rig.port.calls.clear();
+    QTest::mouseClick(line->addButton(), Qt::LeftButton);
+    QApplication::processEvents();
+    context.expect(rig.port.calls == std::vector<std::string>{"addOutput 1"}, "+ adds an output");
+    auto* added = rig.editor->outputLine(J(1), O(5000));
+    context.expect(added != nullptr && added->isVisibleTo(rig.area.get()),
+                   "each output gets its own Output Module line");
+    auto* first = rig.editor->outputLine(J(1), O(11));
+    context.expect(first != nullptr && first->removeButton()->isEnabled(), "with two outputs − works");
+    rig.port.calls.clear();
+    QTest::mouseClick(first->removeButton(), Qt::LeftButton);
+    context.expect(rig.port.calls == std::vector<std::string>{"removeOutput 1 11"}, "− removes this output");
+    // The + − and Output To line up across outputs.
+    auto* second = rig.editor->outputLine(J(1), O(5000));
+    const auto x = [&](QWidget* widget) { return widget->mapTo(rig.list()->viewport(), QPoint(0, 0)).x(); };
+    context.expect(x(first->addButton()) == x(second->addButton()) &&
+                       x(first->destinationLink()) == x(second->destinationLink()),
+                   "+, − and Output To line up across outputs");
+}
+
+void quickPickMenus(TestContext& context) {
+    Rig rig;
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) { snapshot.jobs = {jobIn(rig, 1, host::ExportJobState::Ready)}; });
+    rig.openJob(1);
+    std::unique_ptr<QMenu> range(rig.editor->renderSettingsLine(J(1))->buildPicks());
+    context.expect(actionTexts(*range) == QStringList{"Work area", "Whole composition", "Current frame"},
+                   "the range ▾ offers Work area, Whole composition and Current frame");
+    context.expect(actionNamed(*range, "Current frame")->isEnabled(), "Current frame works in the open composition");
+    rig.port.calls.clear();
+    actionNamed(*range, "Whole composition")->trigger();
+    context.expect(rig.port.calls == std::vector<std::string>{"editJob 1 range=2:0-0"},
+                   "a quick pick is one edit of the range");
+    rig.port.calls.clear();
+    actionNamed(*range, "Current frame")->trigger();
+    context.expect(rig.port.calls == std::vector<std::string>{"editJob 1 range=4:0-0"},
+                   "Current frame renders the frame under the playhead");
+    auto* line = rig.editor->outputLine(J(1), O(11));
+    std::unique_ptr<QMenu> presets(line->buildPresets());
+    const auto all = actionTexts(*presets, true);
+    context.expect(all.indexOf("Video") == 0 && all.indexOf("Image sequences") > all.indexOf("ProRes 422 HQ") &&
+                       all.indexOf("OpenEXR sequence") > all.indexOf("Image sequences"),
+                   "the format ▾ lists video first, then image sequences");
+    rig.port.calls.clear();
+    actionNamed(*presets, "ProRes 422 HQ")->trigger();
+    context.expect(rig.port.calls == std::vector<std::string>{"applyPreset 1 11 builtin:prores-422hq-mov"},
+                   "picking a format applies its preset");
+    std::unique_ptr<QMenu> destinations(line->buildDestinations());
+    context.expect(actionTexts(*destinations).front() == "Default name", "Output To ▾ offers Default name first");
+    rig.port.calls.clear();
+    actionNamed(*destinations, "Default name")->trigger();
+    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0].starts_with("editOutput 1 11 destination=Exports/"),
+                   "Default name puts the default destination back");
+    ep::rememberExportFolder(QStringLiteral("/tmp/renders"));
+    rig.publish([](host::ExportQueueSnapshot&) {});
+    std::unique_ptr<QMenu> recent(rig.editor->outputLine(J(1), O(11))->buildDestinations());
+    context.expect(actionNamed(*recent, QDir::toNativeSeparators("/tmp/renders")) != nullptr,
+                   "Output To ▾ offers the recent folders");
+    rig.port.calls.clear();
+    actionNamed(*recent, QDir::toNativeSeparators("/tmp/renders"))->trigger();
+    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0].find("chosen=/tmp/renders/") != std::string::npos,
+                   "a recent folder keeps the default name in that folder");
+}
+
+void replaceConfirm(TestContext& context) {
+    Rig rig;
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
+        auto job = jobIn(rig, 1, host::ExportJobState::Ready);
+        job.outputs[0].preflight.push_back({host::ExportPreflightCode::DestinationExists,
+                                            host::ExportPreflightTarget::Destination,
+                                            host::ExportPreflightSeverity::NeedsConfirmation,
+                                            "out.mp4 already exists."});
+        refuse(job.commands, host::ExportCommand::Start, host::ExportUnavailableCode::NeedsReplaceConfirmation,
+               "Replace existing files?");
+        snapshot.jobs = {job};
+    });
+    context.expect(rig.editor->statusCell(J(1))->text() == "Waiting for your OK",
+                   "a file that is already there reads Waiting for your OK");
+    auto* startAll = rig.find<kit::KButton>("exportStartAllButton");
+    context.expect(startAll->isEnabled() && startAll->variant() == kit::KButton::Variant::Primary,
+                   "Start All stays the Primary: it asks before it replaces");
+    rig.port.calls.clear();
+    QTest::mouseClick(startAll, Qt::LeftButton);
+    auto* prompt = openPrompt(rig, "exportReplaceConfirm");
+    context.expect(prompt != nullptr, "Start All asks once before replacing");
+    if (prompt == nullptr)
+        return;
+    auto* heading = prompt->findChild<QLabel*>("exportReplaceConfirmHeading");
+    context.expect(heading != nullptr && heading->text() == "Replace out.mp4?", "it names the file");
+    context.expect(prompt->button(kit::KDialog::Role::Destructive) != nullptr &&
+                       prompt->button(kit::KDialog::Role::Destructive)->text() == "Replace" &&
+                       prompt->button(kit::KDialog::Role::Alternate)->text() == "Choose another name" &&
+                       prompt->button(kit::KDialog::Role::Reject)->text() == "Cancel",
+                   "Replace, Choose another name and Cancel");
+    prompt->button(kit::KDialog::Role::Reject)->click();
+    QApplication::processEvents();
+    context.expect(rig.port.calls.empty(), "Cancel starts nothing and replaces nothing");
+    QTest::mouseClick(startAll, Qt::LeftButton);
+    prompt = openPrompt(rig, "exportReplaceConfirm");
+    if (prompt == nullptr)
+        return;
+    prompt->button(kit::KDialog::Role::Destructive)->click();
+    QApplication::processEvents();
+    context.expect(rig.port.calls == std::vector<std::string>{"confirmReplace 1 11", "startAll"},
+                   "Replace says yes for the file, then starts");
+    // The row's own Start asks the same question.
+    rig.port.calls.clear();
+    const auto menu = rig.editor->buildJobMenu(J(1));
+    auto* start = actionNamed(*menu, "exportStartAction");
+    context.expect(start != nullptr && start->isEnabled(), "the row's Start is offered");
+    start->trigger();
+    prompt = openPrompt(rig, "exportReplaceConfirm");
+    context.expect(prompt != nullptr, "and asks before replacing");
+    if (prompt != nullptr) {
+        prompt->button(kit::KDialog::Role::Destructive)->click();
+        QApplication::processEvents();
+    }
+    context.expect(rig.port.calls == std::vector<std::string>{"confirmReplace 1 11", "start 1"},
+                   "then starts that job");
+}
+
+void rowMenu(TestContext& context) {
+    Rig rig;
+    rig.threeJobs();
+    const auto menu = rig.editor->buildJobMenu(J(2));
+    const auto texts = actionTexts(*menu);
+    for (const auto* item : {"Details…", "Duplicate", "Remove", "Move up", "Move down", "Copy as bloom-cli command",
+                             "Copy as Python"})
+        context.expect(texts.contains(QString::fromUtf8(item)), (std::string("the ⋯ menu offers ") + item).c_str());
+    context.expect(texts.indexOf("Duplicate") < texts.indexOf("Remove") &&
+                       texts.indexOf("Remove") < texts.indexOf("Move up") &&
+                       texts.indexOf("Move down") < texts.indexOf("Copy as bloom-cli command"),
+                   "in the After Effects order");
+    rig.port.calls.clear();
+    actionNamed(*menu, "Move up")->trigger();
+    actionNamed(*menu, "Duplicate")->trigger();
+    context.expect(rig.port.calls == std::vector<std::string>{"moveJob 2 0", "duplicateJob 2"},
+                   "Move up and Duplicate are one command each");
+    const auto first = rig.editor->buildJobMenu(J(1));
+    context.expect(!actionNamed(*first, "Move up")->isEnabled() && !actionNamed(*first, "Move up")->toolTip().isEmpty(),
+                   "the first job cannot move up, and says so");
+    actionNamed(*first, "Copy as Python")->trigger();
+    context.expect(QGuiApplication::clipboard()->text() == "bloom-cli export-script", "Copy as Python copies the script");
+    // The ⋯ button opens it.
+    context.expect(rig.area->findChildren<kit::KIconButton*>("exportJobMenuButton").size() == 3,
+                   "every row has its ⋯ button");
+}
+
+void dragToReorder(TestContext& context) {
+    Rig rig;
+    rig.threeJobs();
+    auto* list = rig.list();
+    context.expect(rig.item(1)->flags().testFlag(Qt::ItemIsDragEnabled), "a job row can be picked up");
+    const auto toEditor = [&](const int y) { return list->viewport()->mapTo(rig.editor, QPoint(40, y)); };
+    const auto drop = [&](const std::uint64_t job, const QPoint where) {
+        QMimeData mime;
+        mime.setData(ep::kExportJobsMimeType, QByteArray::number(static_cast<qulonglong>(job)));
+        QDragEnterEvent enter(where, Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(rig.editor, &enter);
+        QDragMoveEvent move(where, Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(rig.editor, &move);
+        const bool line = rig.editor->dropIndicatorShown();
+        QDropEvent dropped(where, Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(rig.editor, &dropped);
+        return enter.isAccepted() && line && dropped.isAccepted();
+    };
+    rig.port.calls.clear();
+    context.expect(drop(3, toEditor(list->visualItemRect(rig.item(1)).top() + 1)),
+                   "a job row dragged in the list shows the line and is taken");
+    context.expect(rig.port.calls == std::vector<std::string>{"moveJob 3 0"}, "dropping it above the first moves it first");
+    rig.port.calls.clear();
+    (void)drop(1, toEditor(list->visualItemRect(rig.item(3)).bottom() + 20));
+    context.expect(rig.port.calls == std::vector<std::string>{"moveJob 1 2"}, "dropping it at the end moves it last");
+    rig.port.calls.clear();
+    (void)drop(2, toEditor(list->visualItemRect(rig.item(2)).center().y()));
+    context.expect(rig.port.calls.empty(), "dropping it where it is moves nothing");
+}
+
+void dragFromAssets(TestContext& context) {
+    Rig rig;
+    rig.threeJobs();
+    rig.port.calls.clear();
+    QMimeData mime;
+    mime.setData(kCompositionMimeType, QByteArray::number(static_cast<qulonglong>(rig.composition().value())));
+    const QPoint where(60, 90);
+    QDragEnterEvent enter(where, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(rig.editor, &enter);
+    context.expect(enter.isAccepted(), "the list accepts a composition dragged from Assets");
+    QDropEvent drop(where, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(rig.editor, &drop);
+    context.expect(drop.isAccepted() && rig.port.calls.size() == 1 && rig.port.calls[0].starts_with("addJobs "),
+                   "dropping a composition from Assets adds a job");
+    context.expect(rig.editor->jobOrder().size() == 4, "the dropped composition is a new row");
+    QMimeData other;
+    other.setText("not a composition");
+    QDragEnterEvent refused(where, Qt::CopyAction, &other, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(rig.editor, &refused);
+    context.expect(!refused.isAccepted(), "a drag that is not a composition is refused");
+}
+
+void currentRenderStrip(TestContext& context) {
+    QSettings().remove(QStringLiteral("export/current-render/expanded"));
+    Rig rig;
+    rig.threeJobs();
+    context.expect(rig.editor->currentRenderText() ==
+                       QStringLiteral("Rendering Shot 010 · frame 121 of 240 · 0:07 elapsed · about 42 s left"),
+                   "the strip says what renders, the frame, the time and what is left");
+    context.expect(!rig.editor->currentRenderExpanded() && !rig.shown("exportCurrentRenderBar"),
+                   "the strip starts folded to its one line");
+    QTest::mouseClick(rig.find<QWidget>("exportCurrentRenderToggle"), Qt::LeftButton);
+    auto* bar = rig.find<kit::KProgressBar>("exportCurrentRenderBar");
+    context.expect(rig.editor->currentRenderExpanded() && bar->isVisibleTo(rig.area.get()) &&
+                       bar->completed() == 120 && bar->total() == 240,
+                   "opened, it adds a progress bar");
+    rig.publish([](host::ExportQueueSnapshot& snapshot) {
+        snapshot.activeJob.reset();
+        for (auto& job : snapshot.jobs)
+            if (job.state == host::ExportJobState::Rendering)
+                job.state = host::ExportJobState::Done;
+    });
+    context.expect(rig.editor->currentRenderText() == "Idle", "nothing rendering reads Idle");
+    rig.editor->setCurrentRenderExpanded(false);
+}
+
+void waitingForViewer(TestContext& context) {
+    Rig rig;
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
+        auto job = makeJob(1, "Shot 010", rig.composition(), {makeOutput(11)});
+        job.state = host::ExportJobState::Rendering;
+        job.progress.framesTotal = 240;
+        job.progress.framesCompleted = 60;
+        job.progress.elapsed = std::chrono::milliseconds(31000);
+        job.progress.route = host::ExportDeviceRoute::WaitingForViewer;
+        job.progress.remaining = std::chrono::milliseconds(9000); // never shown while waiting
+        snapshot.jobs = {job};
+        snapshot.activeJob = job.id;
+    });
+    auto* cell = rig.editor->statusCell(J(1));
+    context.expect(cell->text() == "Paused while you work in the Viewer", "waiting for the Viewer says so in plain words");
+    context.expect(cell->barShown() && cell->bar()->busy(), "waiting for the Viewer shows a busy bar");
+    context.expect(!rig.editor->currentRenderText().contains("left") &&
+                       rig.editor->currentRenderText().contains("paused while you work in the Viewer"),
+                   "the strip says so too, with no time left");
+    const auto status = ep::jobStatus(rig.port.snapshot()->jobs[0]);
+    context.expect(ep::toneColor(status.tone) == kit::Color::Muted, "waiting for the Viewer is neutral ink");
+}
+
+void statusWording(TestContext& context) {
+    using State = host::ExportJobState;
+    Rig rig(false);
+    const auto statusOf = [&](const State state, const host::ExportDeviceRoute route = host::ExportDeviceRoute::None) {
+        auto job = jobIn(rig, 1, state);
+        job.progress.route = route;
+        job.progress.fraction = 0.25;
+        if (state == State::Failed)
+            job.failure = host::ExportFailure{.reason = "boom", .summary = "It failed."};
+        return ep::jobStatus(job);
+    };
+    context.expect(statusOf(State::Ready).text == "Queued", "a ready job is Queued");
+    context.expect(statusOf(State::Waiting).text == "Queued", "a job waiting its turn is Queued");
+    context.expect(statusOf(State::Rendering).text == "Rendering 25%", "Rendering 25%");
+    context.expect(statusOf(State::Rendering, host::ExportDeviceRoute::WaitingForViewer).text ==
+                       "Paused while you work in the Viewer",
+                   "waiting for the Viewer is a calm plain sentence");
+    context.expect(statusOf(State::Done).text == "Done", "Done");
+    context.expect(statusOf(State::Failed).text == "Failed", "Failed");
+    const auto refused = [&](const host::ExportUnavailableCode code, const bool locationMissing) {
+        auto job = jobIn(rig, 1, State::Ready);
+        refuse(job.commands, host::ExportCommand::Start, code, "reason");
+        if (locationMissing)
+            job.outputs[0].preflight.push_back({.code = host::ExportPreflightCode::DestinationMissing,
+                                                .target = host::ExportPreflightTarget::Destination,
+                                                .severity = host::ExportPreflightSeverity::Blocking,
+                                                .reason = "Choose where to save this output."});
+        return ep::jobStatus(job).text;
+    };
+    context.expect(refused(host::ExportUnavailableCode::NeedsReplaceConfirmation, false) == "Waiting for your OK",
+                   "a replace question reads Waiting for your OK");
+    context.expect(refused(host::ExportUnavailableCode::PreflightBlocked, true) == "Needs output",
+                   "a missing destination reads Needs output");
+    for (int value = 1; value <= 12; ++value) {
+        auto job = jobIn(rig, 1, static_cast<State>(value));
+        if (job.state == State::Failed)
+            job.failure = host::ExportFailure{.reason = "boom"};
+        const auto status = ep::jobStatus(job);
+        context.expect(!status.text.isEmpty(), "every job state has status text");
+        const auto ink = ep::toneColor(status.tone);
+        context.expect(ink != kit::Color::Warn && ink != kit::Color::Ok, "no status is amber or green");
+        context.expect((ink == kit::Color::Error) == (job.state == State::Failed), "only Failed is red");
+    }
+}
+
+void detailsDialog(TestContext& context) {
+    Rig rig;
+    rig.threeJobs();
+    rig.port.logs[3] = {{.sequence = 1, .sinceStart = std::chrono::milliseconds(1000), .code = "frame.ok",
+                         .message = "Frame 1 written"},
+                        {.sequence = 2, .sinceStart = std::chrono::milliseconds(9000), .code = "verify.frames",
+                         .message = "Frame count differs"}};
+    rig.publish([](host::ExportQueueSnapshot& snapshot) { snapshot.jobs[2].lastLogSequence = 2; });
+    const auto ready = rig.editor->buildJobMenu(J(2));
+    context.expect(!actionNamed(*ready, "Details…")->isEnabled(), "a job that has not run has no details yet");
+    const auto menu = rig.editor->buildJobMenu(J(3));
+    auto* details = actionNamed(*menu, "Details…");
+    context.expect(details != nullptr && details->isEnabled(), "a failed job offers Details…");
+    details->trigger();
+    auto* dialog = openDialog<ep::JobDetailsDialog>(rig);
+    context.expect(dialog != nullptr, "Details… opens a dialog");
+    if (dialog == nullptr)
+        return;
+    context.expect(dialog->summaryText().startsWith("Couldn't save Shot 030."), "it says what happened in a sentence");
+    context.expect(dialog->lineTexts().join('\n').contains("The file has the wrong number of frames (expected 240, found 239)"),
+                   "the check of the file is a plain line with what was expected and found");
+    context.expect(dialog->logText().contains("Frame count differs"), "the log is there");
+    auto* copy = dialog->button(kit::KDialog::Role::Apply);
+    context.expect(copy != nullptr && copy->text() == "Copy details", "Copy details copies it for a bug report");
+    copy->click();
+    context.expect(QGuiApplication::clipboard()->text().contains("Frame count differs"), "Copy details copies the log");
+    dialog->button(kit::KDialog::Role::Accept)->click();
+    QApplication::processEvents();
+}
+
+void noRawCodes(TestContext& context) {
+    Rig rig;
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
+        auto job = makeJob(1, "Shot 010", rig.composition(), {makeOutput(11)});
+        job.state = host::ExportJobState::Failed;
+        job.run = host::ExportRunLink{.run = 1};
+        job.failure = host::ExportFailure{
+            .code = host::ExportFailureCode::AnalysisRefused,
+            .output = job.outputs[0].id,
+            .frame = std::nullopt,
+            .diagnosticCode = "output.analysis.facet=3",
+            .reason = "This format cannot keep everything the frame needs. Choose OpenEXR.",
+            .summary = std::string(host::exportFailureSummary(host::ExportFailureCode::AnalysisRefused))};
+        job.outputs[0].state = host::ExportOutputState::Failed;
+        host::ExportOutputVerification verification;
+        verification.output = job.outputs[0].id;
+        verification.overall = host::ExportCheckOutcome::Failed;
+        verification.checks.push_back({.check = host::ExportCheck::AnalysisPolicy,
+                                       .outcome = host::ExportCheckOutcome::Failed,
+                                       .code = "output.analysis.facet=3"});
+        job.outputs[0].verification = verification;
+        job.outputs[0].record.destination.path = "Exports/{name}.<ext>";
+        snapshot.jobs = {job};
+    });
+    rig.openJob(1);
+    for (int child = 0; child < rig.item(1)->childCount(); ++child)
+        rig.item(1)->child(child)->setExpanded(true);
+    auto* dialog = rig.editor->openDetails(J(1));
+    QApplication::processEvents();
+    auto visible = rig.visibleTexts();
+    for (auto* widget : rig.area->findChildren<QWidget*>())
+        if (widget->isVisibleTo(widget->window()) && widget->window()->isVisible())
+            visible.push_back(widget->toolTip());
+    const auto all = visible.join('\n');
+    context.expect(all.contains("OpenEXR"), "the failure line is a sentence with a remedy");
+    for (const auto* raw : {"stage=", "code=", "facet", "output.analysis", "export.", "0x", "digest", "Digest",
+                            "CPU reference", "preflight", "publication", "verification:", "{name}", "<ext>",
+                            "builtin:"})
+        context.expect(!all.contains(QString::fromLatin1(raw)), (std::string("no raw word in view: ") + raw).c_str());
+    context.expect(dialog != nullptr && dialog->detailsText().contains("facet=3"),
+                   "the raw detail goes only into Copy details");
+    if (dialog != nullptr)
+        dialog->close();
+}
+
+void emptyState(TestContext& context) {
+    Rig rig;
+    rig.publish([](host::ExportQueueSnapshot&) {});
+    const auto texts = rig.visibleTexts();
+    context.expect(texts.contains("Nothing to render yet.") && texts.contains("Or drag compositions here from Assets."),
+                   "the empty list says so and how to add one");
+    context.expect(rig.shown("exportAddActiveButton") && rig.visiblePrimaries() == 1,
+                   "Add composition is the one Primary of the empty panel");
+    context.expect(!rig.shown("exportRenderList"), "there is no list to read yet");
+    QMimeData mime;
+    mime.setData(kCompositionMimeType, QByteArray::number(static_cast<qulonglong>(rig.composition().value())));
+    QDragEnterEvent enter(QPoint(60, 90), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(rig.editor, &enter);
+    QDropEvent drop(QPoint(60, 90), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(rig.editor, &drop);
+    context.expect(rig.port.calls.size() == 1 && rig.port.calls[0].starts_with("addJobs"),
+                   "a drop on the empty list adds a job");
+}
+
+void narrowAndWide(TestContext& context) {
+    Rig rig(true, QSize(2000, 760));
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
+        fillThreeJobs(snapshot, rig.composition());
+        snapshot.jobs[1].outputs.push_back(makeOutput(22, "builtin:exr-sequence", document::ExportFormat::OpenExr,
+                                                      "Exports/Shot 020.####.exr"));
+        snapshot.jobs[1].record.outputs.push_back(snapshot.jobs[1].outputs.back().record);
+    });
+    rig.openJob(2);
+    auto* header = rig.list()->header();
+    context.expect(!header->isSectionHidden(ep::StartedColumn) && !header->isSectionHidden(ep::RenderTimeColumn),
+                   "a wide panel shows every column");
+    context.expect(header->sectionSize(ep::CompositionColumn) < 600 && header->sectionSize(ep::StatusColumn) < 600,
+                   "columns keep the width of their content on a wide panel");
+    context.expect(!rig.editor->outputLine(J(2), O(21))->folded(), "a wide panel keeps an output on one line");
+    rig.area->resize(420, 760);
+    QApplication::processEvents();
+    context.expect(header->isSectionHidden(ep::StartedColumn) && header->isSectionHidden(ep::RenderTimeColumn),
+                   "a narrow panel hides Started and Render Time first");
+    context.expect(!header->isSectionHidden(ep::StatusColumn) && !header->isSectionHidden(ep::CompositionColumn),
+                   "Composition and Status stay");
+    int used = 0;
+    for (int column = 0; column + 1 < ep::ListColumnCount; ++column)
+        used += header->isSectionHidden(column) ? 0 : header->sectionSize(column);
+    context.expect(used <= rig.list()->viewport()->width(), "nothing runs off a narrow panel");
+    auto* line = rig.editor->outputLine(J(2), O(21));
+    context.expect(line->folded() && rig.list()->visualItemRect(rig.item(2)->child(1)).height() ==
+                                         kit::px(kit::Size::AssetRow) + kit::px(kit::Size::AssetRow),
+                   "Output To folds onto its own row on a narrow panel");
+    context.expect(line->destinationLink()->mapTo(line, QPoint(0, 0)).x() ==
+                       line->moduleLink()->mapTo(line, QPoint(0, 0)).x(),
+                   "a folded Output To lines up with the module above it");
+    rig.area->resize(2000, 760);
+    QApplication::processEvents();
+    context.expect(!rig.editor->outputLine(J(2), O(21))->folded(), "widening unfolds it again");
+}
+
+void panelsNeverPump(TestContext& context) {
+    Rig rig;
+    rig.threeJobs();
+    const int pumps = rig.port.pumps;
+    rig.editor->selectJob(J(2));
+    (void)rig.adapter->start(J(2));
+    context.expect(rig.port.pumps == pumps, "panels and commands never pump; only drain() does");
+}
+
+void startedAndRenderTime(TestContext& context) {
+    Rig rig;
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
+        auto job = jobIn(rig, 1, host::ExportJobState::Rendering);
+        job.run = host::ExportRunLink{.run = 1};
+        job.progress.elapsed = std::chrono::milliseconds(65000);
+        snapshot.jobs = {job, jobIn(rig, 2, host::ExportJobState::Ready)};
+        snapshot.activeJob = job.id;
+    });
+    context.expect(!rig.cell(1, ep::StartedColumn).isEmpty() && rig.cell(1, ep::RenderTimeColumn) == "1:05",
+                   "a job that ran shows when it started and how long it took");
+    context.expect(rig.cell(2, ep::StartedColumn).isEmpty() && rig.cell(2, ep::RenderTimeColumn).isEmpty(),
+                   "a job that has not run shows neither");
+    context.expect(rig.adapter->startedAt(J(1)).has_value(), "the adapter keeps the start for every panel");
+}
+
 
 } // namespace
 
@@ -1598,32 +1386,30 @@ int main(int argc, char** argv) {
     QApplication::setApplicationName(QStringLiteral("ExportPanel"));
     QStandardPaths::setTestModeEnabled(true);
     kit::installKinetikTheme(application);
+    QSettings().clear();
     TestContext context;
     adapterTests(context);
     panelsNeverPump(context);
     emptyState(context);
-    listStructure(context);
-    contextualButton(context);
-    startAllAndPrimary(context);
-    statusWording(context);
-    waitingForViewer(context);
-    progressInTheRow(context);
-    replacePromptInline(context);
-    visibleReasons(context);
-    availabilityReasons(context);
-    noRawCodes(context);
-    resultsInPlainWords(context);
-    formatSettings(context);
-    rangeFields(context);
-    addOutputWithFormat(context);
-    editsAreOneCommand(context);
-    destinationFields(context);
-    platformNotSupported(context);
-    logAndVerification(context);
-    narrowAndWide(context);
-    emptyAndAdd(context);
+    columnsAndOrder(context);
+    renderCheckAndStartAll(context);
+    renderSettingsDialog(context);
+    outputModuleDialog(context);
+    everyFormatIsOffered(context);
+    addAndRemoveOutputs(context);
+    quickPickMenus(context);
+    replaceConfirm(context);
+    rowMenu(context);
+    dragToReorder(context);
     dragFromAssets(context);
     dropManyFromAssets(context);
+    currentRenderStrip(context);
+    waitingForViewer(context);
+    statusWording(context);
+    startedAndRenderTime(context);
+    detailsDialog(context);
+    noRawCodes(context);
+    narrowAndWide(context);
     addJobsIsOneUndo(context);
     jobsLink(context);
     addingRevealsAndSelects(context);

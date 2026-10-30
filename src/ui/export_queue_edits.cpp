@@ -131,7 +131,15 @@ ExportEditResult ExportQueueEdits::applyPreset(const document::ExportOutputId ou
 ExportEditResult ExportQueueEdits::editOutput(const document::ExportOutputId output,
                                               const ExportOutputEdit& edit) {
     commands::Transaction transaction("Edit Export Output", session_.snapshot().revision());
-    if (edit.settings)
+    if (edit.presetId) {
+        const auto choice = preset_ ? preset_(*edit.presetId) : std::nullopt;
+        if (!choice.has_value())
+            return {false, QCoreApplication::translate("ExportQueueEdits",
+                                                       "That preset is not in the catalogue."),
+                    std::nullopt, std::nullopt, {}};
+        transaction.emplace<commands::ApplyExportPreset>(output, *edit.presetId,
+                                                         edit.settings.value_or(choice->settings));
+    } else if (edit.settings)
         transaction.emplace<commands::SetExportOutputSettings>(output, *edit.settings);
     if (edit.chosenPath) {
         const auto folder = projectFolder_ ? projectFolder_() : std::nullopt;
