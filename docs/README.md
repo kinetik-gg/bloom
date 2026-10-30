@@ -2,7 +2,7 @@
 
 Status: canonical
 
-Updated: 2026-10-10
+Updated: 2026-10-30
 
 This directory is Bloom's current source of truth. Historical notes outside this repository may
 provide research or rationale, but they are not binding until adopted here.
@@ -70,6 +70,11 @@ gate, so production service-backed RAM fill defaults to width one. See the
 
 ## Current Checkpoint
 
+- The UI kit polish release is complete: one control look and height, the shared popup window, the
+  Inter/Geist type system, the contextual tool bar ([ADR 0031](decisions/0031-contextual-tool-bar.md),
+  [user guide](user-guide/context-bar.md)) and a UI grammar gate with an empty allowlist. What
+  shipped, the validation evidence and the macOS/Windows gaps are in the
+  [release record](plans/ui-kit-polish-release.md).
 - The deterministic CPU preview vertical slice through Batch 3 is implemented and locally verified;
   qualified shared and desktop CI on all three product platforms will remain the cross-platform
   qualification authority. The current automated merge gate is Linux native/core only.
