@@ -367,6 +367,9 @@ class ViewerEditor final : public QWidget,
     // bar's handle-mode switcher shows: no anchors selected (not editing), one common mode, or a
     // mixed selection (no common mode). setAnchorHandleMode() is the switcher's command.
     struct AnchorModeState final {
+        // A path or mask is selected for editing: the handle-mode strip is in the context bar (it is
+        // enabled once anchors are selected). False hides the strip.
+        bool available = false;
         bool editing = false;
         std::optional<document::PathAnchorMode> common;
         friend bool operator==(const AnchorModeState&, const AnchorModeState&) = default;

@@ -88,6 +88,17 @@ int KDropdown::addItem(const QString& text, const QVariant& data) {
     return index;
 }
 
+int KDropdown::addSeparator() {
+    auto* item = new QStandardItem;
+    item->setData(true, kListSeparatorRole);
+    item->setEditable(false);
+    item->setEnabled(false);
+    model_->appendRow(item);
+    popup_->setUniformRows(false);
+    Q_EMIT itemsChanged();
+    return model_->rowCount() - 1;
+}
+
 QIcon KDropdown::itemIcon(const int index) const {
     const auto* item = model_->item(index);
     return item == nullptr ? QIcon{} : item->icon();
@@ -137,6 +148,7 @@ int KDropdown::count() const { return model_->rowCount(); }
 
 void KDropdown::clearItems() {
     model_->clear();
+    popup_->setUniformRows(true);
     currentIndex_ = -1;
     setToolTip({});
     invalidateWidest();
@@ -247,10 +259,14 @@ void KDropdown::showPopup() {
     if (model_->rowCount() == 0) {
         return;
     }
-    const QFontMetrics metrics(popup_->view()->font());
+    // Fractional advances, rounded up, as widestItemWidth() does: a row measured a fraction short
+    // would elide at the popup's own width.
+    const QFontMetricsF metrics(popup_->view()->font());
     int widestText = 0;
     for (int index = 0; index < model_->rowCount(); ++index)
-        widestText = std::max(widestText, metrics.horizontalAdvance(itemText(index)));
+        widestText = std::max(
+            widestText, static_cast<int>(std::ceil(metrics.horizontalAdvance(itemText(index)))));
+    widestText += px(Spacing::XS);
     popup_->setWidestRowText(widestText);
     popup_->openFor(*this, currentIndex_, textOffset() - (itemIcon(currentIndex_).isNull()
                                                               ? 0

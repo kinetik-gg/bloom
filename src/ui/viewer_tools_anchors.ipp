@@ -479,9 +479,11 @@ void ViewerEditor::notifyAnchorModeState() { emit anchorModeStateChanged(); }
 ViewerEditor::AnchorModeState ViewerEditor::anchorModeState() const {
     const auto target = editablePath();
     const auto anchors = target ? anchorSelectionFor(*target) : path_editing::AnchorSet{};
-    if (anchors.empty())
+    if (!target)
         return {};
-    return {true, path_editing::commonMode(target->path, anchors)};
+    if (anchors.empty())
+        return {true, false, std::nullopt};
+    return {true, true, path_editing::commonMode(target->path, anchors)};
 }
 
 bool ViewerEditor::setAnchorHandleMode(const document::PathAnchorMode mode) {

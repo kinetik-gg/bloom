@@ -24,10 +24,12 @@ namespace bloom::ui {
 class CompositionSession;
 class CompositionPreviewController;
 class LayerAlignmentActions;
+class WorkspacePresets;
 class ViewerEditor;
 
-// ADR 0031: the fixed contextual bar directly under the menu bar. Left, the app-wide tools; middle,
-// the active tool's options; right, Align and Distribute for the selected layers. It reads session
+// ADR 0031: the fixed contextual bar directly under the menu bar. Left, the app-wide tools and the
+// active tool's options; centre, Align, Distribute and Align To for the selected layers; right, the
+// Workspace preset picker. It reads session
 // and document state and issues the same commands every other surface does; it owns no project
 // truth. Its buttons never take keyboard focus, and a field in it hands focus back to the Viewer
 // that last had it once it commits. A narrow window collapses its groups, right first, into one
@@ -45,9 +47,12 @@ class ContextBar final : public QWidget {
     void setViewer(ViewerEditor* viewer);
     [[nodiscard]] ViewerEditor* viewer() const noexcept { return viewer_; }
     [[nodiscard]] LayerAlignmentActions& alignment() const noexcept { return *alignment_; }
+    // The workspace presets the right-hand Workspace field picks from. Null leaves the field out.
+    void setWorkspacePresets(WorkspacePresets* presets);
     // Test seams.
     [[nodiscard]] kit::KIconToggle* toolButtonForTest(ViewerTool tool) const;
     [[nodiscard]] QMenu* shapeFlyoutForTest() const noexcept { return shapeFlyout_; }
+    [[nodiscard]] kit::KDropdown* workspaceDropdownForTest() const noexcept { return workspace_; }
 
   signals:
     // A status line for the window: layers an alignment skipped, and why.
@@ -60,6 +65,8 @@ class ContextBar final : public QWidget {
     void buildTools();
     QWidget* buildAlignment(QWidget* parent, bool distribute);
     QWidget* buildAlignTarget(QWidget* parent);
+    QWidget* buildWorkspace(QWidget* parent);
+    void refreshWorkspace();
     void refreshTools();
     void refreshOptions();
     void refreshAlignTarget();
@@ -82,6 +89,10 @@ class ContextBar final : public QWidget {
     // The anchor-mode groups in the row and in the overflow menu, refreshed from the Viewer.
     std::vector<QWidget*> anchorOverflows_;
     kit::KDropdown* alignTarget_ = nullptr;
+    kit::KDropdown* workspace_ = nullptr;
+    QWidget* workspaceGroup_ = nullptr;
+    QPointer<WorkspacePresets> presets_;
+    QMenu* workspaceOverflow_ = nullptr;
     QMetaObject::Connection viewerConnection_;
 };
 

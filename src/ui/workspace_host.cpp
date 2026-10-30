@@ -342,6 +342,7 @@ void WorkspaceHost::resetToSingleArea(const std::string_view editorId) {
             setActiveArea(area);
             updateAreaControls();
             emit areaCountChanged(1);
+            emit layoutChanged();
         },
         {});
 }
@@ -406,6 +407,7 @@ void WorkspaceHost::resetToDefaultLayout(const std::string_view viewerEditorId,
             setActiveArea(areas[std::min(activeIndex, areas.size() - 1)]);
             updateAreaControls();
             emit areaCountChanged(areaCount());
+            emit layoutChanged();
         },
         {});
 }
@@ -433,11 +435,23 @@ EditorArea* WorkspaceHost::revealEditor(const std::string_view editorId,
     for (auto* area : areas) {
         if (area->editorId() == editorId) {
             setActiveArea(area);
+            area->setFocus(Qt::OtherFocusReason);
             return area;
         }
         if (timeline == nullptr && area->editorId() == "bloom.timeline") {
             timeline = area;
         }
+    }
+    // Per-editor reveal policy. The Export editor never splits the Timeline's panel: it replaces
+    // the Timeline in place, or, with no Timeline open, takes a new panel along the bottom.
+    if (editorId == "bloom.export") {
+        if (timeline != nullptr) {
+            (void)timeline->setEditorId(editorId);
+            setActiveArea(timeline);
+            timeline->setFocus(Qt::OtherFocusReason);
+            return timeline;
+        }
+        return spawnBottomArea(editorId, newAreaFraction);
     }
     EditorArea* source = timeline != nullptr ? timeline : activeArea_.data();
     if (source == nullptr) {
@@ -448,6 +462,40 @@ EditorArea* WorkspaceHost::revealEditor(const std::string_view editorId,
         setActiveArea(created);
     }
     return created;
+}
+
+// A new panel across the whole bottom of the workspace: the current root and the new area become
+// the two children of a new vertical root.
+EditorArea* WorkspaceHost::spawnBottomArea(const std::string_view editorId, const double fraction) {
+    if (countAreas(rootWidget_) >= maximumAreaCount) {
+        return nullptr;
+    }
+    auto created = std::make_shared<QPointer<EditorArea>>();
+    (void)beginWorkspaceMutation(
+        [this, id = std::string(editorId), fraction, created] {
+            auto* area = createArea(id);
+            auto* root = createSplitter(Qt::Vertical);
+            auto* previous = rootWidget_;
+            rootLayout_->removeWidget(previous);
+            root->addWidget(previous);
+            root->addWidget(area);
+            const int below = std::clamp(static_cast<int>(std::lround(fraction * 1000.0)), 100, 900);
+            root->setSizes({1000 - below, below});
+            rootWidget_ = root;
+            rootLayout_->addWidget(root);
+            root->show();
+            *created = area;
+            setActiveArea(area);
+            updateAreaControls();
+            emit areaCountChanged(areaCount());
+            emit layoutChanged();
+        },
+        {});
+    if (created->isNull()) {
+        return nullptr;
+    }
+    (*created)->setFocus(Qt::OtherFocusReason);
+    return created->data();
 }
 
 EditorArea* WorkspaceHost::splitArea(EditorArea& area, Qt::Orientation orientation,
@@ -517,6 +565,7 @@ EditorArea* WorkspaceHost::splitArea(EditorArea& area, Qt::Orientation orientati
             setActiveArea(newArea);
             updateAreaControls();
             emit areaCountChanged(areaCount());
+            emit layoutChanged();
             *createdArea = newArea;
         },
         {});
@@ -584,6 +633,7 @@ bool WorkspaceHost::closeArea(EditorArea& area) {
                 setActiveArea(nextActiveArea);
                 updateAreaControls();
                 emit areaCountChanged(areaCount());
+                emit layoutChanged();
                 *committed = true;
                 return;
             }
@@ -618,6 +668,7 @@ bool WorkspaceHost::closeArea(EditorArea& area) {
             setActiveArea(nextActiveArea);
             updateAreaControls();
             emit areaCountChanged(areaCount());
+            emit layoutChanged();
             *committed = true;
         },
         {});
@@ -670,7 +721,8 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutState(const QByteArray&
     return *result;
 }
 
-WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArray& state) {
+WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArray& state,
+                                                                  const bool reuseAreas) {
     QJsonParseError parseError;
     const auto document = QJsonDocument::fromJson(state, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
@@ -695,6 +747,14 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArr
     QSet<QString> restoredAreaIds;
     EditorArea* restoredActiveArea = nullptr;
     bool valid = true;
+    // Reusing areas moves live widgets, so a first dry pass validates the whole tree and only a
+    // valid one is built: an invalid state must leave the current tree untouched.
+    bool dry = reuseAreas;
+    QList<EditorArea*> pool;
+    if (reuseAreas) {
+        collectAreas(rootWidget_, pool);
+    }
+    QWidget* const dryNode = rootWidget_;
 
     std::function<QWidget*(const QJsonObject&, int)> buildNode = [&](const QJsonObject& node,
                                                                      int depth) -> QWidget* {
@@ -733,7 +793,23 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArr
                 return nullptr;
             }
 
-            auto* area = createArea(editorId.toStdString(), areaId);
+            if (dry) {
+                return dryNode;
+            }
+            EditorArea* area = nullptr;
+            if (reuseAreas) {
+                const auto reusable = std::ranges::find_if(pool, [&](const EditorArea* candidate) {
+                    return candidate->editorId() == editorId.toStdString();
+                });
+                if (reusable != pool.end()) {
+                    area = *reusable;
+                    pool.erase(reusable);
+                } else {
+                    area = createArea(editorId.toStdString());
+                }
+            } else {
+                area = createArea(editorId.toStdString(), areaId);
+            }
             if (isActive) {
                 restoredActiveArea = area;
             }
@@ -758,7 +834,8 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArr
         }
 
         auto* splitter =
-            createSplitter(orientationValue == "horizontal" ? Qt::Horizontal : Qt::Vertical);
+            dry ? nullptr
+                : createSplitter(orientationValue == "horizontal" ? Qt::Horizontal : Qt::Vertical);
         for (const auto& childValue : children) {
             if (!childValue.isObject()) {
                 valid = false;
@@ -769,7 +846,9 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArr
                 valid = false;
                 break;
             }
-            splitter->addWidget(child);
+            if (splitter != nullptr) {
+                splitter->addWidget(child);
+            }
         }
 
         if (!valid) {
@@ -799,11 +878,42 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArr
         } else {
             sizes.fill(defaultSplitWeight, children.size());
         }
+        if (splitter == nullptr) {
+            return dryNode;
+        }
         splitter->setSizes(sizes);
         return splitter;
     };
 
     auto* restoredRoot = buildNode(documentRoot.value("root").toObject(), 0);
+    if (reuseAreas) {
+        if (!valid || restoredRoot == nullptr || createdAreaCount < 1) {
+            return WorkspaceLayoutRestoreResult::Invalid;
+        }
+        dry = false;
+        createdAreaCount = 0;
+        activeAreaCount = 0;
+        restoredAreaIds.clear();
+        restoredRoot = buildNode(documentRoot.value("root").toObject(), 0);
+        // The first pass proved the tree, and the second walks the same tree.
+        if (restoredRoot == nullptr) {
+            return WorkspaceLayoutRestoreResult::Invalid;
+        }
+        // A reused area that was the old root now lives in the new tree: it must not be retired
+        // with the old root.
+        if (auto* oldRootArea = qobject_cast<EditorArea*>(rootWidget_);
+            oldRootArea != nullptr && containsArea(restoredRoot, oldRootArea)) {
+            rootLayout_->removeWidget(rootWidget_);
+            rootWidget_ = nullptr;
+        }
+        replaceRoot(restoredRoot);
+        activeArea_.clear();
+        setActiveArea(restoredActiveArea != nullptr ? restoredActiveArea : firstArea(rootWidget_));
+        updateAreaControls();
+        emit areaCountChanged(areaCount());
+        emit layoutChanged();
+        return WorkspaceLayoutRestoreResult::Restored;
+    }
     if (!valid || restoredRoot == nullptr || createdAreaCount < 1) {
         delete restoredRoot;
         return WorkspaceLayoutRestoreResult::Invalid;
@@ -815,7 +925,23 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArr
     setActiveArea(restoredActiveArea != nullptr ? restoredActiveArea : firstArea(rootWidget_));
     updateAreaControls();
     emit areaCountChanged(areaCount());
+    emit layoutChanged();
     return WorkspaceLayoutRestoreResult::Restored;
+}
+
+WorkspaceLayoutRestoreResult WorkspaceHost::applyArrangement(const QByteArray& layoutState) {
+    if (surfaceRetirementGate_.isPending()) {
+        return WorkspaceLayoutRestoreResult::Deferred;
+    }
+    restoreMaximizedArea();
+    auto result =
+        std::make_shared<WorkspaceLayoutRestoreResult>(WorkspaceLayoutRestoreResult::Invalid);
+    (void)beginWorkspaceMutation(
+        [this, layoutState, result] { *result = restoreLayoutStateNow(layoutState, true); }, {});
+    if (surfaceRetirementGate_.isPending()) {
+        return WorkspaceLayoutRestoreResult::Deferred;
+    }
+    return *result;
 }
 
 void WorkspaceHost::persistLayout(QSettings& settings, const QString& key) const {
@@ -833,6 +959,7 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restorePersistedLayout(QSettings& se
 
 EditorArea* WorkspaceHost::createArea(const std::string_view initialEditorId, QString areaId) {
     auto* area = new EditorArea(editorRegistry_, initialEditorId, std::move(areaId));
+    connect(area, &EditorArea::editorChanged, this, &WorkspaceHost::layoutChanged);
     connect(area, &EditorArea::activationRequested, this,
             [this](EditorArea* requestedArea) { setActiveArea(requestedArea); });
     connect(area, &EditorArea::splitRequested, this,
@@ -867,6 +994,7 @@ QSplitter* WorkspaceHost::createSplitter(Qt::Orientation orientation) const {
     // panels matches the edge-to-border window padding exactly.
     splitter->setHandleWidth(panelGutterHandleWidth);
     splitter->setOpaqueResize(true);
+    connect(splitter, &QSplitter::splitterMoved, this, &WorkspaceHost::layoutChanged);
     return splitter;
 }
 

@@ -619,6 +619,8 @@ target_sources(
         gpu_viewer_bootstrap.cpp
         native_surface_retirement.cpp
         window_status_bar.cpp
+        window_status_bar_text.cpp
+        workspace_presets.cpp
         workspace_host.cpp
     workspace_host_shutdown.cpp
         "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}"
@@ -706,6 +708,7 @@ target_sources(
             include/bloom/ui/gpu_viewer_bootstrap.hpp
             include/bloom/ui/window_status_bar.hpp
             include/bloom/ui/workspace_host.hpp
+            include/bloom/ui/workspace_presets.hpp
 )
 
 target_compile_features(bloom_ui PUBLIC cxx_std_20)

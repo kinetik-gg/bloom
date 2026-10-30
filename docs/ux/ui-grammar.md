@@ -213,26 +213,51 @@ Failure lines never carry stage, code or facet numbers: the raw text is behind *
 The existing native window frame and application menu bar remain unchanged. No branding,
 workspace tabs or custom title bar are part of this grammar revision.
 
-`WindowStatusBar` composes a single `Control`-height `UiSmall` row: version, colour state,
-readiness, dropped frames when measured, cache when populated, and transient/persistent messages.
-The cache cell combines RAM-preview frames with operation-cache hits, misses, retained bytes and
-effective budgets; its tooltip names those two cache accounts when the compact cell is dense, and
-states the rule the budgets came from: Bloom reserves `max(8 GiB, 40%)` of memory for the rest of
-the machine and its default caches never exceed half of physical memory. The tooltip explains where
-a number came from; it never becomes a second place to read the numbers themselves.
-Colour state is tinted text with no filled badge. It remains visible on every central page,
-and reports unavailable colour state when no preview controller exists. Readiness and cache
-use muted ink; a colour-state failure remains explicit. `UiSmall` preserves mixed case with
-natural tracking. `KSurface` owns neutral surface backgrounds.
+`WindowStatusBar` is one `Control`-height row of labelled segments, left to right, separated by
+`Border` hairlines (`StatusSeparatorHeight`) and `Spacing::M` gaps. Every value has a short visible
+label in the UI font (`UiSmall`, Muted ink) and the value itself in the mono face (`TypeRole::Value`,
+Geist Mono) in a cell whose minimum width is that of its widest text, so a changing number never
+moves its neighbours. No value appears without its label, and no bare number. Plain words only: the
+render path reads GPU or CPU, never "GPU-prepared / CPU-painted", and caches are never "Ops". The
+segments:
+
+- **Viewer**: Render (GPU or CPU, tinted Ok, Warn or Error by the colour state), Exposure, Channel,
+  Dropped (a dash outside a playback run), and Decode while the composition reads video. The full
+  colour-state and readiness sentences ("Qualified · Bloom Neutral", "Shown EV 0 · RGBA · Current")
+  are the tooltips. A previous display shows Muted values.
+- **Activity**: the transient or persistent notice, else RAM-preview progress (a `KProgressBar` and
+  "Caching frames for RAM preview · 12 of 386"), else a preview that is rendering, failed,
+  unsupported or cancelled, else the Faint placeholder "Idle". The compile-failure Details button
+  is at the end of this segment. It takes the free width and elides.
+- **Pixel** (`windowStatusBarProbe`): the Viewer's probe readout; shown only while it has one.
+- **RAM**: used/budget of the preview and operation caches together ("2.5/7.7 GB") and Cache, the
+  preview cache's frame count ("385 f"). The tooltip keeps the budget explanation (Bloom reserves
+  `max(8 GiB, 40%)` of memory for the rest of the machine; default caches never exceed half of
+  physical memory) and the hit and miss counters of each cache; it explains where a number came
+  from and never becomes a second place to read the numbers themselves.
+- **Disk cache**: "12% hit · 536.3 MB", "off", or a dash before the first lookup; hits, misses and
+  entries in the tooltip.
+- **MCP**: a small text segment, "MCP :6767" in the mono face and Muted ink, only while the server
+  runs ("MCP failed" in Error ink after a failure); there is no button. Clicking it, or Return or
+  Space with it focused, opens the MCP Server panel. Nothing shows while the server is stopped.
+- **Version**: Faint, at the far right.
+
+A segment that has nothing to report keeps its place with a dash so the layout does not jump. In a
+narrow window whole segments collapse by priority, never their labels: Version, MCP, Disk cache,
+Pixel, then RAM; Activity keeps `StatusActivityMinWidth`. `KSurface` owns neutral surface
+backgrounds.
 
 **The context bar** ([ADR 0031](../decisions/0031-contextual-tool-bar.md)) is the second fixed
 surface: one `ContextBarHeight` (32) row directly under the menu bar, a `Control` row inside
-`ChromePadding`, on `Surface` with one `Border` hairline below it. It is a row of the window's
+`ChromePadding` vertically and one `Spacing::Gutter` at its left and right edges (the outer margin
+the workspace panels use, so the bar's content lines up with them), on `Surface` with one `Border`
+hairline below it. It is a row of the window's
 central column, not a `QToolBar`, so it cannot be docked, floated or moved and the native macOS
 menu bar is untouched; Window > Context Bar hides it, and that choice persists with the workspace
 UI state (`workspace/context-bar-visible`), never in the project. While the read-only placeholder
 is showing, the bar is disabled. It is a kit priority row (`EditorArea::buildChromeRow`) in three
-regions:
+regions: tools and their options on the left, the selection actions in the centre, and the
+Workspace field on the right:
 
 - **Tools**, on the left: eleven tools in eight `KIconToggle` slots in three groups separated by a
   `ChromeGroupGap`: navigation (Select V, Hand H, Zoom Z), creation (the shape slot, Line, Pen P,
@@ -251,15 +276,27 @@ regions:
   new shapes and new text start with, which is session state in the `ToolController` and authors
   nothing until something is drawn. Hand, Zoom and the eyedropper have no options. There is no
   transform-gizmo mode and no snapping in the Viewer, so Select has no slot for them.
-- **Selection actions**, against the right edge: Align (left edges, horizontal centres, right
+- **Selection actions**, in the centre of the row: Align (left edges, horizontal centres, right
   edges; top edges, vertical middles, bottom edges), Distribute (horizontally, vertically) and
-  an "Align To" dropdown (Composition, Selection, Key Object). Key Object is the primary selected
+  an "Align To" dropdown (Composition, Selection, Key Object). Align To starts on Composition
+  (`ToolController`'s session default). Key Object is the primary selected
   layer, named in the dropdown ("Key Object (Title)") and its tooltip. These are the same actions as
   Composition > Align.
 
+- **Workspace**, against the right edge: a `KDropdown` styled like Align To (`DropdownWidthWorkspace`)
+  with a "Workspace" label. Its list is the built-in presets (Default, Node, Export, Animation), a
+  separator, the artist's saved presets, a separator, then "Save current layout as…" (a
+  `kit::promptText` for the name) and, while a saved preset is active, "Update ‘name’" and
+  "Delete ‘name’…" (a `kit::confirm`). The field reads the active preset, "Node (edited)" after the
+  arrangement changed by hand, or "Custom".
+  It is the last group to fold into the overflow menu, where it is a Workspace submenu.
+
 Slots are stable within a tool: an option or action that cannot apply stays where it is, disabled,
-with the reason in its tooltip (no anchors selected, a line has no fill, fewer than three layers to
-distribute, one layer aligned to its own selection, a Viewer frame that is not yet current). A
+with the reason in its tooltip (a line has no fill, fewer than three layers to
+distribute, one layer aligned to its own selection, a Viewer frame that is not yet current). The one
+exception (owner, 2026-10-30) is the handle-mode strip: with no path or mask selected, or with a
+tool that does not edit points, it is hidden rather than disabled; with a path selected but no
+anchors it is shown disabled. A
 narrow window collapses groups right to left into one overflow button (`Overflow`, a double caret)
 at the end of the tool options: Distribute first, then Align To, then Align, then the fill/stroke
 and text options, then the handle modes. The menu offers each collapsed group whole: the action
@@ -328,7 +365,8 @@ a key at the playhead), and follows the Escape-confirms rule above.
   leaves the anchor Free.
 - The anchor mode strip -- a kit segmented control with Corner, Mirrored, Aligned, Free and Auto --
   is the Select and Pen tools' option in the context bar (`contextBarAnchorMode`), and acts on the
-  anchors selected in the Viewer that last had focus; with none selected it stays, disabled. It shows the selection's mode, or no option for a mixed selection,
+  anchors selected in the Viewer that last had focus; it is hidden while no path or mask is selected
+  and disabled while none of its anchors is. It shows the selection's mode, or no option for a mixed selection,
   and choosing one converts every selected anchor. A curved mode on a Corner pulls handles sized
   from its neighbours; Mirrored and Aligned straighten existing handles onto their common tangent.
 - Right-click on an anchor or the selection offers the same five modes, Delete Point(s) and, for a
@@ -560,16 +598,17 @@ inside its `ValueFieldLabelColumn` cap. `KListSurface` paints the common flat em
 
 ## Layout and specialized metrics
 
-The default is five editors in two rows. The full-width top row is Assets, Viewer, Nodes,
-Properties at 16% / 31% / 32% / 19%; the full-width bottom row is Timeline. The rows are 68% / 32%
-of the content height. These weights are authored in `WorkspaceHost` as per-mille values and are
-applied after the complete split tree receives window geometry, so early minimum-size clamping
-cannot change the intended proportions.
+The default is the Default workspace preset: Assets, Viewer and Properties side by side, with the
+Timeline under Assets and Viewer. The workspace splits 80% / 20% (left region, Properties), the left
+region 66% / 34% (Assets/Viewer row, Timeline), and the row 25% / 75%. These weights are authored in
+`WorkspacePresets`, kept in the host's own splitters, and applied after the complete split tree
+receives window geometry, so early minimum-size clamping cannot change the intended proportions.
 
 | Layout token | Value |
 | --- | --- |
-| `WorkspaceHost` top-row weights | 160 / 310 / 320 / 190 |
-| `WorkspaceHost` row weights | 680 / 320 |
+| Default preset column weights | 800 / 200 |
+| Default preset left-region weights | 660 / 340 |
+| Default preset top-row weights | 250 / 750 |
 | `TimelineEditor` layer-table share | 0.37 of the Timeline width |
 | `Layout::WorkspaceVersion` | 2 |
 
@@ -586,6 +625,9 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `TimelineLeftColumn` | 576 | Four 24px toggles + name + two 100px dropdown columns |
 | `GizmoHandle / GizmoRotateZone` | 8 / 16 | Viewer transform handles / outside-corner rotation radius |
 | `ViewerWorkPadding` | 48 | Padded image work area |
+| `StatusSeparatorHeight` | 12 | The hairline between two status bar segments. |
+| `StatusActivityMinWidth` | 160 | The least room the status bar's Activity text keeps before whole segments collapse. |
+| `DropdownWidthWorkspace` | 160 | The context bar's Workspace field. |
 | `ContextBarHeight` | 32 | The context bar under the menu bar: `Control` + 2 × `ChromePadding` |
 | `ViewerChannelWidth` | 80 | Channel dropdown |
 | `ViewerModeWidth` | 108 | RAM Preview command floor (widened to its widest label) |

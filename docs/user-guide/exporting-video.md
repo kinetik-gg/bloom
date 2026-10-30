@@ -2,7 +2,10 @@
 
 Exports run from the **Export** panel, a queue saved in the project, much like the After Effects
 Render Queue. Open it by choosing **Export** in any panel's editor picker, or choose **File → Add to Export
-Queue** (Ctrl+M). The same **Add to Export Queue** item is on a composition row in Assets, and you can drag
+Queue** (Ctrl+M). If an Export panel is already open Bloom brings it forward; otherwise the Timeline's
+panel becomes Export, and with no Timeline a new panel opens along the bottom
+([Workspace presets](workspace-presets.md#opening-the-export-panel)). The same **Add to Export Queue**
+item is on a composition row in Assets, and you can drag
 a composition from Assets onto the list. Bloom adds a job for the composition, reveals the panel
 and selects the new job. A job renders one composition range to one or more outputs, one job at a
 time in queue order, in the background while you keep working.

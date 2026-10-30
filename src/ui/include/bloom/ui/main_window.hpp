@@ -40,6 +40,7 @@ class PlaybackController;
 class WindowStatusBar;
 class ContextBar;
 class WorkspaceHost;
+class WorkspacePresets;
 class ViewerEditor;
 enum class WorkspaceLayoutRestoreResult;
 
@@ -121,6 +122,8 @@ class MainWindow final : public QMainWindow {
     // ADR 0031: the fixed contextual bar under the menu bar, and Window > Context Bar.
     [[nodiscard]] ContextBar* contextBar() const noexcept { return contextBar_; }
     [[nodiscard]] QAction* contextBarAction() const noexcept { return contextBarAction_; }
+    // The workspace presets behind the context bar's Workspace field.
+    [[nodiscard]] WorkspacePresets* workspacePresets() const noexcept { return workspacePresets_; }
     // The application's MCP server adapter (ADR 0034): enables the status bar indicator, and reveals the MCP Server panel when either asks. Borrowed; null removes it.
     void setMcpServer(McpServerAdapter* adapter);
     // Test-only seam (same terms as the other test/diagnostic accessors): applies committed
@@ -203,6 +206,7 @@ class MainWindow final : public QMainWindow {
     QAction* contextBarAction_ = nullptr;
     QPointer<McpServerAdapter> mcpServer_;
     WorkspaceHost* workspaceHost_ = nullptr;
+    WorkspacePresets* workspacePresets_ = nullptr;
     QWidget* readOnlyPlaceholderPage_ = nullptr;
     QLabel* readOnlyPlaceholderFileNameLabel_ = nullptr;
     QLabel* readOnlyPlaceholderBodyLabel_ = nullptr;

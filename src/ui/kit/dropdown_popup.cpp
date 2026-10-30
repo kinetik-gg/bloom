@@ -81,6 +81,8 @@ void KDropdownPopup::setSearchable(const bool searchable) {
     list_->setModel(searchable_ ? static_cast<QAbstractItemModel*>(proxy_) : sourceModel_);
 }
 
+void KDropdownPopup::setUniformRows(const bool uniform) { list_->setUniformRows(uniform); }
+
 QListView* KDropdownPopup::view() const noexcept { return list_->view(); }
 
 QWidget* KDropdownPopup::surface() const noexcept { return list_; }

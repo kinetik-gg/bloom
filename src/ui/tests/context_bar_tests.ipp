@@ -142,10 +142,13 @@ void testContextBarOptions(Expectations& expectations) {
                suppressed(bar, "contextBarShapeOptions") != shape &&
                suppressed(bar, "contextBarTextOptions") != text;
     };
-    expectations.expect(groups(true, false, false), "Select offers the anchor handle modes");
+    // The handle-mode strip is hidden (not disabled) while no path or mask is selected.
+    expectations.expect(groups(false, false, false),
+                        "Select with no path selected hides the anchor handle modes");
     captureBar(bar, "select");
     tools.setTool(ui::ViewerTool::Pen);
-    expectations.expect(groups(true, true, false), "the Pen offers handle modes and fill/stroke");
+    expectations.expect(groups(false, true, false),
+                        "the Pen with no path selected offers fill/stroke only");
     tools.setTool(ui::ViewerTool::Rectangle);
     expectations.expect(groups(false, true, false), "a shape tool offers fill and stroke");
     captureBar(bar, "rectangle");
@@ -155,11 +158,9 @@ void testContextBarOptions(Expectations& expectations) {
     tools.setTool(ui::ViewerTool::Hand);
     expectations.expect(groups(false, false, false), "Hand has no options");
 
-    // With no anchors selected the handle modes stay in their slot, disabled with the reason.
     tools.setTool(ui::ViewerTool::Select);
-    auto* modes = bar.findChild<ui::kit::KRadioGroup*>("contextBarAnchorMode");
-    expectations.expect(modes && !modes->isEnabled() && modes->toolTip().contains("Select anchors"),
-                        "the handle modes are disabled with a reason when nothing is editable");
+    expectations.expect(suppressed(bar, "contextBarAnchorOptions"),
+                        "the handle modes stay hidden when nothing is editable");
 
     // New shapes take the bar's style: no shape selected, so the options are the new-shape style.
     tools.setTool(ui::ViewerTool::Rectangle);
@@ -239,6 +240,8 @@ void testContextBarAlignment(Expectations& expectations) {
     }
     auto& bar = contextBar(fixture);
     bar.show();
+    // These cases are about the selection as the target; Composition is the default.
+    fixture.session.tools().setAlignmentTarget(commands::AlignmentTarget::Selection);
     auto& actions = bar.alignment();
     using A = commands::LayerArrangement;
     auto* left = actions.action(A::AlignLeft);
@@ -343,4 +346,76 @@ void testContextBarReturnsFocus(Expectations& expectations) {
     expectations.expect(fixture.viewer.hasFocus(), "a committed bar field returns focus to the Viewer");
     fixture.viewer.setParent(nullptr);
     toolShutdown(fixture, expectations);
+}
+
+// Align To starts on Composition; the Workspace field sits at the right, the alignment group in the
+// centre, and the bar's content lines up with the panels below (one Gutter in from each edge).
+void testContextBarLayoutAndDefaults(Expectations& expectations) {
+    using namespace bloom;
+    ViewerFixture fixture(toolProject());
+    fixture.viewer.resize(800, 650);
+    fixture.viewer.show();
+    toolReady(fixture, expectations);
+    auto& bar = contextBar(fixture);
+    bar.resize(1400, bar.height());
+    bar.show();
+    QCoreApplication::processEvents();
+    auto* target = bar.findChild<ui::kit::KDropdown*>("contextBarAlignTo");
+    expectations.expect(fixture.session.tools().alignmentTarget() ==
+                                commands::AlignmentTarget::Composition &&
+                            target != nullptr && target->currentText() == QStringLiteral("Composition"),
+                        "Align To defaults to Composition");
+    auto* tools = bar.findChild<QWidget*>("contextBarTools");
+    auto* align = bar.findChild<QWidget*>("contextBarAlign");
+    expectations.expect(tools && align && tools->mapTo(&bar, QPoint()).x() == ui::kit::px(ui::kit::Spacing::Gutter),
+                        "the left edge of the tools lines up with the panels (one Gutter in)");
+    const int centre = align ? align->mapTo(&bar, QPoint()).x() + align->width() / 2 : 0;
+    expectations.expect(align && centre > bar.width() / 4 && centre < bar.width() * 3 / 4,
+                        "the alignment group sits in the middle of the bar");
+}
+
+// The Workspace field: built-ins, separator, user presets, separator, then the actions.
+void testContextBarWorkspaceField(Expectations& expectations) {
+    using namespace bloom;
+    QTemporaryDir settingsDirectory;
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
+    ViewerFixture fixture(toolProject());
+    ui::EditorRegistry registry;
+    for (const auto* id : {"bloom.viewer", "bloom.timeline", "bloom.assets", "bloom.nodes",
+                           "bloom.properties", "bloom.export"})
+        (void)registry.registerEditor(
+            {id, QString::fromLatin1(id), [](QWidget* parent) { return new QWidget(parent); }});
+    ui::WorkspaceHost host(registry);
+    host.resetToDefaultLayout("bloom.viewer", "bloom.nodes", "bloom.assets", "bloom.timeline",
+                              "bloom.properties");
+    host.resize(1400, 800);
+    host.show();
+    ui::WorkspacePresets presets(host);
+    auto& bar = contextBar(fixture);
+    bar.setWorkspacePresets(&presets);
+    bar.resize(1400, bar.height());
+    bar.show();
+    QCoreApplication::processEvents();
+    auto* field = bar.workspaceDropdownForTest();
+    expectations.expect(field != nullptr && field->isVisible() &&
+                            field->mapTo(&bar, QPoint()).x() > bar.width() / 2 &&
+                            field->currentText().startsWith(QStringLiteral("Default")),
+                        "the Workspace field sits at the right and starts on Default");
+    const auto indexOf = [&](const QString& text) {
+        for (int index = 0; index < field->count(); ++index)
+            if (field->itemText(index) == text)
+                return index;
+        return -1;
+    };
+    field->chooseIndex(indexOf(QStringLiteral("Node")));
+    expectations.expect(presets.activeName() == QStringLiteral("Node") &&
+                            field->currentText() == QStringLiteral("Node") &&
+                            indexOf(QStringLiteral("Custom")) < 0 &&
+                            indexOf(QStringLiteral("Save current layout as…")) > 0,
+                        "choosing a preset applies it and the field names it");
+    (void)host.splitActiveArea(Qt::Horizontal);
+    expectations.expect(field->currentText() == QStringLiteral("Node (edited)"),
+                        "a manual change shows \"Node (edited)\"");
+    host.hide();
 }
