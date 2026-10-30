@@ -41,7 +41,14 @@
 #include <bloom/ui/h264_encoder_service.hpp>
 #include <bloom/ui/jobs_editor.hpp>
 #include <bloom/ui/kit/theme.hpp>
+#include <bloom/mcp/server_service.hpp>
+#include <bloom/platform/cache_directory.hpp>
+#include <bloom/platform/user_data_directory.hpp>
+#include <bloom/scripting/live_session_host.hpp>
+#include <bloom/ui/live_session_adapter.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/mcp_server_adapter.hpp>
+#include <bloom/ui/mcp_server_service_port.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/memory_budget_controller.hpp>
 #include <bloom/ui/playback_controller.hpp>
@@ -550,9 +557,37 @@ int main(int argc, char* argv[]) try {
     // `&& bloom::ui::registerJobsEditor(editorRegistry, taskMonitor)` this line used to carry is
     // all it takes to offer the panel again -- so Jobs is reachable programmatically and simply
     // not on offer in the interface.
+    // One application-lifetime live session shared by the Script panel and the in-app MCP server
+    // (ADR 0034), then the MCP server itself and its Qt adapter. Declared before the window so they
+    // are destroyed after it; the adapter (waiter thread) goes before the service.
+    bloom::scripting::LiveSessionHost liveSessionHost;
+    bloom::ui::LiveSessionAdapter liveSessionAdapter(liveSessionHost, compositionSession,
+                                                     projectHost);
+    const auto mcpPreferences = bloom::ui::loadMcpServerPreferences(QSettings{});
+    const auto mcpDataDirectory = bloom::platform::userDataDirectory();
+    const auto mcpCacheDirectory = bloom::platform::userCacheDirectory();
+    bloom::mcp::McpServerServiceDependencies mcpDependencies{
+        .live = liveSessionHost,
+        // TODO(export-lane): bind to ProjectHost::exportQueue() once it lands; a null provider
+        // answers bloom.mcp.export-unavailable.
+        .exportQueue = {},
+        .scheduler = taskScheduler,
+        .tokenFile = mcpDataDirectory ? *mcpDataDirectory / "mcp" / "token"
+                                      : std::filesystem::path{},
+        .captureDirectory = mcpCacheDirectory ? *mcpCacheDirectory / "mcp-captures"
+                                              : std::filesystem::path{},
+        .serverVersion = QCoreApplication::applicationVersion().toStdString(),
+        .preferences = mcpPreferences,
+        .limits = {},
+    };
+    bloom::mcp::McpServerService mcpService(std::move(mcpDependencies));
+    bloom::ui::McpServerServicePort mcpPort(mcpService);
+    bloom::ui::McpServerAdapter mcpAdapter(mcpPort);
+    mcpAdapter.attach(taskUiBridge);
+    mcpAdapter.startWaiter();
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
         editorRegistry, compositionSession, previewController, &ramPreviewController, &projectHost,
-        &viewerGpuDependencies, gpuExportProvider);
+        &viewerGpuDependencies, gpuExportProvider, &liveSessionHost, &mcpAdapter);
     if (!editorsRegistered) {
         QEventLoop shutdownLoop;
         QObject::connect(&shutdownCoordinator,
@@ -640,6 +675,15 @@ int main(int argc, char* argv[]) try {
                                  nullptr, &playback, cpuEvaluator.operationCache().get(),
                                  mediaDiskCache.get(), &accelerationStatus, &cachePurgeController);
     // Every default dialog of the project host and the export controller opens over the window.
+    window.setMcpServer(&mcpAdapter);
+    // Shutdown participant: close the listener at once; the packed-host predicate below keeps the
+    // coordinator from reaching quiescence until the request workers are idle.
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted, &mcpAdapter,
+                     [&mcpService, &mcpAdapter] {
+                         mcpService.beginShutdown();
+                         mcpAdapter.drain();
+                     });
     projectHost.setDialogOwner(&window);
     frameExportController.setDialogOwner(&window);
     // UI sound feedback and render notifications (docs/architecture/ui-feedback.md). The sound
@@ -781,8 +825,13 @@ int main(int argc, char* argv[]) try {
             cpuEvaluator.operationCache()->closePreparedUploads();
             packedHostRetirement->beginShutdown();
         },
-        [&] { return packedHostRetirement->exitAcknowledged(); });
+        [&] {
+            mcpAdapter.drain();
+            return packedHostRetirement->exitAcknowledged() && mcpService.quiescent();
+        });
     window.show();
+    if (mcpPreferences.autoStart)
+        mcpService.requestAutoStart();
 
     // The EXISTING TaskUiBridge poll drives the cached capability refresh and keeps running until
     // shutdown, so a capability that is later lost is observed and published as a null client --
