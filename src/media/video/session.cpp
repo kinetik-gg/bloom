@@ -23,7 +23,7 @@ bool isVideoExtension(const std::filesystem::path& path) {
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return extension == ".mp4" || extension == ".mov" || extension == ".mkv" ||
            extension == ".mxf" || extension == ".mts" || extension == ".m2ts" ||
-           extension == ".ts" || extension == ".m4v";
+           extension == ".ts" || extension == ".m4v" || extension == ".webm";
 }
 
 std::size_t automaticDecodedVideoCacheBytes(const std::size_t physicalBytes) noexcept {

@@ -48,8 +48,8 @@ namespace {
 [[nodiscard]] QString mediaFileFilter() {
     return QObject::tr(
         "Media (*.cube *.clf *.spi1d *.spi3d *.png *.jpg *.jpeg *.exr *.tif *.tiff *.wav *.mp3 "
-        "*.mp4 *.mov *.mkv *.mxf *.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR *.TIF *.TIFF "
-        "*.WAV *.MP3 *.MP4 *.MOV *.MKV *.MXF)");
+        "*.mp4 *.mov *.mkv *.webm *.mxf *.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR *.TIF "
+        "*.TIFF *.WAV *.MP3 *.MP4 *.MOV *.MKV *.WEBM *.MXF)");
 }
 // CACHEFIX-1 proxy/audio caps. The proxy cache keeps its historic 512-entry bound and adds the
 // byte bound that bound only ever implied; the audio cache gets the aggregate bound it never had.

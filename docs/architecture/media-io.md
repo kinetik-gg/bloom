@@ -200,6 +200,11 @@ the development files. On x86 and x86-64 hosts FFmpeg's hand-written SIMD is ena
 assembles it with NASM 2.16.03, a source-built, build-host-only tool installed outside the
 dependency prefix that is never linked or shipped.
 
+Import routes `.mp4 .mov .mkv .webm .mxf .m4v .mts .m2ts .ts` to this worker. A video stream whose
+codec the build does not decode (VP9 and AV1 today) is refused at probe as "Codec not available in
+this build: <codec>" (issue #398), so a WebM or AV1 file never falls through to the still-image
+reader or fails later at render.
+
 FFmpeg ProRes is a non-authorized preview/workflow capability only. It is not evidence of Apple
 authorization, certification, patent clearance, or delivery qualification. The worker resolves its
 own bundled shared libraries privately (Linux `$ORIGIN/lib`, macOS `@loader_path/lib` with

@@ -507,6 +507,36 @@ void special(const std::filesystem::path& path, const Special kind) {
     }
     require(av_write_trailer(out.format) >= 0, "Fixture mux trailer");
 }
+// Issue #398: a WebM (Matroska) file carrying a VP8 stream, a WebM codec this build does not decode.
+// The packets are opaque bytes: the probe must refuse the stream by name before any decode. (VP9
+// cannot be muxed here: Matroska inserts the vp9_superframe filter, which the build omits.)
+void undecodableWebm(const std::filesystem::path& path) {
+    Output out;
+    require(avformat_alloc_output_context2(&out.format, nullptr, "matroska", path.c_str()) >= 0,
+            "Fixture mux allocation");
+    auto* stream = avformat_new_stream(out.format, nullptr);
+    require(stream, "Fixture video stream");
+    stream->time_base = {1, 1000};
+    stream->avg_frame_rate = {24, 1};
+    auto& vp = *stream->codecpar;
+    vp.codec_type = AVMEDIA_TYPE_VIDEO;
+    vp.codec_id = AV_CODEC_ID_VP8;
+    vp.width = 64;
+    vp.height = 48;
+    vp.format = AV_PIX_FMT_YUV420P;
+    require(avio_open(&out.format->pb, path.c_str(), AVIO_FLAG_WRITE) >= 0, "Fixture file open");
+    require(avformat_write_header(out.format, nullptr) >= 0, "Fixture mux header");
+    for (int n = 0; n < 2; ++n) {
+        require(av_new_packet(out.packet, 16) >= 0, "Fixture packet allocation");
+        std::memset(out.packet->data, 0x80 + n, 16);
+        out.packet->pts = out.packet->dts = av_rescale_q(n, {1, 24}, stream->time_base);
+        out.packet->duration = av_rescale_q(1, {1, 24}, stream->time_base);
+        out.packet->flags = AV_PKT_FLAG_KEY;
+        out.packet->stream_index = stream->index;
+        require(av_interleaved_write_frame(out.format, out.packet) >= 0, "Fixture webm mux");
+    }
+    require(av_write_trailer(out.format) >= 0, "Fixture mux trailer");
+}
 // Issue #381: the player-equivalent decode of a clip's first frame, written as packed RGB24. FFmpeg
 // decodes the stream and swscale converts limited-range Y'CbCr with `matrix` to full-range R'G'B'
 // with no transfer change, exactly what `-vf scale=in_color_matrix=...:in_range=tv:out_range=full`
@@ -585,6 +615,7 @@ bool generateFixtures(const std::string& directory) {
         special(path / "untagged-hd-prores.mov", Special::UntaggedHd);
         special(path / "uhd8k-prores.mov", Special::EightK);
         special(path / "chroma-edge-422.mov", Special::ChromaEdge);
+        undecodableWebm(path / "vp8-unavailable.webm");
         // Issue #352: a 1,200-frame (50 s) constant-cadence H.264 stream for the lazy index.
         fixture(path / "long-h264.mp4", false, false, {}, 1200);
         // Issue #381: colour patches tagged BT.709 and untagged (64x48 is SD, so the size
@@ -608,6 +639,7 @@ bool generateFixtures(const std::string& directory) {
                "1200-frame H.264 (pattern repeats every 48 frames) for lazy indexing\n"
                "2-frame 7680x4320 Rec.709 ProRes 422 (tiled numbered pattern)\n"
                "12-frame ProRes 422 HQ, flat luma, Cr 768/384 split at row 24 (siting)\n"
+               "2-packet WebM (Matroska) VP8 stream of opaque bytes (undecodable codec)\n"
                "2-frame H.264 colour patches (BT.709 tagged, untagged BT.601) with their\n"
                "FFmpeg swscale RGB24 decodes (limited Y'CbCr to full-range R'G'B')\n"
                "PCM mono 48000 Hz: sample[n]=((n%997)-498)/1024\n"
@@ -621,7 +653,7 @@ bool generateFixtures(const std::string& directory) {
               "pq2020-h264.mp4", "hlg2020-h264.mp4", "vfr-h264.mp4", "rotated-h264.mp4",
               "interlaced-prores.mov", "rgb-tiff.mov", "anamorphic-h264.mp4",
               "untagged-hd-prores.mov", "long-h264.mp4", "uhd8k-prores.mov",
-              "chroma-edge-422.mov", "bars709-h264.mp4",
+              "chroma-edge-422.mov", "vp8-unavailable.webm", "bars709-h264.mp4",
               "bars-untagged-h264.mp4", "bars709-h264.rgb24", "bars-untagged-h264.rgb24"}) {
             const auto identity = sourceIdentity((path / name).string()).first.toLowercaseHex();
             provenance << name << " SHA-256: " << std::string(identity.begin(), identity.end())

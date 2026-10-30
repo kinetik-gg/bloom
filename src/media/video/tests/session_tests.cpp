@@ -621,6 +621,24 @@ void chromaSiting(const std::filesystem::path& directory) {
               "left-sited 4:2:0 chroma is centred between its two luma rows");
     }
 }
+// Issue #398: WebM is a video container, and a codec this build cannot decode is refused at probe
+// by name instead of falling through to the still-image reader.
+void undecodableCodec(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    check(video::isVideoExtension("clip.webm") && video::isVideoExtension("CLIP.WEBM") &&
+              video::isVideoExtension("clip.mkv"),
+          "WebM and Matroska files take the video path");
+    video::VideoDecodeSession session(directory / "vp8-unavailable.webm");
+    const auto probed = session.probe();
+    const auto* refused = std::get_if<provider::Unavailable>(&probed);
+    if (refused == nullptr)
+        std::cerr << "VP8 probe was not refused\n";
+    else if (refused->detail != "Codec not available in this build: vp8")
+        std::cerr << "VP8 probe refusal: " << refused->detail << '\n';
+    check(refused != nullptr && refused->reason == provider::Error::Unavailable &&
+              refused->detail == "Codec not available in this build: vp8",
+          "a WebM stream with an undecodable codec is refused by name at probe");
+}
 int main(int argc, char** argv) {
     try {
         check(argc == 2, "fixture directory");
@@ -628,6 +646,7 @@ int main(int argc, char** argv) {
         retainedRouting(argv[1]);
         colourInterpretation(argv[1]);
         chromaSiting(argv[1]);
+        undecodableCodec(argv[1]);
         timingAndLayout(argv[1]);
         lazyIndex(argv[1]);
         eightK(argv[1]);

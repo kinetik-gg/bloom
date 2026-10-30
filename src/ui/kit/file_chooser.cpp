@@ -131,7 +131,7 @@ class KitFileIconProvider final : public QAbstractFileIconProvider {
             return kit::icon(IconId::Composition, IconRole::Chrome);
         if (QStringList{QStringLiteral("mov"), QStringLiteral("mp4"), QStringLiteral("mkv"),
                         QStringLiteral("mxf"), QStringLiteral("m4v"), QStringLiteral("mts"),
-                        QStringLiteral("m2ts"), QStringLiteral("ts")}
+                        QStringLiteral("m2ts"), QStringLiteral("ts"), QStringLiteral("webm")}
                 .contains(suffix))
             return kit::icon(IconId::Clip, IconRole::Chrome);
         if (QStringList{QStringLiteral("wav"), QStringLiteral("mp3"), QStringLiteral("aac")}

@@ -52,6 +52,12 @@ void require(bool ok, const char* detail, Error code = Error::Corrupt) {
     if (!ok)
         throw Unavailable{code, detail};
 }
+// A codec this build cannot decode, refused by name (issue #398).
+void requireDecoder(const AVCodecParameters& parameters) {
+    if (avcodec_find_decoder(parameters.codec_id) == nullptr)
+        throw Unavailable{Error::Unavailable, std::string("Codec not available in this build: ") +
+                                                  avcodec_get_name(parameters.codec_id)};
+}
 Rational rational(std::int64_t n, std::int64_t d) {
     require(d > 0 && n != std::numeric_limits<std::int64_t>::min(), "Invalid timestamp");
     const auto divisor = std::gcd(n, d);
@@ -279,6 +285,17 @@ ProbeResult probe(Input& input, const Digest& digest, std::uint64_t bytes) {
             s.kind = MediaKind::Data;
         result.streams.push_back(std::move(s));
     }
+    // Issue #398: a stream whose codec this build cannot decode (VP9, AV1) is refused at probe by
+    // name, so import says why instead of failing later or on another path. The first video stream
+    // is the one an asset uses; attached pictures (cover art) are not video.
+    for (unsigned i = 0; i < input.format->nb_streams; ++i) {
+        const auto& stream = *input.format->streams[i];
+        if (stream.codecpar->codec_type != AVMEDIA_TYPE_VIDEO ||
+            (stream.disposition & AV_DISPOSITION_ATTACHED_PIC) != 0)
+            continue;
+        requireDecoder(*stream.codecpar);
+        break;
+    }
     require(valid(result), "Invalid probe metadata");
     return result;
 }
@@ -357,8 +374,8 @@ void configureThreads(AVCodecContext& codec, const AVCodecParameters& p) {
 }
 // A null device selects the software reference decoder.
 void decoder(Input& input, const AVStream& stream, AVBufferRef* device) {
+    requireDecoder(*stream.codecpar);
     const auto* codec = avcodec_find_decoder(stream.codecpar->codec_id);
-    require(codec != nullptr, "Codec is not in the intake", Error::Unavailable);
     input.codec = avcodec_alloc_context3(codec);
     require(input.codec != nullptr, "Decoder allocation failed", Error::Oversized);
     require(avcodec_parameters_to_context(input.codec, stream.codecpar) >= 0,
