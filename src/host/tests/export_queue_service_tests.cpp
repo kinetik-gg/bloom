@@ -62,7 +62,6 @@ std::string fileUri(const std::filesystem::path& path) { return "file://" + path
 
 host::ExportEncoderStatus linuxEncoders(const bool openh264 = true, const bool vaapi = false) {
     host::ExportEncoderStatus status;
-    status.exportPlatform = true;
     status.probed = true;
     status.mediaWorker = true;
     status.h264Software = output::H264EncoderV1::OpenH264;
@@ -737,8 +736,6 @@ void testEveryPlatformExports() {
                                      format == document::ExportFormat::HevcMov ||
                                      format == document::ExportFormat::HevcMp4;
         expect(preset.platformAvailability.code !=
-                       host::ExportAvailabilityCode::PlatformNotSupported &&
-                   preset.platformAvailability.code !=
                        host::ExportAvailabilityCode::WorkerUnavailable &&
                    preset.platformAvailability.reason.find("Linux") == std::string::npos,
                "no preset is refused for its operating system: " + preset.id);
@@ -758,9 +755,8 @@ void testEveryPlatformExports() {
     transient.destination = {"external", fileUri(f.folder / "t.png"),
                              document::ExportOverwritePolicy::Replace};
     const auto submitted = f.service->submitTransient(transient);
-    expect(submitted.accepted ||
-               submitted.availability.code != ExportUnavailableCode::PlatformNotSupported,
-           "a transient job is never refused for its platform");
+    expect(submitted.accepted,
+           "a transient job is accepted on every platform: " + submitted.availability.reason);
     if (submitted.accepted && submitted.job) {
         expect(f.pumpUntil([&] { return host::isTerminal(f.view(*submitted.job)->state); }),
                "the transient job finishes");

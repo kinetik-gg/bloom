@@ -101,7 +101,7 @@ The exceptions are deliberate and closed:
 | --- | --- |
 | Panel menu titles (`KMenuButton`: View, Select, Add, the Timeline and Nodes menus) | Menus, like a menu bar's titles, not buttons: flat text with the `Accent` hover bar |
 | Text entry (`KValueField`, `KTextField`/`KLineEdit`, `KSearchField`, `KTextArea`, the Viewer frame field) | The one text-entry recipe, `kit::fieldColors()`: a `Field` well, so an editable value never reads as a button. A field standing in a chrome row or on a node card keeps a resting `Border` (`KValueField::setOutlinedAtRest`); a property cell (Properties, Timeline rows) rests borderless. A refused entry wears `Error` over every other state |
-| Timeline layer switches (eye, audio, solo, lock) | The glyph is the state (an eye that is there or not), so a switch never takes the Accent plate; its cell is the Secondary plate |
+| Timeline layer switches (eye, audio, solo, lock, shy) | The glyph is the state (an eye that is there or not), so a switch never takes the Accent plate; its cell is the Secondary plate. The Label cell is a `kit::KSwatchButton`: the Secondary plate carrying the label colour as an `IconSmall` square with its edge-ink hairline, never tinted |
 | Ghost | Only where a control deliberately has no resting surface: disclosure carets (layer and property disclosure, the RGBA and multiline expanders) and the window title bar buttons |
 
 There is no Recessed recipe and no `ControlSurface` token any more: both existed only for the
@@ -671,7 +671,9 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | Size token | Pixels | Owner |
 | --- | --- | --- |
 | `TimelineNameDefault` | 280 | Timeline default name column |
-| `TimelineLeftColumn` | 576 | Four 24px toggles + name + two 100px dropdown columns |
+| `TimelineToggleColumn` | 136 | Video, Audio, Solo, Lock and Label: five `ToggleCell`s with XS gaps |
+| `TimelineSwitchColumn` | 28 | The Shy switch after the name: one `ToggleCell` and its XS gap |
+| `TimelineLeftColumn` | 744 | Leading switches + default name + Shy + three 100px dropdown columns |
 | `GizmoHandle / GizmoRotateZone` | 8 / 16 | Viewer transform handles / outside-corner rotation radius |
 | `ViewerWorkPadding` | 48 | Padded image work area |
 | `StatusSeparatorHeight` | 12 | The hairline between two status bar segments. |
@@ -835,18 +837,32 @@ reverted in silence.
 
 The timeline's graph editor REPLACES the key lanes rather than sitting beside them: in graph mode
 the lane region paints only its Surface backdrop and the curve view covers it, because two views of
-the same keys at once only make an artist ask which one they are editing. Its left gutter is
-`Size::GraphValueAxis` wide and carries the ACTIVE curve's value ticks -- the curve of the primary
-keyframe selection, else the one on the selected row, else the first -- and the gutter is painted
-over the curves so a line running off the left edge slides under the axis instead of colliding with
-its labels. A scalar curve strokes in `Color::Keyframe`; a component curve takes
-`Color::ComponentX/Y/Z/W`, which R/G/B/A borrow unchanged so one hue always means "the first
-component"; selection is Accent, which none of the five is. Ease handles are drawn only for a
-SELECTED key on an eased segment, as a hairline to a `Size::GraphHandleDot` dot. The graph toggle
-persists under `timeline/graph-editor`. View exposes checkable Keyframes and Graph Editor choices;
-enabling either turns the other off, and both may be off to show plain layer lanes.
+the same keys at once only make an artist ask which one they are editing. A `Size::HeaderRow` graph
+header (`timelineGraphHeader`) over the canvas carries the segmented Value Graph / Speed Graph
+switch and the Normalize check box, persisted under `timeline/graph-type` and
+`timeline/graph-normalize`. The Value Graph plots the curve; the Speed Graph plots its speed (value
+units per second) read off the sampler, with After Effects' horizontal influence/speed handles.
+Normalize (Blender) draws every curve scaled to -1...1 in one shared window; edits are converted back
+and always write real values, and the scale holds still for the length of a drag. Below the header,
+the left gutter is `Size::GraphValueAxis` wide and carries the ACTIVE curve's value ticks -- the
+curve of the primary keyframe selection, else the one on the selected row, else the first -- and the
+gutter is painted over the curves so a line running off the left edge slides under the axis instead
+of colliding with its labels. While the graph is shown the shared time axis leads with the gutter's
+width (`TimelineRuler::setLeadingInset`), so the ruler, the work area and the graph move together
+and a key at frame 0 always sits clear of the gutter. The background grid is After Effects': `Border`
+hairlines at the gutter's value ticks and at the ruler's own labelled ticks. A component curve strokes
+in `Color::ComponentX/Y/Z/W` (X red, Y green, Z blue; R/G/B/A borrow them unchanged so one hue always
+means "the first component"); single-value curves take `Color::GraphCurve1..5` in curve order,
+cycling. The selected curve -- every curve carrying a selected key, else the selected row's -- is
+drawn brighter (`kit::emphasizedStrokeFor`) and on top. Selection is Accent, which none of the curve
+tokens is. Handles are drawn only for a SELECTED key on an eased segment: an arm in the curve's own
+ink to a `Size::GraphHandleDot` Accent dot. The graph toggle persists under `timeline/graph-editor`.
+View exposes checkable Keyframes and Graph Editor choices; enabling either turns the other off, and
+both may be off to show plain layer lanes. The one header tool button is the graph toggle
+(`timelineGraphToggle`, `IconId::GraphEditor`) at the right end of the layer-table header, beside
+Fullscreen: it and `Shift+F3` switch the right pane between the keyframes and the graph.
 `timeline/keyframes-visible` and `timeline/snapping` persist Keyframes and Snap to Frames.
-These controls appear only in View, with no header tool buttons. Header menu order is Add, View,
+Header menu order is Add, View,
 Select, with text-only menu buttons and no caret indicators; the composition dropdown is absent.
 These are the unchanged shared KMenuButton/EditorChromeRowSpec controls and application theme used
 by Assets, Viewer and Nodes: no Timeline-specific menu painting, stylesheet or background palette.
@@ -856,7 +872,8 @@ There are no View/Select wrapper submenus or selection-only layer commands; acti
 checked state are shared with the header. Opening the popup never changes the layer selection.
 Timeline's fullscreen button sits at the right edge of the layer-table header, beside the divider.
 Keys off hides both key lanes and collapsed summary
-glyphs. Empty key-lane labels paint no chip. Lane snapping is `snapping && !Shift`.
+glyphs. Empty key-lane labels paint no chip. Lane snapping is `snapping && !Shift`; in the graph,
+Shift is the axis lock and snapping follows Snap to Frames alone.
 
 Timeline lanes use `LanePadding` (12) on both sides of their time axis. The layer column/lanes split
 is a draggable `KSplitHandle` (`Size::SplitHandle`, 6, its hit zone; it paints one snapped
@@ -869,7 +886,18 @@ width; an existing `timeline/layer-column-width` pixel value wins, and a double-
 Workspace returns to the 37% ratio. All timeline rows share the ListRow pitch and a zero origin;
 the 28px KPropertyRow is centered within that pitch.
 Selected rows use the kit selected-row recipe: the Accent wash over the row in both halves, with
-the SelectionEdge Accent edge at the layer row's leading side. Every populated and empty row uses
+the SelectionEdge Accent edge at the layer row's leading side. Every row of the layer table --
+layer, group, parameter and component -- takes the list hover step (one surface rung up) under the
+pointer and is clickable; a clicked group or property row wears the same selected-row recipe
+(`KListSurface::setRowStates` under the rows that paint no background, `KRow::setHovered` on a layer
+row) and its key lane the same wash. The layer table's columns read, as in After Effects: Video,
+Audio, Solo and Lock, the Label square, the disclosure and name (which takes every extra pixel),
+the Shy switch (`KRow::setCells` switches after the name), then Blending, Parent and Matte. The
+column headings put the label filter (`timelineLabelFilterButton`, `IconId::LabelFilter`) over the
+Label squares and the Hide Shy Layers toggle (`timelineHideShyToggle`, `IconId::Shy`) over the Shy
+switches; both are plated `KIconToggle`s that wear the Accent plate while filtering or hiding. New
+names: `timelineLayerLabel`, `timelineLayerShy`, `timelineLayerLabelMenu`,
+`timelineSelectLabelGroupAction`, `timelineLabelFilterMenu`. Every populated and empty row uses
 one snapped Background hairline separator (`kit::paintRowSeparator`, the window color, never a
 lighter border), without alternating fills.
 The work-area slider occupies the lane half

@@ -318,11 +318,17 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
                                     QStringLiteral("Default") &&
                                 !fixture.window->workspacePresets()->isEdited(),
                             "reset workspace: the Workspace field reads Default");
+        // 37% of the Timeline, or the layer table's own floor when 37% would hide a column.
+        const double expectedShare =
+            timeline->width() > 0
+                ? std::max(0.37, static_cast<double>(timeline->minLayerColumnWidthForTest()) /
+                                     timeline->width())
+                : 0.0;
         const double timelineShare =
             timeline->width() > 0
                 ? static_cast<double>(timeline->layerColumnWidthForTest()) / timeline->width()
                 : 0.0;
-        expectations.expect(std::abs(timelineShare - 0.37) <= 0.01,
+        expectations.expect(std::abs(timelineShare - expectedShare) <= 0.01,
                             "reset workspace: the timeline divider returns to 37%");
 
         auto* viewer = fixture.window->findChild<ViewerEditor*>();

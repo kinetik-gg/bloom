@@ -356,9 +356,6 @@ enum class ExportUnavailableCode : std::uint8_t {
     // Reveal: nothing has been published at this destination in this session.
     NotPublished = 21,
     CompositionMissing = 22,
-    // Never produced (ADR 0035: every platform exports). Kept only until the desktop UI drops its
-    // references; do not produce it.
-    PlatformNotSupported = 23,
     // An existing destination under AskBeforeReplacing has not been confirmed.
     NeedsReplaceConfirmation = 24,
     // ConfirmReplace: the destination does not exist, is already confirmed, or the policy does

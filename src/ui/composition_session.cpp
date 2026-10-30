@@ -426,6 +426,7 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     // targets them and must not survive the swap.
     transformInteraction_.reset();
     valueEdit_.reset();
+    keyframePreview_.reset();
 
     // One coherent transition (docs/architecture/project-session.md, "Session Publication"):
     // observers must never see a new document paired with stale selection/time/history, so every
@@ -2175,6 +2176,8 @@ void CompositionSession::handleCommandEvent(const commands::CommandEvent& event)
         if (valueEdit_ && valueEdit_->revision != snapshot_.revision()) {
             cancelValueEdit();
         }
+        if (keyframePreview_ && keyframePreview_->revision != snapshot_.revision())
+            clearKeyframePreview();
         if (revisionAdvanced) {
             lastDocumentChangeAffectedEvaluation_ = provenanceChanged;
             normalizeSelection();
@@ -2420,6 +2423,13 @@ CompositionSession::sampleParameterValue(const document::ParameterRecord& parame
     if (current == nullptr) {
         return std::nullopt;
     }
+    return sampleParameterValueIn(current->animationCurves(), parameter, time);
+}
+
+std::optional<ParameterSample>
+CompositionSession::sampleParameterValueIn(const document::AnimationCurveStore& curves,
+                                           const document::ParameterRecord& parameter,
+                                           const core::RationalTime time) const {
     const auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source);
     if (source == nullptr) {
         // Only for animation-sourced parameters (decision 2); constant/driven callers keep their
@@ -2427,14 +2437,14 @@ CompositionSession::sampleParameterValue(const document::ParameterRecord& parame
         // branches).
         return std::nullopt;
     }
-    if (const auto* scalarCurve = current->animationCurves().findScalar(source->curveId)) {
+    if (const auto* scalarCurve = curves.findScalar(source->curveId)) {
         const auto sample = runtime::sampleAnimationCurve(*scalarCurve, time);
         if (!sample || !sample.value.has_value()) {
             return std::nullopt;
         }
         return ParameterSample(*sample.value);
     }
-    if (const auto* vec2Curve = current->animationCurves().findVec2(source->curveId)) {
+    if (const auto* vec2Curve = curves.findVec2(source->curveId)) {
         document::Vec2d fallback{};
         if (source->defaultValue.has_value()) {
             if (const auto* value = std::get_if<document::Vec2d>(&*source->defaultValue))
@@ -2446,7 +2456,7 @@ CompositionSession::sampleParameterValue(const document::ParameterRecord& parame
         }
         return ParameterSample(*sample.value);
     }
-    if (const auto* vec3Curve = current->animationCurves().findVec3(source->curveId)) {
+    if (const auto* vec3Curve = curves.findVec3(source->curveId)) {
         document::Vec3d fallback{};
         if (source->defaultValue.has_value()) {
             if (const auto* value = std::get_if<document::Vec3d>(&*source->defaultValue))
@@ -2458,7 +2468,7 @@ CompositionSession::sampleParameterValue(const document::ParameterRecord& parame
         }
         return ParameterSample(*sample.value);
     }
-    if (const auto* colorCurve = current->animationCurves().findColor4(source->curveId)) {
+    if (const auto* colorCurve = curves.findColor4(source->curveId)) {
         core::Color4d fallback{};
         if (source->defaultValue.has_value()) {
             if (const auto* value = std::get_if<core::Color4d>(&*source->defaultValue))
@@ -2539,6 +2549,10 @@ CompositionSession::effectiveParameterValue(const document::ParameterRecord* par
     // An animated source is sampled at the CURRENT session time; a driven one is produced by the
     // value graph rather than read off the record, so it answers nothing here and
     // drivenValueText() answers instead -- exactly as every write path refuses a driven source.
+    // A live graph drag previews its curves through the same reader, so every readout follows
+    // the drag before anything is committed.
+    if (const auto* previewed = keyframePreviewCurves())
+        return sampleParameterValueIn(*previewed, *parameter, keyTimeAtPlayhead(parameter->id));
     return sampleParameterValue(*parameter, keyTimeAtPlayhead(parameter->id));
 }
 

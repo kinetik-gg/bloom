@@ -382,6 +382,11 @@ void retiredTransientJobs() {
     expect(contains(status, R"("recentTransientJobs":[{"id":)" + id) &&
                contains(status, R"("transient":true)"),
            "export.status lists the retired transient job: " + status);
+    // The refusal codes are named by enumerator, not by position: ADR 0035 retired value 23, and
+    // the codes after it must keep their own names.
+    expect(contains(status, R"("code":"DestinationCheckPending")") &&
+               !contains(status, R"("code":"Unknown")"),
+           "export.status names the codes after the retired gap correctly: " + status);
     const auto wait = server.call("export.wait", R"({"job":)" + id + R"(,"timeoutMs":1000})");
     expect(contains(wait, R"("finished":true)"), "export.wait finds the retired job: " + wait);
 

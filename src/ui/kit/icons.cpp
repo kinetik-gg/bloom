@@ -112,6 +112,9 @@ const auto& iconAssets() {
         {IconId::McpServer, QLatin1StringView("plugs-connected")},
         {IconId::ExportPanel, QLatin1StringView("export")},
         {IconId::Arrange, QLatin1StringView("broom")},
+        {IconId::Shy, QLatin1StringView("ghost")},
+        {IconId::LabelFilter, QLatin1StringView("funnel-simple")},
+        {IconId::GraphEditor, QLatin1StringView("chart-line")},
     });
     return entries;
 }

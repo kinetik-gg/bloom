@@ -157,7 +157,7 @@ KRow::KRow(QWidget* parent) : QWidget(parent), row_(new QHBoxLayout(this)) {
     nameLayout->addWidget(name_, 1, Qt::AlignVCenter);
 }
 void KRow::setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<QWidget*>& columns,
-                    QWidget* trailing, int toggleGap) {
+                    QWidget* trailing, int toggleGap, const QList<QWidget*>& switches) {
     for (auto* cell : toggles) {
         if (cell != toggles.front())
             row_->addSpacing(toggleGap);
@@ -166,6 +166,12 @@ void KRow::setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<Q
         row_->addWidget(cell, 0, Qt::AlignVCenter);
     }
     row_->addWidget(name ? name : nameCell_, 1);
+    for (auto* cell : switches) {
+        row_->addSpacing(toggleGap);
+        cell->setFixedSize(px(Size::ToggleCell), px(Size::ToggleCell));
+        cell->setProperty("rowCell", "toggle");
+        row_->addWidget(cell, 0, Qt::AlignVCenter);
+    }
     for (auto* cell : columns) {
         const auto* dropdown = qobject_cast<KDropdown*>(cell);
         cell->setFixedSize(
@@ -191,6 +197,12 @@ void KRow::setRowState(int index, bool selected) {
     selected_ = selected;
     update();
 }
+void KRow::setHovered(const bool hovered) {
+    if (hovered_ == hovered)
+        return;
+    hovered_ = hovered;
+    update();
+}
 void KRow::resizeEvent(QResizeEvent* event) {
     const auto vertical = height() == px(Size::Control) ? 0 : px(Spacing::RowPadding);
     row_->setContentsMargins(leadingInset_, vertical, px(Spacing::RowPadding), vertical);
@@ -204,7 +216,8 @@ void KRow::setLeadingInset(int inset) {
 }
 void KRow::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    painter.fillRect(rect(), color(Color::Surface));
+    painter.fillRect(
+        rect(), color(hovered_ && !selected_ ? surfaceStep(Color::Surface, 1) : Color::Surface));
     if (selected_)
         paintSelectedRow(painter, QRectF(rect()), Color::Surface, true);
     paintRowSeparator(painter, QRectF(rect()));

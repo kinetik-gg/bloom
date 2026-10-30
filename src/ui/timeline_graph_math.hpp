@@ -7,7 +7,12 @@
 
 #include <bloom/document/animation.hpp>
 
+#include <cstdint>
+#include <optional>
+
+#include <functional>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace bloom::ui {
@@ -78,5 +83,107 @@ inline constexpr double kGraphViewportPadding = 0.1;
 [[nodiscard]] GraphSegmentControls bezierControls(GraphPoint start, GraphPoint end,
                                                   document::KeyframeHandle outgoing,
                                                   document::KeyframeHandle incoming);
+
+// What the canvas plots for a curve (After Effects' graph types). The Value Graph is the curve
+// itself; the Speed Graph is its rate of change in value units per second, read off the sampler
+// rather than re-derived from the handles, so it stays right for every interpolation the engine
+// evaluates.
+enum class GraphType : std::uint8_t { Value, Speed };
+
+// Blender's Normalize: a curve's plotted quantity drawn scaled into -1...1 by its own extent. It
+// is a DISPLAY transform only -- edits are converted back to real units before anything is
+// written -- and it is the identity when normalization is off.
+struct GraphNormalization final {
+    double center = 0.0;
+    double halfSpan = 1.0;
+
+    [[nodiscard]] double toDisplay(double quantity) const noexcept {
+        return (quantity - center) / halfSpan;
+    }
+    [[nodiscard]] double fromDisplay(double display) const noexcept {
+        return center + display * halfSpan;
+    }
+    friend bool operator==(const GraphNormalization&, const GraphNormalization&) = default;
+};
+
+// The normalization that maps the extent of `quantities` onto -1...1. Degenerate input (empty,
+// or every value equal) keeps a unit half-span around that value, so a flat curve draws as a
+// flat line at 0 instead of dividing by zero.
+[[nodiscard]] GraphNormalization normalizationFor(std::span<const double> quantities);
+
+// One curve's complete vertical mapping: the window it is viewed through (in display units), the
+// normalization (identity when off), and the band the window maps into. Every pixel the view
+// paints or hit-tests for a curve, and every pointer delta it converts into an edit, goes through
+// exactly this, so a normalized and a real-unit curve cannot be edited by different rules.
+struct GraphLens final {
+    GraphValueViewport viewport;
+    GraphNormalization normalization;
+    double top = 0.0;
+    double height = 1.0;
+
+    [[nodiscard]] double pixelFor(double quantity) const;
+    [[nodiscard]] double quantityFor(double pixelY) const;
+    // Real units per pixel of vertical pointer travel (positive: a pixel UP adds this much).
+    [[nodiscard]] double quantityPerPixel() const;
+};
+
+// The window that shows -1...1 with the same padding auto-fit gives a real-unit curve.
+[[nodiscard]] GraphValueViewport normalizedViewport();
+
+// Shift-drag (After Effects): a key locks to time-only or value-only, whichever axis dominates the
+// whole displacement so far, decided per move from the total rather than the last step.
+enum class GraphDragAxis : std::uint8_t { Both, TimeOnly, ValueOnly };
+[[nodiscard]] GraphDragAxis dragAxis(double dx, double dy, bool locked) noexcept;
+
+// Shift on a handle: the handle's screen-space vector snapped to the nearest 45 degree direction,
+// keeping its projected length. `forwardSign` is +1 for an outgoing handle and -1 for an incoming
+// one: a handle never points back across its own key, so the backward directions are not offered.
+struct GraphPixelVector final {
+    double dx = 0.0;
+    double dy = 0.0;
+    friend bool operator==(const GraphPixelVector&, const GraphPixelVector&) = default;
+};
+[[nodiscard]] GraphPixelVector snapHandleAngle(GraphPixelVector vector, double forwardSign);
+
+// The speed of a curve at `seconds`, from its own sampler. `keyTimes` are the curve's key times in
+// seconds, ascending, and `interpolations[i]` is the outgoing mode of key i. Inside a segment
+// the speed is a central difference of the sampled value, both probes kept inside that segment so
+// a neighbouring Hold step can never leak into it; a held segment and the time outside the keys
+// (where the curve extrapolates constant) have zero speed. `outgoing` picks the side of a key the
+// speed is read on when `seconds` lands exactly on one.
+[[nodiscard]] double curveSpeed(const std::function<double(double)>& sample,
+                                std::span<const double> keyTimes,
+                                std::span<const document::KeyframeInterpolation> interpolations,
+                                double seconds, bool outgoing = true);
+
+// The Speed Graph's handle model, exact in the Bezier the sampler evaluates: a handle at time
+// fraction `t` of a segment lasting `duration` seconds with value offset `v` leaves (outgoing) or
+// enters (incoming) its key at v / (t * duration) value units per second, sign-adjusted for the
+// incoming side. The inverse writes a speed back as a value offset at the same influence.
+[[nodiscard]] std::optional<double> handleSpeed(document::KeyframeHandle handle, double duration,
+                                                bool outgoing) noexcept;
+[[nodiscard]] double handleValueForSpeed(double speed, double handleTime, double duration,
+                                         bool outgoing) noexcept;
+// The smallest influence a Speed Graph handle drag writes (After Effects' 0.1%): at zero a handle's
+// speed is undefined, so the drag stops just short of it.
+inline constexpr double kMinimumHandleInfluence = 0.001;
+
+// The handle that keeps a segment's straight-line tangent at its own key: a Speed Graph drag that
+// turns a Linear segment into a Bezier pins the segment's far end with it, so only the dragged
+// key's speed changes.
+[[nodiscard]] document::KeyframeHandle linearTangentHandle(double startValue, double endValue,
+                                                           bool outgoing) noexcept;
+
+// The time range (seconds) and value window (display units) that frame `points` with padding, for
+// Fit Selection / Fit All. A single point or a zero-length range gets a unit window around it.
+// The narrowest time range a fit frames, in frames: a single selected key still gets context.
+inline constexpr int kGraphFitMinimumFrames = 10;
+struct GraphFrame final {
+    double t0 = 0.0;
+    double t1 = 1.0;
+    GraphValueViewport values;
+};
+[[nodiscard]] std::optional<GraphFrame> frameFor(std::span<const GraphPoint> points,
+                                                 double minimumSeconds);
 
 } // namespace bloom::ui

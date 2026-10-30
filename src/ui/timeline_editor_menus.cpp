@@ -23,8 +23,10 @@
 #include <QToolButton>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <set>
+#include <tuple>
 #include <vector>
 
 namespace bloom::ui {
@@ -58,6 +60,10 @@ void TimelineEditor::createHeaderMenus() {
     bar->objectName = "timelineHeaderMenus";
     bar->overflowButtonName = "timelineHeaderOverflowButton";
     bar->overflowMenuName = "timelineHeaderOverflowMenu";
+    // A priority row, as in Assets: a narrow layer table collapses Select, then View, then Add, and
+    // last the graph toggle, into one overflow menu, so nothing ever leaves the header row.
+    bar->overflowIcon = kit::IconId::ContextMenu;
+    bar->overflowToolTip = tr("More panel menus");
     const auto menu = [this](const QString& title, const QString& name) {
         auto* result = kit::makeMenu(title, this);
         result->setObjectName(name);
@@ -137,6 +143,7 @@ void TimelineEditor::createHeaderMenus() {
     framesAction_->setChecked(!timecodeFormat_);
     timecodeAction_->setChecked(timecodeFormat_);
     bar->addMenu(view, QStringLiteral("timelineViewButton"));
+    bar->setCollapse(bar->entries.back().control, 2, view->menuAction());
 
     editMenu_ = menu(tr("Edit"), QStringLiteral("timelineEditMenu"));
     // Standalone editor fixtures have no application menu. These local menu actions keep that
@@ -178,6 +185,67 @@ void TimelineEditor::createHeaderMenus() {
         select, tr("Deselect All"), QStringLiteral("timelineSelectNoneAction"),
         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A), [this] { session_.clearSelection(); });
     bar->addMenu(select, QStringLiteral("timelineSelectButton"));
+    bar->setCollapse(bar->entries.back().control, 1, select->menuAction());
+    bar->setCollapse(addButton_, 3, add->menuAction());
+
+    // T1, item 6: the right pane's keyframes/graph switch, as in After Effects (Shift+F3). It is a
+    // switch, not a third state: turning the graph off shows the keyframes. The View menu keeps
+    // its own Keyframes and Graph Editor choices.
+    graphPaneAction_ = new QAction(tr("Graph Editor"), this);
+    graphPaneAction_->setObjectName(QStringLiteral("timelineGraphPaneAction"));
+    graphPaneAction_->setCheckable(true);
+    graphPaneAction_->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F3));
+    graphPaneAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    addAction(graphPaneAction_);
+    connect(graphPaneAction_, &QAction::triggered, this, [this](const bool graph) {
+        if (graph)
+            setGraphEditorEnabled(true);
+        else
+            setKeyframesVisible(true);
+    });
+    graphPaneAction_->setIcon(kit::icon(kit::IconId::GraphEditor, kit::IconRole::Chrome));
+    graphPaneAction_->setToolTip(tr("Graph Editor (Shift+F3)"));
+    // A header icon button like Fullscreen beside it, mirroring the action's checked state. Not a
+    // default action: an action change re-shows its button, and the header row owns visibility.
+    auto* graphToggle = new kit::KIconButton(this);
+    graphToggle->setObjectName(QStringLiteral("timelineGraphToggle"));
+    graphToggle->setCheckable(true);
+    graphToggle->setIcon(graphPaneAction_->icon());
+    const int iconBox = kit::px(kit::iconSize(kit::IconRole::Chrome));
+    graphToggle->setIconSize(QSize(iconBox, iconBox));
+    graphToggle->setToolTip(graphPaneAction_->toolTip());
+    graphToggle->setAccessibleName(tr("Graph Editor"));
+    connect(graphToggle, &QAbstractButton::clicked, graphPaneAction_, &QAction::trigger);
+    connect(graphPaneAction_, &QAction::toggled, graphToggle, &QAbstractButton::setChecked);
+    graphToggle->setAutoRaise(true);
+    graphToggle->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
+    bar->addStretch();
+    bar->addWidget(graphToggle);
+    // A narrow layer table moves the toggle into the header's overflow, never off its row.
+    bar->setCollapse(graphToggle, 4, graphPaneAction_);
+
+    // T1, item 5: Easy Ease (F9), Easy Ease In (Shift+F9) and Easy Ease Out (Ctrl+Shift+F9) over
+    // the selected keys, wherever the timeline has focus. The graph's key menu offers these same
+    // actions.
+    const std::array<std::tuple<QString, const char*, QKeySequence, bool, bool>, 3> eases{{
+        {tr("Easy Ease"), "timelineEasyEaseAction", QKeySequence(Qt::Key_F9), true, true},
+        {tr("Easy Ease In"), "timelineEasyEaseInAction", QKeySequence(Qt::SHIFT | Qt::Key_F9),
+         true, false},
+        {tr("Easy Ease Out"), "timelineEasyEaseOutAction",
+         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F9), false, true},
+    }};
+    for (std::size_t index = 0; index < eases.size(); ++index) {
+        const auto& [title, name, shortcut, easeIn, easeOut] = eases[index];
+        auto* action = new QAction(title, this);
+        action->setObjectName(QString::fromLatin1(name));
+        action->setShortcut(shortcut);
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        addAction(action);
+        connect(action, &QAction::triggered, this, [this, easeIn, easeOut] {
+            (void)session_.easeSelectedKeyframes(easeIn, easeOut);
+        });
+        easeActions_[index] = action;
+    }
     // Reuse the existing actions and Add popup: one command/checked state/shortcut owner.
     // The empty-table menu is contextual, not another copy of the header's menu hierarchy.
     blankLayerContextMenu_ = kit::makeMenu(this);

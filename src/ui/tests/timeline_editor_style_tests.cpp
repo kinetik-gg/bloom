@@ -556,9 +556,10 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     expectations.expect(ui::TimelineEditor::layerColumnWidth() ==
                             ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
                                 ui::kit::px(ui::kit::Size::TimelineNameDefault) +
+                                ui::kit::px(ui::kit::Size::TimelineSwitchColumn) +
                                 3 * ui::kit::px(ui::kit::Size::TimelineColumn),
-                        "the default left column is the exact toggle/name/blending/parent/matte "
-                        "sum");
+                        "the default left column is the exact toggle/name/shy/blending/parent/"
+                        "matte sum");
     expectations.expect(area->findChild<ui::kit::KDropdown*>("timelineCompositionSelector") ==
                                 nullptr &&
                             area->findChild<QAction*>("timelineKeyframesAction") != nullptr &&
@@ -657,7 +658,8 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     QCoreApplication::processEvents();
     auto* overflow = area->findChild<QToolButton*>("timelineHeaderOverflowButton");
     expectations.expect(overflow->isVisible() && overflow->menu()->actions().size() == 4,
-                        "a narrow header collapses all four menus into the overflow popup");
+                        "a narrow header collapses Add, View, Select and the graph toggle into "
+                        "the overflow popup");
     finishFixture(fixture);
 }
 

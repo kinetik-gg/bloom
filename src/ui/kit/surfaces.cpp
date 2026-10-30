@@ -2,6 +2,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPen>
+#include <algorithm>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/surfaces.hpp>
 #include <cmath>
@@ -95,7 +96,11 @@ void KListSurface::paintEvent(QPaintEvent*) {
     const int first = offset_ / pitch;
     for (int row = first; row <= (offset_ + height()) / pitch; ++row) {
         const QRectF band(0, row * pitch - offset_, width(), pitch);
-        painter.fillRect(band, color(Color::Surface));
+        const bool selected = std::ranges::find(selected_, row) != selected_.end();
+        painter.fillRect(band, color(row == hovered_ && !selected ? surfaceStep(Color::Surface, 1)
+                                                                  : Color::Surface));
+        if (selected)
+            paintSelectedRow(painter, band, Color::Surface, true);
         paintRowSeparator(painter, band);
     }
 }

@@ -337,18 +337,30 @@ void testTimeChangeRefreshesValuesWithoutRebuilding(Expectations& expectations) 
     expectations.expect(opacityField != nullptr, "the opacity cell resolves");
     if (opacityField == nullptr)
         return;
+    QCoreApplication::processEvents();
     const auto before = properties.work();
     const auto atZero = opacityField->value();
-    for (int frame = 1; frame <= 60; ++frame)
+    // One playback tick per event-loop turn: one in-place refresh each.
+    for (int frame = 1; frame <= 60; ++frame) {
+        static_cast<void>(session.setCurrentTime(
+            core::RationalTime::create(frame, 12).value_or(core::RationalTime{})));
+        QCoreApplication::processEvents();
+    }
+    const auto ticked = properties.work();
+    // #401: a burst of playhead moves inside one turn is coalesced into a single refresh.
+    for (int frame = 1; frame <= 10; ++frame)
         static_cast<void>(session.setCurrentTime(
             core::RationalTime::create(frame, 12).value_or(core::RationalTime{})));
     static_cast<void>(session.setCurrentTime(time(5)));
+    QCoreApplication::processEvents();
     const auto after = properties.work();
     expectations.expect(after.fullRebuilds == before.fullRebuilds &&
                             after.upstreamWalks == before.upstreamWalks,
                         "playhead moves never rebuild Properties or walk the upstream graph");
-    expectations.expect(after.valueRefreshes >= before.valueRefreshes + 60,
-                        "every playhead move refreshes values once");
+    expectations.expect(ticked.valueRefreshes == before.valueRefreshes + 60,
+                        "every playback tick refreshes values once");
+    expectations.expect(after.valueRefreshes == ticked.valueRefreshes + 1,
+                        "a burst of playhead moves in one turn refreshes values once");
     expectations.expect(opacityField->value() != atZero,
                         "the in-place refresh shows the curve's value at the new time");
 }

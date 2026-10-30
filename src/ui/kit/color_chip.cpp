@@ -44,10 +44,14 @@ KColorChip::~KColorChip() {
 }
 
 void KColorChip::setColorConverter(KColorConverter converter) {
+    // #401: a surface re-hands its converter on every value refresh (once per playback tick); the
+    // swatch repaints only when the colour it shows actually changes.
+    const auto before = color_.converted(ColorSpace::Display, converter_);
     converter_ = std::move(converter);
     if (picker_)
         picker_->setColorConverter(converter_);
-    update();
+    if (color_.converted(ColorSpace::Display, converter_) != before)
+        update();
 }
 
 void KColorChip::setColor(const KColor& newColor) {

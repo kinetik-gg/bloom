@@ -44,6 +44,9 @@ binds the already vendored `film-strip`, so the three `cube` files are no longer
 Issue #376 (Composition Settings preset rename) downloaded the same pinned archive on 2026-10-25,
 verified its SHA-256 above from the downloaded bytes, and extracted `pencil-simple` in regular,
 fill and bold from `assets/` without modification.
+The timeline Graph Editor polish (lane T1, 2026-10-31) verified the same pinned archive's SHA-256
+above from the downloaded bytes and extracted `chart-line` in regular, fill and bold from `assets/`
+without modification, for the timeline's keyframes/graph toggle.
 The table and manifest below cover the actual complete checked-in subset, including those
 pre-existing exceptions; they do not claim that those exceptions are upstream-identical.
 
@@ -101,6 +104,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/dots-three-vertical.svg` | `85fdecd2193efcd7e80a83607b66d2680fef8f3d1e93380c26f9851b24edbd01` |
 | `regular/download-simple.svg` | `6450d3cf43dd9364eab343f1ada9bf4a77a85ded6e62d76deb17606ebfd62388` |
 | `regular/eyedropper.svg` | `87cad5a974a6f152cc7dce67fd6c41fdc21f75d59bed20508b68c95f65d9ebc5` |
+| `regular/chart-line.svg` | `8a432fac53ae887b1726a96462aa8ea285e714b8e480261751361e4d6b2b226f` |
 | `regular/selection.svg` | `5fff68fdc60d81f1855302416481dc69fe9f0abfbb353d3bc43f2c24150ab8d4` |
 | `regular/square-half.svg` | `09f561de8c5e6ed831723a1bc8f6f987fb453928a0028a3f95a0366bae055768` |
 | `regular/align-left.svg` | `37cf5a3b41f55b36b33623f5a987e3b4b6c4494e0c0ff46f5f16df8e305a39ab` |
@@ -184,6 +188,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/download-simple-fill.svg` | `ffd45964adc39f8e0027ebd66ea6c843fb8e5a21290a78ef6940436f7d292466` |
 | `fill/eye-fill.svg` | `86381b51cb6f305019503b4c5d4b02fe8df5941bab3f1475ee873006a8708420` |
 | `fill/eyedropper-fill.svg` | `8fb839f52aaadbe156dc9982deab2288c1e23fe335d65f7a638ba21ac8078037` |
+| `fill/chart-line-fill.svg` | `9528e485b685eca0c75dee314feb5f8cff3a0728325cfe811034e20af6aa9934` |
 | `fill/selection-fill.svg` | `39c98d739e03eecf38da5ccceb1093ca3b45826ee98a187e99bac2c3923fd8a2` |
 | `fill/square-half-fill.svg` | `b7de8273c0735917754a13552d4a1d84f5e4cbe40c8c1458e84ca1c4d0644628` |
 | `fill/align-left-fill.svg` | `704fc89bcaebb23f08b74b65cbb14b2c00d3a1f9409bc8f4790560f555afc65a` |
@@ -266,6 +271,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/download-simple-bold.svg` | `213b1d74439be031407a09958efc541c87158922a3a57e4dee785dddeef3f955` |
 | `bold/eye-bold.svg` | `766b10b6ed7d8a899a76ba28f3f066ca49e8ce0a75ae68b65bfec0e615d8130d` |
 | `bold/eyedropper-bold.svg` | `84cca4e37e3c813098a0b4dada7bfce670c56ad5ec0e924d0e3002e7218b7786` |
+| `bold/chart-line-bold.svg` | `ffff5add2c0384a6e4e2f661fd3784c4facfdc9d8bfe98d8467d710a6261b29c` |
 | `bold/selection-bold.svg` | `bca7ab4688ca03ed591ba3cfba90bda277b25596b649898388c51aebc7742fb3` |
 | `bold/square-half-bold.svg` | `2f8165874291b521ab54da329ffeb2628a0ba7cb20a38e4e81eaa23f6815c230` |
 | `bold/align-left-bold.svg` | `dcae6ce0e634a7ff0bca9a151d1d0767d1333828aa542e8fac9dc213a47f65b4` |
@@ -344,3 +350,8 @@ from the downloaded bytes, and extracted `tree-structure` in regular, fill and b
 without modification. It replaces `graph` everywhere the Node editor is named, so the three `graph`
 files are no longer embedded. The same intake extracted `broom` in regular, fill and bold, without
 modification, for the Node editor footer's Arrange button.
+
+The Timeline layer table (lane T2, 2026-10-31) downloaded the same pinned archive, verified its
+SHA-256 above from the downloaded bytes, and extracted `ghost` (the Shy switch and the master Shy
+toggle; the pinned release has no peeking-figure glyph) and `funnel-simple` (the label filter) in
+regular, fill and bold from `assets/` without modification.

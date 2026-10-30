@@ -36,7 +36,9 @@ double* editedComponent(document::ParameterValue& value,
 
 } // namespace
 
-bool CompositionSession::valueEditActive() const noexcept { return valueEdit_.has_value(); }
+bool CompositionSession::valueEditActive() const noexcept {
+    return valueEdit_.has_value() || keyframePreview_.has_value();
+}
 bool CompositionSession::isValueEditing(const document::ParameterId parameter) const noexcept {
     return valueEdit_ && valueEdit_->parameter == parameter;
 }
@@ -188,6 +190,8 @@ bool CompositionSession::updatePathEdit(document::PathValue path,
 }
 
 std::vector<runtime::SnapshotParameterOverride> CompositionSession::valueEditOverrides() const {
+    if (keyframePreview_ && !valueEdit_)
+        return keyframePreview_->overrides;
     if (!valueEdit_)
         return {};
     auto result = std::visit(
