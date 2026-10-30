@@ -87,6 +87,11 @@ if(BUILD_TESTING)
             "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_agent_feedback.py"
             "${CMAKE_BINARY_DIR}/python"
         LABELS scripting python integration)
+    bloom_add_test(NAME bloom.scripting.python-parity-ops
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_parity_ops.py"
+            "${CMAKE_BINARY_DIR}/python"
+        LABELS scripting python integration)
     # #357: several Hosts rendering through one interpreter device must exit promptly.
     bloom_add_test(NAME bloom.scripting.python-shared-device
         COMMAND "${Python3_EXECUTABLE}" -I

@@ -4,6 +4,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/scripting/operation_registry.hpp>
 
+#include "operation_registry_parity.hpp"
 #include "operation_values.hpp"
 
 #include <algorithm>
@@ -3380,6 +3381,8 @@ OperationRegistry OperationRegistry::builtIn() {
 
     detail::addLayerAlignmentOperations(all);
     detail::addExportOperations(all);
+    detail::parity::addLayerAndNodeOperations(all);
+    detail::parity::addProjectOperations(all);
 
     std::ranges::sort(
         all, {}, [](const OperationDescriptor& descriptor) { return descriptor.schema.typeId; });

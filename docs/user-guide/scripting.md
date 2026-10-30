@@ -55,6 +55,28 @@ Example scripts live in [`examples/scripting`](../../examples/scripting/).
 Python scripts and the interactive interpreter are described in [Scripting Bloom with Python](python.md).
 For stdio clients, see [Using Bloom from an agent (MCP)](mcp.md).
 
+## Layer and node edits from the UI
+
+Every layer and node edit of the Timeline, Viewer and Node editor menus and drops has an operation,
+built on the same command as the UI action, so it validates, labels and undoes the same way:
+
+- `bloom.layer.delete` and `bloom.layer.duplicate` take `layers` (layer ids, not node ids) and
+  default to the selected layers. Delete removes each layer's Layer Output node, as Delete in the
+  Timeline does; duplicate copies it in place directly below the original and outputs one `layer`
+  per copy.
+- `bloom.layer.add-from-assets` is an asset drop on the Timeline or Viewer
+  ([ADR 0030](../decisions/0030-layer-drops.md)): `assets` (image, image sequence, video or audio)
+  and `compositions` (nested-composition layers) become layers in one step, first item uppermost,
+  starting at `time` (default the playhead), with `placement` `"top"`, `"bottom"` or `"before"` a
+  layer, and `sequence` for end-to-end layers. It does not import: run `bloom.asset.import` first.
+- `bloom.node.add-asset-source` and `bloom.node.add-composition-source` are drops on the Node
+  canvas: an unwired source node. `bloom.node.add-feeding` and `bloom.node.add-fed-by` add a node
+  connected to an existing input or output, as dragging a wire to empty canvas does, and
+  `bloom.node.insert-reroute` inserts a Reroute into the link that feeds an input.
+
+`query kind=operations` (MCP) and `Host.schemas()` (Python) carry each operation's `description`:
+its purpose, side effects, outputs, errors with remedies, undo step and an MCP example.
+
 ## Export queue
 
 The export queue ([ADR 0033](../decisions/0033-export-queue.md)) is scriptable in two halves.
