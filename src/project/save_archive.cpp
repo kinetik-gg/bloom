@@ -488,7 +488,12 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
             return ReopenChainResult::failure(
                 SaveArchiveFailure(stage, SaveArchiveResourceExhausted{}));
         }
-        auto reconstructed = reconstructDocument(*decodedDocument.value());
+        // Document 1.30: a layer of an older document follows its source exactly when its name
+        // already is the source's name.
+        auto reconstructed = reconstructDocument(
+            *decodedDocument.value(),
+            decodedDocumentVersion.has_value() &&
+                *decodedDocumentVersion < document::SchemaVersion{1, kLayerNameFollowsSourceMinor});
         if (!reconstructed) {
             return ReopenChainResult::failure(SaveArchiveFailure(stage, reconstructed.rejection()));
         }

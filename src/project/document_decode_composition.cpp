@@ -525,6 +525,9 @@ using document::Vec3d;
 // Animation curves (docs/architecture/project-format.md, "Animation")
 // ------------------------------------------------------------------------------------------
 
+// The minor that declares the easing-equation tokens and the keyframe `easing` member.
+inline constexpr std::uint32_t kKeyframeEasingMinor = 30;
+
 [[nodiscard]] bool decodeInterpolation(const JsonValue& value, DecodeState& state,
                                        const std::string& path, KeyframeInterpolation& out) {
     std::string_view text;
@@ -547,6 +550,13 @@ using document::Vec3d;
     // failUnknownDiscriminator()'s own route.
     if (text == "ease-in-out" && state.documentMinor >= 3) {
         out = KeyframeInterpolation::EaseInOut;
+        return true;
+    }
+    // Document 1.30: Blender's easing equations, gated on the minor that declares them.
+    if (const auto easing = document::keyframeInterpolationFromToken(text);
+        easing && document::isEasingInterpolation(*easing) &&
+        state.documentMinor >= kKeyframeEasingMinor) {
+        out = *easing;
         return true;
     }
     state.fail(DocumentDecodeError::InvalidInterpolation, path);
@@ -608,7 +618,52 @@ void appendPresentHandleKeys(const JsonValue& node, const DecodeState& state,
     }
     if (members.size() > index && members[index].key() == "incomingHandle") {
         keys.emplace_back("incomingHandle");
+        ++index;
     }
+    if (state.documentMinor >= kKeyframeEasingMinor && members.size() > index &&
+        members[index].key() == "easing") {
+        keys.emplace_back("easing");
+    }
+}
+
+// A 1.30 easing object is CLOSED, like a handle: exactly {mode, back, amplitude, period}.
+[[nodiscard]] bool decodeKeyframeEasing(const JsonValue& node, DecodeState& state,
+                                        const std::string& path,
+                                        document::KeyframeEasingParameters& out) {
+    static constexpr std::array<std::string_view, 4> keys{"mode", "back", "amplitude", "period"};
+    if (node.kind() != JsonValueKind::Object) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto members = node.objectMembers();
+    if (members.size() > keys.size()) {
+        state.fail(DocumentDecodeError::UnknownMember, joinPath(path, members[keys.size()].key()));
+        return false;
+    }
+    std::vector<const JsonValue*> values;
+    if (!matchOrderedMembers(node, keys, false, state, path, values))
+        return false;
+    std::string_view mode;
+    if (!decodeStringMember(*values[0], state, joinPath(path, "mode"), mode))
+        return false;
+    const auto easing = document::keyframeEasingFromToken(mode);
+    if (!easing) {
+        state.fail(DocumentDecodeError::InvalidKeyframeEasing, joinPath(path, "mode"));
+        return false;
+    }
+    document::KeyframeEasingParameters parameters;
+    parameters.easing = *easing;
+    if (!decodeFloat64Member(*values[1], state, joinPath(path, "back"), parameters.back) ||
+        !decodeFloat64Member(*values[2], state, joinPath(path, "amplitude"),
+                             parameters.amplitude) ||
+        !decodeFloat64Member(*values[3], state, joinPath(path, "period"), parameters.period))
+        return false;
+    if (!document::isValidKeyframeEasing(parameters)) {
+        state.fail(DocumentDecodeError::InvalidKeyframeEasing, path);
+        return false;
+    }
+    out = parameters;
+    return true;
 }
 
 template <typename Keyframe>
@@ -617,6 +672,12 @@ template <typename Keyframe>
                                        const std::size_t knownCount, DecodeState& state,
                                        const std::string& path, Keyframe& out) {
     for (auto index = knownCount; index < keys.size(); ++index) {
+        if (keys[index] == "easing") {
+            if (!decodeKeyframeEasing(*members[index], state, joinPath(path, keys[index]),
+                                      out.easing))
+                return false;
+            continue;
+        }
         auto& handle = keys[index] == "outgoingHandle" ? out.outgoingHandle : out.incomingHandle;
         if (!decodeKeyframeHandle(*members[index], state, joinPath(path, keys[index]), handle)) {
             return false;
@@ -1591,6 +1652,10 @@ template <typename Keyframe, typename DecodeOne>
 // docs/architecture/project-format.md, "Versions, Migrations, And Preservation": "layer ID for a
 // Layer Output"). `layerId` is its second member, so its own trailing capture must be deferred
 // until this closed shape's own match returns, like every other collection element's own shape.
+// Document 1.30 declares the layer `shy` and `nameFollowsSource` flags. A document older than that
+// has neither; reconstruction infers nameFollowsSource for it (see document_reconstruct.cpp).
+inline constexpr std::uint32_t kLayerPresentationFlagsMinor = 30;
+
 [[nodiscard]] bool decodeLayerOutputBoundary(const JsonValue& node, DecodeState& state,
                                              const std::string& path, LayerOutputBoundary& out) {
     std::vector<std::string_view> keys{"nodeId", "layerId", "name", "outputPort"};
@@ -1607,6 +1672,10 @@ template <typename Keyframe, typename DecodeOne>
                 keys.push_back(key);
     if (state.documentMinor >= 24)
         for (const auto* key : {"masks", "trackMatte"})
+            if (node.findMember(key))
+                keys.push_back(key);
+    if (state.documentMinor >= kLayerPresentationFlagsMinor)
+        for (const auto* key : {"shy", "nameFollowsSource"})
             if (node.findMember(key))
                 keys.push_back(key);
     std::vector<const JsonValue*> members;
@@ -1665,6 +1734,18 @@ template <typename Keyframe, typename DecodeOne>
             rgb[i] = static_cast<std::uint8_t>(channel);
         }
         out.labelColor = rgb;
+    }
+    for (const auto& [key, target] :
+         {std::pair{"shy", &out.shy}, std::pair{"nameFollowsSource", &out.nameFollowsSource}}) {
+        if (const auto* value = node.findMember(key);
+            value && state.documentMinor >= kLayerPresentationFlagsMinor) {
+            const auto flag = value->asBoolean();
+            if (!flag) {
+                state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, key));
+                return false;
+            }
+            *target = *flag;
+        }
     }
     for (const auto& [key, target] :
          {std::pair{"enabled", &out.enabled}, std::pair{"solo", &out.solo},

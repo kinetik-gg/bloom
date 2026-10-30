@@ -307,6 +307,9 @@ enum class DocumentDecodeError : std::uint8_t {
     // members" sort by "UTF-8 key after known members". Such input could not have come from a
     // conforming writer.
     UnsortedUnknownMember,
+    // (1.30) A keyframe's `easing` object names an unknown mode, carries a non-finite number, or a
+    // negative amplitude. The same predicate admits it into the document store and the sampler.
+    InvalidKeyframeEasing,
 };
 
 // (RT1) Why a same-major newer-minor document could not be opened editable even though every

@@ -135,7 +135,7 @@ void testRoundTrip() {
 
 void testMigration() {
     const auto current = encode(makeDocument(false));
-    auto older = replaceOnce(current, "\"minor\": 29", "\"minor\": 28");
+    auto older = replaceOnce(current, "\"minor\": 30", "\"minor\": 28");
     older = std::regex_replace(
         older, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
     older = std::regex_replace(
@@ -149,10 +149,10 @@ void testMigration() {
     const auto legacy = decodeDocumentEnvelope(parsed.document()->root());
     expect(static_cast<bool>(legacy) && legacy.value()->exportQueue.jobs.empty(),
            "a 1.28 document decodes with an empty queue");
-    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 28}, {1, 29},
+    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 28}, {1, 30},
                                              kProductionDocumentMigrationSteps, {}, operation);
-    expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 1,
-           "1.28 to 1.29 runs exactly the export-queue step");
+    expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 2,
+           "1.28 to 1.30 runs exactly the export-queue and easing steps");
     if (migrated.outcome() != MigrationOutcome::Migrated)
         return;
     const auto upgraded = decodeDocumentEnvelope(*migrated.migratedRoot());
@@ -160,13 +160,13 @@ void testMigration() {
     const auto saved = reparsed ? decodeDocumentEnvelope(reparsed.document()->root())
                                 : decodeDocumentEnvelope(*migrated.migratedRoot());
     expect(upgraded && saved && *upgraded.value() == *saved.value(),
-           "a migrated 1.28 project equals the same project saved at 1.29");
+           "a migrated 1.28 project equals the same project saved at 1.30");
 
     // The already-migrated guard: a 1.28-labelled file that already has the queue is refused.
-    const auto mislabelled = replaceOnce(current, "\"minor\": 29", "\"minor\": 28");
+    const auto mislabelled = replaceOnce(current, "\"minor\": 30", "\"minor\": 28");
     auto bad = parseStrictJsonDom(std::as_bytes(std::span(mislabelled)), {}, operation);
     if (bad) {
-        const auto refused = migrateDocumentDom(bad.document()->root(), {1, 28}, {1, 29},
+        const auto refused = migrateDocumentDom(bad.document()->root(), {1, 28}, {1, 30},
                                                 kProductionDocumentMigrationSteps, {}, operation);
         expect(refused.outcome() != MigrationOutcome::Migrated,
                "a 1.28 file that already carries the queue is not migrated twice");

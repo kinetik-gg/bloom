@@ -815,10 +815,28 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
            emitFloat64Member(state, "value", handle.value) && state.ok(writer.endObject());
 }
 
+// Document 1.30: a key's easing-equation parameters, emitted ONLY when non-default, after the
+// handles, so every older key re-encodes byte-identically apart from the schema minor.
+[[nodiscard]] bool
+emitKeyframeEasing(EmitState& state,
+                   const bloom::document::KeyframeEasingParameters& easing) noexcept {
+    if (bloom::document::isDefaultKeyframeEasing(easing))
+        return true;
+    auto& writer = state.writer;
+    const PathScope easingScope(state, "easing");
+    return state.ok(writer.memberName("easing")) && state.ok(writer.beginObject()) &&
+           state.ok(writer.memberName("mode")) &&
+           state.ok(writer.stringValue(bloom::document::keyframeEasingToken(easing.easing))) &&
+           emitFloat64Member(state, "back", easing.back) &&
+           emitFloat64Member(state, "amplitude", easing.amplitude) &&
+           emitFloat64Member(state, "period", easing.period) && state.ok(writer.endObject());
+}
+
 template <typename Keyframe>
 [[nodiscard]] bool emitKeyframeHandles(EmitState& state, const Keyframe& key) noexcept {
     return emitKeyframeHandle(state, "outgoingHandle", key.outgoingHandle) &&
-           emitKeyframeHandle(state, "incomingHandle", key.incomingHandle);
+           emitKeyframeHandle(state, "incomingHandle", key.incomingHandle) &&
+           emitKeyframeEasing(state, key.easing);
 }
 
 [[nodiscard]] bool
@@ -1498,6 +1516,13 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
         if (boundary.parent && !emitNamedId(state, "parent", boundary.parent->value()))
             return false;
         if (!emitLayerTiming(state, boundary.timing) || !emitLayerMasks(state, boundary))
+            return false;
+        // Document 1.30: presentation flags, each written only when set.
+        if (boundary.shy &&
+            (!state.ok(writer.memberName("shy")) || !state.ok(writer.booleanValue(true))))
+            return false;
+        if (boundary.nameFollowsSource && (!state.ok(writer.memberName("nameFollowsSource")) ||
+                                           !state.ok(writer.booleanValue(true))))
             return false;
         if (!emitRetainedTrailing(state)) {
             return false;

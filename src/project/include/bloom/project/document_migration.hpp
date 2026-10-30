@@ -234,6 +234,12 @@ migrateVideoColourDefaultV1_27(const JsonValue& root, std::pmr::memory_resource*
 [[nodiscard]] MigrationStepOutcome
 migrateExportQueueV1_28(const JsonValue& root, std::pmr::memory_resource* resource,
                         std::pmr::vector<char>& output);
+// Easing equations and layer flags, document 1.29 -> 1.30: version-only. The new interpolation
+// tokens are new values, and the keyframe `easing` and layer `shy`/`nameFollowsSource` members are
+// optional. Reconstruction of a decoded pre-1.30 document infers nameFollowsSource.
+[[nodiscard]] MigrationStepOutcome
+migrateEasingAndLayerFlagsV1_29(const JsonValue& root, std::pmr::memory_resource* resource,
+                                std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -263,7 +269,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 25}, {1, 26}, migrateChannelSetsV1_25},
     MigrationStepDescriptor{{1, 26}, {1, 27}, migrateCompositionFoldersV1_26},
     MigrationStepDescriptor{{1, 27}, {1, 28}, migrateVideoColourDefaultV1_27},
-    MigrationStepDescriptor{{1, 28}, {1, 29}, migrateExportQueueV1_28}};
+    MigrationStepDescriptor{{1, 28}, {1, 29}, migrateExportQueueV1_28},
+    MigrationStepDescriptor{{1, 29}, {1, 30}, migrateEasingAndLayerFlagsV1_29}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must
