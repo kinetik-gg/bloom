@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -735,8 +736,90 @@ void testParentAndStageIdentityRevalidation(Expectations& expectations) {
 
 } // namespace
 
+// ADR 0033 section 16: a child process writes the staged file through an inherited descriptor and
+// the lease adopts its bytes. Here the "child" is this process writing through that descriptor.
+void testInheritableWriter(Expectations& expectations) {
+    TempDirectory directory;
+    StagedArtifactConfig config;
+    config.artifactByteLimit = 64;
+    auto coordinator = makeCoordinator(expectations, config);
+    if (!directory.isValid() || !coordinator.has_value()) {
+        expectations.expect(false, "the inheritable-writer fixture is available");
+        return;
+    }
+    const auto targetPath = directory.path() / "movie.mov";
+    const auto stage = [&] {
+        auto preflight = coordinator->preflight(makeRequest(targetPath));
+        return std::move(coordinator->stage(std::move(preflight).takeTarget())).takeLease();
+    };
+    auto lease = stage();
+#if defined(__linux__)
+    auto writer = lease.inheritableWriter();
+    expectations.expect(writer && writer.writer->descriptor() >= 0,
+                        "a fresh lease hands out one inheritable writer");
+    if (!writer)
+        return;
+    const auto descriptorFlags = ::fcntl(writer.writer->descriptor(), F_GETFD);
+    expectations.expect(descriptorFlags >= 0 && (descriptorFlags & FD_CLOEXEC) != 0,
+                        "the writer is close-on-exec in the host");
+    expectations.expect(!lease.inheritableWriter() && lease.inheritableWriter().error ==
+                                                          StagedArtifactError::StageNotWritable,
+                        "a lease hands out at most one writer");
+    expectations.expect(!lease.write(bytes("host")),
+                        "the lease writes nothing itself while a child writes");
+    const std::string_view payload = "streamed by the worker";
+    expectations.expect(::pwrite(writer.writer->descriptor(), payload.data(), payload.size(), 0) ==
+                            static_cast<ssize_t>(payload.size()),
+                        "the child writes through the inherited descriptor");
+    std::array<char, 8> readBack{};
+    expectations.expect(::pread(writer.writer->descriptor(), readBack.data(), 8, 0) == 8 &&
+                            std::string_view(readBack.data(), 8) == "streamed",
+                        "the child can read back what it wrote to verify it");
+    writer.writer.reset();
+    expectations.expect(!lease.adoptExternalWrite(payload.size() + 1),
+                        "adopting a size the file does not have fails the lease");
+
+    auto adopted = stage();
+    auto second = adopted.inheritableWriter();
+    if (!second) {
+        expectations.expect(false, "a new lease hands out a writer");
+        return;
+    }
+    expectations.expect(::pwrite(second.writer->descriptor(), payload.data(), payload.size(), 0) ==
+                            static_cast<ssize_t>(payload.size()),
+                        "the second child writes");
+    second.writer.reset();
+    std::array<std::byte, 64> buffer{};
+    const auto adoptedResult = adopted.adoptExternalWrite(payload.size());
+    const auto finished = adopted.finishWriting();
+    const auto read = adopted.readForVerification(0, buffer);
+    expectations.expect(adoptedResult && adoptedResult.stageBytes == payload.size() && finished &&
+                            read.bytesRead == payload.size(),
+                        "the lease adopts the child's bytes and verifies them like its own");
+    expectations.expect(adopted.acceptVerification() &&
+                            adopted.publish(PublicationDisposition::Proceed).targetWasPublished() &&
+                            readFile(targetPath) == payload,
+                        "the adopted stage publishes atomically");
+
+    auto oversized = stage();
+    auto third = oversized.inheritableWriter();
+    if (third) {
+        const std::string big(65, 'x');
+        (void)::pwrite(third.writer->descriptor(), big.data(), big.size(), 0);
+        third.writer.reset();
+        expectations.expect(oversized.adoptExternalWrite(big.size()).error ==
+                                StagedArtifactError::ArtifactSizeLimit,
+                            "the artifact byte limit still applies to a child's bytes");
+    }
+#else
+    expectations.expect(lease.inheritableWriter().error == StagedArtifactError::UnsupportedPlatform,
+                        "without inheritable descriptors the lease keeps the copy path");
+#endif
+}
+
 int main() {
     Expectations expectations;
+    testInheritableWriter(expectations);
     testConfigurationAndAdmission(expectations);
     testCreateAndReplacePublication(expectations);
     testTargetChecksAndExpectedState(expectations);

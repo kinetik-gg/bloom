@@ -1,5 +1,6 @@
 #include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/process_supervisor.hpp>
+#include <bloom/platform/staged_artifact.hpp>
 
 #include <algorithm>
 #include <array>
@@ -204,8 +205,14 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
                                                 4);
     if (code == 0 && !options.inputSnapshot)
         code = posix_spawn_file_actions_addclose(&actions.value, 4);
+    if (code == 0 && options.stagedOutput && options.stagedOutput->descriptor() < 0)
+        code = EBADF;
+    if (code == 0 && options.stagedOutput)
+        code =
+            posix_spawn_file_actions_adddup2(&actions.value, options.stagedOutput->descriptor(), 5);
     if (code == 0)
-        code = posix_spawn_file_actions_addclosefrom_np(&actions.value, 5);
+        code =
+            posix_spawn_file_actions_addclosefrom_np(&actions.value, options.stagedOutput ? 6 : 5);
     if (code != 0)
         return ProcessFailure{ProcessError::Spawn, code};
     std::vector<std::string> arguments{options.executable};
@@ -345,8 +352,14 @@ bool processWorkerBootstrap() {
         return false;
     // fd 4 is the optional inherited source authority. Keep it across worker calls, but never
     // let an unrelated descendant inherit it through a later exec.
-    const int flags = ::fcntl(4, F_GETFD);
-    return (flags < 0 && errno == EBADF) ||
-           (flags >= 0 && ::fcntl(4, F_SETFD, flags | FD_CLOEXEC) == 0);
+    // fd 5 is the optional staged artifact the worker writes directly (ADR 0033 section 16), kept
+    // the same way.
+    for (const int descriptor : {4, 5}) {
+        const int flags = ::fcntl(descriptor, F_GETFD);
+        if (!((flags < 0 && errno == EBADF) ||
+              (flags >= 0 && ::fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) == 0)))
+            return false;
+    }
+    return true;
 }
 } // namespace bloom::platform

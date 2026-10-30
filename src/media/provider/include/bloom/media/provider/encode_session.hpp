@@ -12,6 +12,9 @@ struct EncodeSessionOptionsV1 {
     bool vaapi = false;
     std::chrono::milliseconds timeout{120000};
     std::function<void(std::int64_t)> launched;
+    // ADR 0033 section 16: the host's staged artifact. The worker writes the container into it
+    // and verifies it in place; the host then adopts it instead of reading chunks. Linux only.
+    std::shared_ptr<const platform::StagedArtifactInheritableWriter> stagedOutput;
 };
 // BlockingIo-only, one request/ack at a time. A failure poisons this session and reaps its worker.
 // Destruction cancels unfinished work. Neither worker nor client can publish a destination.

@@ -5,6 +5,10 @@
 #include <memory>
 #include <utility>
 
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
+
 namespace bloom::platform {
 
 StagedArtifactTarget::StagedArtifactTarget(StagedArtifactTarget&& other) noexcept = default;
@@ -75,6 +79,39 @@ StagedArtifactLease::write(const std::span<const std::byte> bytes) noexcept {
         return {.error = StagedArtifactError::StageNotWritable};
     }
     return state_->write(bytes);
+}
+
+StagedArtifactInheritableWriter::~StagedArtifactInheritableWriter() {
+#if !defined(_WIN32)
+    if (descriptor_ >= 0)
+        (void)::close(descriptor_);
+#endif
+}
+
+StagedArtifactInheritableWriterResult StagedArtifactLease::inheritableWriter() noexcept {
+    if (state_ == nullptr)
+        return {.error = StagedArtifactError::StageNotWritable, .writer = nullptr};
+    int descriptor = -1;
+    const auto error = state_->openInheritableWriter(descriptor);
+    if (error != StagedArtifactError::None)
+        return {.error = error, .writer = nullptr};
+    try {
+        return {.error = StagedArtifactError::None,
+                .writer = std::shared_ptr<const StagedArtifactInheritableWriter>(
+                    new StagedArtifactInheritableWriter(descriptor))};
+    } catch (...) {
+#if !defined(_WIN32)
+        (void)::close(descriptor);
+#endif
+        return {.error = StagedArtifactError::StageWriteFailed, .writer = nullptr};
+    }
+}
+
+StagedArtifactOperationResult
+StagedArtifactLease::adoptExternalWrite(const std::uint64_t bytes) noexcept {
+    if (state_ == nullptr)
+        return {.error = StagedArtifactError::StageNotWritable};
+    return state_->adoptExternalWrite(bytes);
 }
 
 StagedArtifactOperationResult StagedArtifactLease::finishWriting() noexcept {

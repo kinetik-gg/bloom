@@ -2,9 +2,21 @@
 namespace bloom::media::ffmpeg {
 namespace {
 struct PrivateMediaFile {
-    std::FILE* file = std::tmpfile();
+    std::FILE* file = nullptr;
     std::uint64_t size = 0, limit = 0;
-    explicit PrivateMediaFile(std::uint64_t cap) : limit(cap) {
+    // `inherited` >= 0 is the host's staged artifact (ADR 0033 section 16): the container is
+    // written straight into it, and the reopen check reads it back, so no spool copy exists.
+    explicit PrivateMediaFile(std::uint64_t cap, const int inherited = -1) : limit(cap) {
+#if defined(__unix__) || defined(__APPLE__)
+        if (inherited >= 0) {
+            require(::ftruncate(inherited, 0) == 0, "Cannot reset the staged artifact", Error::Io);
+            const int own = ::dup(inherited);
+            file = own >= 0 ? ::fdopen(own, "w+b") : nullptr;
+            if (file == nullptr && own >= 0)
+                ::close(own);
+        } else
+#endif
+            file = std::tmpfile();
         require(file != nullptr, "Cannot create private media spool", Error::Io);
     }
     ~PrivateMediaFile() { std::fclose(file); }
@@ -161,8 +173,9 @@ struct Encoder::State {
     std::vector<std::vector<float>> pendingAudio;
     std::uint64_t audioSubmitted = 0;
     bool hardware = false;
-    State(EncodeSettingsV1 s, const bool useHardware)
-        : settings(std::move(s)), file(settings.byteLimit), io(file, true), hardware(useHardware) {}
+    State(EncodeSettingsV1 s, const bool useHardware, const int stagedOutput)
+        : settings(std::move(s)), file(settings.byteLimit, stagedOutput), io(file, true),
+          hardware(useHardware) {}
     ~State() { avformat_free_context(format); }
     void packets(EncodeTrack& track, AVFrame* frame) {
         AVFrame* submitted = frame;
@@ -715,14 +728,16 @@ struct Encoder::State {
             require(qc.audio == expectedPcm.finalize(), "Reopened PCM samples differ");
     }
 };
-Encoder::Encoder(const bool hardware) : hardware_(hardware) {}
+Encoder::Encoder(const bool hardware, const int stagedOutput)
+    : hardware_(hardware), stagedOutput_(stagedOutput) {}
 Encoder::~Encoder() = default;
 provider::Payload Encoder::call(provider::MessageKind kind, const provider::Payload& payload) {
     try {
         av_log_set_level(AV_LOG_ERROR);
         if (kind == MessageKind::EncodeBegin) {
             require(!state_, "Encoder already initialized", Error::UnexpectedMessage);
-            state_ = std::make_unique<State>(std::get<EncodeSettingsV1>(payload), hardware_);
+            state_ = std::make_unique<State>(std::get<EncodeSettingsV1>(payload), hardware_,
+                                             std::exchange(stagedOutput_, -1));
             state_->open();
         } else {
             require(state_ != nullptr, "Encoder is not initialized", Error::UnexpectedMessage);

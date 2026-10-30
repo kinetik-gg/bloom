@@ -251,6 +251,16 @@ Immutable render snapshot -> render/color/output preparation
                          -> StagedArtifactCoordinator -> final target
 ```
 
+On Linux the private staged artifact is the publication target's own staged file
+([ADR 0033](../decisions/0033-export-queue.md), section 16): the host stages the target before the
+first frame, the supervised worker inherits a read-write descriptor of that file as fd 5
+(`ProcessOptions::stagedOutput`, worker flag `--staged-output`), writes the container into it and
+reopens it for its own QC, and the host adopts exactly the bytes the worker hashed
+(`StagedArtifactLease::adoptExternalWrite`) before its independent verification read and the atomic
+publication. No encoded copy crosses the protocol and no capped spool file exists. Where the
+platform cannot hand out the descriptor, the lease answers `UnsupportedPlatform` and the encoded
+bytes are copied into a lease staged at publication as before.
+
 `src/media` owns provider-neutral discovery, stream descriptions, indexing, decode products, proxy
 requests, audio products, provider selection, and media diagnostics. `src/output` owns export intent,
 preservation analysis, render-to-encode preparation, verification policy, and publication. The

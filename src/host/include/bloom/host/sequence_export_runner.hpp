@@ -153,6 +153,9 @@ struct SequenceExportResultV1 {
     // failure's own detail is the human-readable sentence.
     std::string diagnostic;
     std::string expectedContainer;
+    // ADR 0033 section 16: the worker wrote the container straight into the staged artifact
+    // (Linux) instead of returning chunks for a copy.
+    bool streamedPublication = false;
     [[nodiscard]] bool published() const noexcept { return publication.targetWasPublished(); }
 };
 // Authoring-thread driver. poll() never blocks: it composes the existing attempt/approval stages.

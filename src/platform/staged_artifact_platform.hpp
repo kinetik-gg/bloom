@@ -49,6 +49,14 @@ struct StagedArtifactLeaseState {
     [[nodiscard]] virtual std::uint64_t stageBytes() const noexcept = 0;
     [[nodiscard]] virtual StagedArtifactOperationResult
     write(std::span<const std::byte> bytes) noexcept = 0;
+    // Platforms without inheritable descriptors answer UnsupportedPlatform.
+    [[nodiscard]] virtual StagedArtifactError openInheritableWriter(int& descriptor) noexcept {
+        descriptor = -1;
+        return StagedArtifactError::UnsupportedPlatform;
+    }
+    [[nodiscard]] virtual StagedArtifactOperationResult adoptExternalWrite(std::uint64_t) noexcept {
+        return {.error = StagedArtifactError::UnsupportedPlatform, .stageBytes = stageBytes()};
+    }
     [[nodiscard]] virtual StagedArtifactOperationResult finishWriting() noexcept = 0;
     [[nodiscard]] virtual StagedArtifactVerificationReadResult
     readForVerification(std::uint64_t offset, std::span<std::byte> destination) noexcept = 0;

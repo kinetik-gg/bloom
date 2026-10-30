@@ -270,6 +270,32 @@ class [[nodiscard]] StagedArtifactPreflightResult final {
     StagedArtifactError error_ = StagedArtifactError::None;
 };
 
+// ADR 0033 section 16, staged streaming publication: a read-write descriptor of the lease's staged
+// file that one supervised child process inherits (ProcessOptions::stagedOutput) and writes
+// directly, instead of returning the bytes for the lease to copy. Close-on-exec in this process;
+// the child also reads back what it wrote to verify it. While a writer exists the lease writes
+// nothing itself; StagedArtifactLease::adoptExternalWrite() takes the child's bytes. POSIX only:
+// elsewhere the lease answers UnsupportedPlatform and callers keep the copy path.
+class StagedArtifactInheritableWriter final {
+  public:
+    StagedArtifactInheritableWriter(const StagedArtifactInheritableWriter&) = delete;
+    StagedArtifactInheritableWriter& operator=(const StagedArtifactInheritableWriter&) = delete;
+    ~StagedArtifactInheritableWriter();
+    // The native descriptor; -1 when invalid.
+    [[nodiscard]] int descriptor() const noexcept { return descriptor_; }
+
+  private:
+    friend class StagedArtifactLease;
+    explicit StagedArtifactInheritableWriter(int descriptor) noexcept : descriptor_(descriptor) {}
+    int descriptor_ = -1;
+};
+
+struct StagedArtifactInheritableWriterResult final {
+    StagedArtifactError error = StagedArtifactError::None;
+    std::shared_ptr<const StagedArtifactInheritableWriter> writer;
+    [[nodiscard]] explicit operator bool() const noexcept { return writer != nullptr; }
+};
+
 class StagedArtifactLease final {
   public:
     StagedArtifactLease(const StagedArtifactLease&) = delete;
@@ -282,6 +308,13 @@ class StagedArtifactLease final {
     [[nodiscard]] core::ArtifactTargetKey targetKey() const noexcept;
     [[nodiscard]] std::uint64_t stageBytes() const noexcept;
     [[nodiscard]] StagedArtifactOperationResult write(std::span<const std::byte> bytes) noexcept;
+    // Staged streaming publication (see StagedArtifactInheritableWriter). Only while Writable and
+    // before any write(); at most one writer per lease.
+    [[nodiscard]] StagedArtifactInheritableWriterResult inheritableWriter() noexcept;
+    // The child finished and exited: the staged file must hold exactly `bytes` (within the
+    // artifact byte limit) and still be the staged file. The lease then continues with
+    // finishWriting(), verification and publication as if it had written the bytes itself.
+    [[nodiscard]] StagedArtifactOperationResult adoptExternalWrite(std::uint64_t bytes) noexcept;
     [[nodiscard]] StagedArtifactOperationResult finishWriting() noexcept;
     [[nodiscard]] StagedArtifactVerificationReadResult
     readForVerification(std::uint64_t offset, std::span<std::byte> destination) noexcept;

@@ -50,6 +50,7 @@ class FileDescriptor final {
 
     [[nodiscard]] int get() const noexcept { return value_; }
     [[nodiscard]] bool isValid() const noexcept { return value_ >= 0; }
+    [[nodiscard]] int release() noexcept { return std::exchange(value_, -1); }
 
     [[nodiscard]] bool closeChecked() noexcept {
         if (value_ < 0) {
@@ -382,7 +383,7 @@ class LinuxLease final : public StagedArtifactLeaseState {
         if (phase_ == LeasePhase::Terminal) {
             return terminalOperationResult(StagedArtifactError::StageNotWritable);
         }
-        if (phase_ != LeasePhase::Writable) {
+        if (phase_ != LeasePhase::Writable || externalWriter_) {
             return {.error = StagedArtifactError::StageNotWritable, .stageBytes = stageBytes_};
         }
         if (bytes.size() > target_.shared->config.artifactByteLimit - stageBytes_) {
@@ -408,6 +409,48 @@ class LinuxLease final : public StagedArtifactLeaseState {
             offset += static_cast<std::size_t>(count);
             stageBytes_ += static_cast<std::uint64_t>(count);
         }
+        return {.stageBytes = stageBytes_};
+    }
+
+    [[nodiscard]] StagedArtifactError openInheritableWriter(int& descriptor) noexcept override {
+        descriptor = -1;
+        if (phase_ != LeasePhase::Writable || externalWriter_ || stageBytes_ != 0)
+            return StagedArtifactError::StageNotWritable;
+        // A second read-write description of the same staged inode, so the child can verify what
+        // it wrote; identity is checked before it is handed out.
+        FileDescriptor writer(::openat(target_.parentDescriptor.get(), stageName_.c_str(),
+                                       O_RDWR | O_CLOEXEC | O_NOFOLLOW));
+        if (!writer.isValid())
+            return StagedArtifactError::StageWriteFailed;
+        struct stat status{};
+        if (::fstat(writer.get(), &status) != 0 || !isRegular(status) ||
+            !sameNativeIdentity(status, stageIdentity_))
+            return StagedArtifactError::StageIdentityMismatch;
+        externalWriter_ = true;
+        descriptor = writer.release();
+        return StagedArtifactError::None;
+    }
+
+    [[nodiscard]] StagedArtifactOperationResult
+    adoptExternalWrite(const std::uint64_t bytes) noexcept override {
+        if (phase_ == LeasePhase::Terminal) {
+            return terminalOperationResult(StagedArtifactError::StageNotWritable);
+        }
+        if (phase_ != LeasePhase::Writable || !externalWriter_) {
+            return {.error = StagedArtifactError::StageNotWritable, .stageBytes = stageBytes_};
+        }
+        if (bytes > target_.shared->config.artifactByteLimit) {
+            return failOperation(StagedArtifactError::ArtifactSizeLimit);
+        }
+        struct stat status{};
+        if (::fstat(descriptor_.get(), &status) != 0 || !isRegular(status) ||
+            status.st_nlink != 1 || !sameNativeIdentity(status, stageIdentity_)) {
+            return failOperation(StagedArtifactError::StageIdentityMismatch);
+        }
+        if (status.st_size < 0 || static_cast<std::uint64_t>(status.st_size) != bytes) {
+            return failOperation(StagedArtifactError::StageWriteFailed);
+        }
+        stageBytes_ = bytes;
         return {.stageBytes = stageBytes_};
     }
 
@@ -768,6 +811,8 @@ class LinuxLease final : public StagedArtifactLeaseState {
     FileDescriptor descriptor_;
     std::string stageName_;
     NativeFileIdentity stageIdentity_;
+    // A child process holds an inheritable writer (staged streaming publication).
+    bool externalWriter_ = false;
     std::uint64_t stageBytes_ = 0;
     LeasePhase phase_ = LeasePhase::Writable;
     bool ownsStageName_ = true;

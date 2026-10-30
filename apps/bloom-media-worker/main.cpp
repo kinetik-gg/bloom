@@ -7,6 +7,7 @@
 #include "ffmpeg_provider.hpp"
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/openh264_runtime.hpp>
+#include <fcntl.h>
 #endif
 #include "worker_io.hpp"
 #include <bloom/platform/process_supervisor.hpp>
@@ -43,6 +44,7 @@ int main(int argc, char** argv) {
     bool hardwareDecode = false;
     std::string openh264Directory;
     std::string openh264Digest;
+    int stagedOutput = -1;
     for (int i = 1; i < argc; ++i) {
         const auto argument = std::string_view(argv[i]);
         if (argument == "--probe-vaapi" && argc == 2)
@@ -53,6 +55,8 @@ int main(int argc, char** argv) {
             hardwareDecode = true;
         else if (argument == "--retained-video")
             retainedVideo = true;
+        else if (argument == "--staged-output")
+            stagedOutput = 5; // ADR 0033 section 16: ProcessSupervisor installs it as fd 5.
         else if (argument == "--openh264-dir" && i + 1 < argc)
             openh264Directory = argv[++i];
         else if (argument == "--openh264-sha256" && i + 1 < argc)
@@ -83,7 +87,9 @@ int main(int argc, char** argv) {
             ? provider::ffmpegHardwareDecodeHandshake()
             : provider::ffmpegHandshake(hardware, openh264, provider::OpenH264Runtime::version(),
                                         openh264Digest);
-    ffmpeg::Encoder encoder(hardware);
+    if (stagedOutput >= 0 && (retainedVideo || ::fcntl(stagedOutput, F_GETFD) < 0))
+        return 2;
+    ffmpeg::Encoder encoder(hardware, stagedOutput);
     std::unique_ptr<ffmpeg::DecodeSession> decoder;
     if (retainedVideo)
         decoder = std::make_unique<ffmpeg::DecodeSession>(hardwareDecode);

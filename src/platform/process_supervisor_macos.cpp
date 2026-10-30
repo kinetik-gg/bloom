@@ -171,6 +171,9 @@ ProcessSupervisor::ProcessSupervisor(std::unique_ptr<State> state) : state_(std:
 ProcessSupervisor::~ProcessSupervisor() { stop(); }
 ProcessResult<std::unique_ptr<ProcessSupervisor>>
 ProcessSupervisor::launch(const ProcessOptions& options) {
+    // Staged streaming publication is Linux-only in this release (ADR 0033 sections 15 and 16).
+    if (options.stagedOutput)
+        return ProcessFailure{ProcessError::Spawn, ENOTSUP};
     if (options.executable.empty() || options.executable.front() != '/' ||
         options.executable.find('\0') != std::string::npos ||
         options.addressSpaceBytes < 64ULL * 1024U * 1024U || options.openFiles < 8 ||

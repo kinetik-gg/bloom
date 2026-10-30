@@ -13,8 +13,10 @@
 #include <numeric>
 #include <optional>
 #include <thread>
+#include <utility>
 #if defined(__unix__) || defined(__APPLE__)
 #include <sys/resource.h>
+#include <unistd.h>
 #endif
 extern "C" {
 #include <libavcodec/avcodec.h>

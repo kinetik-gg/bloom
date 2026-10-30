@@ -187,6 +187,10 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
     options.executable = s.options.executable;
     // Issue #352: the export worker gets the address space its frame extent needs.
     options.addressSpaceBytes = workerAddressSpaceBytes(settings.width, settings.height);
+    if (s.options.stagedOutput) {
+        options.stagedOutput = s.options.stagedOutput;
+        options.arguments.push_back("--staged-output");
+    }
 #if !defined(__APPLE__)
     if (s.options.vaapi)
         options.arguments.push_back("--vaapi");

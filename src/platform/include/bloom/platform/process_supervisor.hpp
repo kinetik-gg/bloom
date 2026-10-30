@@ -11,6 +11,7 @@
 
 namespace bloom::platform {
 class ReadOnlyFileSnapshot;
+class StagedArtifactInheritableWriter;
 enum class ProcessError { Unavailable, Spawn, ResourceLimit, Io, Crashed, Timeout, Cancelled };
 struct ProcessFailure {
     ProcessError code = ProcessError::Io;
@@ -31,6 +32,9 @@ struct ProcessOptions {
     // Owning, captured source capability. Only this handle can install child fd 4; ordinary
     // external paths cannot opt into the immutable-input provider contract.
     std::shared_ptr<const ReadOnlyFileSnapshot> inputSnapshot{};
+    // ADR 0033 section 16: the staged artifact the child writes directly, installed as child fd 5
+    // (Linux). Other platforms refuse a launch that asks for it.
+    std::shared_ptr<const StagedArtifactInheritableWriter> stagedOutput{};
 };
 // Blocking API. Call only on a BlockingIo executor. No detached threads or host signal handlers.
 // The trusted worker must call processWorkerBootstrap() before loading provider code.

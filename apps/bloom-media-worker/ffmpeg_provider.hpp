@@ -16,7 +16,9 @@ class DecodeSession final {
 };
 class Encoder final {
   public:
-    explicit Encoder(bool hardware = false);
+    // `stagedOutput` >= 0: the inherited staged artifact descriptor the first encode session
+    // writes into (ADR 0033 section 16).
+    explicit Encoder(bool hardware = false, int stagedOutput = -1);
     ~Encoder();
     [[nodiscard]] provider::Payload call(provider::MessageKind, const provider::Payload&);
 
@@ -24,6 +26,7 @@ class Encoder final {
     struct State;
     std::unique_ptr<State> state_;
     bool hardware_ = false;
+    int stagedOutput_ = -1;
 };
 [[nodiscard]] provider::Payload call(const provider::CallRequest& request, bool hardware = false);
 [[nodiscard]] bool hardwareEncodeAvailable();

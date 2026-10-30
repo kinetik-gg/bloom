@@ -89,7 +89,13 @@ struct detail::SequenceExportWorkV1 {
     // root is held by other work; the owner waits and retries reserveQueue().
     bool queueAwaitingCapacity = false;
     std::uint64_t queueBytes = 0;
+    bool streamed = false;
     std::unique_ptr<output::CompositionOutputStreamV1> encoder;
+    // ADR 0033 section 16, staged streaming publication (Linux): the target is staged before the
+    // first frame and the worker writes the container straight into it through an inherited
+    // descriptor. Absent where the platform cannot hand out the descriptor: the encoded bytes are
+    // then copied into a lease staged at publication, as before.
+    std::optional<platform::StagedArtifactLease> streamedLease;
     std::unique_ptr<FrameExportRequestV1> approvedFrame;
     std::atomic<bool> cancelled{false};
     std::mutex ownership;
@@ -137,8 +143,31 @@ struct detail::SequenceExportWorkV1 {
     }
     void clean() {
         encoder.reset();
+        // Abandoning the lease removes the staged file; the destination is untouched.
+        streamedLease.reset();
         approvedFrame.reset();
         queueReservation.reset();
+    }
+    // Stages the target and returns the descriptor the worker inherits, or null to keep the copy
+    // path (a platform without inheritable descriptors).
+    std::shared_ptr<const platform::StagedArtifactInheritableWriter>
+    stageForStreaming(platform::StagedArtifactCoordinator& artifacts) {
+        auto preflight =
+            artifacts.preflight({target->targetPath, target->overwritePolicy, target->observation});
+        require(static_cast<bool>(preflight), "Export target changed or is unavailable", Error::Io);
+        require(preflight.target()->targetKey() == target->targetKey,
+                "Export target identity changed", Error::IdentityMismatch);
+        auto staging = artifacts.stage(std::move(preflight).takeTarget());
+        require(static_cast<bool>(staging), "Cannot stage composition export", Error::Io);
+        auto lease = std::move(staging).takeLease();
+        auto writer = lease.inheritableWriter();
+        if (!writer) {
+            require(writer.error == platform::StagedArtifactError::UnsupportedPlatform,
+                    "Cannot open the staged export for the encoder", Error::Io);
+            return nullptr; // The unused lease is abandoned here; publication stages again.
+        }
+        streamedLease.emplace(std::move(lease));
+        return std::move(writer.writer);
     }
     const EncodeSettingsV1& settings() const {
         require(analysis != nullptr, "Missing output analysis");
@@ -322,19 +351,22 @@ struct detail::SequenceExportWorkV1 {
                 Error::Oversized);
     }
 
-    void encode(FrameExportRequestV1& approved, runtime::TaskContext& context) {
+    void encode(FrameExportRequestV1& approved, platform::StagedArtifactCoordinator& artifacts,
+                runtime::TaskContext& context) {
         checkpoint();
         const auto& attempt = *approved.attempt();
         if (!target)
             target = std::make_unique<output::OutputAnalysisAttemptTargetV1>(attempt.target());
         if (!encoder) {
+            auto worker = request.worker;
+            worker.stagedOutput = stageForStreaming(artifacts);
             const auto origin =
                 required(FrameRangeRunnerV1::timeForFrame(request.range, request.range.firstFrame),
                          "Missing exact audio origin");
             encoder = std::make_unique<output::CompositionOutputStreamV1>(
                 output::CompositionOutputSourceV1{request.composition.snapshot, plan, origin,
                                                   request.assetBaseDirectory, analysis->display},
-                settings(), request.worker, queueReservation,
+                settings(), std::move(worker), queueReservation,
                 [this] { return isCancelled() || taskCancellation.isCancellationRequested(); });
         }
         const auto digest = required(attempt.digest(), "Frame approval digest missing");
@@ -382,27 +414,46 @@ struct detail::SequenceExportWorkV1 {
                 "Worker verification does not match approved stream layout",
                 Error::IdentityMismatch);
         require(target != nullptr, "Missing publication target");
-        auto preflight =
-            artifacts.preflight({target->targetPath, target->overwritePolicy, target->observation});
-        require(static_cast<bool>(preflight), "Export target changed or is unavailable", Error::Io);
-        require(preflight.target()->targetKey() == target->targetKey,
-                "Export target identity changed", Error::IdentityMismatch);
-        auto staging = artifacts.stage(std::move(preflight).takeTarget());
-        require(static_cast<bool>(staging), "Cannot stage composition export", Error::Io);
-        auto lease = std::move(staging).takeLease();
-        core::Sha256Hasher transferred;
-        for (std::uint64_t offset = 0; offset < qc.bytes;) {
-            checkpoint();
-            const auto chunk = checked(encoder->read(offset));
-            require(chunk.bytes.size() <= qc.bytes - offset && transferred.update(chunk.bytes) &&
-                        static_cast<bool>(lease.write(chunk.bytes)),
-                    "Encoded staging copy failed", Error::Io);
-            offset += chunk.bytes.size();
-        }
-        checked(encoder->close());
-        encoder.reset();
-        require(transferred.finalize() == qc.artifact && static_cast<bool>(lease.finishWriting()),
-                "Encoded artifact changed during transfer", Error::DigestMismatch);
+        platform::StagedArtifactLease lease = [&] {
+            if (streamedLease) {
+                // The worker wrote and verified the staged file itself; once it has exited the
+                // lease adopts exactly the bytes its reopen check hashed.
+                checked(encoder->close());
+                encoder.reset();
+                auto adopted = std::move(*streamedLease);
+                streamedLease.reset();
+                require(static_cast<bool>(adopted.adoptExternalWrite(qc.bytes)) &&
+                            static_cast<bool>(adopted.finishWriting()),
+                        "The streamed export differs from the encoder's result", Error::Io);
+                streamed = true;
+                return adopted;
+            }
+            auto preflight = artifacts.preflight(
+                {target->targetPath, target->overwritePolicy, target->observation});
+            require(static_cast<bool>(preflight), "Export target changed or is unavailable",
+                    Error::Io);
+            require(preflight.target()->targetKey() == target->targetKey,
+                    "Export target identity changed", Error::IdentityMismatch);
+            auto staging = artifacts.stage(std::move(preflight).takeTarget());
+            require(static_cast<bool>(staging), "Cannot stage composition export", Error::Io);
+            auto copied = std::move(staging).takeLease();
+            core::Sha256Hasher transferred;
+            for (std::uint64_t offset = 0; offset < qc.bytes;) {
+                checkpoint();
+                const auto chunk = checked(encoder->read(offset));
+                require(chunk.bytes.size() <= qc.bytes - offset &&
+                            transferred.update(chunk.bytes) &&
+                            static_cast<bool>(copied.write(chunk.bytes)),
+                        "Encoded staging copy failed", Error::Io);
+                offset += chunk.bytes.size();
+            }
+            checked(encoder->close());
+            encoder.reset();
+            require(transferred.finalize() == qc.artifact &&
+                        static_cast<bool>(copied.finishWriting()),
+                    "Encoded artifact changed during transfer", Error::DigestMismatch);
+            return copied;
+        }();
         Bytes buffer(kEncodeChunkBytes);
         core::Sha256Hasher reopened;
         for (std::uint64_t offset = 0; offset < qc.bytes;) {
@@ -427,6 +478,7 @@ struct detail::SequenceExportWorkV1 {
         outcome.expectedContainer =
             settings().container + "/" + (codec == "prores_ks" ? std::string("prores") : codec);
         outcome.encodedFrames = encoded;
+        outcome.streamedPublication = streamed;
         outcome.gpuEvaluatedFrames = gpuEvaluatedFrames;
         outcome.gpuNativeDispatches = gpuNativeDispatches;
         outcome.gpuReadbacks = gpuReadbacks;
@@ -951,7 +1003,7 @@ struct SequenceExportRunnerV1::State {
                 Work& work;
                 ~Release() { work.approvedFrame.reset(); }
             } release{w};
-            w.encode(*w.approvedFrame, context);
+            w.encode(*w.approvedFrame, *artifactService, context);
             if (w.encoded == w.total())
                 w.publish(*w.approvedFrame, *artifactService, context);
         });

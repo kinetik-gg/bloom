@@ -549,6 +549,10 @@ void testCapacityWait(Fixture& f, const std::filesystem::path& directory, const 
 void verify(const host::SequenceExportResultV1& r, const std::filesystem::path& path, bool video) {
     check(r.published(), r.failure ? r.failure->detail : "composition was not published");
     const auto qc = need(r.evidence);
+#if defined(__linux__)
+    // ADR 0033 section 16: the worker wrote the container straight into the staged file.
+    check(r.streamedPublication, "the export streamed into the staged artifact");
+#endif
     check(qc.audioSamples == 96000 && qc.duration == media::provider::Rational{2, 1},
           "sample count and rational duration");
     if (video)
