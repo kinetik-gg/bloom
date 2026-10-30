@@ -19,6 +19,7 @@ target_sources(
         parameter_presentation.cpp
         shape.cpp
         persisted_text.cpp
+        export_queue.cpp
         project.cpp
         project_incremental_validation.cpp
         render_reachability.cpp

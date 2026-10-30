@@ -232,6 +232,7 @@ void Project::freezeCompositionContent() {
     assetFolders_.freeze();
     extensionRecords_.freeze();
     dataBlocks_.freeze();
+    exportJobs_.freeze();
 }
 
 std::size_t Project::rootByteCharge() const {
@@ -242,6 +243,22 @@ std::size_t Project::rootByteCharge() const {
     chargeRecords<AssetFolder>(bytes, assetFolders_.get().size());
     chargeRecords<ExtensionRecord>(bytes, extensionRecords_.get().size());
     chargeRecords<DataBlockRecord>(bytes, dataBlocks_.get().size());
+    chargeRecords<ExportJob>(bytes, exportJobs_.get().size());
+    for (const auto& job : exportJobs_.get()) {
+        charge(bytes, job.name.size());
+        chargeRecords<ExportOutput>(bytes, job.outputs.size());
+        for (const auto& output : job.outputs) {
+            charge(bytes, output.presetId.size());
+            charge(bytes, output.settings.codecProfile.size());
+            charge(bytes, output.settings.compression.size());
+            charge(bytes, output.settings.outputColorSpaceId.size());
+            charge(bytes, output.settings.displayName.size());
+            charge(bytes, output.settings.viewName.size());
+            charge(bytes, output.settings.naming.pattern.size());
+            charge(bytes, output.destination.portability.size());
+            charge(bytes, output.destination.path.size());
+        }
+    }
     for (const auto& composition : compositions_) {
         charge(bytes, composition.name().size());
         if (composition.workingColorSpaceId())
@@ -530,7 +547,68 @@ bool Project::removeComposition(const CompositionId id) {
         return false;
     }
     compositions_.erase(iterator);
+    // ADR 0033: a job's composition must exist, so deleting a composition removes its export jobs
+    // in the same transaction; undo restores both.
+    if (std::ranges::any_of(exportJobs_.get(),
+                            [id](const auto& job) { return job.composition == id; }))
+        std::erase_if(exportJobs_.edit(), [id](const auto& job) { return job.composition == id; });
     return true;
+}
+
+const ExportJob* Project::findExportJob(const ExportJobId id) const noexcept {
+    const auto found =
+        std::ranges::find_if(exportJobs_.get(), [id](const auto& job) { return job.id == id; });
+    return found == exportJobs_.get().end() ? nullptr : &*found;
+}
+
+ExportJob* Project::findExportJob(const ExportJobId id) {
+    if (std::as_const(*this).findExportJob(id) == nullptr)
+        return nullptr;
+    auto& jobs = exportJobs_.edit();
+    return &*std::ranges::find_if(jobs, [id](const auto& job) { return job.id == id; });
+}
+
+bool Project::insertExportJob(ExportJob job, const std::size_t index) {
+    if (!job.id.isValid() || std::as_const(*this).findExportJob(job.id) != nullptr)
+        return false;
+    auto& jobs = exportJobs_.edit();
+    const auto at = std::min(index, jobs.size());
+    jobs.insert(jobs.begin() + static_cast<std::ptrdiff_t>(at), std::move(job));
+    return true;
+}
+
+bool Project::removeExportJob(const ExportJobId id) {
+    if (std::as_const(*this).findExportJob(id) == nullptr)
+        return false;
+    return std::erase_if(exportJobs_.edit(), [id](const auto& job) { return job.id == id; }) != 0;
+}
+
+bool Project::moveExportJob(const ExportJobId id, const std::size_t index) {
+    const auto& current = exportJobs_.get();
+    const auto found =
+        std::ranges::find_if(current, [id](const auto& job) { return job.id == id; });
+    if (found == current.end())
+        return false;
+    const auto from = static_cast<std::size_t>(found - current.begin());
+    const auto to = std::min(index, current.size() - 1);
+    if (from == to)
+        return true;
+    auto& jobs = exportJobs_.edit();
+    auto job = std::move(jobs[from]);
+    jobs.erase(jobs.begin() + static_cast<std::ptrdiff_t>(from));
+    jobs.insert(jobs.begin() + static_cast<std::ptrdiff_t>(to), std::move(job));
+    return true;
+}
+
+void Project::setExportQueue(ExportQueue queue) { exportJobs_.edit() = std::move(queue.jobs); }
+
+std::pair<const ExportJob*, const ExportOutput*>
+Project::findExportOutput(const ExportOutputId id) const noexcept {
+    for (const auto& job : exportJobs_.get())
+        for (const auto& output : job.outputs)
+            if (output.id == id)
+                return {&job, &output};
+    return {nullptr, nullptr};
 }
 
 const ExtensionRecord* Project::findExtensionRecord(const ExtensionRecordId id) const noexcept {
@@ -702,10 +780,33 @@ void Project::validateRootRecords(ValidationResult& result) const {
         }
         complete.insert(chain.begin(), chain.end());
     }
+    validateExportQueue(result);
     if (!id_.isValid()) {
         result.add(ValidationCode::InvalidId, "id", "Project ID must not be zero");
     }
     validateHumanFacingName(name_, "name", "Project name", result);
+}
+
+void Project::validateExportQueue(ValidationResult& result) const {
+    const auto& jobs = exportJobs_.get();
+    if (jobs.size() > kExportQueueMaximumJobs)
+        result.add(ValidationCode::InvalidValue, "exportQueue.jobs",
+                   "The export queue holds at most 1024 jobs");
+    std::unordered_set<ExportJobId> jobIds;
+    std::unordered_set<ExportOutputId> outputIds;
+    for (const auto& job : jobs) {
+        const auto path = "exportQueue.jobs[" + std::to_string(job.id.value()) + "]";
+        result.append(path, validateExportJob(job));
+        if (!jobIds.insert(job.id).second)
+            result.add(ValidationCode::DuplicateId, path + ".id", "Duplicate export job ID");
+        if (findComposition(job.composition) == nullptr)
+            result.add(ValidationCode::MissingReference, path + ".composition",
+                       "Export job composition does not exist");
+        for (const auto& output : job.outputs)
+            if (!outputIds.insert(output.id).second)
+                result.add(ValidationCode::DuplicateId, path + ".outputs.id",
+                           "Duplicate export output ID");
+    }
 }
 
 void Project::validateCrossRecords(ValidationResult& result) const {

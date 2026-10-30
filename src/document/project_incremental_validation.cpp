@@ -119,7 +119,8 @@ bool Project::sameRootRecordStorage(const Project& other) const noexcept {
     return assets_.identity() == other.assets_.identity() &&
            assetFolders_.identity() == other.assetFolders_.identity() &&
            extensionRecords_.identity() == other.extensionRecords_.identity() &&
-           dataBlocks_.identity() == other.dataBlocks_.identity();
+           dataBlocks_.identity() == other.dataBlocks_.identity() &&
+           exportJobs_.identity() == other.exportJobs_.identity();
 }
 
 Project::IncrementalValidationWork Project::incrementalValidationWork() noexcept {
@@ -169,6 +170,14 @@ bool Project::validatesAgainst(const Project& base) const {
         ValidationResult root;
         validateRootRecords(root);
         if (!root.ok())
+            return notProven();
+    }
+    // ADR 0033: an export job's composition must exist, so a changed composition set re-checks the
+    // queue even when the queue itself is unchanged.
+    if (!rootChanged && compositionSetChanged && !exportJobs_.get().empty()) {
+        ValidationResult queue;
+        validateExportQueue(queue);
+        if (!queue.ok())
             return notProven();
     }
     // #378: a composition's folder must exist (folders are root records; a composition shell

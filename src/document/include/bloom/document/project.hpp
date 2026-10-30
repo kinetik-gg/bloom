@@ -6,6 +6,7 @@
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/data_block.hpp>
+#include <bloom/document/export_queue.hpp>
 #include <bloom/document/extension_records.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/ids.hpp>
@@ -257,6 +258,23 @@ class Project final {
     [[nodiscard]] DataBlockRecord* findDataBlock(DataBlockRecordId id);
     [[nodiscard]] bool addDataBlock(DataBlockRecord block);
     [[nodiscard]] bool removeDataBlock(DataBlockRecordId id);
+    // ADR 0033: the export queue, in run order. Project truth, edited only through commands.
+    [[nodiscard]] std::span<const ExportJob> exportJobs() const noexcept {
+        return exportJobs_.get();
+    }
+    [[nodiscard]] const ExportJob* findExportJob(ExportJobId id) const noexcept;
+    [[nodiscard]] ExportJob* findExportJob(ExportJobId id);
+    // Inserts at `index` (clamped to the end). Refuses an invalid or duplicate job id.
+    [[nodiscard]] bool insertExportJob(ExportJob job, std::size_t index);
+    [[nodiscard]] bool removeExportJob(ExportJobId id);
+    // Moves the job to `index` (clamped). False when the job does not exist.
+    [[nodiscard]] bool moveExportJob(ExportJobId id, std::size_t index);
+    // Replaces the whole queue (the codec's decode path).
+    void setExportQueue(ExportQueue queue);
+    [[nodiscard]] ExportQueue exportQueue() const { return {exportJobs_.get()}; }
+    // The export output with `id` and the job that owns it, or nulls.
+    [[nodiscard]] std::pair<const ExportJob*, const ExportOutput*>
+    findExportOutput(ExportOutputId id) const noexcept;
     // Normalized views used by the Inspector. Media assets and extension records remain in their
     // owning collections; only authored non-media blocks are stored in typedDataBlocks().
     [[nodiscard]] std::vector<DataBlockRecord> dataBlocks() const;
@@ -279,7 +297,8 @@ class Project final {
     };
     [[nodiscard]] static IncrementalValidationWork incrementalValidationWork() noexcept;
     // Whether two projects share the storage of every root collection (assets, folders, extension
-    // records, data blocks): true exactly when neither edited them since they diverged.
+    // records, data blocks, export jobs): true exactly when neither edited them since they
+    // diverged.
     [[nodiscard]] bool sameRootRecordStorage(const Project& other) const noexcept;
     [[nodiscard]] ValidationResult validateCompositionNesting() const;
     // Diagnostic work counter for detecting accidental whole-project validation on UI paths.
@@ -293,6 +312,7 @@ class Project final {
     void freezeCompositionContent();
     void validateRootRecords(ValidationResult& result) const;
     void validateCrossRecords(ValidationResult& result) const;
+    void validateExportQueue(ValidationResult& result) const;
     ProjectId id_;
     std::string name_;
     std::vector<Composition> compositions_;
@@ -300,6 +320,7 @@ class Project final {
     detail::SharedRecords<AssetFolder> assetFolders_;
     detail::SharedRecords<ExtensionRecord> extensionRecords_;
     detail::SharedRecords<DataBlockRecord> dataBlocks_;
+    detail::SharedRecords<ExportJob> exportJobs_;
 };
 
 } // namespace bloom::document

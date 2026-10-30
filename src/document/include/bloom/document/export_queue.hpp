@@ -2,12 +2,15 @@
 
 #include <bloom/core/id.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/document/validation.hpp>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The export queue's durable authoring records (ADR 0033; document schema 1.29).
@@ -23,19 +26,14 @@
 // bloom::output presets and encoder settings is bloom::host's job; this module must not depend on
 // src/output.
 //
-// Design-step note: this header declares the contract only. The records are not yet members of
-// document::Project, the allocator has no export namespaces yet, and no codec reads or writes
-// them. The implementation step adds `Project::exportQueue()`, the `exportJob`/`exportOutput`
-// allocator namespaces and the 1.28 -> 1.29 migration described in ADR 0033.
+// The records are members of document::Project (Project::exportJobs()), their ids come from the
+// `exportJob`/`exportOutput` allocator namespaces, and src/project persists them from document
+// schema 1.29 (`project.exportQueue`).
 namespace bloom::document {
 
-struct ExportJobIdTag;
-struct ExportOutputIdTag;
-
-// Stable, allocator-backed and project-global identities. A deleted or undone job never frees its
-// id for reuse; reopen, undo and redo keep ids unchanged, so a panel may key rows by them.
-using ExportJobId = core::Id<ExportJobIdTag>;
-using ExportOutputId = core::Id<ExportOutputIdTag>;
+// ExportJobId and ExportOutputId (ids.hpp) are stable, allocator-backed and project-global. A
+// deleted or undone job never frees its id for reuse; reopen, undo and redo keep ids unchanged, so
+// a panel may key rows by them.
 
 // Bounds enforced by validation and by the schema. A command that would exceed one is rejected
 // before it changes anything.
@@ -198,5 +196,32 @@ struct ExportQueue final {
     std::vector<ExportJob> jobs;
     friend bool operator==(const ExportQueue&, const ExportQueue&) = default;
 };
+
+// ---------------------------------------------------------------------------------------------
+// Closed vocabularies (document 1.29 tokens). Shared by the codec, scripting and the host.
+
+[[nodiscard]] std::string_view exportFormatToken(ExportFormat format) noexcept;
+[[nodiscard]] std::optional<ExportFormat> parseExportFormat(std::string_view token) noexcept;
+[[nodiscard]] std::string_view exportRangeKindToken(ExportRangeKind kind) noexcept;
+[[nodiscard]] std::optional<ExportRangeKind> parseExportRangeKind(std::string_view token) noexcept;
+[[nodiscard]] std::string_view exportEncoderToken(ExportEncoderPreference encoder) noexcept;
+[[nodiscard]] std::optional<ExportEncoderPreference>
+parseExportEncoder(std::string_view token) noexcept;
+[[nodiscard]] std::string_view exportOverwriteToken(ExportOverwritePolicy policy) noexcept;
+[[nodiscard]] std::optional<ExportOverwritePolicy>
+parseExportOverwrite(std::string_view token) noexcept;
+
+// Image formats write one file per frame (a still when the range is one frame); the others write
+// one movie or audio file.
+[[nodiscard]] bool isImageExportFormat(ExportFormat format) noexcept;
+// The codec profiles a format accepts; empty for formats that take no profile token. An empty
+// `codecProfile` is always accepted (the format's default).
+[[nodiscard]] std::span<const std::string_view> exportCodecProfiles(ExportFormat format) noexcept;
+
+// Self-contained checks of one record: ids, bounds, closed vocabularies, text limits, the
+// sequence pattern's frame token. Cross-record rules (unique ids, composition exists, queue size)
+// are Project's.
+[[nodiscard]] ValidationResult validateExportOutput(const ExportOutput& output);
+[[nodiscard]] ValidationResult validateExportJob(const ExportJob& job);
 
 } // namespace bloom::document

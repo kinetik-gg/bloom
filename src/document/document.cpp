@@ -102,6 +102,13 @@ template <typename Visitor>
         if (id != nullptr && !visitor(*id))
             return false;
     }
+    for (const auto& job : project.exportJobs()) {
+        if (!visitor(job.id))
+            return false;
+        for (const auto& output : job.outputs)
+            if (!visitor(output.id))
+                return false;
+    }
     for (const auto& composition : project.compositions()) {
         if (!visitCompositionIds(composition, visitor))
             return false;
@@ -127,6 +134,11 @@ static void reserveChangedProjectIds(IdAllocator& ids, const Project& project,
         for (const auto& block : project.typedDataBlocks())
             if (const auto* id = std::get_if<DataBlockRecordId>(&block.id))
                 reserve(*id);
+        for (const auto& job : project.exportJobs()) {
+            reserve(job.id);
+            for (const auto& output : job.outputs)
+                reserve(output.id);
+        }
     }
     for (const auto& composition : project.compositions()) {
         const auto* before = base.findComposition(composition.id());
