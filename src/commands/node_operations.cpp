@@ -385,9 +385,12 @@ OperationResult RenameLayer::apply(document::Draft& draft) const {
     for (const auto& layer : composition->graph().layerOutputs()) {
         if (layer.layerId != layerId_)
             continue;
-        if (layer.name == name_)
+        // Renaming is the artist taking the name over: the layer stops following its source.
+        if (layer.name == name_ && !layer.nameFollowsSource)
             return OperationResult::noChange();
         (void)composition->graph().renameLayer(layerId_, name_);
+        if (auto* renamed = composition->graph().findLayer(layerId_))
+            renamed->nameFollowsSource = false;
         return OperationResult::applied();
     }
     return detail::invalidTarget();
