@@ -145,7 +145,8 @@ struct TransientResult final {
 // (reporting progress), stops the job when the request is cancelled, and acknowledges the result.
 // Throws ToolFailure on refusal, failure or cancellation.
 // export.log's entry rows; render, export and capture results reuse them.
-[[nodiscard]] yyjson_mut_val* logEntries(Json& out, const std::vector<host::ExportLogEntry>& entries);
+[[nodiscard]] yyjson_mut_val* logEntries(Json& out,
+                                         const std::vector<host::ExportLogEntry>& entries);
 [[nodiscard]] TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                                               host::ExportTransientJobRequest request);
 // `path` as an export destination: absolute paths become external file URIs, relative paths stay

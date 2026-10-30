@@ -14,6 +14,7 @@
 // Qt-free: the bindings live in apps/bloom over the UI's own controllers.
 
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/color_settings.hpp>
 #include <bloom/document/ids.hpp>
 
 #include <array>
@@ -214,6 +215,10 @@ struct McpLiveUiPort final {
     std::function<McpUiResult(const McpTransportRequest&)> transport;
     // viewer.set
     std::function<McpUiResult(const McpViewerRequest&)> setViewer;
+    // project.set-color-settings: apply already-resolved colour settings to the open project, as
+    // Project Settings > Colour does (not undoable; marks the project dirty). Refuse ReadOnly for a
+    // read-only project and Busy while a project is opening.
+    std::function<McpUiResult(const document::ColorSettings&)> setColorSettings;
 };
 
 } // namespace bloom::mcp

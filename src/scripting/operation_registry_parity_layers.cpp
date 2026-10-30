@@ -193,10 +193,11 @@ void addLayerAndNodeOperations(std::vector<OperationDescriptor>& descriptors) {
 
     add(descriptors, "bloom.layer.add-from-assets", kAddFromAssets,
         {composition(),
-         fromContext("time", ValueKind::Time, ContextSource::Time, std::int64_t{0},
-                     "Time (the registry time kind: a whole number, or an exact [numerator, "
-                     "denominator] time in seconds). Where the first layer starts, snapped to the "
-                     "nearest frame inside the composition. Defaults to the playhead."),
+         fromContext(
+             "time", ValueKind::Time, ContextSource::Time, std::int64_t{0},
+             "Time: a whole frame of the composition at its frame rate, or an exact [numerator, "
+             "denominator] time in seconds). Where the first layer starts, snapped to the "
+             "nearest frame inside the composition. Defaults to the playhead."),
          maybe("assets", ValueKind::Array, ValueArray{Value(StableId{1})},
                "Array of asset ids: image, image sequence, video or audio assets, in stack order "
                "(first is uppermost). Default: none.",

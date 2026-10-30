@@ -168,7 +168,8 @@ void unboundSeams() {
              {"composition.activate", R"({"composition":1})"},
              {"transport", R"({"action":"play"})"},
              {"viewer.set", R"({"zoom":"fit"})"},
-             {"project.new", "{}"}}) {
+             {"project.new", "{}"},
+             {"project.set-color-settings", R"({"config":"aces"})"}}) {
         const auto result = server.call(tool, arguments);
         expect(contains(result, "bloom.mcp.ui-unbound"), tool + " unbound is typed: " + result);
     }
@@ -182,6 +183,7 @@ void liveSeams() {
     mcp::McpViewerRequest viewer;
     std::optional<document::CompositionId> activated;
     std::vector<mcp::McpProjectRequest> lifecycle;
+    std::optional<document::ColorSettings> colour;
     std::jthread later;
     mcp::McpLiveUiPort port{
         .revealComposition =
@@ -229,6 +231,11 @@ void liveSeams() {
             [&](const mcp::McpViewerRequest& request) {
                 viewer = request;
                 return mcp::McpUiResult{.refusal = mcp::McpUiRefusal::None, .message = {}};
+            },
+        .setColorSettings =
+            [&](const document::ColorSettings& settings) {
+                colour = settings;
+                return mcp::McpUiResult{};
             }};
     Live server(std::move(port));
 
@@ -275,6 +282,10 @@ void liveSeams() {
     expect(contains(result, R"("succeeded":true)") && contains(result, "project.saved") &&
                lifecycle.size() == 2 && lifecycle.back().replace,
            "project.save-as waits for the asynchronous binding: " + result);
+    // Colour settings are resolved by the core and applied by the application through the port.
+    result = server.call("project.set-color-settings", R"({"config":"aces"})");
+    expect(contains(result, R"("code":"updated")") && colour.has_value(),
+           "project.set-color-settings reaches the port: " + result);
     result = server.call("events", R"({"sinceRevision":0})");
     expect(contains(result, R"("kind":"project.saved")"), "events list project.saved: " + result);
 }

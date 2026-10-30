@@ -178,16 +178,14 @@ Session::setColorSettings(const std::string_view config,
         host::resolveProjectColorSettings(*current, *choice, std::move(workingColorSpaceId));
     if (!resolved.settings)
         return {"invalid-settings", std::move(resolved.reason), current};
-    host::ProjectSessionColorSettingsStatus status;
-    if (binding_) {
-        if (!binding_->setColorSettings)
-            return {"unavailable",
-                    "The live application does not accept colour settings from scripts yet",
-                    current};
-        status = binding_->setColorSettings(*resolved.settings);
-    } else {
-        status = session_->setColorSettings(*resolved.settings);
-    }
+    // An attached (live) session does not own the project session: the desktop application
+    // changes colour settings through Project Settings > Colour and, for agents, through the MCP
+    // server's McpLiveUiPort::setColorSettings.
+    if (binding_)
+        return {"unavailable",
+                "Change the colour settings with Project Settings > Colour in this window",
+                current};
+    const auto status = session_->setColorSettings(*resolved.settings);
     const auto after = renderSourceSnapshot().colorSettings;
     switch (status) {
     case host::ProjectSessionColorSettingsStatus::Updated:

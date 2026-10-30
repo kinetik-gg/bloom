@@ -105,11 +105,6 @@ struct SessionBinding final {
     platform::StagedArtifactCoordinator* artifacts = nullptr;
     // Capture both values together so project replacement/Save As cannot mix their authority.
     std::function<SessionRenderSourceSnapshot()> renderSourceSnapshot{};
-    // Project Settings > Colour on the owner's project session (not a command: not undoable,
-    // marks the project dirty). Absent while the live host has not wired it; the change is then
-    // refused as unavailable.
-    std::function<host::ProjectSessionColorSettingsStatus(document::ColorSettings)>
-        setColorSettings{};
 };
 
 // What Session::setColorSettings did. `code` is "updated", "no-change", "invalid-config",

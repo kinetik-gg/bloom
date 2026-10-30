@@ -588,7 +588,8 @@ The owner accepted every default below on 2026-10-30.
    discard unsaved work silently (`bloom.mcp.unsaved-changes` unless the call passes
    `discardChanges:true`, `bloom.mcp.jobs-running` unless it passes `stopJobs:true`), and the
    live-only window tools `editor.reveal`, `selection.set`, `composition.activate`, `transport` and
-   `viewer.set`. The desktop binds them through `McpServerServiceDependencies::liveUi`
+   `viewer.set`, and the window applies `project.set-color-settings` (`setColorSettings`). The
+   desktop binds them through `McpServerServiceDependencies::liveUi`
    (`mcp::McpLiveUiPort`, `bloom/mcp/live_ui_port.hpp`), called on the UI thread; `bloom-mcp`
    implements the project tools on its headless session and answers `bloom.mcp.not-live` for the
    window tools. The original decision was "No project open, close or save tools."
