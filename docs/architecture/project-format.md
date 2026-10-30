@@ -1,6 +1,7 @@
 # Bloom Project Format
 
-The current document schema is 1.29. It adds the export queue: the required last project member
+The current document schema is 1.30. It adds the optional node group `color` (see "Node Group
+Colours In Document 1.30"). Document 1.29 added the export queue: the required last project member
 `exportQueue` and the `exportJob`/`exportOutput` allocator namespaces (see "Export Queue In Document
 1.29"). Document 1.28 changed no member: it marks projects saved after ordinary
 and untagged SDR video in Auto began to be shown through the sRGB texture space (see "Video Colour
@@ -1385,9 +1386,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.29`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.30`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.29.schema.json` and `manifest-1.29.schema.json`; the
+The current artifacts are `document-1.30.schema.json` and `manifest-1.30.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1531,6 +1532,15 @@ it differs from the default (start 0, non-drop), so a composition without it kee
 The decoder reads it only at `1.26` or later, refuses a negative start as a domain violation, and
 preserves unknown trailing members like any composition attachment.
 
+## Node Group Colours In Document 1.30
+
+A node group object may append an optional `color` after `padding`, before retained unknown members:
+three integers in `0..255`, the frame's 8-bit sRGB tint, in the same shape as a Layer Output's
+`labelColor`. The writer emits it only when the frame has a colour, so an uncoloured group keeps its
+1.29 bytes; absent means the neutral frame. The decoder reads it only at `1.30` or later. A group's
+colour is layout like the rest of the record: compilation, render caches and snapshot identity never
+read it. The `1.29` → `1.30` DOM step `migrateNodeGroupColorsV1_29` only advances the version.
+
 ## Export Queue In Document 1.29
 
 Document `1.29` persists the export queue ([ADR 0033](../decisions/0033-export-queue.md)): the jobs,
@@ -1633,15 +1643,15 @@ advances the version: every new member is optional, so no record is inserted or 
 
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.29.schema.json` and
-`manifest-1.29.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The current document and manifest schema artifacts are `document-1.30.schema.json` and
+`manifest-1.30.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
 The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
 likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
 defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step,
 1.20 → 1.21 LUT step, 1.21 → 1.22 locator version step, 1.22 → 1.23 layer-time step,
 1.23 → 1.24 layer-mask version step, 1.24 → 1.25 video-metadata step, 1.25 → 1.26 channel-set step,
-1.26 → 1.27 composition-folder version step, 1.27 → 1.28 video-colour-default version step and
-1.28 → 1.29 export-queue step.
+1.26 → 1.27 composition-folder version step, 1.27 → 1.28 video-colour-default version step,
+1.28 → 1.29 export-queue step and 1.29 → 1.30 node-group-colour version step.
 
 `AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
 interpretation, dimensions and organization envelope, with a closed `video` member before

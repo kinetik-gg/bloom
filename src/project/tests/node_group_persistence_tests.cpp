@@ -18,9 +18,11 @@
 
 #include <array>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <memory_resource>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -91,7 +93,9 @@ Authored authoredProject() {
     std::set<document::NodeId> members;
     for (const auto& node : composition.graph().nodes())
         members.insert(node.id);
-    composition.nodeGroups()[*first] = {*first, "Lighting", members, {48.0, 12.5}};
+    // Document 1.30: the first frame carries a colour, the second none.
+    composition.nodeGroups()[*first] = {
+        *first, "Lighting", members, {48.0, 12.5}, std::array<std::uint8_t, 3>{217, 124, 124}};
     composition.nodeGroups()[*second] = {*second, "Spare", {}, {}};
     if (!owned->commit(snapshot.revision(), std::move(draft)).committed())
         throw std::runtime_error("group commit");
@@ -140,7 +144,11 @@ void roundTripAndReopen() {
     if (composition == nullptr)
         return;
     expect(composition->nodeGroups() == original,
-           "every group id, name, member and padding component round-trips exactly");
+           "every group id, name, member, padding component and colour round-trips exactly");
+    expect(composition->nodeGroups().begin()->second.color ==
+                   std::optional(std::array<std::uint8_t, 3>{217, 124, 124}) &&
+               !std::next(composition->nodeGroups().begin())->second.color,
+           "a frame colour survives save and reopen, and a neutral frame stays neutral");
     expect(reopened.ids().highWater().nodeGroup == snapshot.ids().highWater().nodeGroup &&
                reopened.ids().highWater().nodeGroup == 2,
            "the group allocator high water is durable");
@@ -183,10 +191,10 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
         throw std::logic_error("legacy entries");
     const auto bytes = entries.document()->documentBytes();
     documentText.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto minor = documentText.find("\"minor\": 29");
+    const auto minor = documentText.find("\"minor\": 30");
     if (minor == std::string::npos)
         throw std::logic_error("legacy minor anchor");
-    documentText.replace(minor, std::string_view("\"minor\": 29").size(), "\"minor\": 1");
+    documentText.replace(minor, std::string_view("\"minor\": 30").size(), "\"minor\": 1");
     stripExportQueueV1_29(documentText);
     removeImageFields(documentText);
     eraseMemberLine(documentText, "nodeGroups");

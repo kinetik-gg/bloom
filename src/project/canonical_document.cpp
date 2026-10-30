@@ -1639,8 +1639,19 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
                 !emitFloat64Member(state, "y", record.padding.y) || !emitRetainedTrailing(state))
                 return false;
         }
-        if (!state.ok(writer.endObject()) || !emitRetainedTrailing(state) ||
-            !state.ok(writer.endObject()))
+        if (!state.ok(writer.endObject()))
+            return false;
+        // Document 1.30: the optional frame colour, written only when the frame has one.
+        if (record.color) {
+            if (!state.ok(writer.memberName("color")) || !state.ok(writer.beginArray()))
+                return false;
+            for (const auto channel : *record.color)
+                if (!state.ok(writer.integerValue(channel)))
+                    return false;
+            if (!state.ok(writer.endArray()))
+                return false;
+        }
+        if (!emitRetainedTrailing(state) || !state.ok(writer.endObject()))
             return false;
     }
     return state.ok(writer.endArray());

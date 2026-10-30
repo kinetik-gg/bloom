@@ -152,7 +152,8 @@ enum class Step {
     LayerMasks,
     CompositionFolders,
     VideoColourDefault,
-    ExportQueue
+    ExportQueue,
+    NodeGroupColors
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -172,6 +173,10 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // The SDR video colour default (1.27 -> 1.28, ADR 0032) is version-only: no member changes.
     // The source version tells the open path that the project was saved under the old default.
     if (step == Step::VideoColourDefault)
+        return false;
+    // Node group colours (1.29 -> 1.30) are version-only: the new `color` member is optional and
+    // absent means the neutral frame.
+    if (step == Step::NodeGroupColors)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -354,6 +359,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::CompositionFolders   ? "{\"major\":1,\"minor\":27}"
                            : step == Step::VideoColourDefault   ? "{\"major\":1,\"minor\":28}"
                            : step == Step::ExportQueue          ? "{\"major\":1,\"minor\":29}"
+                           : step == Step::NodeGroupColors      ? "{\"major\":1,\"minor\":30}"
                                                                 : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -898,6 +904,13 @@ MigrationStepOutcome migrateExportQueueV1_28(const JsonValue& root, std::pmr::me
                                              Buffer& output) {
     if (!sourceVersionIs(root, "28") || !transform(root, Scope::Root, Step::ExportQueue, output))
         return MigrationStepOutcome::failure("/project/exportQueue");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateNodeGroupColorsV1_29(const JsonValue& root,
+                                                 std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "29") ||
+        !transform(root, Scope::Root, Step::NodeGroupColors, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }
 MigrationStepOutcome migrateChannelSetsV1_25(const JsonValue& root, std::pmr::memory_resource*,

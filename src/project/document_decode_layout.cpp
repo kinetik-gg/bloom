@@ -97,8 +97,11 @@ bool decodeNodeGroups(const JsonValue& node, DecodeState& state, const std::stri
     std::size_t index = 0;
     for (const auto& element : node.arrayElements()) {
         const auto recordPath = joinPathIndex(path, index++);
-        static constexpr std::array<std::string_view, 4> keys{"groupId", "name", "members",
-                                                              "padding"};
+        // Document 1.30 appends the optional frame `color` after `padding`.
+        std::vector<std::string_view> keys{"groupId", "name", "members", "padding"};
+        const bool hasColor = state.documentMinor >= 30 && element.findMember("color") != nullptr;
+        if (hasColor)
+            keys.push_back("color");
         std::vector<const JsonValue*> members;
         std::vector<RetainedJsonMember> trailing;
         if (!matchOrderedMembers(element, keys, true, state, recordPath, members, trailing))
@@ -153,6 +156,23 @@ bool decodeNodeGroups(const JsonValue& node, DecodeState& state, const std::stri
         if (record.padding.x < 0.0 || record.padding.y < 0.0) {
             state.fail(DocumentDecodeError::DomainViolation, joinPath(recordPath, "padding"));
             return false;
+        }
+        if (hasColor) {
+            const auto colorPath = joinPath(recordPath, "color");
+            const auto channels = members[4]->arrayElements();
+            if (members[4]->kind() != JsonValueKind::Array || channels.size() != 3) {
+                state.fail(DocumentDecodeError::WrongValueKind, colorPath);
+                return false;
+            }
+            std::array<std::uint8_t, 3> rgb{};
+            for (std::size_t channel = 0; channel < rgb.size(); ++channel) {
+                std::uint32_t value = 0;
+                if (!decodeUInt32Member(channels[channel], state,
+                                        joinPathIndex(colorPath, channel), 255, value))
+                    return false;
+                rgb[channel] = static_cast<std::uint8_t>(value);
+            }
+            record.color = rgb;
         }
         out.emplace(id, std::move(record));
     }

@@ -99,4 +99,62 @@ void validateDocumentSchemaV1_2(const json::Value& schema) {
     historical.at("title") = json::Value(std::string("Bloom Project Document 1.1"));
     validateDocumentSchemaV1_1(historical);
 }
+
+// Document 1.30 adds the optional node group `color` (task N1, item 5). Removing it, the new group
+// definition and the version must give back the 1.29 artifact exactly.
+namespace {
+json::Value previousVersionV1_30(const json::Value& schema, const bool manifest) {
+    using namespace schema_detail;
+    validateReferences(schema, schema);
+    const std::string kind = manifest ? "manifest" : "document";
+    requireExactString(schema.at("$id"), "urn:kinetik:bloom:schema:project-" + kind + ":1.30",
+                       "node group colour schema id");
+    requireExact(schema.at("$defs").at("fixedVersion-1.30").at("properties").at("minor"),
+                 R"({"const":30})", "node group colour minor");
+    const auto& version =
+        manifest ? schema.at("$defs").at("document-1.0").at("properties").at("schemaVersion")
+                 : schema.at("properties").at("schemaVersion");
+    requireExact(version, R"({"$ref":"#/$defs/fixedVersion-1.30"})", "schema version");
+    auto previous = schema;
+    for (auto& member : previous.at("$defs").asObject())
+        if (member.first == "fixedVersion-1.30")
+            member.first = "fixedVersion-1.29";
+    previous.at("$defs").at("fixedVersion-1.29").at("properties").at("minor") =
+        json::parse(R"({"const":29})");
+    auto& previousRef =
+        manifest ? previous.at("$defs").at("document-1.0").at("properties").at("schemaVersion")
+                 : previous.at("properties").at("schemaVersion");
+    previousRef = json::parse(R"({"$ref":"#/$defs/fixedVersion-1.29"})");
+    previous.at("$id") =
+        json::Value(std::string("urn:kinetik:bloom:schema:project-" + kind + ":1.29"));
+    return previous;
+}
+} // namespace
+
+void validateDocumentSchemaV1_30(const json::Value& schema) {
+    using namespace schema_detail;
+    auto previous = previousVersionV1_30(schema, false);
+    auto& defs = previous.at("$defs");
+    auto group = defs.at("nodeGroup-1.30");
+    requireExact(
+        group.at("properties").at("color"),
+        R"({"type":"array","minItems":3,"maxItems":3,"items":{"type":"integer","minimum":0,"maximum":255}})",
+        "node group colour");
+    requireExact(group.at("required"), R"(["groupId","name","members","padding"])",
+                 "node group colour stays optional");
+    eraseMember(group.at("properties"), "color");
+    group.at("$comment") = defs.at("nodeGroup-1.2").at("$comment");
+    if (!json::exactEqual(group, defs.at("nodeGroup-1.2")))
+        fail("nodeGroup-1.30 must be nodeGroup-1.2 plus the optional color");
+    eraseMember(defs, "nodeGroup-1.30");
+    requireExact(defs.at("composition-1.0").at("properties").at("nodeGroups").at("items"),
+                 R"({"$ref":"#/$defs/nodeGroup-1.30"})", "composition node groups");
+    defs.at("composition-1.0").at("properties").at("nodeGroups").at("items") =
+        json::parse(R"({"$ref":"#/$defs/nodeGroup-1.2"})");
+    validateDocumentSchemaV1_29(previous);
+}
+
+void validateManifestSchemaV1_30(const json::Value& schema) {
+    validateManifestSchemaV1_29(previousVersionV1_30(schema, true));
+}
 } // namespace bloom::quality

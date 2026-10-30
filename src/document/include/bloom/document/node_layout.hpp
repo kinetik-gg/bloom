@@ -2,6 +2,8 @@
 
 #include <bloom/document/graph.hpp>
 
+#include <array>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <set>
@@ -34,7 +36,10 @@ struct NodeCardSize {
 
 using NodeCardSizes = std::map<NodeId, NodeCardSize>;
 
-inline constexpr double kNodeLayoutSpacing = 16.0; // Spacing::L in the UI grammar.
+// The node canvas's layout lattice (the editor's default dot grid, Size::NodeGrid), and the clear
+// space Arrange and automatic placement keep between two cards: four grid steps (task N1, item 4).
+inline constexpr double kNodeLayoutGrid = 16.0;
+inline constexpr double kNodeLayoutSpacing = 4.0 * kNodeLayoutGrid;
 inline constexpr NodeCardSize kConservativeNodeCardSize{240.0, 540.0};
 
 // Returns the first deterministic free top-left position at or around `preferred`. Existing
@@ -60,6 +65,9 @@ struct NodeGroupRecord {
     std::string name;
     std::set<NodeId> members;
     Vec2d padding{kDefaultNodeGroupPadding, kDefaultNodeGroupPadding};
+    // The frame's tint as 8-bit sRGB, or none for the neutral frame (document 1.30). Layout like
+    // the rest of the record: nothing that evaluates, compiles or caches reads it.
+    std::optional<std::array<std::uint8_t, 3>> color{};
 
     friend bool operator==(const NodeGroupRecord&, const NodeGroupRecord&) = default;
 };
