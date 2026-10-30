@@ -427,7 +427,10 @@ void testPointerPressCancelsBeforePreviewChanges(Expectations& expectations) {
                        const std::vector<runtime::SnapshotParameterOverride>& override,
                        runtime::TaskContext& context) {
         gate.enterAndWait();
-        cancelled = context.isCancellationRequested();
+        // Sticky: the frame in flight at the press is the one under test. Later fills after the
+        // restart run uncancelled and must not overwrite its observation.
+        if (context.isCancellationRequested())
+            cancelled = true;
         return fixture.pipelineFixture.pipeline(snapshot, identity, limit, override, context);
     };
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
