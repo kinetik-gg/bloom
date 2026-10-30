@@ -212,6 +212,8 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) 
         }
     }
 
+    project.setExportQueue(std::move(envelope.exportQueue));
+
     const auto validation = project.validate();
     if (!validation.ok()) {
         return ReconstructDocumentResult::failure(

@@ -26,6 +26,14 @@
 #include <string_view>
 
 namespace {
+
+// Document 1.29 (ADR 0033) members a downgraded fixture must not carry.
+[[maybe_unused]] void stripExportQueueV1_29(std::string& text) {
+    text = std::regex_replace(
+        text, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
+    text = std::regex_replace(
+        text, std::regex(R"(,\s*"exportJob"\s*:\s*"0",\s*"exportOutput"\s*:\s*"0")"), "");
+}
 using namespace bloom;
 using namespace bloom::project;
 using namespace bloom::document;
@@ -229,7 +237,8 @@ void roundTripsEveryMember() {
 
 void olderDocumentMigratesAndResavesWithoutTiming() {
     auto text = encodeProject({});
-    text = replaceRegex(text, R"("minor": 28\s*\})", "\"minor\": 22\n  }");
+    text = replaceRegex(text, R"("minor": 29\s*\})", "\"minor\": 22\n  }");
+    stripExportQueueV1_29(text);
     const auto typeAt = text.find("\"bloom.layer-output\"");
     const auto versionAt = text.find("\"schemaVersion\": 5", typeAt);
     if (typeAt == std::string::npos || versionAt == std::string::npos)
@@ -287,7 +296,7 @@ void olderDocumentMigratesAndResavesWithoutTiming() {
     for (const auto member : kMembers)
         expect(resaved.find(std::string("\"") + std::string(member) + "\"") == std::string::npos,
                "re-saved 1.22 document has no layer time member");
-    expect(resaved.find("\"minor\": 28") != std::string::npos, "re-save writes the current minor");
+    expect(resaved.find("\"minor\": 29") != std::string::npos, "re-save writes the current minor");
 }
 
 void rejectsInvalidMembers() {
@@ -310,7 +319,7 @@ void rejectsInvalidMembers() {
            "fixed extent with zero duration is rejected");
     expect(!decodeText(replaceRegex(fixed, R"("kind": "fixed")", "\"kind\": \"bogus\"")),
            "unknown extent kind is rejected");
-    expect(!decodeText(replaceRegex(fixed, R"("minor": 28\s*\})", "\"minor\": 22\n  }")),
+    expect(!decodeText(replaceRegex(fixed, R"("minor": 29\s*\})", "\"minor\": 22\n  }")),
            "layer time members are not accepted in a 1.22 document");
 }
 } // namespace

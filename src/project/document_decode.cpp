@@ -1070,6 +1070,8 @@ namespace {
         keys.push_back("assetFolders");
     if (state.documentMinor >= 18)
         keys.push_back("dataBlocks");
+    if (state.documentMinor >= 29)
+        keys.push_back("exportQueue");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1140,6 +1142,13 @@ namespace {
         !decodeDataBlocks(*members[nextProjectMember], state, joinPath(path, "dataBlocks"),
                           out.dataBlocks))
         return false;
+    if (state.documentMinor >= 18)
+        ++nextProjectMember;
+    // Document 1.29 (ADR 0033): the export queue, the required last member.
+    if (state.documentMinor >= 29 &&
+        !detail::decodeExportQueue(*members[nextProjectMember], state,
+                                   joinPath(path, "exportQueue"), out.exportQueue))
+        return false;
     return true;
 }
 
@@ -1188,6 +1197,10 @@ namespace {
     const bool hasLayerMask = state.documentMinor >= 24 && node.findMember("layerMask") != nullptr;
     if (hasLayerMask)
         keys.push_back("layerMask");
+    if (state.documentMinor >= 29) {
+        keys.push_back("exportJob");
+        keys.push_back("exportOutput");
+    }
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, true, state, path, members)) {
         return false;
@@ -1233,6 +1246,14 @@ namespace {
         ++nextMember;
     if (hasLayerMask && !decodeAllocatorHighWaterMember(*members[nextMember], state,
                                                         joinPath(path, "layerMask"), out.layerMask))
+        return false;
+    if (hasLayerMask)
+        ++nextMember;
+    if (state.documentMinor >= 29 &&
+        (!decodeAllocatorHighWaterMember(*members[nextMember], state, joinPath(path, "exportJob"),
+                                         out.exportJob) ||
+         !decodeAllocatorHighWaterMember(*members[nextMember + 1], state,
+                                         joinPath(path, "exportOutput"), out.exportOutput)))
         return false;
     return decodeAllocatorHighWaterMember(*members[10], state, joinPath(path, "nodeGroup"),
                                           out.nodeGroup);

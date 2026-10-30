@@ -20,7 +20,9 @@ target_sources(
         canonical_manifest.cpp
         document_decode.cpp
         document_decode_assets.cpp
+        document_decode_export_queue.cpp
         canonical_assets.ipp
+        canonical_export_queue.ipp
         document_decode_composition.cpp
         document_decode_internal.hpp
         document_components_migration.cpp
@@ -370,6 +372,11 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_project_channel_set_test PRIVATE bloom_project bloom_commands ZLIB::ZLIB)
     bloom_enable_warnings(bloom_project_channel_set_test)
     bloom_add_test(NAME bloom.project.channel-sets COMMAND bloom_project_channel_set_test LABELS unit persistence)
+
+    add_executable(bloom_project_export_queue_test tests/export_queue_persistence_tests.cpp)
+    target_link_libraries(bloom_project_export_queue_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_export_queue_test)
+    bloom_add_test(NAME bloom.project.export-queue COMMAND bloom_project_export_queue_test LABELS unit persistence)
 
     add_executable(bloom_project_video_metadata_test tests/video_metadata_persistence_tests.cpp)
     target_link_libraries(bloom_project_video_metadata_test PRIVATE bloom_project)

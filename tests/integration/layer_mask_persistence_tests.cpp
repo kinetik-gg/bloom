@@ -16,6 +16,7 @@
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/strict_json_dom.hpp>
+#include <regex>
 
 #include <array>
 #include <iostream>
@@ -24,6 +25,14 @@
 #include <string>
 
 namespace {
+
+// Document 1.29 (ADR 0033) members a downgraded fixture must not carry.
+[[maybe_unused]] void stripExportQueueV1_29(std::string& text) {
+    text = std::regex_replace(
+        text, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
+    text = std::regex_replace(
+        text, std::regex(R"(,\s*"exportJob"\s*:\s*"0",\s*"exportOutput"\s*:\s*"0")"), "");
+}
 using namespace bloom;
 int failures = 0;
 void expect(const bool condition, const char* message) {
@@ -166,26 +175,28 @@ void olderDocumentsMigrateAndRefuseNewMembers() {
                                                  document::FrameRate::framesPerSecond24()))
             .project};
     auto text = encode(plain);
-    replaceOnce(text, "\"minor\": 28", "\"minor\": 23");
+    replaceOnce(text, "\"minor\": 29", "\"minor\": 23");
+    stripExportQueueV1_29(text);
     expect(static_cast<bool>(decodeText(text)), "a 1.23 document without masks decodes");
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
     if (parsed) {
         const auto migrated =
-            project::migrateDocumentDom(parsed.document()->root(), {1, 23}, {1, 28},
+            project::migrateDocumentDom(parsed.document()->root(), {1, 23}, {1, 29},
                                         project::kProductionDocumentMigrationSteps, {}, operation);
         expect(
             migrated.outcome() == project::MigrationOutcome::Migrated &&
-                migrated.stepsApplied() == 5 &&
+                migrated.stepsApplied() == 6 &&
                 static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
             "the 1.23 -> 1.24 mask, 1.24 -> 1.25 video-metadata and 1.25 -> 1.26 channel-set and "
             "1.26 -> 1.27 composition-folder and 1.27 -> 1.28 video-colour-default steps only "
-            "advance the version");
+            "advance the version, and 1.28 -> 1.29 adds the empty export queue");
     }
 
     Fixture fixture;
     auto masked = encode(fixture.document);
-    replaceOnce(masked, "\"minor\": 28", "\"minor\": 23");
+    replaceOnce(masked, "\"minor\": 29", "\"minor\": 23");
+    stripExportQueueV1_29(masked);
     expect(!static_cast<bool>(decodeText(masked)), "a 1.23 document carrying masks is refused");
 }
 
@@ -310,7 +321,8 @@ void anchorModesPersistAndMigrate() {
                                          document::ShapeKind::Path, geometry);
     expect(shapedCommands.execute(std::move(add)).succeeded(), "a moded shape path is added");
     auto shapeText = encode(shaped);
-    replaceOnce(shapeText, "\"minor\": 28", "\"minor\": 23");
+    replaceOnce(shapeText, "\"minor\": 29", "\"minor\": 23");
+    stripExportQueueV1_29(shapeText);
     expect(!static_cast<bool>(decodeText(shapeText)),
            "a pre-1.24 file carrying an anchor mode is refused");
 }
@@ -348,7 +360,8 @@ void compositionTimecodePersists() {
         }
     }
     auto older = text;
-    replaceOnce(older, "\"minor\": 28", "\"minor\": 25");
+    replaceOnce(older, "\"minor\": 29", "\"minor\": 25");
+    stripExportQueueV1_29(older);
     expect(!static_cast<bool>(decodeText(older)), "a pre-1.26 file carrying a timecode is refused");
 }
 

@@ -228,6 +228,12 @@ migrateCompositionFoldersV1_26(const JsonValue& root, std::pmr::memory_resource*
 [[nodiscard]] MigrationStepOutcome
 migrateVideoColourDefaultV1_27(const JsonValue& root, std::pmr::memory_resource* resource,
                                std::pmr::vector<char>& output);
+// The export queue (ADR 0033), document 1.28 -> 1.29: appends `project.exportQueue` with an empty
+// `jobs` array and the zero `exportJob`/`exportOutput` allocator high-water members. Its
+// already-migrated guard checks for their presence.
+[[nodiscard]] MigrationStepOutcome
+migrateExportQueueV1_28(const JsonValue& root, std::pmr::memory_resource* resource,
+                        std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -256,7 +262,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 24}, {1, 25}, migrateVideoSourceMetadataV1_24},
     MigrationStepDescriptor{{1, 25}, {1, 26}, migrateChannelSetsV1_25},
     MigrationStepDescriptor{{1, 26}, {1, 27}, migrateCompositionFoldersV1_26},
-    MigrationStepDescriptor{{1, 27}, {1, 28}, migrateVideoColourDefaultV1_27}};
+    MigrationStepDescriptor{{1, 27}, {1, 28}, migrateVideoColourDefaultV1_27},
+    MigrationStepDescriptor{{1, 28}, {1, 29}, migrateExportQueueV1_28}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

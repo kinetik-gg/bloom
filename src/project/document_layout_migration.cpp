@@ -151,7 +151,8 @@ enum class Step {
     ExternalFileLocators,
     LayerMasks,
     CompositionFolders,
-    VideoColourDefault
+    VideoColourDefault,
+    ExportQueue
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -172,6 +173,12 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // The source version tells the open path that the project was saved under the old default.
     if (step == Step::VideoColourDefault)
         return false;
+    // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
+    // step already ran.
+    if (step == Step::ExportQueue)
+        return (scope == Scope::Project && value.findMember("exportQueue")) ||
+               (scope == Scope::HighestIssued &&
+                (value.findMember("exportJob") || value.findMember("exportOutput")));
     if (step == Step::Images) {
         return (scope == Scope::Project && value.findMember("assets")) ||
                (scope == Scope::Composition && value.findMember("backgroundColor")) ||
@@ -346,13 +353,14 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::LayerMasks           ? "{\"major\":1,\"minor\":24}"
                            : step == Step::CompositionFolders   ? "{\"major\":1,\"minor\":27}"
                            : step == Step::VideoColourDefault   ? "{\"major\":1,\"minor\":28}"
+                           : step == Step::ExportQueue          ? "{\"major\":1,\"minor\":29}"
                                                                 : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
         } else if (scope == Scope::Root && member.key() == "idAllocation" &&
-                   (step == Step::NodeGroups || step == Step::Images ||
-                    step == Step::DataBlocks)) { // NOLINT(bugprone-branch-clone)
+                   (step == Step::NodeGroups || step == Step::Images || step == Step::DataBlocks ||
+                    step == Step::ExportQueue)) { // NOLINT(bugprone-branch-clone)
             if (!descend(Scope::IdAllocation))
                 return false;
         } else if (scope == Scope::IdAllocation && member.key() == "highestIssued") {
@@ -445,6 +453,10 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
     }
     if (scope == Scope::Project && step == Step::DataBlocks)
         append(output, ",\"dataBlocks\":[]");
+    if (scope == Scope::Project && step == Step::ExportQueue)
+        append(output, ",\"exportQueue\":{\"jobs\":[]}");
+    if (scope == Scope::HighestIssued && step == Step::ExportQueue)
+        append(output, ",\"exportJob\":\"0\",\"exportOutput\":\"0\"");
     append(output, "}");
     return true;
 }
@@ -487,9 +499,9 @@ inline constexpr NodeSchemaRewrite kChannelSetRewrite{
     const auto* typeId = node.findMember("typeId");
     const auto* schemaVersion = node.findMember("schemaVersion");
     const auto version = schemaVersion ? schemaVersion->asNumberToken() : std::nullopt;
-    const auto matches = typeId && typeId->asString() == rewrite.typeId && version &&
-                         (*version == rewrite.sourceVersions[0] ||
-                          *version == rewrite.sourceVersions[1]);
+    const auto matches =
+        typeId && typeId->asString() == rewrite.typeId && version &&
+        (*version == rewrite.sourceVersions[0] || *version == rewrite.sourceVersions[1]);
     append(output, "{");
     bool first = true;
     for (const auto& member : node.objectMembers()) {
@@ -880,6 +892,12 @@ MigrationStepOutcome migrateVideoColourDefaultV1_27(const JsonValue& root,
     if (!sourceVersionIs(root, "27") ||
         !transform(root, Scope::Root, Step::VideoColourDefault, output))
         return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateExportQueueV1_28(const JsonValue& root, std::pmr::memory_resource*,
+                                             Buffer& output) {
+    if (!sourceVersionIs(root, "28") || !transform(root, Scope::Root, Step::ExportQueue, output))
+        return MigrationStepOutcome::failure("/project/exportQueue");
     return MigrationStepOutcome::success();
 }
 MigrationStepOutcome migrateChannelSetsV1_25(const JsonValue& root, std::pmr::memory_resource*,

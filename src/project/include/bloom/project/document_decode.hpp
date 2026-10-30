@@ -1,4 +1,5 @@
 #pragma once
+#include <bloom/document/export_queue.hpp>
 #include <bloom/document/project.hpp>
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
@@ -172,6 +173,8 @@ struct DecodedDocumentEnvelope final {
     std::vector<document::AssetRecord> assets;
     std::vector<document::AssetFolder> assetFolders;
     std::vector<document::DataBlockRecord> dataBlocks;
+    // Document 1.29 (ADR 0033); empty for an older document.
+    document::ExportQueue exportQueue;
     document::IdAllocatorHighWater highWater;
     std::vector<document::ExtensionRecord> extensionRecords;
 

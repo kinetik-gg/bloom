@@ -2365,6 +2365,7 @@ dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
 }
 
 #include "canonical_assets.ipp"
+#include "canonical_export_queue.ipp"
 
 [[nodiscard]] bool emitDocumentRoot(EmitState& state) noexcept {
     using namespace bloom::document;
@@ -2428,7 +2429,7 @@ dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
             }
         }
         if (!state.ok(writer.endArray()) || !emitAssets(state) || !emitAssetFolders(state) ||
-            !emitDataBlocks(state)) {
+            !emitDataBlocks(state) || !emitExportQueue(state)) {
             return false;
         }
         if (!emitRetainedTrailing(state)) {
@@ -2467,7 +2468,10 @@ dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
                 !emitHighWaterMember(state, "dataBlock", water.dataBlock) ||
                 // Document 1.24 (ADR 0028): written only once a mask id has been issued.
                 (water.layerMask != 0 &&
-                 !emitHighWaterMember(state, "layerMask", water.layerMask))) {
+                 !emitHighWaterMember(state, "layerMask", water.layerMask)) ||
+                // Document 1.29 (ADR 0033): always written.
+                !emitHighWaterMember(state, "exportJob", water.exportJob) ||
+                !emitHighWaterMember(state, "exportOutput", water.exportOutput)) {
                 return false;
             }
             if (!emitRetainedTrailing(state)) {

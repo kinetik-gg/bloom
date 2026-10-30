@@ -25,7 +25,7 @@ namespace bloom::project {
 // that merely names a CanonicalDocumentV1.
 class RoundTripState;
 
-inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 28};
+inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 29};
 inline constexpr document::SchemaVersion kMinimumDocumentSchemaVersionV1{1, 15};
 // ADR 0032: the first document version saved after Auto began showing ordinary and untagged SDR
 // video through the sRGB texture space. Opening an older project that relied on the previous

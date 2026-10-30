@@ -18,6 +18,14 @@
 #include <string>
 
 namespace {
+
+// Document 1.29 (ADR 0033) members a downgraded fixture must not carry.
+[[maybe_unused]] void stripExportQueueV1_29(std::string& text) {
+    text = std::regex_replace(
+        text, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
+    text = std::regex_replace(
+        text, std::regex(R"(,\s*"exportJob"\s*:\s*"0",\s*"exportOutput"\s*:\s*"0")"), "");
+}
 using namespace bloom;
 using namespace bloom::project;
 using namespace bloom::document;
@@ -121,15 +129,16 @@ void migration() {
         auto text = encode(makeDocument(timecode, 0));
         // A 1.24 file has no field order or timecode type.
         text = replaceRegex(text, R"(,\s*"fieldOrder": \d+,\s*"timecodeType": \d+)", "");
-        text = replaceRegex(text, R"("minor": 28(\s*\}))", "\"minor\": 24$1");
+        text = replaceRegex(text, R"("minor": 29(\s*\}))", "\"minor\": 24$1");
+        stripExportQueueV1_29(text);
         auto operation = memory();
         auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
         expect(static_cast<bool>(parsed), "1.24 video fixture parses");
         if (!parsed)
             continue;
-        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 28},
+        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 29},
                                                  kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 4,
+        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 5,
                "1.24 to the current schema runs the video-metadata, channel-set, folder and "
                "video-colour-default steps");
         if (migrated.outcome() != MigrationOutcome::Migrated)
@@ -160,17 +169,18 @@ void videoColourDefaultMigration() {
             throw std::logic_error("video colour default commit");
         auto text = encode(document);
         const auto current = encode(document);
-        text = replaceRegex(text, R"("minor": 28(\s*\}))", "\"minor\": 27$1");
+        text = replaceRegex(text, R"("minor": 29(\s*\}))", "\"minor\": 27$1");
+        stripExportQueueV1_29(text);
         auto operation = memory();
         auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
         expect(static_cast<bool>(parsed), "1.27 video colour fixture parses");
         if (!parsed)
             continue;
         const auto older = decodeDocumentEnvelope(parsed.document()->root());
-        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 27}, {1, 28},
+        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 27}, {1, 29},
                                                  kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 1,
-               "1.27 to 1.28 runs one version-only step");
+        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 2,
+               "1.27 to 1.29 runs the version-only step and the export-queue step");
         if (migrated.outcome() != MigrationOutcome::Migrated)
             continue;
         const auto upgraded = decodeDocumentEnvelope(*migrated.migratedRoot());
@@ -178,12 +188,12 @@ void videoColourDefaultMigration() {
                    upgraded.value()->assets.front().interpretation.inputColorSpaceId == explicitId,
                "the migrated video asset keeps its Auto or explicit input colour exactly");
         auto reparsed = parseStrictJsonDom(std::as_bytes(std::span(current)), {}, operation);
-        expect(static_cast<bool>(reparsed), "the 1.28 video colour document parses");
+        expect(static_cast<bool>(reparsed), "the 1.29 video colour document parses");
         if (!reparsed)
             continue;
         const auto saved = decodeDocumentEnvelope(reparsed.document()->root());
         expect(saved && upgraded && *saved.value() == *upgraded.value(),
-               "a migrated 1.27 document equals the same project saved at 1.28");
+               "a migrated 1.27 document equals the same project saved at 1.29");
     }
 }
 

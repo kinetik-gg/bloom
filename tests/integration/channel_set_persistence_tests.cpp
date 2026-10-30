@@ -16,6 +16,7 @@
 #include <bloom/project/open_archive.hpp>
 #include <bloom/project/save_archive.hpp>
 #include <bloom/project/strict_json_dom.hpp>
+#include <regex>
 
 #include <algorithm>
 #include <array>
@@ -25,6 +26,14 @@
 #include <string>
 
 namespace {
+
+// Document 1.29 (ADR 0033) members a downgraded fixture must not carry.
+[[maybe_unused]] void stripExportQueueV1_29(std::string& text) {
+    text = std::regex_replace(
+        text, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
+    text = std::regex_replace(
+        text, std::regex(R"(,\s*"exportJob"\s*:\s*"0",\s*"exportOutput"\s*:\s*"0")"), "");
+}
 using namespace bloom;
 int failures = 0;
 void expect(const bool condition, const char* message) {
@@ -137,11 +146,11 @@ void roundTrip() {
     const auto snapshot = fixture.document.snapshot();
     expect(snapshot.project().validate().ok(), "the channel project validates");
     const auto text = encode(fixture.document);
-    expect(text.find("\"minor\": 28") != std::string::npos, "the document is written at 1.28");
+    expect(text.find("\"minor\": 29") != std::string::npos, "the document is written at 1.29");
     expect(text.find("\"bloom.channel-shuffle\"") != std::string::npos &&
                text.find("\"bloom.image.part\"") != std::string::npos,
            "the channel nodes and the image part parameter are written");
-    expect(static_cast<bool>(decodeText(text)), "the 1.28 document decodes");
+    expect(static_cast<bool>(decodeText(text)), "the 1.29 document decodes");
 
     const auto settings = document::makeBloomNeutralColorSettingsV1({});
     auto archive = project::buildVerifiedSaveArchive(
@@ -167,11 +176,11 @@ void roundTrip() {
                    return std::ranges::find(match->parameters, binding) != match->parameters.end();
                });
     });
-    const auto sameEdges = before.graph().edges().size() == after.graph().edges().size() &&
-                           std::ranges::all_of(before.graph().edges(), [&](const auto& edge) {
-                               return std::ranges::find(after.graph().edges(), edge) !=
-                                      after.graph().edges().end();
-                           });
+    const auto sameEdges =
+        before.graph().edges().size() == after.graph().edges().size() &&
+        std::ranges::all_of(before.graph().edges(), [&](const auto& edge) {
+            return std::ranges::find(after.graph().edges(), edge) != after.graph().edges().end();
+        });
     const auto sameParameters =
         std::ranges::all_of(before.parameters().records(), [&](const auto& record) {
             const auto* match = after.parameters().find(record.id);
@@ -187,7 +196,8 @@ void imageSourceV1Migrates() {
     Fixture fixture;
     auto text = encode(fixture.document);
     // A 1.24 Image source is v1. The migrated node keeps every binding and edge.
-    replaceOnce(text, "\"minor\": 28", "\"minor\": 24");
+    replaceOnce(text, "\"minor\": 29", "\"minor\": 24");
+    stripExportQueueV1_29(text);
     replaceOnce(text, "\"typeId\": \"bloom.image-source\",\n              \"schemaVersion\": 2",
                 "\"typeId\": \"bloom.image-source\",\n              \"schemaVersion\": 1");
     auto operation = memory();
@@ -196,18 +206,18 @@ void imageSourceV1Migrates() {
     if (!parsed)
         return;
     const auto migrated =
-        project::migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 28},
+        project::migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 29},
                                     project::kProductionDocumentMigrationSteps, {}, operation);
     expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-               migrated.stepsApplied() == 4,
-           "the video-metadata, channel-set, composition-folder and video-colour-default steps "
-           "run once each");
+               migrated.stepsApplied() == 5,
+           "the video-metadata, channel-set, composition-folder, video-colour-default and "
+           "export-queue steps run once each");
     if (migrated.outcome() != project::MigrationOutcome::Migrated)
         return;
     const auto decoded = project::decodeDocumentEnvelope(*migrated.migratedRoot());
     expect(static_cast<bool>(decoded), "the migrated document decodes with Image source v2");
     expect(static_cast<bool>(decodeText(text)) == false,
-           "a 1.28 decoder refuses an unmigrated v1 Image source");
+           "a 1.29 decoder refuses an unmigrated v1 Image source");
 }
 
 } // namespace

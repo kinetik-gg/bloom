@@ -27,6 +27,14 @@
 #include <vector>
 
 namespace {
+
+// Document 1.29 (ADR 0033) members a downgraded fixture must not carry.
+[[maybe_unused]] void stripExportQueueV1_29(std::string& text) {
+    text = std::regex_replace(
+        text, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
+    text = std::regex_replace(
+        text, std::regex(R"(,\s*"exportJob"\s*:\s*"0",\s*"exportOutput"\s*:\s*"0")"), "");
+}
 void removeImageFields(std::string& text) {
     text = std::regex_replace(text, std::regex(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])"), "");
     text = std::regex_replace(text, std::regex(R"(,\s*"assets"\s*:\s*\[\])"), "");
@@ -175,10 +183,11 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
         throw std::logic_error("legacy entries");
     const auto bytes = entries.document()->documentBytes();
     documentText.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto minor = documentText.find("\"minor\": 28");
+    const auto minor = documentText.find("\"minor\": 29");
     if (minor == std::string::npos)
         throw std::logic_error("legacy minor anchor");
-    documentText.replace(minor, std::string_view("\"minor\": 28").size(), "\"minor\": 1");
+    documentText.replace(minor, std::string_view("\"minor\": 29").size(), "\"minor\": 1");
+    stripExportQueueV1_29(documentText);
     removeImageFields(documentText);
     eraseMemberLine(documentText, "nodeGroups");
     eraseMemberLine(documentText, "nodeGroup");
