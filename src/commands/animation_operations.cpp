@@ -1,3 +1,5 @@
+#include "animation_curve_edits.hpp"
+
 #include <bloom/commands/animation_operations.hpp>
 
 #include <bloom/document/project.hpp>
@@ -51,9 +53,7 @@ OperationResult exhaustedIds() {
 
 [[nodiscard]] bool
 validInterpolation(const document::KeyframeInterpolation interpolation) noexcept {
-    return interpolation == document::KeyframeInterpolation::Hold ||
-           interpolation == document::KeyframeInterpolation::Linear ||
-           interpolation == document::KeyframeInterpolation::EaseInOut;
+    return document::isValidKeyframeInterpolation(interpolation);
 }
 
 template <typename Value> [[nodiscard]] bool finiteValue(const Value& value) noexcept {
@@ -1288,8 +1288,7 @@ OperationResult ConvertAnimationToConstant::apply(document::Draft& draft) const 
     return OperationResult::applied();
 }
 
-namespace {
-using CurveEdits = std::map<document::AnimationCurveId, document::AnimationCurveRecord>;
+namespace detail {
 OperationResult stageKeys(const document::Composition& composition,
                           const std::vector<KeyframeAddress>& keys, CurveEdits& edits) {
     std::set<std::tuple<document::AnimationCurveId, document::KeyframeId,
@@ -1364,7 +1363,10 @@ OperationResult publishCurves(document::Composition& composition, CurveEdits edi
     composition.animationCurves() = std::move(staged);
     return OperationResult::applied();
 }
-} // namespace
+} // namespace detail
+using detail::CurveEdits;
+using detail::publishCurves;
+using detail::stageKeys;
 
 std::string_view MoveKeyframes::typeId() const noexcept { return "bloom.animation.move-keyframes"; }
 OperationResult MoveKeyframes::apply(document::Draft& draft) const {
@@ -1774,7 +1776,8 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
     for (const auto& paste : keys_) {
         if (!validInterpolation(paste.interpolation) ||
             !document::isValidKeyframeHandle(paste.outgoingHandle) ||
-            !document::isValidKeyframeHandle(paste.incomingHandle))
+            !document::isValidKeyframeHandle(paste.incomingHandle) ||
+            !document::isValidKeyframeEasing(paste.easing))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Invalid pasted key time, interpolation or handle");
         const auto* parameter = composition->parameters().find(paste.parameterId);
@@ -1825,7 +1828,7 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                     if (!id)
                         return exhaustedIds();
                     curve.keyframes.push_back({*id, paste.time, *value, paste.interpolation,
-                                               paste.outgoingHandle, paste.incomingHandle});
+                                               paste.outgoingHandle, paste.incomingHandle, paste.easing});
                     return OperationResult::applied();
                 } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     const auto* value = std::get_if<double>(&paste.value);
@@ -1841,7 +1844,7 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                     if (!id)
                         return exhaustedIds();
                     curve.keyframes.push_back({*id, paste.time, *value, paste.interpolation,
-                                               paste.outgoingHandle, paste.incomingHandle});
+                                               paste.outgoingHandle, paste.incomingHandle, paste.easing});
                     return OperationResult::applied();
                 } else if (paste.component.has_value()) {
                     auto* component = curve.component(*paste.component);
@@ -1861,7 +1864,7 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                     if (!id)
                         return exhaustedIds();
                     component->keyframes.push_back({*id, paste.time, *value, paste.interpolation,
-                                                    paste.outgoingHandle, paste.incomingHandle});
+                                                    paste.outgoingHandle, paste.incomingHandle, paste.easing});
                     return OperationResult::applied();
                 } else if constexpr (std::is_same_v<Curve, document::Vec2AnimationCurve>) {
                     const auto* value = std::get_if<document::Vec2d>(&paste.value);
