@@ -431,6 +431,432 @@
    "kind": "footage",
    "tier": "720p",
    "format": "vp9"
+  },
+  "1080p/exr_float_zip": {
+   "type": "sequence",
+   "path": "1080p/exr_float_zip/bench_1080p_exr_float_zip.####.exr",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "exr": {
+    "channels": [
+     [
+      "A",
+      "FLOAT"
+     ],
+     [
+      "B",
+      "FLOAT"
+     ],
+     [
+      "G",
+      "FLOAT"
+     ],
+     [
+      "R",
+      "FLOAT"
+     ]
+    ],
+    "compression": "ZIP"
+   },
+   "height": 1080,
+   "width": 1920,
+   "files": 240,
+   "bytes": 4433153568,
+   "sha256": "6949706967738c349fec27919a7048ee1173cb254ec9f0e843c275f21e4e9c07",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "exr_float_zip"
+  },
+  "1080p/exr_half_piz": {
+   "type": "sequence",
+   "path": "1080p/exr_half_piz/bench_1080p_exr_half_piz.####.exr",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "exr": {
+    "channels": [
+     [
+      "A",
+      "HALF"
+     ],
+     [
+      "B",
+      "HALF"
+     ],
+     [
+      "G",
+      "HALF"
+     ],
+     [
+      "R",
+      "HALF"
+     ]
+    ],
+    "compression": "PIZ"
+   },
+   "height": 1080,
+   "width": 1920,
+   "files": 240,
+   "bytes": 1270398644,
+   "sha256": "143286becfd879742b200f50a61e197760fb993d651f3ae232d7ed45ac53d65a",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "exr_half_piz"
+  },
+  "1080p/exr_multilayer": {
+   "type": "sequence",
+   "path": "1080p/exr_multilayer/bench_1080p_multilayer.####.exr",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "exr": {
+    "channels": [
+     [
+      "Composite.Combined.A",
+      "HALF"
+     ],
+     [
+      "Composite.Combined.B",
+      "HALF"
+     ],
+     [
+      "Composite.Combined.G",
+      "HALF"
+     ],
+     [
+      "Composite.Combined.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.A",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.B",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.G",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.CryptoObject00.a",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject00.b",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject00.g",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject00.r",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.a",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.b",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.g",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.r",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Depth.Z",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Noisy Image.A",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Noisy Image.B",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Noisy Image.G",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Noisy Image.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Normal.X",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Normal.Y",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Normal.Z",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.bench_color.A",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_color.B",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_color.G",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_color.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_id.X",
+      "FLOAT"
+     ]
+    ],
+    "compression": "ZIP"
+   },
+   "height": 1080,
+   "width": 1920,
+   "files": 240,
+   "bytes": 7389085098,
+   "sha256": "b94105be48e542678b5d31e09b560c82ac3571d58152a34cbdd9ee9302fbba41",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "exr_multilayer"
+  },
+  "1080p/png16": {
+   "type": "sequence",
+   "path": "1080p/png16/bench_1080p_png16.####.png",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "height": 1080,
+   "png": {
+    "bitDepth": 16,
+    "channels": 4
+   },
+   "width": 1920,
+   "files": 240,
+   "bytes": 2428675739,
+   "sha256": "c2683b85570aca9880696ab1752a451e1182e180e1fee59fe8ca55a9f40def1b",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "png16"
+  },
+  "1080p/png8": {
+   "type": "sequence",
+   "path": "1080p/png8/bench_1080p_png8.####.png",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "height": 1080,
+   "png": {
+    "bitDepth": 8,
+    "channels": 4
+   },
+   "width": 1920,
+   "files": 240,
+   "bytes": 820950818,
+   "sha256": "225e4b67afd2bf85ff75e35f5e59f0f9d49c1833f6ef646fbb6d0b6a9cbc5551",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "png8"
+  },
+  "1080p/av1": {
+   "type": "video",
+   "path": "1080p/video/bench_1080p_av1.mp4",
+   "fps": 24,
+   "width": 1920,
+   "height": 1080,
+   "frames": 240,
+   "video": {
+    "codec_name": "av1",
+    "profile": "Main",
+    "pix_fmt": "yuv420p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 12135092,
+   "sha256": "1b1c3095d780741750e648c5000662616d3f93ad79c58492108d29d038db73fb",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "av1"
+  },
+  "1080p/dnxhr_hqx": {
+   "type": "video",
+   "path": "1080p/video/bench_1080p_dnxhr_hqx.mov",
+   "fps": 24,
+   "width": 1920,
+   "height": 1080,
+   "frames": 240,
+   "video": {
+    "codec_name": "dnxhd",
+    "profile": "DNXHR HQX",
+    "pix_fmt": "yuv422p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 220202725,
+   "sha256": "4ff0a652270632bcf2d53999cd49038ed7b62ac3c9d9c577ce63d6f9497c0d6d",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "dnxhr_hqx"
+  },
+  "1080p/h264": {
+   "type": "video",
+   "path": "1080p/video/bench_1080p_h264.mp4",
+   "fps": 24,
+   "width": 1920,
+   "height": 1080,
+   "frames": 240,
+   "video": {
+    "codec_name": "h264",
+    "profile": "High",
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 19447566,
+   "sha256": "e0dd57074ced44e72171c41810304cb32fed58e03fa375987944677a715d5885",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "h264"
+  },
+  "1080p/hevc10": {
+   "type": "video",
+   "path": "1080p/video/bench_1080p_hevc10.mp4",
+   "fps": 24,
+   "width": 1920,
+   "height": 1080,
+   "frames": 240,
+   "video": {
+    "codec_name": "hevc",
+    "profile": "Main 10",
+    "pix_fmt": "yuv420p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 13413814,
+   "sha256": "f17e6364e720b714e09a17010a38c43bedb1ca31b58504618c9ca155b688a987",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "hevc10"
+  },
+  "1080p/prores422hq": {
+   "type": "video",
+   "path": "1080p/video/bench_1080p_prores422hq.mov",
+   "fps": 24,
+   "width": 1920,
+   "height": 1080,
+   "frames": 240,
+   "video": {
+    "codec_name": "prores",
+    "profile": "HQ",
+    "pix_fmt": "yuv422p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 216339469,
+   "sha256": "b33040c79171ffe4253a206dc1243a42af8548b922119ebc5b4c3aab1a3a99df",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "prores422hq"
+  },
+  "1080p/prores4444": {
+   "type": "video",
+   "path": "1080p/video/bench_1080p_prores4444.mov",
+   "fps": 24,
+   "width": 1920,
+   "height": 1080,
+   "frames": 240,
+   "video": {
+    "codec_name": "prores",
+    "profile": "4444",
+    "pix_fmt": "yuva444p12le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 782486203,
+   "sha256": "bde30449df71912eaa6832a4471c48d998b5710086b2316f0a29567699322160",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "prores4444"
+  },
+  "1080p/vp9": {
+   "type": "video",
+   "path": "1080p/video/bench_1080p_vp9.webm",
+   "fps": 24,
+   "width": 1920,
+   "height": 1080,
+   "frames": 240,
+   "video": {
+    "codec_name": "vp9",
+    "profile": "Profile 0",
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 10368474,
+   "sha256": "51aad3b545a2a1494c42f58624aa1b4ffef552cf22ee229f287f9a6659a99aae",
+   "kind": "footage",
+   "tier": "1080p",
+   "format": "vp9"
   }
  },
  "generator": {
@@ -726,7 +1152,7 @@
   "encoder": "ffmpeg version n9.0.2 Copyright (c) 2000-2026 the FFmpeg developers"
  },
  "totals": {
-  "assets": 12,
-  "bytes": 8239009491
+  "assets": 24,
+  "bytes": 25855666701
  }
 }
