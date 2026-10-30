@@ -3,11 +3,11 @@
 // reproduced the plan-9 / evaluator-10 pins, then derived the values below.
 // ADR 0024: plan semantics 8 -> 9 (animation 2, evaluator 10, primitives 7; pixel bits and preimage
 // lengths unchanged). The standalone oracle in docs/architecture/color5-identity-oracle.md first
-// reproduced the previous pins (which sat at plan 8, evaluator 9) and the process-frame golden, then
-// derived the plan-9 / evaluator-10 values below.
-// COLOR-3: independent oracle reproduces plan 7/evaluator 8 before deriving 8/9.
-// MEDIA-3: s5-identity-oracle.py reproduced plan-6 pins before deriving plan 7.
-// Animation 2, evaluator 8, primitives 7, pixel bits and preimage lengths are unchanged.
+// reproduced the previous pins (which sat at plan 8, evaluator 9) and the process-frame golden,
+// then derived the plan-9 / evaluator-10 values below. COLOR-3: independent oracle reproduces plan
+// 7/evaluator 8 before deriving 8/9. MEDIA-3: s5-identity-oracle.py reproduced plan-6 pins before
+// deriving plan 7. Animation 2, evaluator 8, primitives 7, pixel bits and preimage lengths are
+// unchanged.
 #include "output_semantic_identity.hpp"
 
 #include "output_analysis_analyzer_test_support.hpp"
@@ -71,11 +71,11 @@ using namespace std::chrono_literals;
 // oracle was validated by reproducing every previously checked-in golden set byte for byte --
 // including both lanes' own pre-merge sets -- when fed their version numbers.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "91fb3c3f892827136f1264948ae800c0e21b0073b46855ec11e60f3960390342";
+    "f8d94bef5e61d45ed491c5a2a12c5e685005cf483cd1967e55e11e5992315228";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "89db168a70e56ba371602158cf66c189b30644ed09c357e87d6d97c7c58507fd";
+    "c9eabd7d1d52c66deec7b8e011c057da1cd62cf429ce800007e4d9fae596cb8e";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "3987dbcb0e3e1552e8b583dd3b31cc12a014c8795e0e2433aa3881292e8047a5";
+    "877e4cb0fd0f242345bd90f2f425b2c48b910fa27547b052dd4972ea0d8d322e";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 
@@ -547,9 +547,8 @@ void testWindowAndRelationshipBoundaries(test::Expectations& expectations) {
 
     bool oversizedReachedHashing = false;
     const auto oversized = preparer.preparePngRgba8SrgbV1(
-        {.verifiedProduct = verifiedPngForTest(
-             pngBound, extent(2'147'483'648U, 1), {})},
-        {}, [&oversizedReachedHashing](const output::OutputSemanticIdentityProgressV1& progress) {
+        {.verifiedProduct = verifiedPngForTest(pngBound, extent(2'147'483'648U, 1), {})}, {},
+        [&oversizedReachedHashing](const output::OutputSemanticIdentityProgressV1& progress) {
             oversizedReachedHashing =
                 oversizedReachedHashing ||
                 progress.stage ==

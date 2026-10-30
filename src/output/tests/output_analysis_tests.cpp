@@ -82,23 +82,24 @@ template <typename Enum> [[nodiscard]] Enum enumWithBits(const std::uint8_t bits
 
 [[nodiscard]] std::array<output::OutputFacetAssessmentV1View, output::kOutputAnalysisFacetCountV1>
 makeExrReport() noexcept {
-    return {{{Facet::Pixels, State::Exact, Code::None, kSourcePixels, kSourcePixels},
-             {Facet::Precision, State::Exact, Code::None, "component-type=id:binary32",
-              "component-type=id:binary32"},
-             {Facet::Color, State::Exact, Code::None, "color-id=id:lin_rec709_scene",
-              "color-id=id:lin_rec709_scene"},
-             {Facet::AlphaAssociation, State::Exact, Code::None,
-              "association=id:premultiplied;zero-alpha=id:canonical-zero",
-              "association=id:premultiplied;zero-alpha=id:canonical-zero"},
-             {Facet::Channels, State::Exact, Code::None, kChannels, kChannels},
-             {Facet::DataWindow, State::Exact, Code::None, kWindow, kWindow},
-             {Facet::DisplayWindow, State::Exact, Code::None, kWindow, kWindow},
-             {Facet::PixelAspect, State::Exact, Code::None, "denominator=u:1;numerator=u:1",
-              "value=f32:3f800000"},
-             {Facet::Compression, State::Exact, Code::None, "", "method=id:zip"},
-             {Facet::Metadata, State::Exact, Code::None, "profile=id:none", "profile=id:none"},
-             {Facet::ExternalDependencies, State::Exact, Code::None, kNoDependencies,
-              kNoDependencies}}};
+    return {
+        {{Facet::Pixels, State::Exact, Code::None, kSourcePixels, kSourcePixels},
+         {Facet::Precision, State::Exact, Code::None, "component-type=id:binary32",
+          "component-type=id:binary32"},
+         {Facet::Color, State::Exact, Code::None, "color-id=utf8:6c696e5f7265633730395f7363656e65",
+          "color-id=utf8:6c696e5f7265633730395f7363656e65"},
+         {Facet::AlphaAssociation, State::Exact, Code::None,
+          "association=id:premultiplied;zero-alpha=id:canonical-zero",
+          "association=id:premultiplied;zero-alpha=id:canonical-zero"},
+         {Facet::Channels, State::Exact, Code::None, kChannels, kChannels},
+         {Facet::DataWindow, State::Exact, Code::None, kWindow, kWindow},
+         {Facet::DisplayWindow, State::Exact, Code::None, kWindow, kWindow},
+         {Facet::PixelAspect, State::Exact, Code::None, "denominator=u:1;numerator=u:1",
+          "value=f32:3f800000"},
+         {Facet::Compression, State::Exact, Code::None, "", "method=id:zip"},
+         {Facet::Metadata, State::Exact, Code::None, "profile=id:none", "profile=id:none"},
+         {Facet::ExternalDependencies, State::Exact, Code::None, kNoDependencies,
+          kNoDependencies}}};
 }
 
 [[nodiscard]] std::array<output::OutputFacetAssessmentV1View, output::kOutputAnalysisFacetCountV1>
@@ -108,7 +109,8 @@ makePngReport() noexcept {
              {Facet::Precision, State::Approximated, Code::PngFloat32ToUint8,
               "component-type=id:binary32", "component-type=id:uint8"},
              {Facet::Color, State::Approximated, Code::PngLinRec709SceneToSrgb,
-              "color-id=id:lin_rec709_scene", "color-id=id:srgb_rec709_display"},
+              "color-id=utf8:6c696e5f7265633730395f7363656e65",
+              "color-id=utf8:737267625f7265633730395f646973706c6179"},
              {Facet::AlphaAssociation, State::Approximated, Code::PngPremultipliedToStraight,
               "association=id:premultiplied;zero-alpha=id:canonical-zero",
               "association=id:straight;zero-alpha=id:canonical-zero"},
@@ -475,8 +477,8 @@ void testDescriptorValidationAndBounds(Expectations& expectations) {
 
 void testPresetVocabularyAndRelationships(Expectations& expectations) {
     auto exr = makeExrReport();
-    exr[2].sourceDescriptor = "color-id=id:ACEScg";
-    exr[2].targetDescriptor = "color-id=id:ACEScg";
+    exr[2].sourceDescriptor = "color-id=utf8:414345536367";
+    exr[2].targetDescriptor = "color-id=utf8:414345536367";
     const auto acesValidation = validate(Preset::FlatExrRgba32fLinRec709SceneV1, exr);
     expectations.expect(acesValidation.approvable(),
                         "a flat EXR analysis record carries the selected working color space");

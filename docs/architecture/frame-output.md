@@ -477,7 +477,8 @@ Minimal signed decimal is exactly `0` or `-?[1-9][0-9]*`; minimal unsigned decim
 `0/1`. Hexadecimal carries no `0x` prefix.
 
 Each preset version closes the required descriptor keys for each facet: pixels use `height`,
-`packing`, `sample-type`, `width`; precision uses `component-type`; color uses `color-id`; alpha
+`packing`, `sample-type`, `width`; precision uses `component-type`; color uses `color-id`
+(always `utf8:`, because OCIO colour-space names are free text such as `Linear Rec.709 (sRGB)`); alpha
 uses `association`, `zero-alpha`; channels use `count` followed by zero-based `name-N` and `role-N`;
 either window uses `height`, `origin-x`, `origin-y`, `width`; pixel aspect uses `denominator`,
 `numerator` for the source and `value` (`f32`) for an EXR target; compression uses `method`;
@@ -509,7 +510,7 @@ minimal decimal form, not the placeholder letters. Source descriptors in facet o
 ```text
 height=u:H;packing=id:rgba;sample-type=id:binary32;width=u:W
 component-type=id:binary32
-color-id=id:lin_rec709_scene
+color-id=utf8:6c696e5f7265633730395f7363656e65
 association=id:premultiplied;zero-alpha=id:canonical-zero
 count=u:4;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;name-3=utf8:41;role-0=id:red;role-1=id:green;role-2=id:blue;role-3=id:alpha
 height=u:DH;origin-x=i:DX;origin-y=i:DY;width=u:DW
@@ -536,7 +537,7 @@ PNG target descriptors in the same facet order are exactly:
 ```text
 height=u:H;packing=id:rgba;sample-type=id:uint8;width=u:W
 component-type=id:uint8
-color-id=id:srgb_rec709_display
+color-id=utf8:737267625f7265633730395f646973706c6179
 association=id:straight;zero-alpha=id:canonical-zero
 count=u:4;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;name-3=utf8:41;role-0=id:red;role-1=id:green;role-2=id:blue;role-3=id:alpha
 height=u:H;origin-x=i:0;origin-y=i:0;width=u:W
@@ -557,7 +558,7 @@ EXR target descriptors in the same facet order are exactly:
 ```text
 height=u:H;packing=id:rgba;sample-type=id:binary32;width=u:W
 component-type=id:binary32
-color-id=id:lin_rec709_scene
+color-id=utf8:6c696e5f7265633730395f7363656e65
 association=id:premultiplied;zero-alpha=id:canonical-zero
 count=u:4;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;name-3=utf8:41;role-0=id:red;role-1=id:green;role-2=id:blue;role-3=id:alpha
 height=u:DH;origin-x=i:DX;origin-y=i:DY;width=u:DW

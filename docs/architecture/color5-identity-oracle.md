@@ -16,6 +16,11 @@ def text(value):
     return struct.pack(">I", len(data)) + data
 
 
+def color(name):
+    """Colour-space names are OCIO free text: the Color facet carries their UTF-8 bytes as hex."""
+    return "color-id=utf8:" + name.encode("utf-8").hex()
+
+
 revision = "a6fc07c95cea14897b725992a179d35055cccce2ffaf719ca73b4a289c89eacf"
 display_record = (
     b"BloomDisplayProcessorIdentity\0"
@@ -72,7 +77,7 @@ none = "kind=id:none;revision=id:none"
 exr_facets = [
     ("exr.output-color-transform", pixels, pixels),
     ("", "component-type=id:binary32", "component-type=id:binary32"),
-    ("exr.output-color-transform", "color-id=id:ACEScg", "color-id=id:ACES2065-1"),
+    ("exr.output-color-transform", color("ACEScg"), color("ACES2065-1")),
     ("", alpha, alpha), ("", channels, channels),
     ("", window, window), ("", window, window),
     ("", "denominator=u:1;numerator=u:1", "value=f32:3f800000"),
@@ -86,7 +91,7 @@ analysis_bytes = (len(b"BloomOutputAnalysisDigest\0") + 2 + 4 + process_bytes
                   + 4 + 4 + 2 + sum(3 + sum(len(text(v)) for v in facet) for facet in exr_facets)
                   + look_bytes)
 assert process_bytes == 271
-assert analysis_bytes == 1669
+assert analysis_bytes == 1689
 records.update({"aces_process_bytes": process_bytes,
                 "handoff_analysis_bytes": analysis_bytes,
                 "look_suffix_bytes": look_bytes})
@@ -119,6 +124,16 @@ ADR 0026 later advances compiled-plan semantics 9 -> 10 and evaluator semantics 
 which the C++ implementation matched: PNG analysis `91fb3c3f...` (1922 bytes), EXR analysis
 `7975de4c...` (1485), PNG output `89db168a...` (669) and EXR output `3987dbcb...` (567).
 
+The Color facet then changed its colour-space encoding from `color-id=id:<name>` to
+`color-id=utf8:<lower-hex UTF-8 bytes>`: OCIO colour-space names are free text (for example
+`Linear Rec.709 (sRGB)`), and the `id:` grammar refused them, so every export from such a working
+space failed its analysis. The blocks above encode names with `color()`. With `10 2 11 7` the oracle
+derives PNG analysis `f8d94bef...` (1961 bytes), EXR analysis `45c89367...` (1521), PNG output
+`c9eabd7d...` (669) and EXR output `877e4cb0...` (567), and the ACES handoff record grows from 1669
+to 1689 bytes; the C++ implementation matches all of them. Analysis digests and output identities
+live only within one export run (approval and reopen verification), so no saved project, cache or
+published file carries the previous values.
+
 ```python
 """Independent output-identity oracle (no Bloom code imported). Usage: oracle.py PLAN ANIM EVAL PRIM"""
 import hashlib, struct, sys
@@ -128,6 +143,7 @@ u32 = lambda v: struct.pack(">I", v); u64 = lambda v: struct.pack(">Q", v)
 i32 = lambda v: struct.pack(">i", v); i64 = lambda v: struct.pack(">q", v)
 text = lambda s: u32(len(s.encode())) + s.encode()
 blob = lambda b: u32(len(b)) + b
+color = lambda name: "color-id=utf8:" + name.encode().hex()
 
 def process_identity(pixels_f32_bits, versions, project=1, comp=2, rev=6, tnum=0, tden=1, node=4,
                      w=1, h=1):
@@ -159,7 +175,7 @@ OCIO = "kind=id:ocio;revision=id:" + REV.hex()
 PREM = "association=id:premultiplied;zero-alpha=id:canonical-zero"
 STR = "association=id:straight;zero-alpha=id:canonical-zero"
 exr_facets = [(1,1,"",SRC,SRC),(2,1,"","component-type=id:binary32","component-type=id:binary32"),
- (3,1,"","color-id=id:lin_rec709_scene","color-id=id:lin_rec709_scene"),(4,1,"",PREM,PREM),
+ (3,1,"",color("lin_rec709_scene"),color("lin_rec709_scene")),(4,1,"",PREM,PREM),
  (5,1,"",CH,CH),(6,1,"",WIN,WIN),(7,1,"",WIN,WIN),
  (8,1,"","denominator=u:1;numerator=u:1","value=f32:3f800000"),(9,1,"","","method=id:zip"),
  (10,1,"","profile=id:none","profile=id:none"),(11,1,"",NONE,NONE)]
@@ -172,7 +188,7 @@ def analysis_digest(proc, preset, ver, profile, facets, revb=b"", disp=b""):
 
 png_facets = [(1,3,"png.display-transform-clamp-quantize",SRC,PNGP),
  (2,3,"png.float32-to-uint8","component-type=id:binary32","component-type=id:uint8"),
- (3,3,"png.lin-rec709-scene-to-srgb","color-id=id:lin_rec709_scene","color-id=id:srgb_rec709_display"),
+ (3,3,"png.lin-rec709-scene-to-srgb",color("lin_rec709_scene"),color("srgb_rec709_display")),
  (4,3,"png.premultiplied-to-straight",PREM,STR),(5,1,"",CH,CH),(6,1,"",WIN,WIN),(7,1,"",WIN,WIN),
  (8,1,"","denominator=u:1;numerator=u:1","denominator=u:1;numerator=u:1"),
  (9,1,"","","method=id:deflate-level-6-filter-none"),(10,1,"","profile=id:none","profile=id:none"),

@@ -56,7 +56,7 @@ void testAllClosedSchemas(Expectations& expectations) {
         Case{Schema::Absent, ""},
         Case{Schema::Pixels, "height=u:1080;packing=id:rgba;sample-type=id:float32;width=u:1920"},
         Case{Schema::Precision, "component-type=id:float32"},
-        Case{Schema::Color, "color-id=id:lin_rec709_scene"},
+        Case{Schema::Color, "color-id=utf8:6c696e5f7265633730395f7363656e65"},
         Case{Schema::AlphaAssociation, "association=id:premultiplied;zero-alpha=id:preserve-rgb"},
         Case{Schema::Channels,
              "count=u:4;name-0=utf8:52;name-1=utf8:47;name-2=utf8:42;name-3=utf8:41;"

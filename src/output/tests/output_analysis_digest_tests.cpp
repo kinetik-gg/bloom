@@ -3,10 +3,10 @@
 // reproduced the plan-9 / evaluator-10 pins, then derived the values below.
 // ADR 0024: plan semantics 8 -> 9 (animation 2, evaluator 10, primitives 7; pixel bits and preimage
 // lengths unchanged). The standalone oracle in docs/architecture/color5-identity-oracle.md first
-// reproduced the previous pins (which sat at plan 8, evaluator 9) and the process-frame golden, then
-// derived the plan-9 / evaluator-10 values below.
-// MEDIA-3: s5-identity-oracle.py reproduced plan-6 pins before deriving plan 7.
-// Animation 2, evaluator 8, primitives 7, pixel bits and preimage lengths are unchanged.
+// reproduced the previous pins (which sat at plan 8, evaluator 9) and the process-frame golden,
+// then derived the plan-9 / evaluator-10 values below. MEDIA-3: s5-identity-oracle.py reproduced
+// plan-6 pins before deriving plan 7. Animation 2, evaluator 8, primitives 7, pixel bits and
+// preimage lengths are unchanged.
 #include <bloom/output/output_analysis_digest.hpp>
 
 #include <bloom/color/display_processor_identity.hpp>
@@ -125,9 +125,9 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 // links no Bloom code; it was re-validated against every previously checked-in golden set,
 // including both lanes' pre-merge sets, before its combined values were trusted.
 constexpr std::string_view kExpectedExrDigest =
-    "7975de4c16a04676876ed938a88c86bf0559fa4733c685ee237ccd682a8ff152";
+    "45c89367d644974768830f4ddd704086f1da2988e9a77ffbce87554fea535636";
 constexpr std::string_view kExpectedPngDigest =
-    "91fb3c3f892827136f1264948ae800c0e21b0073b46855ec11e60f3960390342";
+    "f8d94bef5e61d45ed491c5a2a12c5e685005cf483cd1967e55e11e5992315228";
 
 class Expectations final {
   public:
@@ -236,23 +236,24 @@ prepareIdentity(const std::shared_ptr<const runtime::ProcessFrame>& frame) {
 
 [[nodiscard]] std::array<output::OutputFacetAssessmentV1View, output::kOutputAnalysisFacetCountV1>
 makeExrReport() noexcept {
-    return {{{Facet::Pixels, State::Exact, Code::None, kSourcePixels, kSourcePixels},
-             {Facet::Precision, State::Exact, Code::None, "component-type=id:binary32",
-              "component-type=id:binary32"},
-             {Facet::Color, State::Exact, Code::None, "color-id=id:lin_rec709_scene",
-              "color-id=id:lin_rec709_scene"},
-             {Facet::AlphaAssociation, State::Exact, Code::None,
-              "association=id:premultiplied;zero-alpha=id:canonical-zero",
-              "association=id:premultiplied;zero-alpha=id:canonical-zero"},
-             {Facet::Channels, State::Exact, Code::None, kChannels, kChannels},
-             {Facet::DataWindow, State::Exact, Code::None, kWindow, kWindow},
-             {Facet::DisplayWindow, State::Exact, Code::None, kWindow, kWindow},
-             {Facet::PixelAspect, State::Exact, Code::None, "denominator=u:1;numerator=u:1",
-              "value=f32:3f800000"},
-             {Facet::Compression, State::Exact, Code::None, "", "method=id:zip"},
-             {Facet::Metadata, State::Exact, Code::None, "profile=id:none", "profile=id:none"},
-             {Facet::ExternalDependencies, State::Exact, Code::None, kNoDependencies,
-              kNoDependencies}}};
+    return {
+        {{Facet::Pixels, State::Exact, Code::None, kSourcePixels, kSourcePixels},
+         {Facet::Precision, State::Exact, Code::None, "component-type=id:binary32",
+          "component-type=id:binary32"},
+         {Facet::Color, State::Exact, Code::None, "color-id=utf8:6c696e5f7265633730395f7363656e65",
+          "color-id=utf8:6c696e5f7265633730395f7363656e65"},
+         {Facet::AlphaAssociation, State::Exact, Code::None,
+          "association=id:premultiplied;zero-alpha=id:canonical-zero",
+          "association=id:premultiplied;zero-alpha=id:canonical-zero"},
+         {Facet::Channels, State::Exact, Code::None, kChannels, kChannels},
+         {Facet::DataWindow, State::Exact, Code::None, kWindow, kWindow},
+         {Facet::DisplayWindow, State::Exact, Code::None, kWindow, kWindow},
+         {Facet::PixelAspect, State::Exact, Code::None, "denominator=u:1;numerator=u:1",
+          "value=f32:3f800000"},
+         {Facet::Compression, State::Exact, Code::None, "", "method=id:zip"},
+         {Facet::Metadata, State::Exact, Code::None, "profile=id:none", "profile=id:none"},
+         {Facet::ExternalDependencies, State::Exact, Code::None, kNoDependencies,
+          kNoDependencies}}};
 }
 
 [[nodiscard]] std::array<output::OutputFacetAssessmentV1View, output::kOutputAnalysisFacetCountV1>
@@ -262,7 +263,8 @@ makePngReport() noexcept {
              {Facet::Precision, State::Approximated, Code::PngFloat32ToUint8,
               "component-type=id:binary32", "component-type=id:uint8"},
              {Facet::Color, State::Approximated, Code::PngLinRec709SceneToSrgb,
-              "color-id=id:lin_rec709_scene", "color-id=id:srgb_rec709_display"},
+              "color-id=utf8:6c696e5f7265633730395f7363656e65",
+              "color-id=utf8:737267625f7265633730395f646973706c6179"},
              {Facet::AlphaAssociation, State::Approximated, Code::PngPremultipliedToStraight,
               "association=id:premultiplied;zero-alpha=id:canonical-zero",
               "association=id:straight;zero-alpha=id:canonical-zero"},
@@ -321,7 +323,7 @@ void testIndependentDigestVectors(Expectations& expectations) {
     auto exr = makeExrReport();
     const auto exrDigest = output::computeOutputAnalysisDigestV1(
         *identity, {Preset::FlatExrRgba32fLinRec709SceneV1, exr});
-    expectations.expect(exrDigest && exrDigest.preimageByteCount() == 1485,
+    expectations.expect(exrDigest && exrDigest.preimageByteCount() == 1521,
                         "the tiny EXR preimage has its independently counted byte length");
     if (exrDigest && !hasDigest(exrDigest.digest(), kExpectedExrDigest)) {
         printDigest("actual-exr", exrDigest.digest());
@@ -341,7 +343,7 @@ void testIndependentDigestVectors(Expectations& expectations) {
     };
     const auto pngDigest = output::computeOutputAnalysisDigestV1(
         *identity, {Preset::PngRgba8SrgbV1, png}, dependencies);
-    expectations.expect(pngDigest && pngDigest.preimageByteCount() == 1922,
+    expectations.expect(pngDigest && pngDigest.preimageByteCount() == 1961,
                         "the tiny PNG preimage has its independently counted byte length");
     if (pngDigest && !hasDigest(pngDigest.digest(), kExpectedPngDigest)) {
         printDigest("actual-png", pngDigest.digest());

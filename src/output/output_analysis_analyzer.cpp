@@ -403,8 +403,7 @@ class OutputAnalysisAnalyzerV1 final {
             const auto sourceDataWindow = windowDescriptor(dataWindow);
             const auto sourceDisplayWindow = windowDescriptor(displayWindow);
             const auto sourcePixelAspect = pixelAspectDescriptor(pixelAspect);
-            std::string sourceColor = "color-id=id:";
-            sourceColor.append(source.workingColorSpaceId);
+            const auto sourceColor = outputColorIdDescriptorV1(source.workingColorSpaceId);
 
             std::array<OutputAnalysisReportV1::OwnedAssessment, kOutputAnalysisFacetCountV1>
                 assessments;
@@ -499,12 +498,12 @@ class OutputAnalysisAnalyzerV1 final {
                                            png    ? std::string("component-type=id:uint8")
                                            : tiff ? std::string("component-type=id:uint16")
                                                   : std::string(kSourcePrecision));
-            valid =
-                valid &&
-                setAssessment(assessments[2], preset, Facet::Color, colorCode, sourceColor,
-                              (png || tiff) ? std::string("color-id=id:srgb_rec709_display")
-                              : input.exr ? "color-id=id:" + input.exr->options().outputColorSpaceId
-                                          : sourceColor);
+            valid = valid &&
+                    setAssessment(assessments[2], preset, Facet::Color, colorCode, sourceColor,
+                                  (png || tiff) ? outputColorIdDescriptorV1("srgb_rec709_display")
+                                  : input.exr   ? outputColorIdDescriptorV1(
+                                                      input.exr->options().outputColorSpaceId)
+                                                : sourceColor);
             valid = valid &&
                     setAssessment(
                         assessments[3], preset, Facet::AlphaAssociation,

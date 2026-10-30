@@ -1,3 +1,4 @@
+#include <bloom/output/output_analysis.hpp>
 #include <bloom/output/output_facet_descriptor.hpp>
 
 #include <algorithm>
@@ -6,6 +7,8 @@
 #include <cstdint>
 #include <limits>
 #include <numeric>
+#include <optional>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -468,7 +471,8 @@ validateValue(const std::string_view encoded, const FieldRule& rule,
 }
 
 [[nodiscard]] constexpr std::array<FieldRule, 1> colorRules() noexcept {
-    return {{{"color-id", ValueTag::Identifier}}};
+    // OCIO colour-space names are free text ("Linear Rec.709 (sRGB)"): UTF-8, lower-hex encoded.
+    return {{{"color-id", ValueTag::Utf8}}};
 }
 
 [[nodiscard]] constexpr std::array<FieldRule, 2> alphaRules() noexcept {
@@ -842,6 +846,59 @@ validateOutputFacetDescriptorV1(const OutputFacetDescriptorSchemaV1 schema,
         return validateFixedSchema(descriptor, externalDependencyRules());
     }
     return failure(OutputFacetDescriptorErrorCode::InternalInvariant, 0);
+}
+
+std::string outputColorIdDescriptorV1(const std::string_view colorSpaceId) {
+    constexpr std::string_view digits = "0123456789abcdef";
+    std::string result = "color-id=utf8:";
+    for (const char value : colorSpaceId) {
+        const auto byte = static_cast<unsigned char>(value);
+        result.push_back(digits[byte >> 4U]);
+        result.push_back(digits[byte & 0x0FU]);
+    }
+    return result;
+}
+
+std::optional<std::string> outputColorIdFromDescriptorV1(const std::string_view descriptor) {
+    constexpr std::string_view utf8 = "color-id=utf8:";
+    if (!descriptor.starts_with(utf8))
+        return std::nullopt;
+    const auto hex = descriptor.substr(utf8.size());
+    if (hex.empty() || hex.size() % 2U != 0U ||
+        !std::ranges::all_of(hex, [](const char c) { return isLowerHex(c); }))
+        return std::nullopt;
+    std::string id;
+    for (std::size_t index = 0; index < hex.size(); index += 2)
+        id.push_back(static_cast<char>((hexValue(hex[index]) << 4U) | hexValue(hex[index + 1])));
+    return id;
+}
+
+std::string_view outputFacetDisplayNameV1(const OutputFacetIdV1 facet) noexcept {
+    switch (facet) {
+    case OutputFacetIdV1::Pixels:
+        return "Pixels";
+    case OutputFacetIdV1::Precision:
+        return "Precision";
+    case OutputFacetIdV1::Color:
+        return "Color";
+    case OutputFacetIdV1::AlphaAssociation:
+        return "Alpha Association";
+    case OutputFacetIdV1::Channels:
+        return "Channels";
+    case OutputFacetIdV1::DataWindow:
+        return "Data Window";
+    case OutputFacetIdV1::DisplayWindow:
+        return "Display Window";
+    case OutputFacetIdV1::PixelAspect:
+        return "Pixel Aspect";
+    case OutputFacetIdV1::Compression:
+        return "Compression";
+    case OutputFacetIdV1::Metadata:
+        return "Metadata";
+    case OutputFacetIdV1::ExternalDependencies:
+        return "External Dependencies";
+    }
+    return "Unknown facet";
 }
 
 } // namespace bloom::output

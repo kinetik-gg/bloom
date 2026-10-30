@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -141,6 +142,14 @@ outputFacetDescriptorSchemasV1(OutputPresetV1 preset, OutputFacetIdV1 facet) noe
 outputFacetStableCodeRuleV1(OutputFacetStableCodeV1 code) noexcept;
 [[nodiscard]] std::optional<std::string_view>
 outputFacetStableCodeTextV1(OutputFacetStableCodeV1 code) noexcept;
+// The Color facet descriptor of a colour space id: "color-id=utf8:<lowercase hex of its UTF-8
+// bytes>". OCIO names are free text (for example "Linear Rec.709 (sRGB)") and are outside the
+// descriptor identifier grammar, so every colour id uses the utf8 value tag.
+[[nodiscard]] std::string outputColorIdDescriptorV1(std::string_view colorSpaceId);
+// The colour space id a Color facet descriptor names, in either form; nullopt when malformed.
+[[nodiscard]] std::optional<std::string> outputColorIdFromDescriptorV1(std::string_view descriptor);
+// The artist-facing name of a facet ("Pixel Aspect", "External Dependencies").
+[[nodiscard]] std::string_view outputFacetDisplayNameV1(OutputFacetIdV1 facet) noexcept;
 
 struct OutputFacetAssessmentV1View final {
     OutputFacetIdV1 facet;

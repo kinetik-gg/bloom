@@ -161,15 +161,16 @@ struct WindowDescriptorParts final {
 };
 
 [[nodiscard]] bool isColorDescriptor(const std::string_view descriptor) noexcept {
-    constexpr std::string_view prefix = "color-id=id:";
-    if (!descriptor.starts_with(prefix)) {
+    try {
+        const auto id = bloom::output::outputColorIdFromDescriptorV1(descriptor);
+        return id && !id->empty() && id->size() <= 256U &&
+               std::ranges::all_of(*id, [](const char value) {
+                   const auto byte = static_cast<unsigned char>(value);
+                   return byte >= 0x20U && byte <= 0x7EU;
+               });
+    } catch (...) {
         return false;
     }
-    const auto id = descriptor.substr(prefix.size());
-    return !id.empty() && id.size() <= 256U && std::ranges::all_of(id, [](const char value) {
-        const auto byte = static_cast<unsigned char>(value);
-        return byte >= 0x20U && byte <= 0x7EU;
-    });
 }
 
 [[nodiscard]] std::optional<WindowDescriptorParts>
@@ -399,10 +400,11 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
                            facet.targetDescriptor != facet.sourceDescriptor
                        ? VocabularyValidation::Valid
                        : VocabularyValidation::RelationshipMismatch;
-        return facet.targetDescriptor == (report.preset == OutputPresetV1::PngRgba8SrgbV1 ||
-                                                  report.preset == OutputPresetV1::TiffRgba16SrgbV1
-                                              ? "color-id=id:srgb_rec709_display"
-                                              : facet.sourceDescriptor)
+        return facet.targetDescriptor ==
+                       (report.preset == OutputPresetV1::PngRgba8SrgbV1 ||
+                                report.preset == OutputPresetV1::TiffRgba16SrgbV1
+                            ? bloom::output::outputColorIdDescriptorV1("srgb_rec709_display")
+                            : facet.sourceDescriptor)
                    ? VocabularyValidation::Valid
                    : VocabularyValidation::VocabularyMismatch;
     case OutputFacetIdV1::AlphaAssociation:

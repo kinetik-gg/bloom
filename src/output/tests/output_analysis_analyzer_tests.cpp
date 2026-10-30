@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -101,8 +102,8 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
                 "height=u:1;packing=id:rgba;sample-type=id:binary32;width=u:1",
                 "height=u:1;packing=id:rgba;sample-type=id:uint8;width=u:1");
     expectFacet(expectations, *png.report(), Facet::Color, State::Approximated,
-                Code::PngLinRec709SceneToSrgb, "color-id=id:lin_rec709_scene",
-                "color-id=id:srgb_rec709_display");
+                Code::PngLinRec709SceneToSrgb, "color-id=utf8:6c696e5f7265633730395f7363656e65",
+                "color-id=utf8:737267625f7265633730395f646973706c6179");
     expectFacet(expectations, *png.report(), Facet::ExternalDependencies, State::ExternalReference,
                 Code::PngOcioExternalReference, "kind=id:none;revision=id:none",
                 "kind=id:ocio;revision=id:"
@@ -113,9 +114,9 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
         *identity, png.report()->view(),
         {.expectedOcioRevision = revision, .displayProcessorIdentity = &displayIdentity});
     expectations.expect(
-        pngDigest && pngDigest.preimageByteCount() == 1922 &&
+        pngDigest && pngDigest.preimageByteCount() == 1961 &&
             hasDigest(pngDigest.digest(),
-                      "91fb3c3f892827136f1264948ae800c0e21b0073b46855ec11e60f3960390342"),
+                      "f8d94bef5e61d45ed491c5a2a12c5e685005cf483cd1967e55e11e5992315228"),
         "the analyzer-produced PNG report preserves the independent digest golden");
 
     auto exrInputValue = exrInput(descriptor());
@@ -141,9 +142,9 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
                 "kind=id:none;revision=id:none", "kind=id:none;revision=id:none");
     const auto exrDigest = computeOutputAnalysisDigestV1(*identity, exr.report()->view());
     expectations.expect(
-        exrDigest && exrDigest.preimageByteCount() == 1485 &&
+        exrDigest && exrDigest.preimageByteCount() == 1521 &&
             hasDigest(exrDigest.digest(),
-                      "7975de4c16a04676876ed938a88c86bf0559fa4733c685ee237ccd682a8ff152"),
+                      "45c89367d644974768830f4ddd704086f1da2988e9a77ffbce87554fea535636"),
         "the analyzer-produced EXR report preserves the independent digest golden");
 
     const auto availableTiff = analyzeTiffRgba16SrgbV1(
@@ -224,6 +225,50 @@ void testOwningLifetimeAndResultCoherence(Expectations& expectations) {
                         "the report exposes its bounded aggregate descriptor byte count by value");
 }
 
+// OCIO colour-space names are free text. The Color facet carries them as `utf8:` bytes, so a
+// working space such as "Linear Rec.709 (sRGB)" yields a valid, digestible report for every
+// preset instead of a malformed descriptor that failed every export before encoding.
+void testFreeTextWorkingSpaces(Expectations& expectations) {
+    for (const std::string_view name :
+         {std::string_view("Linear Rec.709 (sRGB)"), std::string_view("ACES - ACEScg"),
+          std::string_view("Linear P3-D65")}) {
+        const auto identity = prepareIdentity(evaluateTinyFrame({0.25, 0.5, 0.75, 1.0}, name));
+        const auto expected = outputColorIdDescriptorV1(name);
+        expectations.expect(outputColorIdFromDescriptorV1(expected) == std::string(name),
+                            "a free-text colour-space name round-trips through its descriptor");
+
+        auto pngInputValue = pngInput(descriptor());
+        pngInputValue.process = readySource(identity);
+        const auto png = analyzePngRgba8SrgbV1(std::move(pngInputValue));
+        expectations.expect(png && png.report() != nullptr && png.report()->approvable() &&
+                                facet(*png.report(), Facet::Color).sourceDescriptor == expected,
+                            "PNG analysis accepts a free-text working space");
+
+        auto exrInputValue = exrInput(descriptor());
+        exrInputValue.process = readySource(identity);
+        const auto exr = analyzeFlatExrRgba32fLinRec709SceneV1(std::move(exrInputValue));
+        const bool exrValid = exr && exr.report() != nullptr && exr.report()->approvable() &&
+                              facet(*exr.report(), Facet::Color).sourceDescriptor == expected;
+        expectations.expect(exrValid, "EXR analysis accepts a free-text working space");
+        if (exrValid) {
+            const auto digest = computeOutputAnalysisDigestV1(*identity, exr.report()->view());
+            expectations.expect(static_cast<bool>(digest),
+                                "the analysis digest accepts the free-text working space");
+        }
+
+        const auto tiff = analyzeTiffRgba16SrgbV1(
+            {.process = readySource(identity), .adapter = OutputAnalysisAdapterStateV1::Qualified});
+        // This fixture's names are not spaces of the neutral config, so the TIFF display
+        // preparation is unavailable and the report is honestly non-approvable; what matters here
+        // is that its descriptors are well formed and carry the name.
+        expectations.expect(
+            tiff && tiff.report() != nullptr &&
+                static_cast<bool>(validateOutputAnalysisReportV1(tiff.report()->view())) &&
+                facet(*tiff.report(), Facet::Color).sourceDescriptor == expected,
+            "TIFF analysis accepts a free-text working space");
+    }
+}
+
 } // namespace
 
 } // namespace bloom::output::test
@@ -232,6 +277,7 @@ int main() {
     bloom::output::test::Expectations expectations;
     bloom::output::test::testNominalPresetsAndDigestGoldens(expectations);
     bloom::output::test::testMissingSourceIsolation(expectations);
+    bloom::output::test::testFreeTextWorkingSpaces(expectations);
     bloom::output::test::testOwningLifetimeAndResultCoherence(expectations);
     bloom::output::test::runOutputAnalysisAnalyzerEdgeTests(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

@@ -194,7 +194,7 @@ void exrOracle(const output::OutputAnalysisAttemptV1& source,
           "handoff policy evidence");
     const auto record =
         output::computeOutputAnalysisDigestV1(*attempt.processIdentity(), attempt.report()->view());
-    check(record.hasValue() && record.preimageByteCount() == 1669 &&
+    check(record.hasValue() && record.preimageByteCount() == 1689 &&
               attempt.processIdentity()->canonicalBytes().size() == 271,
           "handoff identity record sizes pinned");
     std::cout << "AP0 maximum delta=" << delta

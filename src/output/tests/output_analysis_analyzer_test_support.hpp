@@ -162,15 +162,18 @@ planFor(const std::uint32_t width, const std::uint32_t height, const core::Color
                                                    .output = runtime::OperationIndex::fromRaw(3)});
 }
 
-[[nodiscard]] inline std::shared_ptr<const runtime::ProcessFrame>
-evaluateTinyFrame(const core::Color4d colorValue = {0.25, 0.5, 0.75, 1.0}) {
+[[nodiscard]] inline std::shared_ptr<const runtime::ProcessFrame> evaluateTinyFrame(
+    const core::Color4d colorValue = {0.25, 0.5, 0.75, 1.0},
+    const std::string_view workingColorSpaceId = runtime::kLinearRec709SceneColorSpaceId) {
     const auto plan = planFor(1, 1, colorValue);
+    auto colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
+    colorIntent.workingColorSpaceId = workingColorSpaceId;
     const runtime::EvaluationRequest request{
         .time = core::RationalTime::fromInteger(0),
         .output = plan->output(),
         .resolution = runtime::CompositionFormatResolution{},
         .quality = runtime::EvaluationQuality::Reference,
-        .colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene,
+        .colorIntent = colorIntent,
         .pixelStorageByteLimit = 1U << 20U,
     };
     const runtime::CpuCompositionEvaluator evaluator;
