@@ -62,6 +62,8 @@ struct VaapiEncodeProbeV1 {
     bool hevc = false;
 };
 [[nodiscard]] VaapiEncodeProbeV1 probeVaapiEncodeV1(std::string workerExecutable = {});
+// Whether the supervised media worker executable exists for this build. Worker threads only.
+[[nodiscard]] bool mediaWorkerAvailableV1();
 // Verifies the installed OpenH264 binary (a SHA-256 of the library): worker only.
 [[nodiscard]] H264RuntimeAvailabilityV1 verifyH264RuntimeV1();
 // Verifies and installs a downloaded OpenH264 binary (hash and copy): worker only, cancellable.

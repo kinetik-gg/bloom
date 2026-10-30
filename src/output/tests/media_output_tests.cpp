@@ -61,11 +61,11 @@ int main() {
         check(recordBytes == 759 &&
                   report.display->processor().identity().canonicalBytes().size() == 224,
               "identity record sizes pinned");
-        // Independent Python byte oracle: domain + 04 + frozen 146-byte settings hash + eleven
-        // explicit (facet byte,state byte,NUL-terminated UTF-8 description) tuples: 759 bytes. See
-        // tests/color5_identity_oracle.py.
+        // Independent Python byte oracle: domain + 04 + frozen settings hash (EncodeSettingsV1
+        // version 2) + eleven explicit (facet byte,state byte,NUL-terminated UTF-8 description)
+        // tuples: 759 bytes. See tests/color5_identity_oracle.py.
         check(std::string(hex.data(), hex.size()) ==
-                  "881bec4a9feff91651f94191980833942eb3e0708fa814dcc2af9e20a36599d9",
+                  "9c6f6e49b187b4da4054db5c4f3dee0e38a9a22f8eb1b5c1f9a8f52e2b5e384c",
               "media analysis frozen oracle");
 #endif
         check(report.implementationNote.starts_with(p::kProResExportNote) &&

@@ -57,7 +57,9 @@ void encodeIdentity() {
     settings.audioCodec = "pcm_s16le";
     settings.audioSamples = 96000;
     Oracle oracle;
-    oracle.domain("EncodeSettingsV1");
+    // Version 2 (#369) adds the colour tags (code + 1) and the bit rate.
+    oracle.text("EncodeSettingsV1");
+    oracle.integer(2, 2);
     oracle.text("mov");
     oracle.text("prores_ks");
     oracle.text("hq");
@@ -71,12 +73,15 @@ void encodeIdentity() {
     oracle.integer(48000, 4);
     oracle.integer(2, 4);
     oracle.text("");
+    for (unsigned i = 0; i < 4; ++i)
+        oracle.integer(2, 4);
+    oracle.integer(0, 4);
     oracle.integer(3, 1);
     const std::string tolerance =
         "bloom.video-rgba16-srgb.v1;first-last;absolute-max=22938;mean-ceil=1967;alpha-max=64;"
         "timing=exact;stream-layout=exact;pcm=exact";
     oracle.hash(digestBytes(std::as_bytes(std::span(tolerance.data(), tolerance.size()))));
-    test::check(oracle.hex.size() / 2 == 146, "frozen EncodeSettingsV1 byte size");
+    test::check(oracle.hex.size() / 2 == 166, "frozen EncodeSettingsV1 byte size");
     test::check(oracle.finish() == std::get<Digest>(digest(settings)),
                 "independent encode identity oracle");
     settings.byteLimit = 1000;
@@ -295,7 +300,11 @@ void distinctFields() {
     g.text("FFmpeg preview");
     g.integer(231, 4);
     g.integer(42, 4);
-    test::check(g.hex.size() / 2 == 527, "expanded quality evidence frozen size");
+    // Issue #369: colour tags (code + 1, absent = 0) and the reopened "<container>/<codec>".
+    for (unsigned i = 0; i < 4; ++i)
+        g.integer(0, 4);
+    g.text("");
+    test::check(g.hex.size() / 2 == 547, "expanded quality evidence frozen size");
     test::check(g.finish() == std::get<Digest>(digest(qc)),
                 "distinct quality evidence field order");
 }
@@ -405,6 +414,9 @@ void run() {
     g.text("");
     g.integer(0, 4);
     g.integer(0, 4);
+    for (int i = 0; i < 4; ++i) // #369: absent colour tags (code + 1)
+        g.integer(0, 4);
+    g.text("");
     test::check(g.finish() == std::get<Digest>(digest(qc)), "quality-control independent encoding");
     auto bad = c;
     bad.role = static_cast<Role>(0);

@@ -45,6 +45,11 @@ bool vaapiRenderNodeAvailableV1() {
 #endif
     return false;
 }
+bool mediaWorkerAvailableV1() {
+    std::error_code error;
+    const auto worker = EncodeSessionV1::defaultWorker();
+    return !worker.empty() && std::filesystem::is_regular_file(worker, error) && !error;
+}
 VaapiEncodeProbeV1 probeVaapiEncodeV1(std::string workerExecutable) {
     VaapiEncodeProbeV1 result;
 #if defined(__linux__)
@@ -54,6 +59,8 @@ VaapiEncodeProbeV1 probeVaapiEncodeV1(std::string workerExecutable) {
     options.executable =
         workerExecutable.empty() ? EncodeSessionV1::defaultWorker() : std::move(workerExecutable);
     options.arguments = {"--probe-vaapi"};
+    // Hardware drivers map large GPU address ranges; give the probe the worker ceiling.
+    options.addressSpaceBytes = kWorkerAddressSpaceCeiling;
     auto launched = platform::ProcessSupervisor::launch(options);
     auto* process = std::get_if<std::unique_ptr<platform::ProcessSupervisor>>(&launched);
     if (process == nullptr || !*process)
