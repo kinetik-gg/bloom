@@ -408,6 +408,32 @@ if(BUILD_TESTING)
             endif()
         endif()
 
+        # Desktop-shaped admission: Viewer and RAM-fill frames beside a 2048x858 footage export on
+        # one shared processing root. The plain registration takes the CPU reference host phase; the
+        # device registration requires the real GPU export provider.
+        add_executable(bloom_host_desktop_admission_test tests/desktop_admission_tests.cpp)
+        target_include_directories(bloom_host_desktop_admission_test PRIVATE
+            "${PROJECT_SOURCE_DIR}/src/host" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+        target_link_libraries(bloom_host_desktop_admission_test PRIVATE
+            bloom_host bloom_runtime_evaluator OpenEXR::OpenEXR)
+        bloom_package_gpu_shader_tools(bloom_host_desktop_admission_test)
+        bloom_enable_warnings(bloom_host_desktop_admission_test)
+        bloom_add_test(
+            NAME bloom.host.desktop-admission
+            COMMAND bloom_host_desktop_admission_test
+            LABELS unit host output memory
+            TIMEOUT 300
+        )
+        if(BLOOM_HOST_ROUTE_PROOF_LOADER_ENV)
+            bloom_add_test(
+                NAME bloom.host.desktop-admission-device
+                COMMAND bloom_host_desktop_admission_test --require-device
+                LABELS unit host output gpu memory
+                ENVIRONMENT ${BLOOM_HOST_ROUTE_PROOF_LOADER_ENV}
+                TIMEOUT 300
+            )
+        endif()
+
         bloom_add_test(
             NAME bloom.host.export-route-proof.still
             COMMAND bloom_host_frame_export_publication_test
