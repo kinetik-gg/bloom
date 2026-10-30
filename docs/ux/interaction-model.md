@@ -526,6 +526,15 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | `Ctrl+C` / `Ctrl+V` with parameter lanes focused | Copy selected keys / paste onto the same parameters with the earliest copied time at the playhead |
 | Right-click key | Hold, Linear, Ease In-Out, or Delete for the complete key selection |
 | `Escape` during key drag or box selection | Cancel the gesture without a document edit |
+| Graph Editor: drag key or handle | Preview live -- the curve, the value readouts and the Viewer follow the pointer through the session's preview overrides; one transaction and one Undo on release |
+| Graph Editor: `Shift` during key drag | Lock to time-only or value-only, whichever axis dominates the displacement (snapping follows Snap to Frames) |
+| Graph Editor: `Shift` during handle drag | Snap the handle's on-screen angle to 45 degree steps; in the Speed Graph, lock to influence-only or speed-only |
+| Graph Editor: `Alt` during handle drag / `Alt`-drag key | Break the handle pair / duplicate the keys at the destination |
+| Graph Editor: right-click key | Interpolation (Constant, Linear, Bezier), Easing (two or more keys: Linear, Constant, then Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Bounce and Elastic, each Ease In / Ease Out / Ease In-Out, one `SetKeyframesEasing` per pick), Easy Ease, Easy Ease In, Easy Ease Out, Delete |
+| `F9` / `Shift+F9` / `Ctrl+Shift+F9` with the timeline focused | Easy Ease / Easy Ease In / Easy Ease Out on the selected keys (`ApplyEasyEase`): 33.33% influence, zero speed, one Undo |
+| `Shift+F3` or the graph toggle beside Fullscreen | Switch the right pane between keyframes and the graph |
+| Graph Editor: `F` / double-click the value gutter | Fit the selected keys (all keys when none) on both axes / fit all curves |
+| Graph Editor: wheel / middle-drag | Zoom values about the pointer / pan time and values together |
 | `B` / `N` | Set work-area start / exclusive end at the playhead |
 | Drag work-area grips / double-click strip | Set frame-snapped range / reset to full duration |
 | Drag bar edge / body | Trim one endpoint / move the layer (start time, in and out together, so content and keys move with it); commit once on release, Escape cancels |

@@ -818,18 +818,32 @@ reverted in silence.
 
 The timeline's graph editor REPLACES the key lanes rather than sitting beside them: in graph mode
 the lane region paints only its Surface backdrop and the curve view covers it, because two views of
-the same keys at once only make an artist ask which one they are editing. Its left gutter is
-`Size::GraphValueAxis` wide and carries the ACTIVE curve's value ticks -- the curve of the primary
-keyframe selection, else the one on the selected row, else the first -- and the gutter is painted
-over the curves so a line running off the left edge slides under the axis instead of colliding with
-its labels. A scalar curve strokes in `Color::Keyframe`; a component curve takes
-`Color::ComponentX/Y/Z/W`, which R/G/B/A borrow unchanged so one hue always means "the first
-component"; selection is Accent, which none of the five is. Ease handles are drawn only for a
-SELECTED key on an eased segment, as a hairline to a `Size::GraphHandleDot` dot. The graph toggle
-persists under `timeline/graph-editor`. View exposes checkable Keyframes and Graph Editor choices;
-enabling either turns the other off, and both may be off to show plain layer lanes.
+the same keys at once only make an artist ask which one they are editing. A `Size::HeaderRow` graph
+header (`timelineGraphHeader`) over the canvas carries the segmented Value Graph / Speed Graph
+switch and the Normalize check box, persisted under `timeline/graph-type` and
+`timeline/graph-normalize`. The Value Graph plots the curve; the Speed Graph plots its speed (value
+units per second) read off the sampler, with After Effects' horizontal influence/speed handles.
+Normalize (Blender) draws every curve scaled to -1...1 in one shared window; edits are converted back
+and always write real values, and the scale holds still for the length of a drag. Below the header,
+the left gutter is `Size::GraphValueAxis` wide and carries the ACTIVE curve's value ticks -- the
+curve of the primary keyframe selection, else the one on the selected row, else the first -- and the
+gutter is painted over the curves so a line running off the left edge slides under the axis instead
+of colliding with its labels. While the graph is shown the shared time axis leads with the gutter's
+width (`TimelineRuler::setLeadingInset`), so the ruler, the work area and the graph move together
+and a key at frame 0 always sits clear of the gutter. The background grid is After Effects': `Border`
+hairlines at the gutter's value ticks and at the ruler's own labelled ticks. A component curve strokes
+in `Color::ComponentX/Y/Z/W` (X red, Y green, Z blue; R/G/B/A borrow them unchanged so one hue always
+means "the first component"); single-value curves take `Color::GraphCurve1..5` in curve order,
+cycling. The selected curve -- every curve carrying a selected key, else the selected row's -- is
+drawn brighter (`kit::emphasizedStrokeFor`) and on top. Selection is Accent, which none of the curve
+tokens is. Handles are drawn only for a SELECTED key on an eased segment: an arm in the curve's own
+ink to a `Size::GraphHandleDot` Accent dot. The graph toggle persists under `timeline/graph-editor`.
+View exposes checkable Keyframes and Graph Editor choices; enabling either turns the other off, and
+both may be off to show plain layer lanes. The one header tool button is the graph toggle
+(`timelineGraphToggle`, `IconId::GraphEditor`) at the right end of the layer-table header, beside
+Fullscreen: it and `Shift+F3` switch the right pane between the keyframes and the graph.
 `timeline/keyframes-visible` and `timeline/snapping` persist Keyframes and Snap to Frames.
-These controls appear only in View, with no header tool buttons. Header menu order is Add, View,
+Header menu order is Add, View,
 Select, with text-only menu buttons and no caret indicators; the composition dropdown is absent.
 These are the unchanged shared KMenuButton/EditorChromeRowSpec controls and application theme used
 by Assets, Viewer and Nodes: no Timeline-specific menu painting, stylesheet or background palette.
@@ -839,7 +853,8 @@ There are no View/Select wrapper submenus or selection-only layer commands; acti
 checked state are shared with the header. Opening the popup never changes the layer selection.
 Timeline's fullscreen button sits at the right edge of the layer-table header, beside the divider.
 Keys off hides both key lanes and collapsed summary
-glyphs. Empty key-lane labels paint no chip. Lane snapping is `snapping && !Shift`.
+glyphs. Empty key-lane labels paint no chip. Lane snapping is `snapping && !Shift`; in the graph,
+Shift is the axis lock and snapping follows Snap to Frames alone.
 
 Timeline lanes use `LanePadding` (12) on both sides of their time axis. The layer column/lanes split
 is a draggable `KSplitHandle` (`Size::SplitHandle`, 6, its hit zone; it paints one snapped
