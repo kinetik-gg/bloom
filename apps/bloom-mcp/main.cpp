@@ -158,16 +158,20 @@ int serve(scripting::Session& session) {
             return refuse(mcp::McpUiRefusal::Failed, opened.diagnostic().message.empty()
                                                          ? "The project could not be opened."
                                                          : opened.diagnostic().message);
-        stopQueue(*queue, host::ExportStopCause::ProjectClosing);
-        queue.reset();
-        session.adopt(std::move(opened).takeSession());
-        mediaEvaluator.setAssetBaseDirectory(session.displayPath().empty()
-                                                 ? std::filesystem::path{}
-                                                 : session.displayPath().parent_path());
-        queue = makeQueue();
-        ++queueGeneration;
+        const auto swap = [&] {
+            stopQueue(*queue, host::ExportStopCause::ProjectClosing);
+            queue.reset();
+            session.adopt(std::move(opened).takeSession());
+            mediaEvaluator.setAssetBaseDirectory(session.displayPath().empty()
+                                                     ? std::filesystem::path{}
+                                                     : session.displayPath().parent_path());
+            queue = makeQueue();
+            ++queueGeneration;
+        };
         if (corePointer != nullptr)
-            corePointer->headlessProjectReplaced();
+            corePointer->replaceHeadlessProject(swap);
+        else
+            swap();
         result.path = session.displayPath();
         result.projectName = session.snapshot().project().name();
         result.message = request.kind == Kind::Open  ? "Opened " + result.projectName + "."

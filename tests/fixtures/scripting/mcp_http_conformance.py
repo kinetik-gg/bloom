@@ -253,13 +253,20 @@ class Conformance(unittest.TestCase):
             imported = result(body)
             self.assertTrue(imported['succeeded'], imported)
             asset = [o['id'] for o in imported['outputs'] if o['name'] == 'asset'][0]
+            # A composition of its own, so the broken layer never reaches other tests' renders.
             _, _, body = client.call(33, 'transact', {
                 'expectedRevision': imported['revision'],
+                'operations': [{'op': 'bloom.composition.add', 'args': {'name': 'Broken'}}]})
+            added = result(body)
+            self.assertTrue(added['succeeded'], added)
+            composition = [o['id'] for o in added['outputs'] if o['name'] == 'composition'][0]
+            _, _, body = client.call(35, 'transact', {
+                'expectedRevision': added['revision'],
                 'operations': [{'op': 'bloom.layer.add-image',
-                                'args': {'composition': 1, 'asset': asset}}]})
+                                'args': {'composition': composition, 'asset': asset}}]})
             self.assertTrue(result(body)['succeeded'])
             source.unlink()
-            _, _, body = client.call(34, 'render', {'composition': 1, 'frame': 0,
+            _, _, body = client.call(34, 'render', {'composition': composition, 'frame': 0,
                                                     'preset': 'PngRgba8SrgbV1',
                                                     'destination': directory})
             failed = json.loads(body)['result']

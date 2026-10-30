@@ -231,10 +231,11 @@ class McpServerCore final {
     // calls it from pump() so events after a replacement are kept from the start). Any thread.
     void followLiveSession();
 
-    // The stdio host: the headless session's project was replaced in place (project.open,
-    // project.new, project.close through scripting::Session::adopt). Older events cursors report
-    // resetRequired and command events follow the new project. Call it between requests.
-    void headlessProjectReplaced();
+    // The stdio host: replaces the headless session's project in place (project.open, project.new
+    // and project.close through scripting::Session::adopt inside `replace`). The core lets go of
+    // the old project's event stream before `replace` runs and follows the new one after it; older
+    // events cursors report resetRequired. Call it from the thread that owns the session.
+    void replaceHeadlessProject(const std::function<void()>& replace);
 
     struct State;
 

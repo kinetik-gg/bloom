@@ -208,14 +208,18 @@ McpServerCore::~McpServerCore() = default;
 
 void McpServerCore::followLiveSession() { state_->syncEvents(); }
 
-void McpServerCore::headlessProjectReplaced() {
+void McpServerCore::replaceHeadlessProject(const std::function<void()>& replace) {
     auto& state = *state_;
     auto* headless =
         std::get_if<std::reference_wrapper<scripting::Session>>(&state.dependencies.session);
-    if (headless == nullptr)
+    if (headless == nullptr) {
+        replace();
         return;
+    }
     const std::lock_guard lock(state.subscriptionMutex);
+    // The subscription borrows the old project's event stream, which `replace` destroys.
     state.subscription.reset();
+    replace();
     {
         const std::lock_guard guard(state.eventsMutex);
         state.events.clear();
