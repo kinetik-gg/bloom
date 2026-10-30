@@ -150,6 +150,8 @@ comparison only:
    to that component. Different components may therefore be at different key intervals.
 6. For an interior `EaseInOut` segment, transform that component's factor before mixing, exactly as
    described below. An empty component returns its typed default value.
+7. For an interior easing-equation segment (`Sine` ... `Elastic`), evaluate the equation over the
+   exact interval factor as described under **Easing equations** below.
 
 The interval factor is derived as an exact non-negative rational. Products and differences of valid
 signed 64-bit rational components require at most 256-bit unsigned magnitude. Bloom therefore uses
@@ -174,9 +176,12 @@ Endpoints stay exact: the transform maps `0` to exactly `0` and `1` to exactly `
 exact thirds it is exactly `7/27` and `20/27`, and at the exact midpoint exactly `1/2`. Only the
 segment's LEFT key decides its mode, so a `Hold` key is unaffected by an eased neighbour.
 
-`kAnimationSamplingSemanticsVersion` is `2`. It enters compiled-plan compatibility and cache
+`kAnimationSamplingSemanticsVersion` is `3`. It enters compiled-plan compatibility and cache
 identity alongside scalar, evaluator, and image primitive versions; it moved from `1` when
-`EaseInOut` and the `Color4Curve` table made sampling able to produce values version 1 could not.
+`EaseInOut` and the `Color4Curve` table made sampling able to produce values version 1 could not,
+and from `2` to `3` when the easing equations below made it able to produce values version 2 could
+not. Every version-2 key (Hold, Linear, Bezier) samples bit-for-bit as before; only the version
+number in plan compatibility and frame identity moved.
 
 ### Ease handles
 
@@ -224,6 +229,90 @@ Sampling branches on a BITWISE default test, not an arithmetic one:
 Compiled curves carry both handles on every compiled scalar and component key, and compilation
 copies them verbatim; a handle edit therefore changes the operand a memoized operation was keyed on
 and the frame is re-evaluated.
+
+### Interpolation names
+
+The artist-facing names follow Blender. The enumerator names, numeric ids and file tokens are
+stable and never move:
+
+| Id | `KeyframeInterpolation` | Token | Shown as |
+| --- | --- | --- | --- |
+| 0 | `Hold` | `hold` | Constant |
+| 1 | `Linear` | `linear` | Linear |
+| 2 | `EaseInOut` | `ease-in-out` | Bezier |
+| 3 | `Sine` | `sine` | Sinusoidal |
+| 4 | `Quad` | `quad` | Quadratic |
+| 5 | `Cubic` | `cubic` | Cubic |
+| 6 | `Quart` | `quart` | Quartic |
+| 7 | `Quint` | `quint` | Quintic |
+| 8 | `Expo` | `expo` | Exponential |
+| 9 | `Circ` | `circ` | Circular |
+| 10 | `Back` | `back` | Back |
+| 11 | `Bounce` | `bounce` | Bounce |
+| 12 | `Elastic` | `elastic` | Elastic |
+
+`KeyframeEasing` is `Auto` (0, `auto`), `In` (1, `in`), `Out` (2, `out`), `InOut` (3, `in-out`).
+Python and MCP accept `constant` and `bezier` as aliases for `hold` and `ease-in-out`; MCP
+`query kind=enums` returns these tables with their labels.
+
+### Easing equations
+
+Ids 3-12 are Blender's easing equations: Robert Penner's equations in the exact forms Blender's
+`BLI_easing` implements and its F-Curve evaluation calls, including Blender's Expo (shifted and
+rescaled by `2^-10` so it starts and ends exactly on its keys) and Blender's Elastic (an amplitude
+below the segment's change scales the swing and fades in over the first quarter period instead of
+jumping). Each equation reads the segment's LEFT key's `KeyframeEasingParameters`, which every
+scalar, component and Path key carries (like Blender's BezTriple, they persist across mode changes):
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `easing` | `Auto` | Which end eases: `In`, `Out`, `InOut`, or Blender's `Auto` -- `Out` for Back, Bounce and Elastic, `In` for every other equation |
+| `back` | `1.70158` | Back's overshoot. Any finite value |
+| `amplitude` | `0.8` | Elastic's amplitude in the curve's own value units (a Path key's progress runs 0 -> 1). Finite, zero or more |
+| `period` | `4.1 / 24` s | Elastic's period in SECONDS. Any finite value; exactly `0` is Blender's automatic period, `0.3` of the segment (`0.45` for In-Out) |
+
+The period is in seconds, not frames, because Bloom key times are exact rational seconds and a
+composition's frame rate can change under its keys; the default is Blender's 4.1 frames at Blender's
+default 24 fps. A UI may present it in the composition's frames. Validity is one predicate,
+`isValidKeyframeEasing`, asked by the store, document validation, the decoder and
+`validateForSampling` alike, so an invalid parameter is refused at every request time.
+
+With `u` the exact interval factor, `b` and `c` the left value and the change, and `d` the segment's
+duration in seconds (`right.time.toSeconds() - left.time.toSeconds()`), Blender's
+`f(time = u * d, begin = b, change = c, duration = d)` reduces exactly to the forms in
+`runtime/keyframe_easing.cpp`; only Elastic reads `d`, where Blender multiplies `time * duration`.
+The arithmetic is IEEE double in a fixed operation order under the strict floating-point flags.
+`sin`, `cos`, `2^x` and `asin` are not taken from the platform `libm`, whose last bits differ between
+Linux, macOS and Windows: they are Bloom kernels written from `+ - * /`, `floor`, `ldexp` and `sqrt`
+(all exactly rounded by IEEE 754) -- exact quarter-turn reduction and Taylor polynomials -- so a
+sample is a pure function of its operands on every platform. They agree with `libm` to about 1e-15.
+
+Every route that renders -- interactive viewer preview, RAM preview, still, range and video export,
+headless and scripted render -- resolves animated parameters on the host through this one sampler
+before any CPU or GPU image work, so the CPU reference and GPU routes see the same bits; no GPU
+kernel samples curves. `bloom.runtime.keyframe_easing` pins each equation and mode at the segment
+fractions 1/8 ... 7/8, 1/3 and 2/3 against an independent transcription of Blender's formulas
+(Elastic additionally across amplitudes below and above the change, an automatic period, a
+zero-change segment and a two-second segment).
+
+### Easy Ease
+
+After Effects' Easy Ease (F9) gives the selected keys 33.33% influence and zero speed on both sides;
+Easy Ease In (Shift+F9) only on the incoming side and Easy Ease Out (Ctrl+Shift+F9) only on the
+outgoing side. Bloom maps it onto its handle model exactly:
+
+- The eased side's segment becomes Bezier (`EaseInOut`), and the eased key's handle on that side is
+  `{time: 1/3, value: 0}` -- 1/3 of the segment is AE's 33.33% influence, and a zero value offset is
+  zero speed. This is bitwise the default handle, so a segment eased on both ends samples through
+  the exact Smoothstep path.
+- The far side of a segment that was not already Bezier gets the linear-speed handle: the left key's
+  outgoing `{1/3, +c/3}` or the right key's incoming `{1/3, -c/3}`, with `c` the segment's change (a
+  Path segment's progress change is 1). Control points on the chord leave that end at the speed it
+  had. A far side that was already Bezier keeps its handle.
+- A first key has no incoming side and a last key no outgoing side; they are skipped, not refused.
+
+`ApplyEasyEase` (`bloom.animation.easy-ease`, `side` `both`/`in`/`out`) is one undoable step over the
+whole selection; re-applying it to an already eased side is no change.
 
 ## Compiled Plan And Evaluation
 
@@ -291,7 +380,8 @@ The command surface is typed by curve value kind:
 
 ### Multi-key commands
 
-`MoveKeyframes`, `DeleteKeyframes`, `SetKeyframesInterpolation` and `PasteKeyframes` are Qt-free
+`MoveKeyframes`, `DeleteKeyframes`, `SetKeyframesInterpolation`, `SetKeyframesEasing`,
+`ApplyEasyEase` and `PasteKeyframes` are Qt-free
 operations in `animation_operations`. Each UI batch is one transaction against the revision frozen
 at gesture start (or the current revision for a menu/clipboard action), with one undo entry.
 
@@ -299,7 +389,9 @@ at gesture start (or the current revision for a menu/clipboard action), with one
 | --- | --- |
 | `MoveKeyframes` | Accepts stable curve/key addresses with destination times. Stages and sorts complete curves, permitting selected keys to exchange their original times. Duplicate addresses, occupied final times and non-representable times reject the whole transaction. Under [layer-owned time](#layer-time) a key's clock is its layer or content clock, so admission no longer requires `[0, duration)`; the Timeline clamps moves to the composition interval projected onto the key's clock. IDs and values are preserved; final outgoing interpolation is normalized to Linear |
 | `DeleteKeyframes` | Removes the complete addressed selection across value kinds. If a curve becomes empty, restores a constant holding its earliest pre-delete key's value and erases the curve atomically |
-| `SetKeyframesInterpolation` | Applies Hold, Linear or Ease In-Out to the complete selection. Final keys remain canonical Linear; no effective change creates no history entry |
+| `SetKeyframesInterpolation` | Applies any interpolation -- Constant, Linear, Bezier or an easing equation -- to the complete selection. Final keys remain canonical Linear; no effective change creates no history entry |
+| `SetKeyframesEasing` | Writes the ease mode, Back overshoot and Elastic amplitude/period on the selection, optionally switching the interpolation in the same step. An absent field keeps its value; a non-finite value or negative amplitude rejects the whole batch. A component-less vector or colour address edits every component's key at that time |
+| `ApplyEasyEase` | After Effects' Easy Ease, In or Out on the selection; see **Easy Ease** |
 | `PasteKeyframes` | Accepts original parameter IDs, exact destination times, typed values and interpolation. Allocates new IDs, creates compatible animation for constant parameters, and rejects missing/driven targets, invalid values and occupied times without publishing a partial result |
 
 All four value kinds (Scalar, Vec2, Vec3 and Color4) use the same batch paths. A staged collision does
