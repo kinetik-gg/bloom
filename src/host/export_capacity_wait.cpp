@@ -44,8 +44,18 @@ outputAnalysisCapacityRefusalV1(const OutputAnalysisAttemptOutcomeV1& outcome,
     if (!failure || failure->cancelled())
         return OutputAnalysisCapacityRefusalV1::None;
     if (const auto* code = failure->payloadAs<runtime::GpuProcessFrameDiagnosticCode>()) {
-        if (*code == runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity)
+        if (*code == runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity) {
+            // Measured capacity with nothing admitted but the export's own reservations: no
+            // release in this process can make room, so waiting would only wait on itself until
+            // the stall rule. Unmeasured capacity (a sample still pending) keeps waiting.
+            if (policy != nullptr && !otherProcessingPhasesAdmittedV1(policy, ownPhases)) {
+                const auto reservations = policy->snapshot().reservations;
+                if (reservations.hostReady && reservations.hostCapacityBytes &&
+                    (!reservations.deviceCapacityBytes || reservations.deviceReady))
+                    return OutputAnalysisCapacityRefusalV1::NeverFits;
+            }
             return OutputAnalysisCapacityRefusalV1::Wait;
+        }
         if (*code == runtime::GpuProcessFrameDiagnosticCode::BudgetRefused)
             return otherProcessingPhasesAdmittedV1(policy, ownPhases)
                        ? OutputAnalysisCapacityRefusalV1::Wait
