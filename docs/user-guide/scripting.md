@@ -9,6 +9,7 @@ bloom-cli open <file>
 bloom-cli run <script.json>
 bloom-cli render [--project <file>] (--frame N | --range A-B) \
   --preset PngRgba8SrgbV1|FlatExrRgba32fLinRec709SceneV1 --out <dir>
+bloom-cli export --project <file> (--all | --job <id>...) [--replace] [--save]
 ```
 
 `run` accepts a JSON array of `{ "op": "<stable-id>", "args": { ... } }` transactions. Each
@@ -44,3 +45,45 @@ Example scripts live in [`examples/scripting`](../../examples/scripting/).
 
 Python scripts and the interactive interpreter are described in [Scripting Bloom with Python](python.md).
 For stdio clients, see [Using Bloom from an agent (MCP)](mcp.md).
+
+## Export queue
+
+The export queue ([ADR 0033](../decisions/0033-export-queue.md)) is scriptable in two halves.
+
+**Project-truth operations** run in transactions like any other edit, with the Export panel's
+validation and undo: `bloom.export.add-job` (returns `exportJob` and one `exportOutput` per output),
+`bloom.export.remove-jobs`, `bloom.export.remove-finished-jobs`, `bloom.export.duplicate-job`,
+`bloom.export.move-jobs`, `bloom.export.set-job-name`, `set-job-range`, `set-job-enabled`,
+`set-job-label-color`, `bloom.export.add-output`, `bloom.export.remove-output`,
+`bloom.export.set-output-settings`, `set-output-destination`, `set-output-enabled`,
+`set-output-import` and `bloom.export.apply-preset`. An output travels as the document 1.29 JSON
+object: `{"preset", "settings": {"format", "codecProfile", ...}, "destination": {"portability",
+"path", "overwrite"}, "enabled", "importIntoAssets"}`. Without `outputs`, `add-job` adds one H.264
+MP4 output at `Exports/{name}.mp4`.
+
+**Session calls** act on runtime state only (never undoable, never saved): `export.start`,
+`export.start-all`, `export.pause`, `export.resume`, `export.stop`, `export.stop-all`,
+`export.retry`, `export.confirm-replace` (`job`, `output`), `export.status` (optionally
+`sinceRevision`), `export.events` (`afterSequence`), `export.log` (`job`, `afterSequence`),
+`export.wait` (a `job` or the whole queue, `timeoutMs`; headless only), `export.presets` and
+`export.script` (`job`, `format` `"json"` or `"python"`). In a `run` script, `export.start` without
+`job` starts the job the script last added:
+
+```json
+[{"op": "bloom.export.add-job", "args": {"range": "custom", "first": 0, "last": 47}},
+ {"op": "export.start", "args": {}},
+ {"op": "export.wait", "args": {"timeoutMs": 600000}}]
+```
+
+Nothing replaces a file silently: an unattended script sets the output's overwrite policy to
+`replace` or calls `export.confirm-replace`. `bloom-cli export` renders a saved project's queue
+headlessly, prints the verification and import results as JSON and exits non-zero unless every
+selected job succeeds; `--replace` confirms existing destinations and `--save` writes asset imports
+back to the project. Export runs on Linux in this version; elsewhere the session calls answer
+`bloom.export.platform-not-supported`.
+
+`bloom-cli render`, the Python render call and MCP render keep their request shapes but run as
+transient, unsaved export jobs on the same runner as the queue, so every rendered frame passes the
+same preservation policy, publication and verification; their range files are named
+`<base>.NNNN.<ext>` as before. An output's `useCachedFrames` setting (default `true`) lets an export
+reuse frames the composite cache already rendered; set it to `false` to evaluate every frame again.

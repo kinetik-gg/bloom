@@ -1818,3 +1818,31 @@ compare the supplied display-referred samples and do not select the colour trans
 its tagged Rec.709 YUV to display RGB. Maximum/mean errors are 252/133 in 16-bit units, within
 22938/1967. The same fixture's look-bypassed AP0 handoff has zero error against direct OCIO output.
 Worker and external-LUT unavailability on macOS/Windows remain explicit supported fallbacks.
+
+## Export Queue Media (#369)
+
+Issue #369 ships with the export queue ([ADR 0033](../decisions/0033-export-queue.md), section 16):
+
+- **MP4.** The encode worker writes H.264 and HEVC into MP4 (`H264Mp4V1`, `HevcMp4V1`) as well as
+  MOV. MP4 movies carry AAC audio; MOV and MXF carry PCM.
+- **HEVC** is VA-API only (`hevc_vaapi`, Main and Main 10). There is no software HEVC encoder:
+  without a VA-API render node that opens HEVC encode, HEVC presets report
+  `HardwareEncoderMissing`.
+- **VA-API render-node discovery** is part of the encoder probe. The worker's `--probe-vaapi` mode
+  opens the H.264 and HEVC encode entry points on every render node and prints the answer;
+  `output::probeVaapiEncodeV1()` reads it, so no driver code loads into the application. Encoding
+  uses the probed node.
+- **Colour tags** come from the output colour intent: `output::outputColourTagsV1()` maps the
+  resolved display to H.273 primaries, transfer and matrix (sRGB displays get the sRGB transfer,
+  Rec.1886/Rec.709 BT.709, P3 and Rec.2100 their own code points, unknown displays unspecified), and
+  the matrix selects the RGB to YUV coefficients. `EncodeSettingsV1` is version 2 for this; the
+  reopen reads the tags and `<container>/<codec>` back into `EncodeQcV1`/`MediaQcEvidenceV1` for the
+  ColourTags and Container checks.
+- **Multithreaded encode.** The worker uses an automatic thread count for video. Lossy codecs
+  already declare `DecodedSemanticTolerance`, so threading can change bytes but not the decoded
+  tolerance; PCM stays `ByteExact` and TIFF single-threaded `DecodedSemanticExact`.
+- **Limits from the destination.** The encoded artifact's byte limit is the destination's sampled
+  free space minus the safety margin (2%, at least 64 MiB), within the provider ceiling, and the
+  audio channel cap follows the container (WAV and MOV 64, MXF 16, AAC 8) instead of a fixed 8.
+- **DPX** sequences are part of the 1.29 vocabulary and the catalogue but are reported unavailable
+  with a typed reason in this build.

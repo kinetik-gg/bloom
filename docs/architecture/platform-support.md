@@ -304,3 +304,14 @@ keeps the typed unavailable worker fallback. Portable descriptor plumbing alone 
 qualification. The Linux source fixture covers same-size/same-mtime replacement, removed originals,
 uncached frame parity from retained bytes, cancellation, quota, final revalidation, refresh/reconnect,
 gesture read-only behavior and charged worker retirement.
+
+## Export Queue Platforms
+
+Export runs on Linux in this version ([ADR 0033](../decisions/0033-export-queue.md), section 15).
+The export queue model, persistence (document 1.29), availability, the Export panel, presets and
+scripting edits are identical on Linux, macOS and Windows; a 1.29 project saved on any platform opens
+on every other. On macOS and Windows every preset's platform availability is `PlatformNotSupported`
+with the reason "Export runs on Linux in this version", and Start, Start All, Retry, transient jobs
+and `bloom-cli export` answer the same code: nothing is hidden and nothing fails silently. The
+Windows publication provider and encode worker (#370) and macOS export qualification (#371) are not
+part of this release. User presets live in the platform user-data directory.

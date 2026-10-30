@@ -1127,6 +1127,46 @@ contains look-tagged effects or explicitly bypasses them, its analysis record ap
 (27 bytes total). The legacy no-look/default-policy record has no suffix. The 64×64 ACES handoff
 fixture pins the process record at 271 bytes and the analysis record at 1669 bytes.
 
+## Export Queue
+
+[ADR 0033](../decisions/0033-export-queue.md) puts every export route behind one runner,
+`host::ExportJobRunner`, owned by `host::ExportQueueService`. The panel, scripting, MCP and
+`bloom-cli export` reach the same pipeline; the still/range and composition drivers and the COLOR-5
+deliverable preparation moved out of `src/ui` into it. Each enabled output is its own pass through
+the existing path: `beginOutputAnalysisAttemptV1` → approval → `executeExportPublication` per frame
+for image outputs, and `SequenceExportRunnerV1` for movies and WAV. `approveFrameExportV1`,
+`executeExportPublication`, `PublicationCoordinator`, `StagedArtifactCoordinator`, the export
+resource ledger and the reopen verifiers are reused unchanged; `SequenceExportRunnerV1` gained only a
+frame-boundary pause, the run's task owner, the look bypass, the bit rate, the destination byte limit
+and the probed VA-API render node.
+
+**Approval by policy.** The modal approval prompt is replaced by an explicit policy. Each preset
+declares its expected preservation (eleven facet states, `host::exportExpectedPreservation()`), shown
+before Start. A frame's analysis is accepted when every facet is at most the declared state on the
+scale Exact < Equivalent < Approximated < Omitted < ExternalReference; Missing and Unsupported never
+fit. A frame that does not fit fails the output before publication with `AnalysisRefused` (check
+`AnalysisPolicy`). The byte-equality guard and per-frame publication intent are unchanged: every
+frame is still approved with its own attempt's digest.
+
+**Verification.** After publication each output carries an `ExportOutputVerification`: the accepted
+facet states and digest, an artifact summary (count, first and last path, bytes, digest, worst
+publication outcome), device provenance, and typed `ExportCheckResult`s for Reopen, FrameCount,
+Timing, ColourTags, Container, Audio, Naming, ArtifactDigest, Publication and DeviceProvenance with
+expected and observed values. A frame evaluated on the CPU reference path is a DeviceProvenance
+warning, so it is never presented as a GPU frame. Movies are checked against the worker's reopen
+evidence, including the colour tags and `<container>/<codec>` it read back.
+
+**Replacement.** An output's overwrite policy is AskBeforeReplacing (default), Replace or Refuse.
+Destination facts are sampled on a blocking-I/O worker; an existing destination is a
+`DestinationExists` preflight issue that is NeedsConfirmation, Warning or Blocking respectively.
+`ExportQueueService::confirmReplace(job, output)` binds the sampled fingerprint (for a sequence, the
+set of existing files); it is cleared when the destination, the settings or the sampled files
+change, consumed by the run that replaces them, and not needed for files this session itself
+published for that output. At Preparing the run re-samples authoritatively: an unconfirmed or
+changed destination fails with `PublicationConflict`, and the external-modification guard still
+applies at publication. The same re-sample creates missing destination folders and removes that
+target's stale `.bloom-stage-` files whose owner process is gone.
+
 ## Transient jobs from MCP
 
 The in-app MCP server (ADR 0034) keeps no render path of its own. On the live application its
@@ -1144,5 +1184,5 @@ the request carried a progress token; queue commands themselves run on the UI th
 `McpServerService::pump()`. Capture is the still route at composition resolution with the Viewer's
 display and view, published into a per-user `mcp-captures` folder that keeps the newest 16, and
 embedded as an MCP image up to `kMcpInlineImageBytes`. MCP adds no operation, kernel, lowering or
-route to the GPU coverage contract. `bloom-mcp` on stdio keeps the scripting render path
-(`scripting::Render::run` and the sequence runner) for these three tools.
+route to the GPU coverage contract. `bloom-mcp` on stdio keeps `scripting::Render::run` for these three tools,
+which renders a transient job on the same `ExportJobRunner` from the session's render snapshot.
