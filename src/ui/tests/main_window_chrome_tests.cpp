@@ -416,6 +416,89 @@ void testNumpadZeroIsTheRamPreviewShortcut(Expectations& expectations) {
     }
 }
 
+// The keypad 0 key must reach RAM Preview in every form a platform delivers it, from every focused
+// editor. Qt's Wayland/xkb path may report plain Key_0 (no KeypadModifier); the physical key is
+// then identified by its xkb keycode 90. The main-row 0 (keycode 19) and any text entry must not.
+void testNumpadZeroReachesRamPreviewFromEveryEditor(Expectations& expectations) {
+    try {
+        bloom::ui::test::WindowFixture fixture;
+        auto* window = fixture.window.get();
+        auto* action = window->findChild<QAction*>(QStringLiteral("compositionRamPreviewAction"));
+        expectations.expect(action != nullptr, "numpad 0 editors: the RAM Preview action exists");
+        if (action == nullptr)
+            return;
+        action->setEnabled(true);
+        int triggered = 0;
+        QObject::connect(action, &QAction::triggered, window, [&triggered] { ++triggered; });
+        window->activateWindow();
+        (void)QTest::qWaitForWindowActive(window);
+
+        struct Target {
+            const char* name;
+            QWidget* widget;
+        };
+        const Target targets[] = {{"Viewer", window->findChild<ViewerEditor*>()},
+                                  {"Timeline", window->findChild<TimelineEditor*>()},
+                                  {"node canvas", window->findChild<NodeGraphicsView*>()}};
+        const auto press = [](QWidget* to, Qt::Key key, Qt::KeyboardModifiers modifiers,
+                              quint32 scanCode) {
+            QKeyEvent event(QEvent::KeyPress, key, modifiers, scanCode, 0, 0,
+                            key == Qt::Key_Insert ? QString() : QStringLiteral("0"));
+            QApplication::sendEvent(to, &event);
+        };
+        for (const auto& target : targets) {
+            expectations.expect(target.widget != nullptr,
+                                std::string("numpad 0 editors: a real ") + target.name);
+            if (target.widget == nullptr)
+                continue;
+            target.widget->setFocus();
+            const std::string where = std::string(" (focus in the ") + target.name + ")";
+            int before = triggered;
+            press(target.widget, Qt::Key_0, Qt::KeypadModifier, 90);
+            expectations.expect(triggered == before + 1,
+                                "Key_0 + KeypadModifier toggles RAM Preview" + where);
+            before = triggered;
+            press(target.widget, Qt::Key_Insert, Qt::KeypadModifier, 90);
+            expectations.expect(triggered == before + 1,
+                                "Key_Insert + KeypadModifier toggles RAM Preview" + where);
+            before = triggered;
+            press(target.widget, Qt::Key_0, Qt::NoModifier, 90);
+#if defined(Q_OS_LINUX)
+            expectations.expect(triggered == before + 1,
+                                "Wayland: Key_0 with no modifier, keycode 90, toggles RAM Preview" +
+                                    where);
+#endif
+            before = triggered;
+            press(target.widget, Qt::Key_0, Qt::NoModifier, 19);
+            expectations.expect(triggered == before,
+                                "the main-row 0 (keycode 19) does not toggle RAM Preview" + where);
+        }
+
+        // A keypad 0 in a text entry is a digit.
+        auto* field = new QLineEdit(window);
+        field->show();
+        field->setFocus();
+        QTest::qWait(20);
+        const int before = triggered;
+        press(field, Qt::Key_0, Qt::KeypadModifier, 90);
+        press(field, Qt::Key_0, Qt::NoModifier, 90);
+        expectations.expect(QApplication::focusWidget() == field && triggered == before,
+                            "keypad 0 in a focused text field does not toggle RAM Preview");
+        // A value field's text editor is a QLineEdit under it; it is the focus while editing.
+        auto* value = new kit::KValueField(window);
+        value->show();
+        value->lineEdit()->show();
+        value->lineEdit()->setFocus();
+        QTest::qWait(20);
+        press(value->lineEdit(), Qt::Key_0, Qt::KeypadModifier, 90);
+        expectations.expect(QApplication::focusWidget() == value->lineEdit() &&
+                                triggered == before,
+                            "keypad 0 in a focused value field does not toggle RAM Preview");
+    } catch (const std::exception& error) {
+        expectations.expect(false, std::string("numpad 0 editors fixture: ") + error.what());
+    }
+}
+
 void testMainWindowAlwaysBuildsNativeChrome(Expectations& expectations) {
     bool ok = false;
     Fixture fixture(&ok);
@@ -1272,6 +1355,7 @@ int main(int argc, char** argv) {
     testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(expectations);
     testMainWindowAlwaysBuildsNativeChrome(expectations);
     testNumpadZeroIsTheRamPreviewShortcut(expectations);
+    testNumpadZeroReachesRamPreviewFromEveryEditor(expectations);
     testWindowTitleIsJustTheDocumentTitle(expectations);
     testViewMenuItemsExistAndFire(expectations);
     testHelpMenuItemsExistAndFire(expectations);
