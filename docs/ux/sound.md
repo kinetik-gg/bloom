@@ -59,7 +59,7 @@ Category **E** is an event sound (default on); **I** is an interaction sound (de
 
 | Event | Where it fires | Cat. | Sound | Default |
 | --- | --- | --- | --- | --- |
-| Frame export finished | `FrameExportController::exportFinished` (`frame_export_controller.cpp`), wired in `apps/bloom/main.cpp` | E | render_succeeded + notification when inactive | On |
+| Frame export finished | `ExportJobSucceeded` / `ExportJobFailed` events read by `ExportQueueAdapter` (`export_queue_adapter.cpp`) | E | render_succeeded + notification when inactive | On |
 | Range (sequence) export finished | same signal, `frame_export_controller_composition.cpp` and the range driver | E | render_succeeded + notification | On |
 | Composition (video) export finished | same signal (`frame_export_controller_composition.cpp`) | E | render_succeeded + notification | On |
 | Export published with a warning | same signal, `PublishedWithWarning` | E | render_succeeded + notification | On |

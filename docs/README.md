@@ -55,6 +55,7 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 ## User Guides
 
+- [The Export panel](user-guide/exporting-video.md) — the render queue, outputs, destinations and replacing files.
 - [Organizing Assets](user-guide/assets.md) — folders, display names, tags, search and drag order.
 - [Import from network shares](user-guide/network-shares.md) — mounting an SMB share and
   importing from it on Linux, macOS and Windows.
@@ -161,8 +162,8 @@ node, recovery, RAM preview, cache, audio, media and document work under #306, w
 The [production workflows release](plans/production-workflows-release.md) records what landed under
 #374 (timeline, footage, masking, EXR, composition settings and Assets) and the work still open.
 
-See [Export](user-guide/exporting-video.md) for composition export presets, audio,
-verification and cancellation.
+See [The Export panel](user-guide/exporting-video.md) for the render queue and
+[Export presets](user-guide/exporting-video.md) for presets, audio, verification and cancellation.
 
 ## Status Vocabulary
 

@@ -1,9 +1,25 @@
 # Export
 
-Exports run from the **Export** panel, a queue saved in the project. Choose **Export → Add to
-Export Queue** (also on a composition row in Assets): Bloom adds a job for the composition and
-reveals the panel. A job renders one composition range to one or more outputs, one job at a time in
-queue order, in the background while you keep working.
+Exports run from the **Export** panel, a queue saved in the project, much like the After Effects
+Render Queue. Open the panel from **Window → Export**, or choose **File → Add to Export Queue**
+(Ctrl+M). The same **Add to Export Queue** item is on a composition row in Assets, and you can drag
+a composition from Assets onto the list. Bloom adds a job for the composition, reveals the panel
+and selects the new job. A job renders one composition range to one or more outputs, one job at a
+time in queue order, in the background while you keep working.
+
+Each job is a row: label colour, an enabled check (the job takes part in **Start All**), name,
+composition, range and status. Its outputs are child rows with the preset and the resolved
+destination, shortened in the middle with the whole path as the tooltip. Drag a job to reorder it.
+The running job is shown in a strip above the list with its progress, the frame, the elapsed time
+and, once there is a reliable estimate, the time left. Every command shows why it cannot run: hover
+a dimmed button or menu item to read the reason.
+
+Select a job or an output to edit it in the detail pane, which has four sections: **Render** (name,
+range, enabled, label colour and the job's own Start, Pause, Stop and Retry), **Outputs** (preset,
+settings, destination, overwrite policy, **Add output** and **Remove output**; a job keeps at least
+one), **Post-render** and **Log and verification**. The size shown for an output is only what Bloom
+can estimate; nothing is shown when it cannot. A failure reads as a sentence that says what to do;
+**Details** opens the technical text and **Copy details** copies it for a bug report.
 
 ## Jobs and outputs
 
@@ -83,7 +99,8 @@ job again. The Jobs panel shows a running export as one row with **Show in Expor
 
 The Viewer always comes first. While you scrub, play or build a RAM preview, an export only uses
 spare GPU capacity and may wait in **Waiting for Viewer** with no ETA; it continues at full speed
-when the Viewer is idle. Waiting and paused time do not count toward the export's time limits.
+when the Viewer is idle. Waiting and paused time do not count toward the export's time limits. This is not a fault, and
+the panel reads **Waiting for the Viewer** rather than showing a time left.
 
 Quitting or closing the project while exports run asks "N exports are running. Stop them and
 quit?"; **Keep Exporting** is the default. Saving the project during an export is allowed.
@@ -106,8 +123,8 @@ panel reports it on the output.
 `bloom-cli export --project shot.bloom --all` renders the saved queue headlessly and prints the
 verification and import results as JSON; `--job <id>` selects jobs, `--replace` confirms existing
 destinations, and `--save` writes asset imports back to the project. See
-[headless scripting](scripting.md) and [MCP](mcp.md). **Copy as command** on a job gives the same
-job as a script.
+[headless scripting](scripting.md) and [MCP](mcp.md). **Copy as bloom-cli Command** and **Copy as Python** on a job's context
+menu produce a script that recreates the job and starts it.
 
 ## Platforms
 

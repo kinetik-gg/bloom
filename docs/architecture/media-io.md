@@ -1727,8 +1727,8 @@ Which H.264 encoder a platform uses is the export provider's answer, `output::h2
 a pure platform query that opens no file: VideoToolbox inside the macOS AVFoundation provider
 (nothing to install or consent to), Cisco OpenH264 or VA-API hardware on Linux x86-64, VA-API
 hardware only on Linux on other processors (Cisco publishes no binary there), and none yet on
-Windows, where the H.264 preset reports the worker as unavailable. The Export dialog offers
-install, consent and Locate only when the answer is OpenH264. Everything that touches the disk --
+Windows, where the H.264 preset reports the worker as unavailable. The Export panel offers
+install, consent and Locate (the H.264 encoder dialog) only when the answer is OpenH264. Everything that touches the disk --
 `verifyH264RuntimeV1()` (the library's SHA-256), `vaapiRenderNodeAvailableV1()` (the
 `/dev/dri/renderD*` probe) and `locateH264RuntimeV1()` -- runs as a `BlockingIo` task through
 `ui::H264EncoderService`, which publishes the result to the dialog; Locate shows a busy bar and

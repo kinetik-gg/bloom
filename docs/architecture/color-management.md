@@ -900,5 +900,5 @@ Rec.709 pair. Raw display-referred presets use the config's default display/view
 fail explicitly. The processor pair and config revision are recorded in analysis and evidence;
 there is no export display/view picker.
 The named ACES handoff and review options require the selected built-in ACES CG config with a
-pinned revision. The export dialog disables them with a Project Settings diagnostic otherwise;
+pinned revision. The Export panel marks them unavailable with a Project Settings diagnostic otherwise;
 direct export requests are refused before preparation. Generic export presets remain selectable.

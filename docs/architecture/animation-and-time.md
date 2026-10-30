@@ -448,7 +448,7 @@ their old completions the same way.
 
 ### Sequence Export
 
-"Export Frame Range..." exports an inclusive range of composition frame INDICES, one complete
+A job in the export queue (a custom range) exports an inclusive range of composition frame INDICES, one complete
 publication per frame. It drives the single-frame export's own stages rather than a second copy of
 them:
 

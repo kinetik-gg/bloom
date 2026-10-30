@@ -53,7 +53,7 @@ hosts reach with a modifier — bare letters belong to tools.
 
 New project (`Ctrl+N`) and application startup begin **blank**: the project owns no composition, so
 every editor shows its empty state and the composition-dependent commands (Duplicate, Rename,
-Delete, Export Frame) are disabled. New Composition is the way to author the first one; creating it
+Delete, Add to Export Queue) are disabled. New Composition is the way to author the first one; creating it
 activates it. Deleting the final composition returns to that same blank project as one undoable
 command, and undo restores and reactivates the composition.
 
@@ -679,6 +679,16 @@ Subtract, Intersect, Difference), an Inverted switch, a keyable Path summary, Fe
 Opacity rows, and move-up, move-down and remove buttons; touching a group selects that mask for the
 Viewer. The Track Matte section has a source dropdown (None and the layers of the same Merge), an
 Alpha/Luma channel dropdown and an Inverted switch. A locked layer disables both sections.
+
+## Export
+
+Export is a queue in a replaceable **Export** panel, never a dialog. **File → Add to Export Queue**
+(Ctrl+M), the Assets composition row's context menu and a drag from Assets all add a job, show the
+panel and select the job. Edits to the queue are undoable commands; Start, Stop and the like act on
+the run and are not. A command that cannot run keeps its control visible and gives the reason as its
+tooltip or an inline line. Waiting for the Viewer is a neutral state, not an error. Failures read as
+sentences; technical detail sits behind **Details** in the log. See
+[The Export panel](../user-guide/exporting-video.md).
 
 ## Retired Bindings
 

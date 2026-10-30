@@ -430,7 +430,7 @@ Linux.
 | Confirm replace (`ConfirmReplace`) | Session | the output's policy is AskBeforeReplacing, its sampled destination exists and is not yet confirmed, and the job is not running | `export.confirm-replace` |
 | Reveal output (`RevealOutput`) | Session | the output published at least one artifact in this session | (UI only) |
 
-Menus: **Export → Add to Export Queue** (also on Assets composition rows) adds a job for the
+Menus: **File → Add to Export Queue** (Ctrl+M) (also on Assets composition rows) adds a job for the
 composition and reveals the panel. The former Export Frame, Export Frame Range and Export
 Composition items are replaced by it. A single frame or a range is chosen in the job's range, with
 any preset.

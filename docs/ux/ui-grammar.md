@@ -167,6 +167,21 @@ styling at the `ListRow` pitch, with no per-row widgets.
 Painting outside the kit is limited to viewer canvas, node scene items, and timeline
 ruler, lanes, graph editor, work area and navigator. Other surfaces compose kit widgets.
 
+## Export panel
+
+The Export panel (`exportEditor`, editor id `bloom.export`) has a header (`exportHeader`) with
+Remove finished, Stop All and Start All (`exportRemoveFinishedButton`, `exportStopAllButton`,
+`exportStartAllButton`; Start All is Primary only while something can run); a run strip
+(`exportRunStrip`) while a job renders; a note (`exportPlatformNote`) where export cannot run; the
+job list (`exportJobTree`) over the detail pane (`exportDetailPane`, in `exportDetailScroll`) in a
+splitter (`exportSplitter`). The list uses the Assets row (Size::AssetRow), alternation, hover and
+selected recipe: columns label colour, enabled check, Name, Composition, Range and Status, outputs
+as child rows. A narrow panel keeps Name and Status. The detail pane uses sections and property
+rows like Properties: `exportRenderSection`, `exportOutputsSection`, `exportPostRenderSection` and
+`exportResultsSection`. The empty state is one line and `exportAddActiveButton`. Waiting for the
+Viewer is Muted ink; only Failed uses Error and only Needs confirmation or Done with warnings use
+Warn. Failure lines never carry stage, code or facet numbers.
+
 ## Status bar, context bar and tools
 
 The existing native window frame and application menu bar remain unchanged. No branding,
@@ -955,8 +970,7 @@ share, resolving it through the same GVFS mount the file manager used; an `smb:/
 share this machine has not mounted yet is still accepted (the cursor stays honest about there
 being something to do) but imports nothing, reporting "Connect to `<host>/<share>` in your file
 manager first" through the status bar's transient-message cell rather than dropping it silently.
-Every file dialog (`kit::chooseFile()`: Import, Relink, Open Project, Save Project As, Export Frame,
-Export Frame Range, Export Composition, Locate OpenH264 and the cache folder) is Bloom's own file
+Every file dialog (`kit::chooseFile()`: Import, Relink, Open Project, Save Project As, the export destination, Locate OpenH264 and the cache folder) is Bloom's own file
 dialog and lists every mounted network share in its sidebar beside the standard places.
 Dragging an image/sequence row to Nodes creates an Image source; dragging an Audio row creates an
 Audio source. Dropping media or compositions on the Timeline or the Viewer creates the matching
@@ -1070,10 +1084,9 @@ content needs at that width.
   and refreshes it.
 
 Dialogs open asynchronously (window-modal, answered through a callback) unless a caller must hand a
-synchronous answer back: the Composition dialog, Export Composition, Export Frame Range, the
+synchronous answer back: the Composition dialog, the
 unsaved-change, open, save and recovery prompts of the project host, Preferences, and prompts nested
-inside an already modal dialog run with `exec()`, each documented at its call site. Approve Export,
-Edit Tags, Input Colour, Custom Safe Areas, Project Settings — Colour, Delete, Rename Composition,
+inside an already modal dialog run with `exec()`, each documented at its call site. Edit Tags, Input Colour, Custom Safe Areas, Project Settings — Colour, Delete, Rename Composition,
 Restore Defaults and every failure notice are asynchronous. The keys are in
 [interaction-model.md](interaction-model.md#dialogs).
 
