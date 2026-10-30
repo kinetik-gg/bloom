@@ -19,7 +19,7 @@ the whole application. The owner asked for the same, and for align and distribut
 
 1. **Two fixed surfaces.** The menu bar and the contextual bar directly under it are Bloom's fixed
    application surfaces. Every workspace content area stays a replaceable editor panel; nothing
-   else becomes fixed. The bar can be hidden with Window > Context Bar. Its visibility is
+   else becomes fixed. The bar can be hidden with Window > Toolbar. Its visibility is
    session/UI state persisted like other workspace UI state, never project truth.
 2. **One app-wide active tool (the After Effects model).** One application-level, typed owner holds
    the active tool, passed explicitly to the Viewers that use it (no service locator or event bus).
@@ -34,8 +34,8 @@ the whole application. The owner asked for the same, and for align and distribut
 4. **The bar only issues commands.** It reads session and document state and issues the same typed
    commands every other surface uses. It owns no project truth, and nothing it does bypasses the
    command stack or undo.
-5. **Alignment semantics.** One command, `commands::AlignLayers`, aligns (left, horizontal centre,
-   right, top, vertical middle, bottom) or distributes (horizontal or vertical centres) a set of
+5. **Alignment semantics.** One command, `commands::AlignLayers`, aligns (left, horizontal center,
+   right, top, vertical middle, bottom) or distributes (horizontal or vertical centers) a set of
    layers against a target:
    - **Bounds** are each layer's evaluated visual bounds at the time: the axis-aligned
      composition-space rectangle around its transformed content (`EvaluatedOperationBounds::output`,
@@ -47,7 +47,7 @@ the whole application. The owner asked for the same, and for align and distribut
      any anchor) and added to Position. A layer carried by a moving ancestor moves only by the rest.
    - **Animation.** An animated Position gets a key at the time, in the layer's own key time
      (ADR 0024); its other keys stay. A constant Position is set.
-   - **Distribution** keeps the outermost centres fixed (Selection), places the outermost layers'
+   - **Distribution** keeps the outermost centers fixed (Selection), places the outermost layers'
      outer edges on the frame's edges (Composition), or also keeps the key fixed and spaces the
      layers between fixed layers evenly (Key Object). It needs three or more layers.
    - **Skips.** Locked layers, layers whose Position is driven, layers with no visible bounds at the

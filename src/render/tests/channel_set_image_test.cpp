@@ -45,12 +45,12 @@ void roleInference() {
                          const ChannelSampleKind kind = ChannelSampleKind::Half) {
         return describeChannel(name, kind).role;
     };
-    expect(role("R") == ChannelRole::ColorR, "root R is colour");
+    expect(role("R") == ChannelRole::ColorR, "root R is color");
     expect(role("A") == ChannelRole::Alpha, "root A is alpha");
     expect(role("Y") == ChannelRole::Luminance, "root Y is luminance");
     expect(role("Z", ChannelSampleKind::Float) == ChannelRole::Depth, "root Z is depth");
-    expect(role("diffuse.R") == ChannelRole::ColorR, "layer R is colour");
-    expect(role("diffuse.B") == ChannelRole::ColorB, "layer B is colour");
+    expect(role("diffuse.R") == ChannelRole::ColorR, "layer R is color");
+    expect(role("diffuse.B") == ChannelRole::ColorB, "layer B is color");
     expect(role("depth.Z") == ChannelRole::Depth, "depth layer");
     expect(role("N.X") == ChannelRole::NormalX, "normal x");
     expect(role("normal.Z") == ChannelRole::NormalZ, "normal z");
@@ -66,16 +66,16 @@ void roleInference() {
            "crypto second rank id");
     expect(role("objectId", ChannelSampleKind::Uint) == ChannelRole::Data, "plain data");
     expect(role("id.R", ChannelSampleKind::Uint) == ChannelRole::Data,
-           "uint samples are never colour");
-    expect(role("diffuse.r") == ChannelRole::Data, "lower-case suffix is not colour");
+           "uint samples are never color");
+    expect(role("diffuse.r") == ChannelRole::Data, "lower-case suffix is not color");
 
     const auto colour = describeChannel("beauty.light.G", ChannelSampleKind::Half);
     expect(colour.layer == "beauty.light", "nested layer name");
-    expect(colour.encoding == ChannelValueEncoding::Colour, "colour encoding");
+    expect(colour.encoding == ChannelValueEncoding::Colour, "color encoding");
     const auto depth = describeChannel("depth.Z", ChannelSampleKind::Float);
     expect(depth.encoding == ChannelValueEncoding::Data, "data encoding");
     expect(describeChannel("A", ChannelSampleKind::Half).encoding == ChannelValueEncoding::Data,
-           "alpha is not colour-managed");
+           "alpha is not color-managed");
 }
 
 void creation() {

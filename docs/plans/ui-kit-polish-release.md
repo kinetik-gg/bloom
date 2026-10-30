@@ -14,15 +14,15 @@ and what has not been verified on macOS and Windows. The contracts themselves li
 - **Tokens and painting.** One surface ladder (Background, Surface, SurfaceRaised, Field), the wider
   Accent triple, one selected-row recipe (wash plus a 2 px Accent edge) shared by Timeline, Assets,
   Jobs and `KRow`, device-pixel snapping for every rounded surface and hairline, and a cached icon
-  engine. `kit::buttonColors()` and `kit::fieldColors()` are the only sources of control colour.
-- **One control look and height.** Buttons, icon buttons, dropdown fields, radio groups and colour
+  engine. `kit::buttonColors()` and `kit::fieldColors()` are the only sources of control color.
+- **One control look and height.** Buttons, icon buttons, dropdown fields, radio groups and color
   chips share the Secondary recipe; text entry shares the Field recipe; every control is one
   `Control` slot tall (`control_geometry_tests` audits 130 controls and 42 node rows at DPR 1, 1.5
   and 2). Ghost remains only on disclosure carets and the title bar buttons.
 - **Typography.** Inter Variable and Geist Mono are bundled and identical on every platform; every
   chrome text path takes its font from `kit::font(role)`. Only text-layer content uses other fonts.
 - **Popups.** `KPopupWindow` and `KPopupList` are the one popup mechanism for dropdowns, menus,
-  searches and the colour picker, with placement that flips at the screen edge, a shared elevation
+  searches and the color picker, with placement that flips at the screen edge, a shared elevation
   shadow, and keyboard-usable flow menus.
 - **Fields.** `KValueField` fits its text, commits on Escape, takes the shared refusal style, and
   has `QAccessible` support; `KTextField`, `KSearchField`, `KTextArea` and `KFieldFrame` use the
@@ -33,13 +33,13 @@ and what has not been verified on macOS and Windows. The contracts themselves li
 - **Viewer.** Priority chrome rows with ranked collapse, the Transparency Grid, the surround
   background separate from the composition background, and a GPU present path that draws the
   checker only inside the frame.
-- **Context bar and tools.** ADR 0031: one app-wide active tool, a fixed contextual bar under the
+- **Toolbar and tools.** ADR 0031: one app-wide active tool, a fixed contextual bar under the
   menu bar, and Align/Distribute as one undoable command (`docs/architecture/layer-alignment.md`).
 - **Assets, sounds, preferences.** The Assets panel rewrite, UI sound feedback with its Preferences
   page, and the Preferences window pages.
 - **Quality gate.** `bloom-quality-check` and the UI grammar check now reject, outside the kit: raw
   controls (including `QPlainTextEdit` and `QTextEdit`), the Qt convenience dialogs and spin boxes,
-  numeric `QColor` construction and colour strings, `.darker(`/`.lighter(`, palette overrides,
+  numeric `QColor` construction and color strings, `.darker(`/`.lighter(`, palette overrides,
   `setStyleSheet`, raw `Qt::Popup`/`Qt::ToolTip` windows, literal pen widths, literal
   `resize(w, h)`, and Ghost buttons other than disclosure carets. The kit's own sources are held to
   the pixel-literal rule. The allowlist is empty. The `architecture_boundaries` check passes: its
@@ -60,7 +60,7 @@ and what has not been verified on macOS and Windows. The contracts themselves li
   parallel stress and fixed at the cause: each asserted state after a fixed delay or acted on a
   control that was not yet enabled. They now wait for the state itself, and pass 100 to 400
   consecutive stressed runs each.
-- Review captures (offscreen, DPR 1 and 1.5): the main window under each tool group's context bar,
+- Review captures (offscreen, DPR 1 and 1.5): the main window under each tool group's toolbar,
   a dropdown flipped above a field at the screen bottom, the searchable font dropdown, the
   Composition, Export, Preferences, Unsaved Changes and Delete dialogs, value fields at rest, being
   edited and refusing text, selected rows in the Timeline and Assets, and the Viewer checkerboard.

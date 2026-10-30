@@ -74,12 +74,12 @@ built on the same command as the UI action, so it validates, labels and undoes t
   connected to an existing input or output, as dragging a wire to empty canvas does, and
   `bloom.node.insert-reroute` inserts a Reroute into the link that feeds an input.
 
-Project Settings > Colour is not a document edit, so it is not an operation: MCP's
+Project Settings > Color is not a document edit, so it is not an operation: MCP's
 `project.set-color-settings` tool and Python's `Host.set_color_settings(config, working_space=None)`
-choose the OCIO configuration (`"neutral"`, `"aces"` or `"current"`) and working colour space
+choose the OCIO configuration (`"neutral"`, `"aces"` or `"current"`) and working color space
 exactly as the dialog does. Like the dialog, the change is not undoable, marks the project dirty
 and changes how every composition renders. In the desktop application's Script editor,
-`Host.set_color_settings` answers `unavailable`: use Project Settings > Colour there (agents use
+`Host.set_color_settings` answers `unavailable`: use Project Settings > Color there (agents use
 the MCP tool, which the window applies).
 
 `query kind=operations` (MCP) and `Host.schemas()` (Python) carry each operation's `description`:

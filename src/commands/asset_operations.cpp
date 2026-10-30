@@ -192,7 +192,7 @@ std::string lutRefusal(const color::LutError error) {
     case color::LutError::HelperDeadline:
         return "Reading the LUT took too long";
     case color::LutError::TransformBuildFailed:
-        return "The LUT could not be turned into a colour transform";
+        return "The LUT could not be turned into a color transform";
     default:
         return "The LUT reader stopped unexpectedly";
     }
@@ -595,7 +595,7 @@ OperationResult SetCompositionBackgroundColor::apply(document::Draft& draft) con
                                          "Composition does not exist");
     if (!color_.isValid())
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Invalid background colour");
+                                         "Invalid background color");
     if (composition->backgroundColor() == color_)
         return OperationResult::noChange();
     composition->setBackgroundColor(color_);
@@ -609,7 +609,7 @@ OperationResult SetCompositionWorkingColorSpace::apply(document::Draft& draft) c
                                          "Composition does not exist");
     if (colorSpaceId_.has_value() && !document::validateWorkingColorSpaceId(*colorSpaceId_).ok())
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Invalid working colour space id");
+                                         "Invalid working color space id");
     if (composition->workingColorSpaceId() == colorSpaceId_)
         return OperationResult::noChange();
     composition->setWorkingColorSpaceId(colorSpaceId_);

@@ -163,7 +163,7 @@ void exrOracle(const output::OutputAnalysisAttemptV1& source,
     Imf::InputFile file(path.string().c_str());
     check(file.header().compression() == Imf::PIZ_COMPRESSION, "PIZ header");
     const auto* id = file.header().findTypedAttribute<Imf::StringAttribute>("colorInteropID");
-    check(id && id->value() == "ACES2065-1", "output colour id header");
+    check(id && id->value() == "ACES2065-1", "output color id header");
     const auto& c = Imf::chromaticities(file.header());
     const std::array<float, 8> chroma{c.red.x,  c.red.y,  c.green.x, c.green.y,
                                       c.blue.x, c.blue.y, c.white.x, c.white.y};

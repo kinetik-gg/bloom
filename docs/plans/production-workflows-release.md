@@ -26,9 +26,9 @@ what is open.
 | Performance | [#358](https://github.com/kinetik-gg/bloom/issues/358) | Playback repaints only playhead strips, caches key summaries and driver probes, remixes audio only on edits that can change it |
 | Masking | [#360](https://github.com/kinetik-gg/bloom/issues/360) | Layer masks, Mask values, track mattes (ADR 0028), animated paths as GPU data, live drag preview, shared path editing with Corner/Mirrored/Aligned/Free/Auto handle modes, scripting path values |
 | Masking | [#361](https://github.com/kinetik-gg/bloom/issues/361) | Set Alpha / Multiply Alpha: absent matte on every route, invert, matte selector |
-| EXR | [#362](https://github.com/kinetik-gg/bloom/issues/362) | Alpha association inherited from the asset, non-finite repair before colour conversion, data windows kept registered |
+| EXR | [#362](https://github.com/kinetik-gg/bloom/issues/362) | Alpha association inherited from the asset, non-finite repair before color conversion, data windows kept registered |
 | EXR | [#363](https://github.com/kinetik-gg/bloom/issues/363) | Multi-channel images (ADR 0026): parts and layers, ChannelSet transport, Shuffle, Channel Copy, Select Channels, Viewer channel inspection, layered EXR output; schema 1.26 |
-| EXR | [#364](https://github.com/kinetik-gg/bloom/issues/364) | Cryptomatte node with Mask and Image outputs, manifest names, ID-colour preview, Viewer eyedropper through transforms and time |
+| EXR | [#364](https://github.com/kinetik-gg/bloom/issues/364) | Cryptomatte node with Mask and Image outputs, manifest names, ID-color preview, Viewer eyedropper through transforms and time |
 | Video | [#365](https://github.com/kinetik-gg/bloom/issues/365) | Untagged sources assume Rec.709 (HD) or Rec.601 (SD) with a visible note; BT.2020, PQ and HLG; exact PQ LUT sampling; chroma siting |
 | Video | [#366](https://github.com/kinetik-gg/bloom/issues/366) | FFmpeg SIMD, threading, forward decode, VA-API preview decode (ADR 0027), cache sizing |
 | Video | [#367](https://github.com/kinetik-gg/bloom/issues/367) | VFR slots, orientation, pixel aspect, open-GOP seek, bwdif deinterlacing, RGB-coded streams, audio stream selection, field order and timecode metadata (schema 1.25) |
@@ -47,7 +47,7 @@ per Python interpreter with serialized teardown; a Transform node category.
 | Issue | Work |
 | --- | --- |
 | [#377](https://github.com/kinetik-gg/bloom/issues/377) | Blocking, cancellable import progress dialog |
-| [#369](https://github.com/kinetik-gg/bloom/issues/369) | Export verified end to end on every route, then colour tags, MP4/H.264, HEVC, DPX, threading and size limits |
+| [#369](https://github.com/kinetik-gg/bloom/issues/369) | Export verified end to end on every route, then color tags, MP4/H.264, HEVC, DPX, threading and size limits |
 | [#368](https://github.com/kinetik-gg/bloom/issues/368) | Codec coverage expansion |
 | [#372](https://github.com/kinetik-gg/bloom/issues/372) | Proxy generation and proxy-aware playback |
 | [#359](https://github.com/kinetik-gg/bloom/issues/359) | Nodes canvas rebuild and lookup costs |

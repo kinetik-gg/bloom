@@ -151,14 +151,14 @@ ShapeStyleOptions::ShapeStyleOptions(CompositionSession& session, std::function<
     fill_->setAccessibleName(tr("Fill"));
     fillColor_ = noFocus(new kit::KColorChip(this));
     fillColor_->setObjectName(QStringLiteral("contextBarShapeFillColor"));
-    fillColor_->setAccessibleName(tr("Fill colour"));
+    fillColor_->setAccessibleName(tr("Fill color"));
     stroke_ = noFocus(new kit::KCheckBox(this));
     stroke_->setObjectName(QStringLiteral("contextBarShapeStroke"));
     stroke_->setText(tr("Stroke"));
     stroke_->setAccessibleName(tr("Stroke"));
     strokeColor_ = noFocus(new kit::KColorChip(this));
     strokeColor_->setObjectName(QStringLiteral("contextBarShapeStrokeColor"));
-    strokeColor_->setAccessibleName(tr("Stroke colour"));
+    strokeColor_->setAccessibleName(tr("Stroke color"));
     strokeWidth_ = new kit::KValueField(this);
     strokeWidth_->setObjectName(QStringLiteral("contextBarShapeStrokeWidth"));
     strokeWidth_->setAccessibleName(tr("Stroke width"));
@@ -196,9 +196,9 @@ ShapeStyleOptions::ShapeStyleOptions(CompositionSession& session, std::function<
     connect(stroke_, &QAbstractButton::toggled, this,
             [this] { write("strokeEnabled", tr("Set Stroke")); });
     connect(fillColor_, &kit::KColorChip::colorChanged, this,
-            [this] { write("fillColor", tr("Set Fill Colour")); });
+            [this] { write("fillColor", tr("Set Fill Color")); });
     connect(strokeColor_, &kit::KColorChip::colorChanged, this,
-            [this] { write("strokeColor", tr("Set Stroke Colour")); });
+            [this] { write("strokeColor", tr("Set Stroke Color")); });
     connect(strokeWidth_, &kit::KValueField::valueChanged, this,
             [this] { write("strokeWidth", tr("Set Stroke Width")); });
     connect(strokeWidth_, &kit::KValueField::editFinished, this, [this] {
@@ -294,9 +294,9 @@ void ShapeStyleOptions::refresh() {
     stroke_->setEnabled(!line);
     const auto lineReason = tr("A line has a stroke and no fill");
     fill_->setToolTip(line ? lineReason : tr("Fill %1").arg(subject));
-    fillColor_->setToolTip(line ? lineReason : tr("Fill colour of %1").arg(subject));
+    fillColor_->setToolTip(line ? lineReason : tr("Fill color of %1").arg(subject));
     stroke_->setToolTip(line ? lineReason : tr("Stroke %1").arg(subject));
-    strokeColor_->setToolTip(tr("Stroke colour of %1").arg(subject));
+    strokeColor_->setToolTip(tr("Stroke color of %1").arg(subject));
     strokeWidth_->setToolTip(tr("Stroke width of %1").arg(subject));
     refreshing_ = false;
 }
@@ -326,7 +326,7 @@ TextStyleOptions::TextStyleOptions(CompositionSession& session, std::function<vo
     alignment_->setObjectName(QStringLiteral("contextBarTextAlignment"));
     alignment_->setAccessibleName(tr("Text alignment"));
     alignment_->addOption(tr("Left"), kit::IconId::AlignLeft);
-    alignment_->addOption(tr("Centre"), kit::IconId::AlignCenter);
+    alignment_->addOption(tr("Center"), kit::IconId::AlignCenter);
     alignment_->addOption(tr("Right"), kit::IconId::AlignRight);
     alignment_->setIconsOnly(true);
     layout->addWidget(font_);

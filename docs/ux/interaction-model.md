@@ -23,7 +23,7 @@ hosts reach with a modifier — bare letters belong to tools.
 - **A focused text field keeps its own keys.** While an in-node value field or rename field holds
   focus, the canvas claims nothing — including Tab, which commits and travels. The one pair the
   canvas takes back is `Delete`/`Backspace`, and only where no text editor is actually OPEN in that
-  field: a value field with its editor closed, a colour chip, a switch and a dropdown have no use for
+  field: a value field with its editor closed, a color chip, a switch and a dropdown have no use for
   them, and swallowing them there made "click a card, press Delete" do nothing at all. A field whose
   text editor is open — the rename field, a text content row, a value field the artist has clicked
   into — keeps them. A value field at rest claims only the keys it answers (Up/Down, Page Up/Page
@@ -57,11 +57,11 @@ Delete, Add to Export Queue) are disabled. New Composition is the way to author 
 activates it. Deleting the final composition returns to that same blank project as one undoable
 command, and undo restores and reactivates the composition.
 
-## Tools And The Context Bar
+## Tools And The Toolbar
 
 There is ONE active tool for the whole application ([ADR 0031](../decisions/0031-contextual-tool-bar.md),
 the After Effects model). `ToolController`, owned by the window's `CompositionSession` and handed to
-every Viewer and the context bar through it, holds the tool as session/UI state; it is never project
+every Viewer and the toolbar through it, holds the tool as session/UI state; it is never project
 truth and is not saved. A tool chosen anywhere is the tool in every Viewer, and it acts in whichever
 Viewer receives the gesture; a gesture in flight in one Viewer is confirmed when the tool changes.
 
@@ -71,11 +71,11 @@ Viewer receives the gesture; a gesture in flight in one Viewer is confirmed when
 | `R` / `E` | Rectangle / Ellipse (Polygon, Star and Line are chosen in the bar) |
 | `P` / `T` | Pen / Text |
 | `Esc` (in a Viewer) | Confirm what is in flight and return to Select |
-| Click a tool in the context bar | Choose it; it never takes keyboard focus from the Viewer |
+| Click a tool in the toolbar | Choose it; it never takes keyboard focus from the Viewer |
 | Press and hold, or right-click, the shape slot | Choose Rectangle, Ellipse, Polygon or Star from its flyout |
-| Context bar Align / Distribute buttons, Composition > Align | Align or distribute the selected layers to the Align To target, as one undoable command |
+| Toolbar Align / Distribute buttons, Composition > Align | Align or distribute the selected layers to the Align To target, as one undoable command |
 
-The tool letters are defined once (`toolForKey`) and work while a Viewer or the context bar has
+The tool letters are defined once (`toolForKey`) and work while a Viewer or the toolbar has
 keyboard focus; they are not window shortcuts, so a focused text field, value field, the Timeline's
 B/N or the Nodes canvas keep their own keys. There is no temporary tool override such as a held
 Space for Hand: Space is play/pause. Middle-drag pans and the wheel zooms with any tool.
@@ -134,7 +134,7 @@ dialog's, so every dialog answers them the same way:
 | --- | --- |
 | `Return` / `Enter` | Presses the focused button-row button, else the default button (Accept, or the safe action of a destructive prompt). Refused while that button is disabled: nothing closes, and the refused field is shown (its tab first) and focused. A field that uses Return itself keeps it: a multi-line field's newline, a value field opening or committing its editor |
 | `Ctrl+Return` / `Ctrl+Enter` (`Cmd` on macOS) | Always presses Accept, from any field, including a multi-line field and an open value-field editor, which commits what was typed first. Refused while the dialog is invalid |
-| `Escape` | Rejects the dialog. When a field's own editor is open (a value field being typed into, an open dropdown or colour picker popup) the first Escape belongs to that field and the dialog stays; the next Escape rejects |
+| `Escape` | Rejects the dialog. When a field's own editor is open (a value field being typed into, an open dropdown or color picker popup) the first Escape belongs to that field and the dialog stays; the next Escape rejects |
 
 A value the dialog refuses keeps its accept button disabled and says why under its own field; a
 prompt never closes and reopens to refuse.
@@ -145,13 +145,13 @@ first letters selects it; Tab moves from the sidebar into the page. A section's 
 section's values to their defaults in the window, and **Restore Defaults** (the menu button at the
 foot of the sidebar) asks first, then returns every value; neither saves anything until OK or
 Apply. A dialog that edits project items (Edit Tags, Input
-Colour, Delete) also refuses, live and again at accept, when the project changed while it was open,
+Color, Delete) also refuses, live and again at accept, when the project changed while it was open,
 and commits nothing; cancel and open it again.
 
 ## Viewer
 
 Selected layers show their delivered-frame bounds polygon and anchor. Position moves the anchor in
-composition space; anchor is an offset from local content centre, so changing it with position held
+composition space; anchor is an offset from local content center, so changing it with position held
 fixed moves content. The overlay follows zoom/pan and shows the actual delivered frame during a stale
 preview. Cached display frames retain evaluated geometry without their Float32 process images, so
 playback also shows the overlay without re-rendering. Empty content or another composition has no overlay. Selecting node cards can show multiple layer boundaries. Existing drag bindings are unchanged.
@@ -180,7 +180,7 @@ visible Viewer, the window makes no displayed qualification claim.
 | Composition selector | Switches the shared session to the chosen document composition and clears selection/time-local state as usual |
 | Object selector | Selects the chosen current-composition layer; `None` clears selection |
 | View → Fit / Actual Size / Zoom In / Zoom Out | Uses the viewer transform and shows the existing shortcut beside each item |
-| View → Safe Areas / Centre Cross / Thirds / Rulers / Pixel Grid | Toggles display-only guides; Safe Areas uses the active composition's stored percentages |
+| View → Safe Areas / Center Cross / Thirds / Rulers / Pixel Grid | Toggles display-only guides; Safe Areas uses the active composition's stored percentages |
 | View → Safe Area Preset | Applies Broadcast, HD, Cinema, Social, or validated Custom percentages in one undoable composition edit |
 | Select → All / None / Invert | Selects, clears, or inverts the current composition's layer boundaries |
 | Composition menu / selector trailing menu | New Composition, Composition Settings, Duplicate, Rename, and Delete Composition; Composition Settings, Duplicate, Rename, and Delete are disabled while no composition is active, and Delete may remove the final composition (returning to the blank project). Delete Composition here, in the Composition menu and in Assets is one delete path: an unused composition goes at once, a used one warns with its usage first (Assets, below). Rename asks in a prompt that keeps an unusable name's reason inside it |
@@ -191,10 +191,10 @@ visible Viewer, the window makes no displayed qualification claim.
 | `Esc` | Confirm whatever is in flight and return to Select: a gizmo move/rotate/scale/anchor drag, a region of interest, a creation, a text edit or a path/mask anchor edit (see below); Undo discards |
 | `Left` / `Right` | Step one frame |
 | `Home` / `End` | Go to start / end |
-| Drop Assets items onto the Viewer | Makes a layer of each, on top, starting at the playhead and centred in the composition, as one undoable step; Alt sequences them end to end (see "Layer drops" under Timeline) |
+| Drop Assets items onto the Viewer | Makes a layer of each, on top, starting at the playhead and centered in the composition, as one undoable step; Alt sequences them end to end (see "Layer drops" under Timeline) |
 | Drop files onto the Viewer | Imports them (the import progress modal), then makes layers of them the same way as one more undoable step |
 
-The transport lives in the Viewer footer's centred time group: go to start, step back, play/pause,
+The transport lives in the Viewer footer's centered time group: go to start, step back, play/pause,
 step forward, go to end, a loop toggle and the frame field (a frame index or a timecode, per the field's reading); RAM Preview is in the trailing group.
 A narrow footer offers collapsed controls (including Go to Start/End and RAM Preview) in its View
 options menu with the same actions and shortcuts (ui-grammar.md, "Viewer header and footer"). **The keys are unchanged.** `Space`, `Ctrl+Shift+Space`, `Esc`,
@@ -209,7 +209,7 @@ navigation runs unchanged, and the footer's step buttons are disabled in lockste
 ever clickable while it would silently do nothing.
 
 Loop is a real toggle, not a status glyph. With looping on, playback wraps to the start of the work
-area, which is the only behaviour Bloom has ever had; with it off, playback lands on the last frame
+area, which is the only behavior Bloom has ever had; with it off, playback lands on the last frame
 of the range and pauses there. The choice persists in `playback/loop`.
 
 RAM Preview stays its own command and its own button: caching a range and starting playback are
@@ -229,7 +229,7 @@ same `timeline/time-format` preference the Timeline's own View menu writes, so t
 labels and this field cannot disagree about the format.
 
 The guide toggles, under View > Guides, use `Ctrl+Alt+S` for Safe Areas and `Ctrl+Shift+C`,
-`Ctrl+Shift+T`, `Ctrl+Shift+R`, and `Ctrl+Shift+P` for Centre Cross, Thirds, Rulers, and Pixel Grid.
+`Ctrl+Shift+T`, `Ctrl+Shift+R`, and `Ctrl+Shift+P` for Center Cross, Thirds, Rulers, and Pixel Grid.
 Select All / Deselect All / Invert are `Ctrl+A`, `Ctrl+Shift+A` and `Ctrl+Alt+A`; they act on a
 path's anchors while it is being edited (the Pen tool, a selected mask, or an anchor selection) and
 on the composition's layers otherwise, and their labels name which. Every Viewer binding is scoped
@@ -242,8 +242,8 @@ layer. A pixel grid
 is suppressed below 400% even when enabled. Guides follow the viewer's active zoom/pan transform;
 they are not part of the display buffer or any export.
 
-Cryptomatte (#364). Selecting a Cryptomatte shows its ID-colour preview in the Viewer: every object
-in its own colour, the selected mattes brightened (Properties "Preview", on by default, turns it
+Cryptomatte (#364). Selecting a Cryptomatte shows its ID-color preview in the Viewer: every object
+in its own color, the selected mattes brightened (Properties "Preview", on by default, turns it
 off). The Viewer's eyedropper tool, or "Pick in Viewer" in Properties, picks objects: a click or
 Shift-click adds the object under the cursor, Alt- or Ctrl-click removes it, each pick one undoable
 edit. The point is mapped through the displaying layer's transform and time, so a moved, scaled,
@@ -298,7 +298,7 @@ search or inline rename field.
 | Drop files or folders onto Assets | Imports them into the folder under the pointer, or the root on empty space |
 | Drop files or folders onto Timeline or Viewer | Imports them into the selected Assets folder, then makes layers of what was imported |
 | Drop files or folders onto Nodes | Imports them into the selected Assets folder; no node is added |
-| Right-click an asset | New Composition from Selection, Input Colour…, Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…, Delete, then New Folder, New Composition…, Import… |
+| Right-click an asset | New Composition from Selection, Input Color…, Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…, Delete, then New Folder, New Composition…, Import… |
 | Right-click a composition | Open, Composition Settings…, Rename, Duplicate, Delete, then the same three |
 | Right-click a folder | Rename, Delete, then the same three; empty space offers only the three |
 
@@ -361,7 +361,7 @@ tab and an Advanced tab (Ctrl+Tab / Ctrl+Shift+Tab switch them from any field). 
 unchanged settings commit nothing. Entry points: Composition menu (`Ctrl+Alt+N`, `Ctrl+Alt+K`), the
 Viewer composition menu, and the Assets Add menu, footer and context menus.
 
-| Control | Behaviour |
+| Control | Behavior |
 | --- | --- |
 | Name | Required |
 | Preset | Custom, the user's presets, then HD 1080p (1920 × 1080), HD 720p (1280 × 720), UHD 4K (3840 × 2160), DCI 2K (2048 × 1080), DCI 4K (4096 × 2160), Vertical 1080 × 1920 and Square 1080, all square pixels. Under the preset a muted summary reads the current values, for example `1920 × 1080 · 16:9 · Square pixels · 24 fps · 10 s (240 frames)`: the frame aspect (size times pixel aspect, reduced, or a ratio to one at two decimals such as `1.9:1` when its terms exceed 32), the pixel aspect, the rate (with `drop-frame` when labels are drop-frame) and the duration; a part whose value is invalid is left out. Choosing a built-in sets size and pixel aspect only; choosing a user preset sets every value it holds. The field shows the first preset whose values equal the current ones (user presets first) and Custom otherwise, including while a value is invalid |
@@ -372,9 +372,9 @@ Viewer composition menu, and the Assets Add menu, footer and context menus.
 | Advanced: Timecode drop-frame labels | Shown only at 30000/1001 and 60000/1001. It changes timecode labels to SMPTE drop-frame (`;` before the frames, two or four labels skipped each minute except every tenth) and never changes frames or time |
 | Advanced: Start | The timecode of frame 0, entered in the duration unit; stored as an exact time and labelled at the nearest frame |
 | Duration and unit | Frames, Seconds (decimal or rational) or Timecode. Switching units re-displays the same exact duration; changing rate in Frames or Timecode keeps the frame count, in Seconds keeps the exact time |
-| Background Colour | The composition background as a `KColorChip` at its own size with its `#RRGGBB` value beside it; the chip opens the colour picker |
-| Advanced: Working Colour Space | Inherit (the project space) or a scene-linear space of the project's OCIO config |
-| Advanced: Resize Anchor | Settings mode only, once the size changes: the Properties Anchor Point grid (`KAnchorGrid`), choosing where existing layers sit when the size changes (default centre). Click a dot or use the arrow keys |
+| Background Color | The composition background as a `KColorChip` at its own size with its `#RRGGBB` value beside it; the chip opens the color picker |
+| Advanced: Working Color Space | Inherit (the project space) or a scene-linear space of the project's OCIO config |
+| Advanced: Resize Anchor | Settings mode only, once the size changes: the Properties Anchor Point grid (`KAnchorGrid`), choosing where existing layers sit when the size changes (default center). Click a dot or use the arrow keys |
 | Advanced: Action / Title Safe | The stored safe-area percentages; title safe may not exceed action safe |
 
 An invalid value disables OK and shows one plain reason directly under its own field (name, size,
@@ -601,8 +601,8 @@ path where a window manager claims Alt-drag. Its object names are `layerStartFra
 Bar magnetic targets are other layers' in/out points, the playhead and work-area edges. A guide
 marks the chosen target. Empty lane space retains ruler scrubbing. Visibility, solo and lock cells
 commit their boundary commands; audio and Parent columns stay hidden. A label menu offers eight
-presets, Custom… (the kit colour picker popup under the row, committing one Set Layer Label Color
-step when it closes with a new colour; Escape keeps the old one) and Kind Default. Name editing consumes text/navigation keys before
+presets, Custom… (the kit color picker popup under the row, committing one Set Layer Label Color
+step when it closes with a new color; Escape keeps the old one) and Kind Default. Name editing consumes text/navigation keys before
 Timeline commands. Parenting remains separate work.
 
 New object names: `timelineSetWorkAreaStartAction`, `timelineSetWorkAreaEndAction`,
@@ -662,7 +662,7 @@ None and the other layers of the same Merge, then Alpha, Luma and Inverted for t
 | Wheel over the body | Scroll the section cards; Properties has no filter or header search, every section stays visible |
 | Click an anchor grid dot | Set anchor offset from evaluated local bounds, one undoable command |
 | Edit Anchor X/Y | Highlight a matching grid point; clear highlight for a custom offset |
-| Arrow keys on the anchor grid | Move to a neighbouring grid point |
+| Arrow keys on the anchor grid | Move to a neighboring grid point |
 | Click text stepper arrow | Increase/decrease the field by one step |
 | Click alignment segment | Set Left / Center / Right through the registered parameter |
 

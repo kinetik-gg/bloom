@@ -200,7 +200,7 @@ void JobRow::buildHeader() {
     lines->addWidget(f_->lineTwo);
 
     f_->label = named(new kit::KColorChip(f_->content), QStringLiteral("exportJobLabel"),
-                      tr("Label colour"));
+                      tr("Label color"));
     f_->label->setControlSize(kit::KColorChip::ControlSize::Compact);
     f_->enabled = named(new kit::KSwitch(f_->content), QStringLiteral("exportJobEnabled"),
                         tr("Include in Start All"));
@@ -753,9 +753,9 @@ std::unique_ptr<QMenu> JobRow::buildMenu() {
     auto clear = view->commands[host::ExportCommand::EditJob];
     if (clear.available && !view->record.labelColor.has_value()) {
         clear.available = false;
-        clear.reason = tr("This job has no label colour.").toStdString();
+        clear.reason = tr("This job has no label color.").toStdString();
     }
-    add(tr("Remove label colour"), "exportClearLabelAction", clear, [this] {
+    add(tr("Remove label color"), "exportClearLabelAction", clear, [this] {
         report(adapter_.editJob(job_, jobEdit([](auto& edit) {
                                     edit.labelColor = std::optional<std::array<std::uint8_t, 3>>();
                                 })));

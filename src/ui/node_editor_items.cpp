@@ -49,7 +49,7 @@ QString nodeCategoryName(const document::NodeCategory category) {
     case document::NodeCategory::Layers:
         return QCoreApplication::translate("node_editor", "Layers");
     case document::NodeCategory::Color:
-        return QCoreApplication::translate("node_editor", "Colour");
+        return QCoreApplication::translate("node_editor", "Color");
     case document::NodeCategory::Compositing:
         return QCoreApplication::translate("node_editor", "Compositing");
     case document::NodeCategory::Values:
@@ -80,7 +80,7 @@ QString nodeCategoryName(const document::NodeDefinition& definition) {
     if (type == document::kSeparateHsvNodeType || type == document::kCombineHsvNodeType ||
         type == document::kHueShiftNodeType || type == document::kLuminanceNodeType ||
         type == document::kColorMixNodeType)
-        return QStringLiteral("Color");
+        return QStringLiteral("Color Values");
     if (definition.category == document::NodeCategory::Values)
         return QStringLiteral("Values");
     if (type == document::kBooleanLogicNodeType || type == document::kBooleanNotNodeType ||
@@ -102,10 +102,10 @@ QString nodeCategoryName(const document::NodeDefinition& definition) {
 std::span<const QString> nodeCategoryOrder() {
     static const std::array order{
         QStringLiteral("Sources"),   QStringLiteral("Layers"),  QStringLiteral("Compositing"),
-        QStringLiteral("Transform"), QStringLiteral("Filters"), QStringLiteral("Colour"),
+        QStringLiteral("Transform"), QStringLiteral("Filters"), QStringLiteral("Color"),
         QStringLiteral("Values"),    QStringLiteral("Math"),    QStringLiteral("Convert"),
         QStringLiteral("String"),    QStringLiteral("Logic"),   QStringLiteral("Time"),
-        QStringLiteral("Color"),     QStringLiteral("Vector"),  QStringLiteral("Utilities"),
+        QStringLiteral("Color Values"), QStringLiteral("Vector"), QStringLiteral("Utilities"),
         QStringLiteral("Output")};
     return order;
 }
@@ -156,7 +156,7 @@ QString displayTypeName(const std::string_view typeId) {
     if (typeId == "pixelAspectDenominator")
         return QCoreApplication::translate("node_editor", "Pixel Aspect Denominator");
     if (typeId == "bloom.ocio-colour-space-transform")
-        return QCoreApplication::translate("node_editor", "OCIO Colour Space Transform");
+        return QCoreApplication::translate("node_editor", "OCIO Color Space Transform");
     if (typeId == "bloom.ocio-file-transform")
         return QCoreApplication::translate("node_editor", "OCIO File Transform");
     if (typeId == "processSpace")

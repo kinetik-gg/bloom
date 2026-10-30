@@ -136,7 +136,7 @@ void testLayoutSelectionAndSockets() {
            "unlinked parameter-role socket keeps its kit control");
     const auto colorBinding = std::ranges::find(
         rowNode.parameters, document::kSolidColorParameterRole, &document::ParameterBinding::role);
-    expect(colorBinding != rowNode.parameters.end(), "render-rule fixture colour binding");
+    expect(colorBinding != rowNode.parameters.end(), "render-rule fixture color binding");
     const auto valueNodeId = document::NodeId::fromRaw(99999);
     const auto valueParameterId = document::ParameterId::fromRaw(99999);
     expect(projectionComposition.parameters().insert(
@@ -148,7 +148,7 @@ void testLayoutSelectionAndSockets() {
                 std::string(document::kColorValueNodeType),
                 {{std::string(document::kValueParameterRole), valueParameterId}},
                 document::kValueNodeSchemaVersion}),
-           "render-rule fixture Colour value node");
+           "render-rule fixture Color value node");
     expect(projectionComposition.parameters().setSource(
                colorBinding->parameterId,
                document::DriverBindingSource{valueNodeId, std::string(document::kValuePortName)}),

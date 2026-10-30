@@ -1037,6 +1037,12 @@ bloom_add_test(NAME bloom.ui.timeline-row-controls COMMAND bloom_timeline_row_co
 # through real pointer and key events on the production canvas. Its own executable for the same
 # reason node_card_tests.cpp is -- and deliberately separate from node_production_wiring_tests.cpp,
 # which owns the "no adapter on setSubmit()" contract rather than the gesture contract.
+add_executable(bloom_node_field_controls_test node_field_controls_tests.cpp)
+target_include_directories(bloom_node_field_controls_test PRIVATE ..)
+target_link_libraries(bloom_node_field_controls_test PRIVATE bloom_ui bloom_project Qt6::Test)
+bloom_enable_warnings(bloom_node_field_controls_test)
+bloom_add_test(NAME bloom.ui.node-field-controls COMMAND bloom_node_field_controls_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_card_value_gesture_test node_card_value_gesture_tests.cpp)
 target_include_directories(bloom_node_card_value_gesture_test PRIVATE ..)
 target_link_libraries(bloom_node_card_value_gesture_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)

@@ -423,19 +423,19 @@ void AssetsEditor::rebuild() {
         if (video) {
             const auto containerTags = videoContainerTags(asset);
             if (!containerTags.isEmpty())
-                tooltip += QStringLiteral("\n") + tr("Container colour tags:\n") + containerTags;
+                tooltip += QStringLiteral("\n") + tr("Container color tags:\n") + containerTags;
         }
         if (controller) {
             auto input = controller->inputColorSpaceDisplay(asset.id);
             if (input.isEmpty() && !asset.interpretation.inputColorSpaceId.empty())
                 input = QString::fromStdString(asset.interpretation.inputColorSpaceId);
             if (!input.isEmpty())
-                tooltip += QStringLiteral("\n") + tr("Input colour space: ") + input;
+                tooltip += QStringLiteral("\n") + tr("Input color space: ") + input;
             const auto warning = controller->inputColorSpaceWarning(asset.id);
             if (!warning.isEmpty())
-                tooltip += QStringLiteral("\n") + tr("Colour note: ") + warning;
+                tooltip += QStringLiteral("\n") + tr("Color note: ") + warning;
         } else if (!asset.interpretation.inputColorSpaceId.empty())
-            tooltip += QStringLiteral("\n") + tr("Input colour space: ") +
+            tooltip += QStringLiteral("\n") + tr("Input color space: ") +
                        QString::fromStdString(asset.interpretation.inputColorSpaceId);
         if (video && std::ranges::any_of(asset.videoStreams, [](const auto& stream) {
                 return stream.codec == "prores";

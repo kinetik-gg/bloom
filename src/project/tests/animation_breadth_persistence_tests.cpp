@@ -220,7 +220,7 @@ Authored authoredProject() {
     for (auto& key : colorKeys) {
         const auto allocated = draft.ids().allocateKeyframe();
         if (!allocated) {
-            throw std::runtime_error("fixture colour key ids");
+            throw std::runtime_error("fixture color key ids");
         }
         key = *allocated;
     }
@@ -249,7 +249,7 @@ Authored authoredProject() {
              document::ScalarKeyframe{colorKeys[7], time(7, 24), 1.0}}}};
     if (!composition.animationCurves().insert(
             document::Color4AnimationCurve{*colorCurve, std::move(colorComponents)})) {
-        throw std::runtime_error("fixture colour curve");
+        throw std::runtime_error("fixture color curve");
     }
     // GRAPH-1, D2: the eased scalar segment also carries NON-DEFAULT ease handles on both of its
     // ends, while every colour key keeps its defaults. That pairing is the whole point of the
@@ -310,11 +310,11 @@ void roundTripAndReopen() {
     const auto archive = archiveOf(snapshot, settings);
     const auto text = documentTextOf(archive);
     expect(text.find("\"kind\": \"color4\"") != std::string::npos,
-           "a colour curve is written with the color4 discriminator");
+           "a color curve is written with the color4 discriminator");
     expect(text.find("\"ease-in-out\"") != std::string::npos,
            "and an eased key is written with the ease-in-out token");
     expect(text.find("\"red\"") != std::string::npos && text.find("\"alpha\"") != std::string::npos,
-           "a colour key's value carries the same named channels a constant colour does");
+           "a color key's value carries the same named channels a constant color does");
     expect(text.find("\"minor\": 29") != std::string::npos,
            "both constructs declare the current document schema minor");
     expect(handleObject(text, "outgoingHandle") == R"({"time":0.125,"value":0.5})" &&
@@ -326,7 +326,7 @@ void roundTripAndReopen() {
 
     auto openedResult = openProjectArchive(archive, {}, memory());
     expect(openedResult.outcome() == OpenArchiveOutcome::Opened,
-           "a project with a colour curve and an eased key opens");
+           "a project with a color curve and an eased key opens");
     if (openedResult.outcome() != OpenArchiveOutcome::Opened) {
         return;
     }
@@ -343,7 +343,7 @@ void roundTripAndReopen() {
     const auto* colorCurve = composition->animationCurves().findColor4(authored.colorCurve);
     const auto* expectedColor = original->animationCurves().findColor4(authored.colorCurve);
     expect(colorCurve != nullptr && expectedColor != nullptr && *colorCurve == *expectedColor,
-           "every colour key's id, exact time, four channels and interpolation round-trip exactly, "
+           "every color key's id, exact time, four channels and interpolation round-trip exactly, "
            "negative and HDR channels included");
     const auto* scalarCurve = composition->animationCurves().findScalar(authored.scalarCurve);
     const auto* expectedScalar = original->animationCurves().findScalar(authored.scalarCurve);
@@ -437,7 +437,7 @@ void minorGating() {
         const auto decoded = decodeDocumentEnvelope(dom.document()->root());
         expect(decoded.outcome() == DocumentDecodeOutcome::Failed &&
                    decoded.error() == DocumentDecodeError::UnsupportedSchemaVersion,
-               "a document claiming 1.2 while carrying a colour curve is refused, never decoded as "
+               "a document claiming 1.2 while carrying a color curve is refused, never decoded as "
                "if the construct were part of 1.2");
         expect(decoded.path() == "/schemaVersion",
                "and the refusal names the exact discriminator it could not accept");
@@ -458,7 +458,7 @@ void minorGating() {
         const auto decoded = decodeDocumentEnvelope(dom.document()->root());
         expect(decoded.outcome() == DocumentDecodeOutcome::Decoded &&
                    decoded.classification() == DocumentClassification::EditableWithRoundTrip,
-               "a document claiming a newer minor still decodes its colour curve and eased key");
+               "a document claiming a newer minor still decodes its color curve and eased key");
     }
 }
 

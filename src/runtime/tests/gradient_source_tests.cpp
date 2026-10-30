@@ -56,7 +56,7 @@ int main() {
     gradient.end = gradient.start;
     const auto degenerate = gradientPixel(gradient, 100, 100);
     if (!degenerate || !near(degenerate.value()->red(), 0)) {
-        std::cerr << "degenerate gradient must choose first colour\n";
+        std::cerr << "degenerate gradient must choose first color\n";
         return 1;
     }
     gradient.aspect = 1;

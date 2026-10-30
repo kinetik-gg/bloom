@@ -334,7 +334,7 @@ void testColorOperations(Expectations& expectations) {
     const auto grey = run(Kernel::SeparateHsv, {core::Color4d{0.5, 0.5, 0.5, 0.25}});
     expectations.expect(near(grey, 0, 0.0) && near(grey, 1, 0.0) && near(grey, 2, 0.5) &&
                             near(grey, 3, 0.25),
-                        "and a grey has no hue and no saturation");
+                        "and a gray has no hue and no saturation");
 
     expectations.expect(nearColor(run(Kernel::CombineHsv, {0.0, 1.0, 1.0, 1.0}), red),
                         "Combine HSV is its inverse");
@@ -351,14 +351,14 @@ void testColorOperations(Expectations& expectations) {
         "and a shift past the circle wraps");
     expectations.expect(nearColor(run(Kernel::HueShift, {core::Color4d{0.5, 0.5, 0.5, 1.0}, 90.0}),
                                   {0.5, 0.5, 0.5, 1.0}, 1e-12),
-                        "and a grey has no hue to shift");
+                        "and a gray has no hue to shift");
 
     expectations.expect(near(run(Kernel::Luminance, {red}), 0, core::kRec709RedLuminanceWeight) &&
                             near(run(Kernel::Luminance, {core::Color4d{0.0, 1.0, 0.0, 1.0}}), 0,
                                  core::kRec709GreenLuminanceWeight) &&
                             near(run(Kernel::Luminance, {core::Color4d{0.0, 0.0, 1.0, 1.0}}), 0,
                                  core::kRec709BlueLuminanceWeight),
-                        "Luminance uses the colour module's own Rec.709 weights");
+                        "Luminance uses the color module's own Rec.709 weights");
     // Alpha is not a colour and takes no part.
     expectations.expect(near(run(Kernel::Luminance, {core::Color4d{1.0, 1.0, 1.0, 0.0}}), 0,
                              core::rec709Luminance({1.0, 1.0, 1.0, 1.0})),

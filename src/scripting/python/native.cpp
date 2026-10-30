@@ -388,7 +388,7 @@ void NativeHost::save(const std::string& path) {
 nb::dict NativeHost::setColorSettings(const std::string& config,
                                       std::optional<std::string> workingSpace) {
     if (std::this_thread::get_id() != owner_) {
-        throw std::runtime_error("Colour settings change on the host authoring thread");
+        throw std::runtime_error("Color settings change on the host authoring thread");
     }
     const auto access = lockSession();
     SessionColorSettingsResult result;

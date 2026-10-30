@@ -229,12 +229,12 @@ void testWorkingColorSpaceOverrideIsUndoable(TestContext& test) {
         stack.undo().changed() &&
             document.snapshot().project().findComposition(kCompositionId)->workingColorSpaceId() ==
                 std::nullopt,
-        "working colour-space override is one undo step");
+        "working color-space override is one undo step");
     test.expect(
         stack.redo().changed() &&
             document.snapshot().project().findComposition(kCompositionId)->workingColorSpaceId() ==
                 std::optional<std::string>{"ACEScg"},
-        "redo restores the working colour-space override");
+        "redo restores the working color-space override");
 }
 
 // #376 Composition Settings: one undoable command for every setting, with exact layer timing and
@@ -337,7 +337,7 @@ void testCompositionSettingsRefuseInvalidValues(TestContext& test) {
     refused(safe, "title safe outside action safe is refused");
     auto space = fixture.settings();
     space.workingColorSpaceId = std::string{};
-    refused(space, "an empty working colour space id is refused");
+    refused(space, "an empty working color space id is refused");
     test.expect(compositionSettingsIssue(empty).has_value() &&
                     !compositionSettingsIssue(fixture.settings()).has_value(),
                 "the issue helper gives the dialog the same plain reason");
@@ -422,7 +422,7 @@ void testSizeChangeKeepsContentAtTheAnchor(TestContext& test) {
         test.expect(resize(fixture, {1, 1}).changed(), "a centre-anchored resize commits");
         const auto after = fixture.constantPosition(layer.position);
         test.expect(after && after->x == before.x + 500 && after->y == before.y + 300,
-                    "centre anchor: content moves by half the size change");
+                    "center anchor: content moves by half the size change");
         test.expect(fixture.stack.undo().changed() &&
                         fixture.constantPosition(layer.position) == before,
                     "one undo restores size and position");

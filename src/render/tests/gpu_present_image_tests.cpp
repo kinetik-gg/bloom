@@ -238,14 +238,14 @@ void channelAndBackground(Expectations& expectations) {
     const Pixel frame = background(params, 0.5F, 0.5F);
     const Pixel outside = background(params, 30.5F, 0.5F);
     expectations.expect(near(frame.r, 0.6F) && near(frame.g, 0.3F) && near(frame.b, 0.2F),
-                        "inside the destination the backdrop is the frame (composition) colour");
+                        "inside the destination the backdrop is the frame (composition) color");
     expectations.expect(near(outside.r, 0.1F) && near(outside.g, 0.1F),
-                        "outside the destination the backdrop is the surround colour");
+                        "outside the destination the backdrop is the surround color");
     params.transparencyGrid = true;
     const Pixel raised = background(params, 0.5F, 0.5F);
     const Pixel base = background(params, 10.5F, 0.5F);
     expectations.expect(near(raised.r, 0.75F) && near(base.r, 0.25F),
-                        "the grid replaces the frame colour; row+column even is raised");
+                        "the grid replaces the frame color; row+column even is raised");
     const Pixel surround = background(params, 30.5F, 0.5F);
     expectations.expect(near(surround.r, 0.1F),
                         "the checkerboard stops at the destination; the surround stays solid");
@@ -258,15 +258,15 @@ void channelAndBackground(Expectations& expectations) {
     params.channel = GpuPresentChannel::Rgba;
     Pixel p = compose(params, image, Pixel{}, false, 0.5F, 0.5F);
     expectations.expect(near(p.r, texel.r * texel.a + 0.2F * (1.0F - texel.a)),
-                        "RGBA composes straight alpha over the frame colour");
+                        "RGBA composes straight alpha over the frame color");
     params.channel = GpuPresentChannel::Rgb;
     p = compose(params, image, Pixel{}, false, 0.5F, 0.5F);
     expectations.expect(near(p.r, 0.4F) && near(p.g, 0.6F) && near(p.b, 0.8F) && near(p.a, 1.0F),
-                        "RGB forces opaque and shows the colour");
+                        "RGB forces opaque and shows the color");
     params.channel = GpuPresentChannel::Red;
     p = compose(params, image, Pixel{}, false, 0.5F, 0.5F);
     expectations.expect(near(p.r, 0.4F) && near(p.g, 0.4F) && near(p.b, 0.4F),
-                        "Red shows the red channel as grey");
+                        "Red shows the red channel as gray");
     params.channel = GpuPresentChannel::Alpha;
     p = compose(params, image, Pixel{}, false, 0.5F, 0.5F);
     expectations.expect(near(p.r, 0.5F) && near(p.g, 0.5F) && near(p.b, 0.5F),

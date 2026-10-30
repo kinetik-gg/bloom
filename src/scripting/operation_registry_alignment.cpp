@@ -157,12 +157,12 @@ void add(std::vector<OperationDescriptor>& descriptors, std::string id, Argument
 void addLayerAlignmentOperations(std::vector<OperationDescriptor>& descriptors) {
     add(descriptors, "bloom.layer.align-layers",
         argument("edge", ValueKind::String, true, true, ContextSource::None, "left",
-                 R"(The edge or centre to line up: "left", "horizontal-centre", "right", "top", )"
+                 R"(The edge or center to line up: "left", "horizontal-centre", "right", "top", )"
                  R"("vertical-middle" or "bottom".)"),
         false);
     add(descriptors, "bloom.layer.distribute-layers",
         argument("axis", ValueKind::String, true, true, ContextSource::None, "horizontal",
-                 R"(Space the layers' centres evenly along "horizontal" or "vertical". Needs )"
+                 R"(Space the layers' centers evenly along "horizontal" or "vertical". Needs )"
                  R"(three or more layers.)"),
         true);
 }

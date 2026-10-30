@@ -124,8 +124,8 @@ ADR 0026 later advances compiled-plan semantics 9 -> 10 and evaluator semantics 
 which the C++ implementation matched: PNG analysis `91fb3c3f...` (1922 bytes), EXR analysis
 `7975de4c...` (1485), PNG output `89db168a...` (669) and EXR output `3987dbcb...` (567).
 
-The Color facet then changed its colour-space encoding from `color-id=id:<name>` to
-`color-id=utf8:<lower-hex UTF-8 bytes>`: OCIO colour-space names are free text (for example
+The Color facet then changed its color-space encoding from `color-id=id:<name>` to
+`color-id=utf8:<lower-hex UTF-8 bytes>`: OCIO color-space names are free text (for example
 `Linear Rec.709 (sRGB)`), and the `id:` grammar refused them, so every export from such a working
 space failed its analysis. The blocks above encode names with `color()`. With `10 2 11 7` the oracle
 derives PNG analysis `f8d94bef...` (1961 bytes), EXR analysis `45c89367...` (1521), PNG output

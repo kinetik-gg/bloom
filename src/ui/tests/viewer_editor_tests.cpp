@@ -1225,7 +1225,7 @@ void testChannelDropdownRemapsOnlyThePresentedImage(Expectations& expectations) 
                                                    core::RationalTime::fromInteger(1), *format));
     expectations.expect(
         fixture.session.addSolidLayer(QStringLiteral("Blue"), core::Color4d{0.0, 0.0, 1.0, 1.0}),
-        "the channel fixture has opaque coloured content");
+        "the channel fixture has opaque colored content");
     fixture.viewer.show();
     fixture.viewer.zoomDropdownForTest()->setCurrentIndex(3); // 100%
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),

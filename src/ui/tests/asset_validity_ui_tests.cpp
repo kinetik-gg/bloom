@@ -158,7 +158,7 @@ Outcome importAndInspect(const std::filesystem::path& path, const bool chooseRec
     if (chooseRec709) {
         const auto config = runtime::detail::resolveInputColorConfig(harness.session.colorIntent());
         if (config && !config->rec709VideoColorSpaceId().empty()) {
-            commands::Transaction choose("Input Colour", harness.session.snapshot().revision());
+            commands::Transaction choose("Input Color", harness.session.snapshot().revision());
             choose.emplace<commands::SetAssetInputColor>(
                 asset.id, asset.interpretation.colorSpace,
                 std::string(config->rec709VideoColorSpaceId()));
@@ -216,8 +216,8 @@ void statusBarVideoNote(const std::filesystem::path& clip, const std::string& fa
     const auto text = bar.videoTextForTest().toStdString();
     std::cout << "status bar video cell: " << text << '\n';
     expect(text.starts_with("Video: software") &&
-               text.ends_with("Colour tags missing — assumed " + family +
-                              " with the sRGB transfer. Change in Assets → Input Colour"),
+               text.ends_with("Color tags missing — assumed " + family +
+                              " with the sRGB transfer. Change in Assets → Input Color"),
            "status bar: the decode route and the assumed-colour note are shown");
     expect(bar.videoToolTipForTest().contains(QString::fromStdString(assets.front().name)),
            "status bar: the tooltip names the source");
@@ -227,7 +227,7 @@ void report(const std::string& label, const Outcome& outcome) {
     std::cout << label << ": imported=" << outcome.imported << " kind=" << outcome.kind
               << " missing=" << outcome.missing << " thumbnail=" << outcome.thumbnail
               << " dataOnly=" << outcome.dataOnly << " problem=" << outcome.problem
-              << " audio=" << outcome.audio << " colour=" << outcome.colourNote
+              << " audio=" << outcome.audio << " color=" << outcome.colourNote
               << " input=" << outcome.inputDisplay << '\n';
 }
 
@@ -275,9 +275,9 @@ int main(int argc, char** argv) {
             image.save(QString::fromStdString(png.string()));
             const auto still = importAndInspect(png);
             report("png still", still);
-            expect(still.headerColour.starts_with("Colour: sRGB (from the file)") &&
+            expect(still.headerColour.starts_with("Color: sRGB (from the file)") &&
                        still.headerColour.find("srgb_rec709_display") == std::string::npos,
-                   "a PNG header names its colour space sRGB, got " + still.headerColour);
+                   "a PNG header names its color space sRGB, got " + still.headerColour);
         }
         // Untagged video (owner decision 2026-10-24): Auto no longer refuses. It assumes the size
         // convention (Rec.709 for HD, Rec.601 for SD), shows a thumbnail and the visible note
@@ -286,13 +286,13 @@ int main(int argc, char** argv) {
                                       const bool hasAudio, const std::string& family) {
             expect(video.imported && !video.missing, label + ": a present video is not missing");
             expect(video.thumbnail && video.problem.empty(),
-                   label + ": Auto shows a thumbnail instead of a colour refusal");
-            expect(video.assumed && video.colourNote == "Colour tags missing — assumed " + family +
+                   label + ": Auto shows a thumbnail instead of a color refusal");
+            expect(video.assumed && video.colourNote == "Color tags missing — assumed " + family +
                                                             " with the sRGB transfer. Change in "
-                                                            "Assets → Input Colour",
+                                                            "Assets → Input Color",
                    label + ": the assumption is a visible note naming its fix");
             expect(video.inputDisplay.rfind("Auto (assumed: ", 0) == 0,
-                   label + ": the input colour display says the space was assumed");
+                   label + ": the input color display says the space was assumed");
             // #380: the header names the space plainly and states the assumption once.
             const auto count = [&](const std::string& part) {
                 std::size_t found = 0;
@@ -301,11 +301,11 @@ int main(int argc, char** argv) {
                     ++found;
                 return found;
             };
-            expect(video.headerColour.starts_with("Colour: ") && count("lin_rec709_scene") == 0 &&
+            expect(video.headerColour.starts_with("Color: ") && count("lin_rec709_scene") == 0 &&
                        count("srgb_rec709_display") == 0 && count("(Bloom)") == 0,
-                   label + ": the header shows a plain colour-space name, got " +
+                   label + ": the header shows a plain color-space name, got " +
                        video.headerColour);
-            expect(count("Colour tags missing") == 1 && count("assumed") == 1,
+            expect(count("Color tags missing") == 1 && count("assumed") == 1,
                    label + ": the header shows the assumed-colour note once");
             expect(video.headerKind.find(" frames), ") != std::string::npos &&
                        video.headerKind.find("Δ") == std::string::npos,
@@ -314,7 +314,7 @@ int main(int argc, char** argv) {
             if (hasAudio)
                 expect(video.audio.empty(), label + ": its audio decodes");
             expect(video.thumbnailAfterChoice,
-                   label + ": choosing Rec.709 as its input colour space gives a thumbnail");
+                   label + ": choosing Rec.709 as its input color space gives a thumbnail");
         };
         if (!fixtures.empty())
             statusBarVideoNote(fixtures / "untagged-hd-prores.mov", "Rec.709");
@@ -353,8 +353,8 @@ int main(int argc, char** argv) {
             report(path.filename().string(), video);
             expect(video.imported && !video.missing && video.thumbnail && video.problem.empty() &&
                        video.assumed &&
-                       video.colourNote == "Colour tags missing — assumed Rec.709 with the "
-                                           "sRGB transfer. Change in Assets → Input Colour",
+                       video.colourNote == "Color tags missing — assumed Rec.709 with the "
+                                           "sRGB transfer. Change in Assets → Input Color",
                    path.filename().string() + ": renders in Auto with the Rec.709 note");
         }
         for (const auto& path : extra)

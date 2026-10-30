@@ -839,7 +839,7 @@ void CompositionPreviewController::requestPreview(
         failed.desiredIdentity.reset();
         failed.taskId.reset();
         failed.freshness = freshnessFor(failed.frame, failed.desiredIdentity);
-        failed.message = tr("The preview colour intent could not be captured");
+        failed.message = tr("The preview color intent could not be captured");
         publish(std::move(failed));
         return;
     }

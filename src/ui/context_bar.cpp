@@ -79,7 +79,7 @@ ContextBar::ContextBar(CompositionSession& session, CompositionPreviewController
     : QWidget(parent), session_(session), preview_(preview),
       alignment_(new LayerAlignmentActions(session, preview, this)) {
     setObjectName(QStringLiteral("contextBar"));
-    setAccessibleName(tr("Context bar"));
+    setAccessibleName(tr("Toolbar"));
     setFixedHeight(kit::px(kit::Size::ContextBarHeight));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
@@ -89,7 +89,7 @@ ContextBar::ContextBar(CompositionSession& session, CompositionPreviewController
     spec.overflowButtonName = QStringLiteral("contextBarOverflowButton");
     spec.overflowMenuName = QStringLiteral("contextBarOverflowMenu");
     spec.overflowIcon = kit::IconId::Overflow;
-    spec.overflowToolTip = tr("More of the context bar");
+    spec.overflowToolTip = tr("More of the toolbar");
     spec.owner = this;
     spec.addWidget(tools_);
 

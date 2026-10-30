@@ -387,15 +387,15 @@ void testChangedSourceInvalidates(Expectations& expectations, GpuDevice& device,
         const auto uploadsBeforeColour = executor.executor->counters().uploads;
         expectations.expect(expectMediaParity(expectations, *executor.executor, evaluator, builder,
                                               reinterpreted, requestFor(*reinterpreted),
-                                              "invalidate: changed input colour"),
-                            "invalidate: changed input colour parity");
+                                              "invalidate: changed input color"),
+                            "invalidate: changed input color parity");
         const auto reinterpretedRebuilt = builder.build(reinterpreted, requestFor(*reinterpreted));
         const auto* reinterpretedKeys = firstUpload(*reinterpretedRebuilt.scene);
         expectations.expect(reinterpretedKeys != nullptr &&
                                 reinterpretedKeys->semanticKey != baseKeys->semanticKey,
-                            "invalidate: a changed input colour changes the upload key");
+                            "invalidate: a changed input color changes the upload key");
         expectations.expect(executor.executor->counters().uploads > uploadsBeforeColour,
-                            "invalidate: a changed input colour uploads again");
+                            "invalidate: a changed input color uploads again");
     }
 }
 

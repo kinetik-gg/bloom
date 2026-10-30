@@ -200,7 +200,7 @@ void testTheSplitterHandleIsPaintedInBackground(Expectations& expectations) {
 void testTheNodeGraphSitsOnTheKinetikBackground(Expectations& expectations) {
     NodeGraphicsScene scene;
     expectations.expect(scene.backgroundBrush().color() == kit::color(kit::Color::Background),
-                        "the node graph's canvas is the Kinetik background, not its own grey");
+                        "the node graph's canvas is the Kinetik background, not its own gray");
     expectations.expect(scene.objectName() == QStringLiteral("nodeGraphicsScene"),
                         "and the scene keeps its objectName");
 }

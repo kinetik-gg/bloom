@@ -339,6 +339,12 @@ QWidget* NodeGraphicsScene::nodeFieldForTest(const document::NodeId nodeId,
     return item == nullptr ? nullptr : item->fieldWidget(fieldObjectName);
 }
 
+QList<QWidget*> NodeGraphicsScene::nodeControlsForRoleForTest(const document::NodeId nodeId,
+                                                              const QString& role) const {
+    const auto* item = dynamic_cast<const NodeItem*>(findNodeItem(nodeId));
+    return item == nullptr ? QList<QWidget*>{} : item->controlsForRole(role);
+}
+
 NodeSockets NodeGraphicsScene::nodeSocketsForTest(const document::NodeId nodeId) const {
     const auto* item = dynamic_cast<const NodeItem*>(findNodeItem(nodeId));
     return item == nullptr ? NodeSockets{}

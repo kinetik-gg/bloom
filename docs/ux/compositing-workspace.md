@@ -85,7 +85,7 @@ The working document and render contract is defined in
 
 ## Panel Shell
 
-Every workspace content area is a panel. The application menu bar and the contextual tool bar under
+Every workspace content area is a panel. The application menu bar and the toolbar under
 it are the only fixed surfaces ([ADR 0031](../decisions/0031-contextual-tool-bar.md)). Each
 panel has an editor header and its editor type may be replaced without recreating or mutating project
 data.

@@ -1,4 +1,4 @@
-"""Atomic command groups with optimistic revision checks."""
+"""Atomic command groups with optimiztic revision checks."""
 from . import _state
 from .errors import checked
 

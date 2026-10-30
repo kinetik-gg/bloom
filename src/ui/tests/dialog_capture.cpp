@@ -565,7 +565,7 @@ void compositionDeleteAndViewer(test::WindowFixture& fixture) {
 void labelColourPicker(test::WindowFixture& fixture) {
     auto* stack = fixture.window->findChild<TimelineLayerStack*>();
     if (stack == nullptr || stack->rowCount() == 0) {
-        std::cerr << "label colour: no timeline layer rows\n";
+        std::cerr << "label color: no timeline layer rows\n";
         ++gFindings;
         return;
     }
@@ -583,7 +583,7 @@ void labelColourPicker(test::WindowFixture& fixture) {
     if (menu != nullptr)
         menu->close();
     if (custom == nullptr) {
-        std::cerr << "label colour: no Custom… entry\n";
+        std::cerr << "label color: no Custom… entry\n";
         ++gFindings;
         return;
     }
@@ -595,7 +595,7 @@ void labelColourPicker(test::WindowFixture& fixture) {
             widget->close();
             return;
         }
-    std::cerr << "label colour: the picker did not open\n";
+    std::cerr << "label color: the picker did not open\n";
     ++gFindings;
 }
 

@@ -1,8 +1,8 @@
-# The Context Bar
+# The Toolbar
 
-The context bar is the row directly under the menu bar
+The toolbar is the row directly under the menu bar
 ([ADR 0031](../decisions/0031-contextual-tool-bar.md)). It holds the tools on the left, the active
-tool's options next to them, and actions on the selected layers on the right. Window > Context Bar
+tool's options next to them, and actions on the selected layers on the right. Window > Toolbar
 hides or shows it; Bloom remembers the choice.
 
 Nothing the bar does is different from doing it anywhere else: every option and action is the same
@@ -19,7 +19,7 @@ whichever Viewer you use it in.
 | Select | V | Select and move layers; edit a path's or mask's anchors |
 | Hand | H | Drag to pan |
 | Zoom | Z | Click to zoom in, Alt-click to zoom out |
-| Rectangle, Ellipse, Polygon, Star | R, E | Drag a shape (Shift constrains, Alt draws from the centre) |
+| Rectangle, Ellipse, Polygon, Star | R, E | Drag a shape (Shift constrains, Alt draws from the center) |
 | Line | | Drag a line (Shift snaps to 45 degrees) |
 | Pen | P | Click anchors, drag handles; Enter or Escape finishes |
 | Text | T | Click to place text and type |
@@ -42,18 +42,18 @@ that layer; with none, they set what the next one starts with.
 - **Select and Pen:** the handle mode of the selected anchors on a path or mask: Corner, Mirrored,
   Aligned, Free or Auto. With anchors of different modes selected, no mode is shown; choosing one
   converts them all. With no anchors selected the control is unavailable.
-- **Shapes, Line and Pen:** Fill and its colour, Stroke and its colour, and the stroke width. A line
+- **Shapes, Line and Pen:** Fill and its color, Stroke and its color, and the stroke width. A line
   always has a stroke and no fill.
-- **Text:** the font, the size and the alignment (left, centre or right).
+- **Text:** the font, the size and the alignment (left, center or right).
 
-An option that does not apply is greyed out where it always is, and its tooltip says why. After you
+An option that does not apply is grayed out where it always is, and its tooltip says why. After you
 type into a field in the bar and press Enter or Escape, the keyboard returns to the Viewer.
 
 ## Align and distribute
 
-- **Align** lines up the selected layers' left edges, horizontal centres, right edges, top edges,
+- **Align** lines up the selected layers' left edges, horizontal centers, right edges, top edges,
   vertical middles or bottom edges.
-- **Distribute** spaces the selected layers' centres evenly, horizontally or vertically. It needs
+- **Distribute** spaces the selected layers' centers evenly, horizontally or vertically. It needs
   three or more layers.
 - **Align To** chooses what they line up with:
   - **Selection** (the default): the box around all the selected layers. Distributing keeps the
@@ -66,7 +66,7 @@ The same actions are in Composition > Align.
 
 Bloom measures what you see at the current time: each layer's visual bounds after its transform,
 its parent's transform and its content, taken from the frame the Viewer is showing. While the
-Viewer is still catching up with an edit or a new time, the actions wait, greyed out. A parented
+Viewer is still catching up with an edit or a new time, the actions wait, grayed out. A parented
 layer moves in its parent's space, so it lands where the bounds say even under a rotated or scaled
 parent. A layer whose Position is animated gets a keyframe at the current time; its other keyframes
 stay. Locked layers, and layers whose Position is driven by a node, do not move, and the status line

@@ -37,7 +37,7 @@ the same evaluator semantics:
 - **Interactive.** The Viewer has the bounds of the frame it was delivered,
   `CompositionPreviewController::currentLayerBounds()` (translated to the live layer identities).
   This is metadata on the delivered frame: no evaluation on the UI thread. `ui::LayerAlignmentActions`
-  (the context bar's buttons and Composition > Align) uses that frame only while its source revision,
+  (the toolbar's buttons and Composition > Align) uses that frame only while its source revision,
   composition and time are the session's current ones, and is disabled with a reason otherwise; it
   orders the selected layers top of the stack first and takes the primary selected layer as the key.
 - **Headless.** `runtime::queryLayerBounds` compiles the snapshot and evaluates the frame with the
@@ -76,10 +76,10 @@ exactly that plan.
 2. **Target.** Composition is `(0, 0, width, height)`. Selection is the union of the bounds of every
    requested layer that has bounds (skipped ones included: they are part of what the artist
    selected). Key Object is the key's bounds; the key is never moved even when it is also requested.
-3. **Deltas.** An alignment gives each layer the one-axis delta from its edge or centre to the
-   target's. A distribution sorts the layers (and the key) by centre, request order breaking ties,
+3. **Deltas.** An alignment gives each layer the one-axis delta from its edge or center to the
+   target's. A distribution sorts the layers (and the key) by center, request order breaking ties,
    fixes the outermost two (Composition first moves them so their outer edges meet the frame's
-   edges) and, for Key Object, the key, then spaces the centres between each pair of fixed layers
+   edges) and, for Key Object, the key, then spaces the centers between each pair of fixed layers
    evenly.
 4. **Skips.** A layer is skipped, with a typed `LayerAlignmentSkipReason` and a message, when it is
    locked (its boundary or its Position parameter), has no bounds, has no Vec2 Position, has a
@@ -106,7 +106,7 @@ contract are unaffected.
 
 Both operations measure through `OperationContext::layerGeometry` when they are created: Python,
 MCP and `bloom-cli` contexts carry a provider that runs `host::measureLayerAlignmentGeometry` on the
-session's render-source snapshot (with its colour intent and asset base directory). Python releases
+session's render-source snapshot (with its color intent and asset base directory). Python releases
 the GIL while it measures. A context without a provider creates the operation without geometry,
 which the command then rejects. Their `layers` argument defaults to the selected layers
 (`ContextSource::Layers`, published as `"layers"`), `time` to the playhead and `composition` to the

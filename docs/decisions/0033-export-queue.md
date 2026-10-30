@@ -32,7 +32,7 @@ decided:
 6. HEVC is hardware-only (VA-API).
 7. An output may import its result into the project's Assets after a verified publish.
 8. Everything ships in one release, including issue #369 (export verified end to end on every
-   route, colour tags, MP4/H.264, HEVC, DPX, threading and size limits).
+   route, color tags, MP4/H.264, HEVC, DPX, threading and size limits).
 
 The design must keep Qt in `src/ui` and `apps`, keep module dependencies acyclic, reuse the proven
 attempt/approval/publication pipeline (frame-output.md) instead of replacing it, and keep GPU
@@ -47,7 +47,7 @@ coverage unchanged: the queue adds no pixel operation.
 | `src/document` | durable records: `ExportQueue`, `ExportJob`, `ExportOutput`, `ExportOutputSettings`, ids, validation (`bloom/document/export_queue.hpp`) |
 | `src/commands` | the undoable queue edits (`export_queue_operations.hpp`); every one has `renderAffecting() == false` |
 | `src/project` | schema 1.29, the queue codec and the 1.28 → 1.29 migration |
-| `src/output` | the #369 formats (MP4, HEVC, DPX), colour-tag derivation, encoder threading, capacity-derived limits, reopen and quality-check primitives |
+| `src/output` | the #369 formats (MP4, HEVC, DPX), color-tag derivation, encoder threading, capacity-derived limits, reopen and quality-check primitives |
 | `src/runtime` | `GpuAdmissionArbiter` over the shared `GpuProcessingPhasePolicy` (section 9) |
 | `src/render` | the export device's low queue priority where supported and the batch-yield hook |
 | `src/platform` | free-space queries, staged streaming hand-off to the worker, destination-scoped stale-staging cleanup |
@@ -68,7 +68,7 @@ no entry.
 
 **Project truth** (saved, undoable, dirties the project): the ordered jobs; per job the composition,
 an optional name, the render settings (the frame range), the enabled flag and an optional label
-colour; per output the origin preset id, the full `ExportOutputSettings`, the destination with its
+color; per output the origin preset id, the full `ExportOutputSettings`, the destination with its
 overwrite policy, the enabled flag and the import-into-Assets flag. An output keeps every setting it
 needs, so a project exports the same way on a computer that lacks the user preset it was made from.
 
@@ -129,7 +129,7 @@ Done | DoneWithWarnings | Failed | Stopped --Retry--> Waiting
 - **Preparing** captures the session's newest published document snapshot, resolves the range and
   freezes the `{date}` token. Edits made after this point never change a running job. Preparing then
   compiles the plan, resolves each enabled output's settings against the catalogue and the project
-  colour settings, revalidates preflight on a worker (authoritative over the cached sample), and
+  color settings, revalidates preflight on a worker (authoritative over the cached sample), and
   starts the first frame's analysis.
 - **Rendering** runs the outputs one after another. Each output has the states Pending → Preparing
   → Rendering → Verifying → Published | PublishedWithWarnings | Failed | Stopped. A disabled
@@ -157,7 +157,7 @@ extension), its **expected preservation** (the eleven facet states the format is
 produce) and a **platform availability** with a typed code, a tooltip-ready reason and a remedy
 (Install OpenH264, Locate OpenH264, Open Project Settings, Choose Software Encoder).
 Project-dependent requirements (the named deliverables need the built-in ACES CG config with a
-pinned revision; output colour names must exist in the config) are evaluated per output by
+pinned revision; output color names must exist in the config) are evaluated per output by
 `availabilityFor()`. This replaces `composition_export_capability.hpp`.
 
 Encoder availability comes from a worker probe published as a neutral `ExportEncoderStatus`. In the
@@ -228,7 +228,7 @@ destination, and Start says "Choose where to save this output".
   supplies the project folder, composition name, range and date), so the panel previews the first
   and last file live. The run uses the same function.
 - **Preflight.** Each `ExportPreflightIssue` has a code, a **target** (Job, Composition, Range,
-  Destination, Naming, Container, Codec, Colour, Audio, Encoder) so the panel can mark the field,
+  Destination, Naming, Container, Codec, Color, Audio, Encoder) so the panel can mark the field,
   a **severity** (Blocking, Warning, NeedsConfirmation) and a tooltip-ready reason. Pure checks
   (naming, ranges, duplicate targets, preset availability) run in `pump()`. Destination facts
   (exists, folder writable, free space, the existing file's fingerprint or, for a sequence, the set
@@ -415,7 +415,7 @@ Linux.
 | Remove finished (`RemoveFinished`) | Project truth | at least one job is Done or DoneWithWarnings | `bloom.export.remove-finished-jobs` |
 | Duplicate job (`DuplicateJob`) | Project truth | the job exists and the queue has room; the copy has new ids and is Ready | `bloom.export.duplicate-job` |
 | Move job (`MoveJob`) | Project truth | the job is not running; moving a Waiting job changes run order | `bloom.export.move-jobs` |
-| Edit job: name, range, enabled, label colour (`EditJob`) | Project truth | the job is not running | `bloom.export.set-job-name`, `set-job-range`, `set-job-enabled`, `set-job-label-color` |
+| Edit job: name, range, enabled, label color (`EditJob`) | Project truth | the job is not running | `bloom.export.set-job-name`, `set-job-range`, `set-job-enabled`, `set-job-label-color` |
 | Add output (`AddOutput`) | Project truth | the job is not running and has fewer than 16 outputs | `bloom.export.add-output` |
 | Edit output: settings, destination and overwrite policy, enabled, import into Assets (`EditOutput`) | Project truth | the job is not running | `bloom.export.set-output-settings`, `set-output-destination`, `set-output-enabled`, `set-output-import` |
 | Apply preset (`ApplyPreset`) | Project truth | the job is not running and the preset exists (an unavailable preset may be applied; its reason then blocks Start) | `bloom.export.apply-preset` |
@@ -462,7 +462,7 @@ any preset.
   - the still and range driver of `FrameExportController`: plan compile, per-frame attempts, the
     single approval for a range, sequence naming, `SequenceState`;
   - the composition-export driver (`frame_export_controller_composition.cpp`);
-  - the COLOR-5 deliverable colour preparation (`frame_export_controller_deliverables.cpp`);
+  - the COLOR-5 deliverable color preparation (`frame_export_controller_deliverables.cpp`);
   - the facet and failure descriptions, which become typed results;
   - `composition_export_capability.hpp`, which becomes `ExportPresetCatalogue::availabilityFor()`.
 - **Reused unchanged**: `OutputAnalysisAttemptRunnerV1`, `approveFrameExportV1`,
@@ -504,12 +504,12 @@ this release; #370 and #371 track them.
   reference project with layers, masks, retimed video and an untagged H.264 source. Every route
   shows progress, can be stopped, and ends with a typed result naming the output location. The
   queue's verification is that result.
-- **Colour tags** come from the output's colour intent (display/view, or the output colour space)
+- **Color tags** come from the output's color intent (display/view, or the output color space)
   instead of fixed BT.709. They are checked by `ColourTags` on reopen.
 - **MP4 container** for H.264 and HEVC (`h264-mp4`, `hevc-mp4`), alongside MOV.
 - **HEVC** through VA-API only. There is no software HEVC encoder.
 - **DPX sequences** (10-bit and 16-bit RGB) through the worker with a reopen verifier, carrying the
-  output colour space like EXR.
+  output color space like EXR.
 - **Multithreaded encode.** The worker uses an automatic thread count. Each preset's
   `MediaDeterminismV1` states whether threading can change the bitstream. When it can, the tolerance
   profile covers decoded frames, not bytes.
@@ -529,7 +529,7 @@ this release; #370 and #371 track them.
   connect to the adapter's "queue changed" signal.
 - **No output-name token.** Outputs have no name in the model. `{format}` and `{job}` cover the
   stated use, and adding a name field only for a token was rejected.
-- **The job label is not mirrored from the composition.** Bloom has label colours on layers but
+- **The job label is not mirrored from the composition.** Bloom has label colors on layers but
   not on compositions, so there is nothing to mirror. `labelColor` is the job's own optional label
   and uses the layer representation.
 - **The free-space and estimate fields can be absent**, as the review allowed. An estimate is
@@ -564,7 +564,7 @@ this release; #370 and #371 track them.
 - **Pausing in-flight GPU work**: native submissions cannot be pre-empted; the frame boundary is
   the honest pause point.
 - **Keeping refuse-and-retry admission**: it lets a long export refuse Viewer frames.
-- **A guaranteed minimum export rate during playback**: rejected by the owner in favour of strict
+- **A guaranteed minimum export rate during playback**: rejected by the owner in favor of strict
   Viewer priority.
 - **Device priority alone**: it is not available on every driver.
 - **Silent replacement or hard refusal as the default**: the owner chose an explicit confirmation.

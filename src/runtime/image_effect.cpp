@@ -28,7 +28,7 @@ namespace {
     return {code,
             DiagnosticSeverity::Warning,
             {},
-            "Colour transform bypassed: " + reason,
+            "Color transform bypassed: " + reason,
             std::move(reason)};
 }
 [[nodiscard]] EvaluationDiagnostic
@@ -45,7 +45,7 @@ processorFailure(const color::OcioColorSpaceProcessorError error) {
     case Error::InputColorSpaceIsData:
     case Error::WorkingColorSpaceInvalid:
         return refusal(EvaluationDiagnosticCode::ColorSpaceIsData,
-                       "Data colour spaces cannot be used for image colour transforms");
+                       "Data color spaces cannot be used for image color transforms");
     case Error::InvalidColorSpaceId:
         return refusal(EvaluationDiagnosticCode::ColorSpaceMissing, "InvalidColorSpaceId");
     case Error::UnsupportedFloatingPointEnvironment:
@@ -432,13 +432,13 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     auto builder = render::Rgba32fImageBuilder::create(*input.descriptor(), pixelBudget);
     if (!builder) {
         result.diagnostic = refusal(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
-                                    "The colour transform image exceeds the pixel storage budget");
+                                    "The color transform image exceeds the pixel storage budget");
         return result;
     }
     const auto view = input.view();
     if (!view) {
         result.diagnostic =
-            refusal(EvaluationDiagnosticCode::InvalidPixel, "Colour transform input is invalid");
+            refusal(EvaluationDiagnosticCode::InvalidPixel, "Color transform input is invalid");
         return result;
     }
     const auto window = input.descriptor()->dataWindow();
@@ -637,7 +637,7 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
         auto target = builder.value()->row(y);
         if (!source || !target) {
             result.diagnostic = refusal(EvaluationDiagnosticCode::InternalInvariant,
-                                        "Colour transform row is unavailable");
+                                        "Color transform row is unavailable");
             return result;
         }
         constexpr std::size_t chunkSize = 4096;
@@ -722,7 +722,7 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     auto frozen = std::move(*builder.value()).freeze();
     if (!frozen) {
         result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidPixel,
-                                    "Colour transform image validation failed");
+                                    "Color transform image validation failed");
         return result;
     }
     result.image = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));

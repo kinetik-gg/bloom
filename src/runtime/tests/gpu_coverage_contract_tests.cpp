@@ -554,7 +554,7 @@ displayProofRunner(const bool customView) {
             result.frames.push_back(FrameRun{plan, request,
                                              bloom::gpu_coverage_media::gateDirectory(),
                                              prepared.scene});
-            result.evidence = "prepared colour shuffle " +
+            result.evidence = "prepared color shuffle " +
                               std::to_string(prepared.scene->commands().size()) + " commands";
             return result;
         }

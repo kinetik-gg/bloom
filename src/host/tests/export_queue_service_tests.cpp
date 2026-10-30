@@ -903,7 +903,7 @@ void testVideoEndToEnd(const document::ExportFormat format,
     expect(passed(host::ExportCheck::FrameCount), name + ": frame count matches the range");
     expect(passed(host::ExportCheck::Container), name + ": the container and codec match");
     expect(passed(host::ExportCheck::ColourTags),
-           name + ": the colour tags match the output colour intent");
+           name + ": the color tags match the output color intent");
     expect(verification.artifacts.digest.has_value() &&
                std::filesystem::exists(f.folder / ("Exports/Main." + extension)),
            name + ": the published file has its digest");

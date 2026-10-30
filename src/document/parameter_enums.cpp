@@ -132,6 +132,14 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
     }
     if (schemaKey == kTextAlignmentParameterSchemaKey)
         return sequential({"Left", "Center", "Right"});
+    if (schemaKey == kTextVerticalAlignmentParameterSchemaKey)
+        return sequential({"Top", "Middle", "Bottom"});
+    if (schemaKey == kTextAnchorModeParameterSchemaKey)
+        return sequential({"Left", "Center", "Right"});
+    if (schemaKey == kTextOverflowParameterSchemaKey)
+        return sequential({"Clip", "Grow"});
+    if (schemaKey == "bloom.channel-shuffle.mode")
+        return sequential({"Color", "Raw"});
     if (schemaKey == kTextFontParameterSchemaKey)
         return {{"DejaVu Sans", kTextFontDejaVuSans},
                 {"Inter Regular", kTextFontInterRegular},

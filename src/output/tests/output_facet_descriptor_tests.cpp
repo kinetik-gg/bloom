@@ -354,7 +354,7 @@ void testUtf8HexBoundary(Expectations& expectations) {
         hasError(output::validateOutputFacetDescriptorV1(
                      Schema::Channels, "count=u:1;name-0=utf8:c3a9;role-0=id:data"),
                  Error::NormalizationUnavailable, 22),
-        "valid non-ASCII reports unavailable NFC proof instead of being accepted optimistically");
+        "valid non-ASCII reports unavailable NFC proof instead of being accepted optimiztically");
 }
 
 void testInvalidSchema(Expectations& expectations) {

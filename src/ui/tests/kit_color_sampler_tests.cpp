@@ -155,7 +155,7 @@ void testASampleSourceAnswersBeforeThePixels(Expectations& expectations) {
     const auto rendered = sampler.renderedSampleAt(source.mapToGlobal(QPoint(2, 2)));
     expectations.expect(rendered.has_value() && rendered->toQColor() == QColor(10, 10, 240),
                         "the rendered pixel is available on its own, for a picker without a "
-                        "colour converter");
+                        "color converter");
 
     // One pixel, not the widget: a 1x1 render of the point under the pointer.
     const auto single = kit::sampleWidgetPixel(source, QPoint(39, 39));

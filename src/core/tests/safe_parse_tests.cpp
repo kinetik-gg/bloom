@@ -136,7 +136,7 @@ void testBooleanAndColorForms(ExpectationContext& expectations) {
     for (const auto* const text :
          {"", "#", "ffffff", "#fff", "#ffffg0", "#ffffff00ff", "# ffffff"}) {
         expectations.expect(!core::parseHexColor(text).has_value(),
-                            "an undocumented colour spelling is refused");
+                            "an undocumented color spelling is refused");
     }
 }
 
@@ -169,7 +169,7 @@ void testFormatting(ExpectationContext& expectations) {
                 std::optional<std::string>{"2.5"} &&
             !core::formatScalar(1.0, std::numeric_limits<std::int64_t>::max(), false,
                                 std::int64_t{0}, 32, 32),
-        "checked scalar formatting honours representable precision and rejects "
+        "checked scalar formatting honors representable precision and rejects "
         "unbounded requests before allocation");
 
     struct IntegerCase final {
@@ -195,7 +195,7 @@ void testFormatting(ExpectationContext& expectations) {
                         "checked integer padding retains the sign and obeys the byte allowance");
 
     expectations.expect(core::formatHexColor(1.0, 0.0, 0.5, 1.0, false, false) == "#ff0080",
-                        "a colour formats as #RRGGBB by default");
+                        "a color formats as #RRGGBB by default");
     expectations.expect(core::formatHexColor(1.0, 0.0, 0.5, 0.25, true, true) == "#FF008040",
                         "alpha joins the spelling on request, in the requested case");
     expectations.expect(core::formatHexColor(-1.0, 2.0, 0.0, 1.0, false, false) == "#00ff00",
@@ -223,14 +223,14 @@ void testRoundTrips(ExpectationContext& expectations) {
     }
     for (const auto* const text : {"#000000", "#ffffff", "#123456", "#12345678"}) {
         const auto parsed = core::parseHexColor(text);
-        expectations.expect(parsed.has_value(), "a documented colour spelling parses");
+        expectations.expect(parsed.has_value(), "a documented color spelling parses");
         if (!parsed.has_value()) {
             continue;
         }
         const auto formatted =
             core::formatHexColor(parsed->red, parsed->green, parsed->blue, parsed->alpha,
                                  std::string_view(text).size() == 9, false);
-        expectations.expect(formatted == text, "a parsed colour formats back to its own spelling");
+        expectations.expect(formatted == text, "a parsed color formats back to its own spelling");
     }
 }
 
@@ -245,7 +245,7 @@ void testColorMath(ExpectationContext& expectations) {
 
     const auto grey = core::toHsva({0.5, 0.5, 0.5, 1.0});
     expectations.expect(grey.hue == 0.0 && grey.saturation == 0.0 && grey.value == 0.5,
-                        "a grey has no hue and no saturation");
+                        "a gray has no hue and no saturation");
     const auto red = core::toHsva({1.0, 0.0, 0.0, 0.25});
     expectations.expect(red.hue == 0.0 && red.saturation == 1.0 && red.value == 1.0 &&
                             red.alpha == 0.25,

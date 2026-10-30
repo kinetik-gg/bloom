@@ -68,7 +68,7 @@ const std::string kReset =
 const std::string kSetNodeValue =
     R"(Sets one node parameter to a constant by its role, as the Properties panel's typed )"
     R"(controls do: dropdowns (an enum index, as `integer`), switches (`boolean`), text fields )"
-    R"((`text`), numbers (`number`) and vectors or colours (`vector`, 2 to 4 numbers). Give )"
+    R"((`text`), numbers (`number`) and vectors or colors (`vector`, 2 to 4 numbers). Give )"
     R"(one value argument; if several are given the first of integer, number, boolean, text, )"
     R"(vector is used. A role the node type declares as optional and the node does )"
     R"(not hold yet is created, as the panel does. An animated or driven parameter becomes a )"
@@ -121,7 +121,7 @@ void addProjectOperations(std::vector<OperationDescriptor>& descriptors) {
     add(descriptors, "bloom.composition.add-from-assets", kNewFromAssets,
         {fromContext("template", ValueKind::Id, ContextSource::Composition, StableId{1},
                      "Id. The composition whose settings fill what the footage does not state "
-                     "(pixel aspect, background, working colour space, safe areas). Defaults to "
+                     "(pixel aspect, background, working color space, safe areas). Defaults to "
                      "the current composition."),
          need("assets", ValueKind::Array, ValueArray{Value(StableId{1})},
               "Array of asset ids; the first visual one sizes the composition."),
@@ -171,7 +171,7 @@ void addProjectOperations(std::vector<OperationDescriptor>& descriptors) {
          maybe("boolean", ValueKind::Boolean, true, "Boolean. A switch."),
          maybe("text", ValueKind::String, "Title", "String. A text value."),
          maybe("vector", ValueKind::Value, core::Color4d{1.0, 1.0, 1.0, 1.0},
-               "Value. A vec2 [x, y], vec3 [x, y, z] or colour [r, g, b, a] (scene-linear, "
+               "Value. A vec2 [x, y], vec3 [x, y, z] or color [r, g, b, a] (scene-linear, "
                "alpha 0..1).")},
         [](const std::string& op, const Arguments& args) {
             Reader read(op, args);

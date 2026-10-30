@@ -7,7 +7,7 @@ a composition from Assets onto the list. Bloom adds a job for the composition, r
 and selects the new job. A job renders one composition range to one or more outputs, one job at a
 time in queue order, in the background while you keep working.
 
-The panel is one list of jobs. Each job is a row: a caret, a label colour, the **Include in Start
+The panel is one list of jobs. Each job is a row: a caret, a label color, the **Include in Start
 All** switch, name, composition, range, status and one button that fits what the job is doing
 (**Start**, **Pause**, **Resume**, **Stop** or **Retry**), with a menu for the rest (Duplicate,
 Move up and down, Remove, Copy as bloom-cli Command and Copy as Python). While a job runs, its row
@@ -28,7 +28,7 @@ only what Bloom can estimate; nothing is shown when it cannot.
 
 ## Jobs and outputs
 
-Output keeps alpha: a composition's Background Colour is only shown in the Viewer behind the
+Output keeps alpha: a composition's Background Color is only shown in the Viewer behind the
 composition, so exports and renders of a format that can carry transparency keep it, like After
 Effects.
 
@@ -39,7 +39,7 @@ default is never an image sequence and never the last preset you used. An unsave
 default destination; Start then says "Choose where to save this output".
 
 Each job has a name, a range (**Work area**, **Whole composition**, **Custom frames** with a first
-and last frame, or **One frame**), the **Include in Start All** switch and an optional label colour.
+and last frame, or **One frame**), the **Include in Start All** switch and an optional label color.
 Each output has a format, its quality settings, a place to save with a choice for what to do when a
 file is already there, a switch for whether it renders and **Add to Assets when done**. Every edit is undoable and saved in the project. Run status, progress, ETA,
 logs and verification are not saved: a reopened project shows every job **Ready**. A running job
@@ -66,12 +66,12 @@ H.264 encoder…**, **Locate encoder…**, **Project settings…**, **Use softwa
 **Quality** shows only the settings the chosen format has: **Include audio** and **Sample rate**
 for movies, **Quality target** and **Use** (Automatic, Software or GPU) for H.264 and HEVC,
 **Compression** for OpenEXR, **File numbering** and **File names** for image sequences, **Include
-the look** and **Reuse cached frames** for anything with pictures. **Colour space**, **Display**
-and **View** are lists of what the project's colour setup offers, with **Project default** first,
+the look** and **Reuse cached frames** for anything with pictures. **Color space**, **Display**
+and **View** are lists of what the project's color setup offers, with **Project default** first,
 so a name cannot be mistyped.
 
 - **H.264** uses Cisco OpenH264 after your consent (Bloom downloads Cisco OpenH264 2.6.0 only after
-  you accept Cisco's licence and verifies its digest; **Locate** verifies a download you already
+  you accept Cisco's license and verifies its digest; **Locate** verifies a download you already
   have) or VA-API hardware. No Cisco binary is bundled. Opening H.264 media never needs it.
 - **HEVC** is hardware-only (VA-API). Without a VA-API render node that encodes HEVC, HEVC presets
   say **HEVC needs a VA-API render node with HEVC encode** and cannot start.
@@ -81,7 +81,7 @@ so a name cannot be mistyped.
 - **DPX** sequences are listed but not available in this build; the preset says so.
 
 MP4 movies carry AAC audio; MOV and MXF carry PCM. Movie containers are tagged from the output's
-colour intent: an sRGB display is tagged with the sRGB transfer, a Rec.1886/Rec.709 display with
+color intent: an sRGB display is tagged with the sRGB transfer, a Rec.1886/Rec.709 display with
 BT.709, P3 and Rec.2100 displays with their own code points.
 
 ## Destinations
@@ -120,7 +120,7 @@ job again. The Jobs panel shows a running export as one row with **Show in Expor
 The Viewer always comes first. While you scrub, play or build a RAM preview, an export only uses
 spare GPU capacity and may wait with no time left shown; it continues at full speed when the Viewer is idle. Waiting and
 paused time do not count toward the export's time limits. This is not a fault, and the job reads
-**Paused while you work in the Viewer** in plain grey, not in a warning colour.
+**Paused while you work in the Viewer** in plain gray, not in a warning color.
 
 Quitting or closing the project while exports run asks "N exports are running. Stop them and
 quit?"; **Keep Exporting** is the default. Saving the project during an export is allowed.
@@ -130,14 +130,14 @@ quit?"; **Keep Exporting** is the default. Saving the project during an export i
 The old approval prompt is gone. Before Start each output shows its preset's expected
 preservation; each frame's analysis is accepted only when it fits that declaration. After
 publication the job's **Result** says in plain lines what was checked: **File opens**, **Right
-number of frames**, **Colours tagged as** the colour space it was saved in, and **Rendered on the
+number of frames**, **Colors tagged as** the color space it was saved in, and **Rendered on the
 GPU** or **Some frames rendered on the CPU**. A check that failed or warned (timing, container,
 audio, file names, whether the saved file changed, whether it could be put in place) says so in a
 sentence with what was expected and found. A frame that had to be evaluated on the CPU is never
 shown as a GPU frame.
 The **File opens** check decodes the movie and compares it with what Bloom rendered, after taking
-the codec's own 4:2:2 or 4:2:0 colour sampling into account, so small saturated detail such as thin
-coloured text passes while damaged pixels or wrong colour tags still fail the export.
+the codec's own 4:2:2 or 4:2:0 color sampling into account, so small saturated detail such as thin
+colored text passes while damaged pixels or wrong color tags still fail the export.
 
 **Add to Assets when done** adds the checked result to Assets (a movie as a video asset,
 a sequence as a sequence, a still as an image, a WAV as audio) with one undoable import. A file

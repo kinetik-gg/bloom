@@ -73,7 +73,7 @@ ProjectColorResolution resolveProjectColorSettings(const document::ColorSettings
     // dialog would not offer it (a project authored elsewhere).
     const bool own = keep && working == original.processColorSpaceId;
     if (!own && !offered.empty() && std::ranges::find(offered, working) == offered.end())
-        return {std::nullopt, "The working colour space \"" + working +
+        return {std::nullopt, "The working color space \"" + working +
                                   "\" is not offered by that configuration"};
     if (keep) {
         auto settings = original;

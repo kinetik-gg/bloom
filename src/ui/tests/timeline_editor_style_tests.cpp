@@ -1871,7 +1871,7 @@ void testPropertyRows(Expectations& expectations) {
         expectations.expect(
             chip && chip->isVisible() &&
                 std::ranges::none_of(fields, [](const auto* field) { return field->isVisible(); }),
-            "collapsed colour has a swatch and no cramped inline RGBA fields");
+            "collapsed color has a swatch and no cramped inline RGBA fields");
         chip->colorChanged({0.25F, 0.5F, 0.75F, 1.0F});
         expectations.expect(fixture.commands.undoLabel() ==
                                 std::optional<std::string_view>{"Set Text Color"},
@@ -1881,7 +1881,7 @@ void testPropertyRows(Expectations& expectations) {
     for (const auto& entry : stack->entries())
         if (entry.role == "color")
             colorParameter = entry.parameterId;
-    expectations.expect(colorParameter.isValid(), "expanded source contains its colour parameter");
+    expectations.expect(colorParameter.isValid(), "expanded source contains its color parameter");
     stack->parameterExpansionRequested(colorParameter);
     QCoreApplication::processEvents();
     expectations.expect(std::ranges::count_if(stack->entries(),
@@ -1889,7 +1889,7 @@ void testPropertyRows(Expectations& expectations) {
                                                   return entry.parameterId == colorParameter &&
                                                          entry.component.has_value();
                                               }) == 4,
-                        "expanding colour exposes all four numeric component rows");
+                        "expanding color exposes all four numeric component rows");
     editor.splitHandleForTest()->dragStarted();
     editor.splitHandleForTest()->dragged(420 - editor.layerColumnWidthForTest());
     editor.splitHandleForTest()->dragFinished();
@@ -1900,7 +1900,7 @@ void testPropertyRows(Expectations& expectations) {
         if (auto* chip = row->findChild<ui::kit::KColorChip*>("timelinePropertyColor");
             chip && chip->isVisible())
             expectations.expect(chip->mapTo(stack, chip->rect().bottomRight()).x() < stack->width(),
-                                "colour swatch remains inside a narrowed table");
+                                "color swatch remains inside a narrowed table");
     }
     if (const auto path = qEnvironmentVariable("BLOOM_TIMELINE_TEST_IMAGE"); !path.isEmpty())
         expectations.expect(editor.grab().save(path), "save requested timeline inspection image");
@@ -2027,7 +2027,7 @@ void testDrivenParameterRowsAndUpstreamGroups(Expectations& expectations) {
     QCoreApplication::processEvents();
     const auto summary = editor.laneRegionForTest()->keySummaryTimes(0);
     expectations.expect(summary == std::vector<core::RationalTime>{time(1), time(3)},
-                        "a collapsed layer summarises the upstream keys that drive it");
+                        "a collapsed layer summarizes the upstream keys that drive it");
     stack->expansionRequested(layer);
     QCoreApplication::processEvents();
 

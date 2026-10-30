@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
         };
         expect(previewPen().color() ==
                    kit::color(socketColorToken(document::SocketValueKind::Scalar)),
-               "a compatible hover keeps the link's own kind colour");
+               "a compatible hover keeps the link's own kind color");
         expect(toOpacity->dragAffinity() == node_editor::SocketItem::DragAffinity::Compatible,
                "a compatible operand socket brightens during the drag");
         a.move(toColor->scenePos());

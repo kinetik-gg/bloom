@@ -424,7 +424,7 @@ void testFlowMenuBodyUsesTheMenuItemPrimitive(Expectations& expectations) {
                     break;
                 }
         expectations.expect(firstInk < image.width() / 4,
-                            "flowed entry text starts at the left inset, not centred");
+                            "flowed entry text starts at the left inset, not centered");
     }
     // Hover: the same full-width Accent bar every menu row shows.
     const QPointF centre = liveRect.center();

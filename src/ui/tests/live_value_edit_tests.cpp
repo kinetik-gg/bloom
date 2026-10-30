@@ -220,7 +220,7 @@ void fieldsShareLiveValues() {
     QTest::mousePress(picker, Qt::LeftButton, Qt::NoModifier, at + QPoint(10, 10));
     QTest::keyClick(picker, Qt::Key_Escape);
     require(fixture.history.size() == 1 && !session.valueEditActive() && !picker->isVisible(),
-            "picker Escape closes it and keeps the picked colour as one edit");
+            "picker Escape closes it and keeps the picked color as one edit");
     (void)color;
 }
 
@@ -309,7 +309,7 @@ void timelineColorBoundary() {
     auto& session = fixture.session;
     waitFor([&] { return static_cast<bool>(session.colorConverter()); });
     const auto* parameter = session.parameterForSelection(document::kSolidColorParameterRole);
-    require(parameter != nullptr, "the solid layer exposes its colour parameter");
+    require(parameter != nullptr, "the solid layer exposes its color parameter");
     const auto parameterId = parameter->id;
     const auto layer = checked(session.selection().contextualLayer);
 
@@ -336,7 +336,7 @@ void timelineColorBoundary() {
     auto* parentChip = parent.findChild<ui::kit::KColorChip*>("timelinePropertyColor");
     require(session.snapshot().revision() == revision && fixture.history.size() == 0 &&
                 parentChip != nullptr && parentChip->isEnabled(),
-            "binding the timeline colour parent row authors nothing and keeps the swatch enabled");
+            "binding the timeline color parent row authors nothing and keeps the swatch enabled");
 
     // An expanded component row shows the same normalized display red as Properties for the same
     // parameter and no "reference" suffix.
@@ -380,14 +380,14 @@ void timelineColorBoundary() {
                 committed.alpha == base.alpha,
             "editing one timeline channel preserves the untouched reference channels exactly");
     require(session.undo() && session.constantColorValue(parameterId) == base,
-            "undo restores the timeline colour edit as one coherent step");
+            "undo restores the timeline color edit as one coherent step");
 
     // Pointer scrub of the same in-range field: the live preview converts the display number
     // through the boundary, untouched channels stay exact, dragging authors no history, release
     // commits once, and undo restores.
     fixture.history.clear();
     require(session.constantColorValue(parameterId) == base,
-            "the scrub starts from the base colour");
+            "the scrub starts from the base color");
     row.bind(entry);
     row.resize(600, 28);
     QCoreApplication::processEvents();
@@ -399,7 +399,7 @@ void timelineColorBoundary() {
     QMouseEvent move(QEvent::MouseMove, movePoint, field->mapToGlobal(movePoint), Qt::NoButton,
                      Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(field, &move);
-    require(field->isScrubbing(), "a timeline colour field scrubs under the pointer");
+    require(field->isScrubbing(), "a timeline color field scrubs under the pointer");
     const double displayDuringDrag = field->value();
     require(std::abs(displayDuringDrag - scrubBase) > 1e-9, "the scrub moved the display number");
     const auto live = checked(session.effectiveColorValue(parameterId));
@@ -411,12 +411,12 @@ void timelineColorBoundary() {
         std::abs(live.red - static_cast<double>(liveExpected.red)) < 1e-5 &&
             live.green == base.green && live.blue == base.blue && live.alpha == base.alpha,
         "the live scrub preview converts the display number and keeps untouched channels exact");
-    require(fixture.history.size() == 0, "dragging the timeline colour authors no history");
+    require(fixture.history.size() == 0, "dragging the timeline color authors no history");
     QTest::mouseRelease(field, Qt::LeftButton, Qt::NoModifier, movePoint);
     require(!session.valueEditActive() && fixture.history.size() == 1,
-            "releasing the scrub commits exactly one colour transaction");
+            "releasing the scrub commits exactly one color transaction");
     require(session.undo() && session.constantColorValue(parameterId) == base,
-            "undo restores the scrubbed colour as one coherent step");
+            "undo restores the scrubbed color as one coherent step");
     fixture.history.clear();
 
     // Escape confirms the same pointer gesture: it ends the scrub as one transaction.
@@ -426,7 +426,7 @@ void timelineColorBoundary() {
     require(field->isScrubbing() && fixture.history.size() == 0, "the scrub is live before Escape");
     QTest::keyClick(field, Qt::Key_Escape);
     require(!field->isScrubbing() && fixture.history.size() == 1,
-            "Escape commits the timeline colour scrub once");
+            "Escape commits the timeline color scrub once");
     require(session.undo() && session.constantColorValue(parameterId) == base,
             "Undo is the discard");
     fixture.history.clear();
@@ -449,7 +449,7 @@ void timelineColorBoundary() {
     // A signed/HDR reference switches the whole colour row to exact reference numbers with the
     // existing "reference" suffix.
     constexpr core::Color4d hdr{4.123456789, -0.25, 0.125, 0.75};
-    require(session.setSelectedSolidColor(hdr), "an HDR reference colour is authored");
+    require(session.setSelectedSolidColor(hdr), "an HDR reference color is authored");
     fixture.history.clear();
     row.bind(entry);
     require(field->value() == hdr.red && field->unit() == QStringLiteral("reference"),
@@ -457,7 +457,7 @@ void timelineColorBoundary() {
     entry.component = document::AnimationComponent::Green;
     row.bind(entry);
     require(field->value() == hdr.green && field->unit() == QStringLiteral("reference"),
-            "the whole HDR colour row switches to reference presentation");
+            "the whole HDR color row switches to reference presentation");
     require(field->value() == hdr.green && session.constantColorValue(parameterId) == hdr,
             "presenting an HDR row authors no data change");
 
@@ -479,7 +479,7 @@ void timelineColorBoundary() {
     QTest::keyClicks(field->lineEdit(), "0.9");
     QTest::keyClick(field->lineEdit(), Qt::Key_Escape);
     require(session.constantColorValue(parameterId) != beforeCancel && fixture.history.size() == 1,
-            "Escape on a timeline colour field commits the typed number once");
+            "Escape on a timeline color field commits the typed number once");
 }
 } // namespace
 int main(int argc, char** argv) {

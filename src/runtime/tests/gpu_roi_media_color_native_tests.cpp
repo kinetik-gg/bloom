@@ -130,7 +130,7 @@ void testMediaRoi(Expectations& expectations, GpuDevice& device, CpuCompositionE
     const auto* upload = firstUpload(*prepared.scene);
     const auto* ocio = firstOcio(*prepared.scene);
     expectations.expect(upload != nullptr && ocio != nullptr,
-                        "media ROI: emits a raw upload and a real OCIO colour command");
+                        "media ROI: emits a raw upload and a real OCIO color command");
     if (upload == nullptr || ocio == nullptr) {
         return;
     }

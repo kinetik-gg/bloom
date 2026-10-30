@@ -120,10 +120,10 @@ int main(const int argc, char** argv) {
         }
 
         if (!expectations.ok()) {
-            std::cerr << "FAIL: GPU media colour expectations failed\n";
+            std::cerr << "FAIL: GPU media color expectations failed\n";
             return 1;
         }
-        std::cout << "PASS: GPU media colour\n";
+        std::cout << "PASS: GPU media color\n";
         return 0;
 #endif
     } catch (const std::exception& exception) {

@@ -60,7 +60,7 @@ ProbeResult verifySolidParity(ProbeContext& context) noexcept {
         const auto pixel = render::solidPixelFromStraightLinearRec709Scene(color);
         if (!pixel) {
             return fail(GpuResidentPreviewDiagnosticCode::CpuOracleFailure,
-                        "the CPU solid primitive rejected a fixture colour");
+                        "the CPU solid primitive rejected a fixture color");
         }
         const GpuSolidParameters params{*pixel.value(), *dataWindow, *displayWindow, *nonSquare};
         std::vector<Rgba32f> measured;

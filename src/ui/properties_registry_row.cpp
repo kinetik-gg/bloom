@@ -43,80 +43,6 @@ namespace {
     return schema == document::kTextFontParameterSchemaKey;
 }
 
-[[nodiscard]] bool isEffectColorSpaceSchema(const std::string_view schema) {
-    return schema == "bloom.ocio-cst.from" || schema == "bloom.ocio-cst.to" ||
-           schema == "bloom.ocio-file.process-space";
-}
-
-[[nodiscard]] bool isInputColorSpaceSchema(const std::string_view schema) {
-    return isEffectColorSpaceSchema(schema) ||
-           schema == document::kImageInputColorSpaceIdParameterSchemaKey ||
-           schema == document::kVideoInputColorSpaceIdParameterSchemaKey;
-}
-
-[[nodiscard]] std::optional<color::ResolvedBloomNeutralConfig>
-inputColorConfig(const CompositionSession& session) {
-    const auto& settings = session.colorSettings();
-    const auto* builtIn =
-        std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
-    if (builtIn == nullptr ||
-        settings.ocioConfig.expectedRevision.algorithm != document::OcioRevisionAlgorithm::Sha256)
-        return {};
-    auto result = color::resolveOcioBuiltIn(
-        color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
-        settings.ocioConfig.expectedRevision.digest, session.colorIntent().workingColorSpaceId);
-    if (!result.ready())
-        return {};
-    return std::move(result).takeResolved();
-}
-
-[[nodiscard]] QString sourceAssetInputColorSpace(const CompositionSession& session,
-                                                 const document::NodeRecord* node) {
-    if (node == nullptr)
-        return {};
-    for (const auto& binding : node->parameters) {
-        if (binding.role != "asset")
-            continue;
-        const auto stored = session.constantStringValue(binding.parameterId);
-        if (!stored)
-            return {};
-        bool numeric = false;
-        const auto raw = stored->toULongLong(&numeric);
-        if (!numeric)
-            return {};
-        const auto* asset = session.snapshot().project().findAsset(
-            document::AssetId::fromRaw(static_cast<std::uint64_t>(raw)));
-        if (asset == nullptr)
-            return {};
-        if (const auto* controller = session.assetController())
-            return controller->inputColorSpaceDisplay(asset->id);
-        return asset->interpretation.inputColorSpaceId.empty()
-                   ? QString{}
-                   : QString::fromStdString(asset->interpretation.inputColorSpaceId);
-    }
-    return {};
-}
-
-[[nodiscard]] std::int64_t sourceLegacyInputColorSpace(const CompositionSession& session,
-                                                       const document::NodeRecord* node) {
-    const auto* composition = session.composition();
-    if (!node || !composition)
-        return 0;
-    for (const auto& binding : node->parameters) {
-        if (binding.role != "colorSpace")
-            continue;
-        const auto* parameter = composition->parameters().find(binding.parameterId);
-        if (!parameter)
-            return 0;
-        const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
-        if (!constant)
-            return 0;
-        const auto* value = std::get_if<std::int64_t>(&constant->value);
-        return value ? *value : 0;
-    }
-    return 0;
-}
-
 } // namespace
 
 document::ShapeKind nodeShapeKind(const document::Composition& composition,
@@ -165,7 +91,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     const auto label =
         isEffectColorSpaceSchema(definition_.schemaKey)
             ? node_editor::displayTypeName(definition_.role)
-        : isInputColorSpaceSchema(definition_.schemaKey)             ? tr("Input colour space")
+        : isInputColorSpaceSchema(definition_.schemaKey)             ? tr("Input color space")
         : definition_.schemaKey == document::kTextParameterSchemaKey ? tr("Text")
         : definition_.schemaKey == "bloom.exposure.stops"            ? tr("Exposure (stops)")
         : definition_.schemaKey == "bloom.offset.amount"             ? tr("Offset")
@@ -443,38 +369,8 @@ void PropertiesRegistryRow::populateFontSelector() {
 void PropertiesRegistryRow::populateInputColorSpaceSelector() {
     if (selector_ == nullptr || !isInputColorSpaceSchema(definition_.schemaKey))
         return;
-    const QSignalBlocker blocker(selector_);
-    const auto current = session_.constantStringValue(parameter_).value_or(QString{});
-    selector_->clearItems();
-    const bool effect = isEffectColorSpaceSchema(definition_.schemaKey);
-    const auto automatic = selector_->addItem(effect ? tr("Working space") : tr("Auto"), QString{});
-    selector_->setItemToolTip(automatic, effect
-                                             ? tr("Use the composition working colour space")
-                                             : tr("Inherit the asset's automatic interpretation"));
-    const auto config = inputColorConfig(session_);
-    if (!config) {
-        const auto unavailable = selector_->addItem(tr("OCIO config unavailable"), QString{});
-        selector_->setItemEnabled(unavailable, false);
-    } else {
-        auto spaces = config->colorSpaces();
-        std::ranges::sort(spaces, [](const auto& left, const auto& right) {
-            return std::tie(left.family, left.id) < std::tie(right.family, right.id);
-        });
-        for (const auto& space : spaces) {
-            const auto family = QString::fromStdString(space.family);
-            const auto name = QString::fromStdString(space.id);
-            const auto label = family.isEmpty() ? name : family + QStringLiteral(" / ") + name;
-            const auto index = selector_->addItem(label, name);
-            selector_->setItemToolTip(index, tr("OCIO colour space id: %1").arg(name));
-        }
-    }
-    auto index = selector_->findData(current);
-    if (index < 0 && !current.isEmpty()) {
-        index = selector_->addItem(tr("Missing config space"), current);
-        selector_->setItemToolTip(index, current);
-    }
-    selector_->setCurrentIndex(index < 0 ? automatic : index);
-    selector_->setWidthFloor(kit::px(kit::Size::PropertiesDropdownWidth));
+    populateColorSpaceSelector(*selector_, session_, definition_.schemaKey,
+                               session_.constantStringValue(parameter_).value_or(QString{}));
 }
 
 void PropertiesRegistryRow::pollFontCatalogue() {
@@ -534,7 +430,7 @@ void PropertiesRegistryRow::refresh() {
                                     : session_.constantStringValue(explicitInput->parameterId);
         if (configured.has_value() && !configured->isEmpty()) {
             selector_->setEnabled(false);
-            selector_->setToolTip(tr("Input colour space (%1) takes precedence. Set it to Auto "
+            selector_->setToolTip(tr("Input color space (%1) takes precedence. Set it to Auto "
                                      "to use this legacy Color Space choice.")
                                       .arg(*configured));
         } else {
@@ -574,20 +470,8 @@ void PropertiesRegistryRow::refresh() {
         if (auto* scalar = std::get_if<double>(&value); scalar && slider_)
             slider_->setValue(*scalar);
         if (auto* integer = std::get_if<std::int64_t>(&value)) {
-            if (selector_ && definition_.schemaKey == "bloom.ocio-file.lut") {
-                const QSignalBlocker blocker(selector_);
-                selector_->clearItems();
-                selector_->addItem(tr("Choose LUT"), QVariant::fromValue(std::int64_t{0}));
-                for (const auto& asset : session_.snapshot().project().assets())
-                    if (asset.kind == document::AssetKind::Lut &&
-                        asset.id.value() <=
-                            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
-                        selector_->addItem(
-                            QString::fromStdString(asset.name),
-                            QVariant::fromValue(static_cast<std::int64_t>(asset.id.value())));
-                if (*integer != 0 && selector_->findData(QVariant::fromValue(*integer)) < 0)
-                    selector_->addItem(tr("Missing LUT"), QVariant::fromValue(*integer));
-            }
+            if (selector_ && definition_.schemaKey == "bloom.ocio-file.lut")
+                refreshLutSelector(*selector_, session_, *integer);
             if (integer_)
                 integer_->setIntegerValue(*integer);
             if (fields_[0])
@@ -648,33 +532,9 @@ void PropertiesRegistryRow::refresh() {
                         break;
                     }
             }
-            if (selector_ && isInputColorSpaceSchema(definition_.schemaKey)) {
-                const bool effect = isEffectColorSpaceSchema(definition_.schemaKey);
-                auto automatic = effect ? tr("Working space") : tr("Auto");
-                if (!effect && text->empty()) {
-                    if (sourceLegacyInputColorSpace(session_, node) != 0)
-                        automatic = tr("Legacy Color Space choice");
-                    else {
-                        const auto resolved = sourceAssetInputColorSpace(session_, node);
-                        if (!resolved.isEmpty())
-                            automatic = resolved;
-                    }
-                }
-                selector_->setItemText(0, automatic);
-                selector_->setItemToolTip(
-                    0, effect ? tr("Composition working colour space: %1")
-                                    .arg(QString::fromStdString(
-                                        std::string(session_.colorIntent().workingColorSpaceId)))
-                       : sourceLegacyInputColorSpace(session_, node) != 0
-                           ? tr("The source's legacy Color Space choice overrides the "
-                                "asset input colour space")
-                           : tr("Inherit the asset's input interpretation"));
-                for (int index = 0; index < selector_->count(); ++index)
-                    if (selector_->itemData(index).toString() == QString::fromStdString(*text)) {
-                        selector_->setCurrentIndex(index);
-                        break;
-                    }
-            }
+            if (selector_ && isInputColorSpaceSchema(definition_.schemaKey))
+                refreshColorSpaceSelector(*selector_, session_, node, definition_.schemaKey,
+                                          QString::fromStdString(*text));
             if (text_)
                 text_->setText(QString::fromStdString(*text));
             if (multiline_ && !multiline_->hasFocus())

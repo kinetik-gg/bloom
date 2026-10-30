@@ -242,7 +242,7 @@ void KColorPicker::buildChrome() {
     hexField_->setAlignment(Qt::AlignCenter);
     hexField_->setAccessibleName(tr("Hex color"));
     auto& policy = hexField_->useInlineEdit([this](const QString& text) {
-        return KColor::fromHex(text, alpha_) ? QString{} : tr("Not a hex colour (#RRGGBB)");
+        return KColor::fromHex(text, alpha_) ? QString{} : tr("Not a hex color (#RRGGBB)");
     });
     connect(hexField_, &QLineEdit::textEdited, this, [this] {
         if (KColor::fromHex(hexField_->text(), alpha_)) {

@@ -10,7 +10,7 @@ Dropping Assets items on the Timeline added a layer for the first dragged item o
 at the composition start, and files dropped from a file manager were only imported
 ([ADR 0029](0029-import-progress-and-cancellation.md)). After Effects places dropped footage where
 it is dropped: at a stacking position in the layer outline, at a time in the time graph, several
-items at once, optionally end to end. The owner asked for the same behaviour.
+items at once, optionally end to end. The owner asked for the same behavior.
 
 ## Decision
 
@@ -23,7 +23,7 @@ items at once, optionally end to end. The owner asked for the same behaviour.
 2. **Placement.** The Timeline reports where the pointer is: a row of the layer stack (start at the
    playhead), a row and a frame over the lanes (the frame under the pointer, on the composition
    frame grid), or elsewhere (on top at the playhead). The Viewer always adds on top at the
-   playhead; the add-layer commands centre the layers. Alt at the drop sequences the items end to
+   playhead; the add-layer commands center the layers. Alt at the drop sequences the items end to
    end, as After Effects' Sequence Layers; a layer that would start after the composition ends
    starts on its last frame, the same clamp a Timeline move uses.
 3. **Payload.** An Assets drag also carries `application/x-bloom-layer-items`: every asset and

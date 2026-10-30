@@ -164,7 +164,7 @@ existing resident 4K profile ceiling and actual native geometry, byte and owners
 Scene preparation, caches, and executor. `CpuGpuSceneBuilder` (`prepared_gpu_scene.hpp`) turns a real
 `CompiledCompositionPlan` plus an `EvaluationRequest` into ordered immutable `GpuSceneCommand`s
 (solid, covered solid and native vector coverage, translation, affine layer transform, source-over
-and typed blend, OCIO colour/effect transform, point-resample proxy gather, image/video upload,
+and typed blend, OCIO color/effect transform, point-resample proxy gather, image/video upload,
 nested composition, merge, and composition output) using the evaluator's real preflight resolution
 and the exact resolved operands; it allocates no full RGBA CPU image and fails closed `Unsupported`
 for every reachable operation it cannot prepare. A vector source emits the
@@ -175,9 +175,9 @@ that producer's device provenance and dispatch counters, so the Required
 semantic keys carry the resolved operands plus the pinned render SPIR-V digests and never node/layer
 IDs, operation indexes, or the revision. `ImageSource`/`VideoSource` leaves decode raw on the CPU
 task thread through the evaluator's own entry points and publish a frozen upload command; when the
-shared GPU colour context is available, a real input-to-working OCIO transform and a fractional
+shared GPU color context is available, a real input-to-working OCIO transform and a fractional
 proxy point-resample then run as GPU commands over that upload, so the decoded samples are not
-colour-converted on the host. Without that context the leaf keeps the connected CPU conversion path
+color-converted on the host. Without that context the leaf keeps the connected CPU conversion path
 as the fallback. The upload/source semantic key contains no node id, plan index, frame time, or
 layer transform; a reachable unsupported layer is screened before any decode. `GpuSceneCoverageCache` is a bounded transactional LRU keyed on raster
 geometry alone. Rooted `GpuPreparedUploadCache` now attaches to the existing bound operation/source
@@ -201,7 +201,7 @@ that pin.
 Coverage contract and final render. `bloom/runtime/gpu_coverage_contract.hpp` is the exhaustive,
 compile-time-checked registry of every `CompiledOperation`/`ImageEffectKernel` alternative, every
 image-producing authoring lowering, every built-in pixel node type, and the required blend, shape,
-geometry (native vector coverage), region-of-interest, layer, colour, and display feature axes and
+geometry (native vector coverage), region-of-interest, layer, color, and display feature axes and
 render routes. GPU
 production preparation is required by
 default; adding an alternative, lowering, or pixel node type without classifying and fixturing it is
@@ -215,7 +215,7 @@ exception requires a non-empty id, a rationale, and an owning document or accept
 reference, and no such exception exists today. Host-preparation declarations -- media container and
 sample I/O and decompression, font load/shaping, parameter/curve/geometry resolution, and one final
 readback -- are a separate audited list and are not a route to exempt a pixel operation, feature, or
-route. Approval identifiers are never fabricated, and working-space colour conversion is a pixel
+route. Approval identifiers are never fabricated, and working-space color conversion is a pixel
 transformation that is never an opt-out. Per-pixel vector coverage rasterization is likewise a
 pixel transformation, not host preparation: a `CoveredSolidV1` fill from a host-built
 `PathRaster::coverageRow` mask does not satisfy the Required `feature.geometry.vector_coverage`
@@ -264,7 +264,7 @@ routes on that same owner thread and scheduler lease:
   `GpuResidentFrameLease` into the service's presentation registry with zero full-frame readback. The
   prepared scene now covers every current compiled pixel operation: solid and covered-solid (native
   vector coverage), translation, affine layer transforms, `SourceOver` and typed `BlendV1`, OCIO
-  colour/effect transforms, point-resample proxy gathers, media upload, merge, nested composition,
+  color/effect transforms, point-resample proxy gathers, media upload, merge, nested composition,
   composition output, and a requested region of interest, plus the default Bloom Neutral display. A
   request the builder refuses (for example non-`Reference` quality, or a working space reaching an
   operation without verified working-space semantics) takes the full original CPU path on the same
@@ -372,8 +372,8 @@ command; it never calls `vkQueueWaitIdle`/`vkDeviceWaitIdle`, retains an image u
 presentation-engine signal actually proves retirement, propagates device loss, and quarantines a
 foreign-thread or unproven teardown under a bounded process fuse. `gpu_present_image.hpp` and
 `presentImage` sample the resident display image into the acquired swapchain with an explicit affine
-destination/source mapping, viewer channel remap, backdrop (the display-referred surround colour
-outside the destination rectangle; inside it the composition's background colour, or the
+destination/source mapping, viewer channel remap, backdrop (the display-referred surround color
+outside the destination rectangle; inside it the composition's background color, or the
 checkerboard when the Transparency Grid is on, exactly as the Viewer's CPU paint), and an
 optional premultiplied RGBA8 overlay; both shaders are SHA-256 pinned with a manifest binding and a
 configure-time regeneration check. `GpuPresentationCoordinator` (with the Qt-free, Vulkan-free
@@ -566,15 +566,15 @@ Honest outcome: the production application source wires the resident display rou
 main-linked vertical acceptance now passes over a genuine OpenEXR document (a real `AddImageLayer`
 image source compiled by the real `SnapshotCompiler` and the unmodified stage factories) through the
 resident frame cache into the actual `ViewerEditor`: fit, zoom-pan, and Red-channel captures match the
-CPU reference with zero byte difference, and the viewer backdrop phases (the Solid/Canvas, Grey,
-Black and White surrounds over the composition background colour, and the Transparency Grid) each
+CPU reference with zero byte difference, and the viewer backdrop phases (the Solid/Canvas, Gray,
+Black and White surrounds over the composition background color, and the Transparency Grid) each
 emit interior samples over transparent composition pixels and a surround sample outside the frame
 for comparison against the CPU paint, so the GPU and CPU display paths agree. Warm cache reuse adds no native dispatches, the unsupported path
 returns the CPU fallback, and shutdown drains cleanly. This document makes no full-application FPS
 claim, no measured speedup claim, and no universal or cross-platform qualification claim, and the
 resident-preview outcome remains `PreviewOnly`. The final-render route now evaluates through the
 same application-owned GPU provider for still, range, video, and headless export: the general
-output-colour production context resolves the OCIO display/effect program on the blocking CPU stage,
+output-color production context resolves the OCIO display/effect program on the blocking CPU stage,
 the shared scene composes and reads the single combined process-plus-encoded result back once at the
 codec/file boundary, and a 6000x4000 media+CST+text export has locally verified native execution.
 The CPU reference evaluator remains the correctness oracle and the explicit supported fallback. GPU
@@ -938,7 +938,7 @@ can be used as a command-line tool or library. Its exact build and transitive li
 and audited before distribution. [Glslang project](https://github.com/KhronosGroup/glslang)
 
 The pinned `glslangValidator` 16.4.0 and `spirv-val` (SPIRV-Tools `b707790a`) now ship as runtime
-tooling so GPU colour compilation works out of the box for the desktop, CLI, and MCP lanes.
+tooling so GPU color compilation works out of the box for the desktop, CLI, and MCP lanes.
 `cmake/BloomGpuShaderTools.cmake` resolves each executable only from the qualified dependency prefix
 (never the ambient PATH), verifies it stays under that prefix, and stages it and its reviewed license
 and generated inventory evidence into an executable-relative private `bloom-gpu-tools/` directory for
@@ -1196,7 +1196,7 @@ ceiling independently; a host source ceiling does not cap GPU intermediates. Eac
 allocation ownership nor a new independent allowance.
 
 Layer masks and mattes (ADR 0028). A `LayerMaskKernel` effect prepares as one fixed
-neighbourhood program (`GpuOcioTransformKind::LayerMask`, semantics `bloom.render.layer-mask.v2`)
+neighborhood program (`GpuOcioTransformKind::LayerMask`, semantics `bloom.render.layer-mask.v2`)
 through the same preparer, compile cache and executor as the separable blur. The host samples and
 flattens the masks once (`sampleLayerMasks`, `layerMaskProgramData`) and packs segments, reciprocal
 factors and per-mask controls into a read-only std430 storage buffer at set 0 binding 0
@@ -1250,7 +1250,7 @@ UMA, whole-process or OOM guarantee, batching or additional frame context.
 A terminal executor `Failure` with `OverBudget` may now supply positive retirement proof after an
 earlier native prefix finishes: no device loss, unretired submission or required owner drain may
 remain. Preview additionally checks actual Neutral/general display and packed transfer submissions;
-final rendering checks output-colour work. Only this proved path releases the touched phase before
+final rendering checks output-color work. Only this proved path releases the touched phase before
 fallback/recovery. Unknown work and the device's independent unproven latch remain charged; budget
 refusal, cancellation or logical terminality alone does not clear them.
 An independent legacy Neutral service post-submit fault confirms that one phase and one unproven
@@ -1271,7 +1271,7 @@ first phase checkpoint and mounted-footage A evidence are unchanged.
 Native work keeps its lease until exact retirement, including cancellation, publication failure
 and retained/quarantined submission ownership. A logical terminal result or timeout is not fence
 proof. A final executor's terminal `Failure`/`OverBudget` may release its phase only when no device
-loss, unretired executor submission, owner drain or output-colour submission remains. The device's
+loss, unretired executor submission, owner drain or output-color submission remains. The device's
 independent unproven-submission latch still prevents release; an unknown failure supplies no such
 proof. Capacity updates preserve held leases/counts; measured zero refuses new admission. Bounded
 readiness and external-capacity-release retries retain one active/newest intent, avoid retrying on
@@ -1547,7 +1547,7 @@ poll-only acquire does not progress in that private fixture and is not qualified
 The final-output increment adopts the transient staging buffer used by
 `GpuOutputColorReadback` for the process payload and, optionally, one encoded RGBA32F or RGBA8
 payload. One submission still transfers the composited output at the final host boundary. The
-existing `FinalProcessingPhase` lease now travels explicitly through the output-colour stage and
+existing `FinalProcessingPhase` lease now travels explicitly through the output-color stage and
 readback begin; it must match the exact proven phase retained by the device, root and generation.
 An omitted lease is not authority to allocate against an unrelated rooted device phase.
 

@@ -169,7 +169,7 @@ void run() {
     expect(xRow->findChild<QLabel*>("propertiesRowLabel")->font().capitalization() ==
                QFont::MixedCase,
            "property labels preserve title case");
-    expect(grid->property("selectedPoint").toInt() == 4, "default anchor highlights centre");
+    expect(grid->property("selectedPoint").toInt() == 4, "default anchor highlights center");
     idle(*grid);
     const auto image = grid->grab().toImage();
     expect(image.pixelColor(gridPointRect(4).center()).lightness() >

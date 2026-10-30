@@ -81,7 +81,7 @@ void strokeAndRules() {
         expect(static_cast<bool>(raster), "line cap rasterized");
         std::array<std::uint8_t, 6> row{};
         expect(raster.value()->coverageRow(0, 0, row, PathFillRule::NonZero, true), "stroke row");
-        expect(row[1] == 128 && row[3] == 128, "one pixel centred line has half coverage");
+        expect(row[1] == 128 && row[3] == 128, "one pixel centered line has half coverage");
         expect(row[0] == (cap == PathStrokeCap::Butt    ? 0
                           : cap == PathStrokeCap::Round ? 48
                                                         : 64),

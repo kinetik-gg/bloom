@@ -18,7 +18,7 @@ int main() {
     const QRectF box(10.0, 20.0, 100.0, 50.0);
     const auto geometry = bloom::ui::textBoxOverlayGeometry(box, 10.0);
     expect(geometry.box == box, "overlay retains the box geometry");
-    expect(geometry.handles[0].contains(box.topLeft()), "corner handle is centred on the corner");
+    expect(geometry.handles[0].contains(box.topLeft()), "corner handle is centered on the corner");
     expect(bloom::ui::hitTestTextBoxHandle(geometry, box.bottomRight()) ==
                bloom::ui::TextBoxHandle::BottomRight,
            "handle hit testing uses the corresponding handle");

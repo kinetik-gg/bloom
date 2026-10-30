@@ -104,7 +104,7 @@ void capture(QWidget& widget, const QString& name) {
 void testAdapter() {
     Fixture f;
     const auto failure = ui::compileFailureFromPreview(f.failedState());
-    expect(failure.has_value(), "a compile failure is recognised");
+    expect(failure.has_value(), "a compile failure is recognized");
     if (!failure)
         return;
     expect(failure->headline == QStringLiteral("Validated graph could not be lowered"), "headline");

@@ -300,7 +300,7 @@ void testMapRangeClampAndMix(Expectations& expectations) {
         expectations.expect(holds(evaluation, scalar.value(), 2.0), "a scalar Mix interpolates");
         expectations.expect(
             holds(evaluation, color.value(), core::Color4d{0.5, 0.25, 0.125, 0.5}),
-            "a colour Mix interpolates all four channels independently, alpha included");
+            "a color Mix interpolates all four channels independently, alpha included");
     }
 }
 

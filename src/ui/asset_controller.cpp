@@ -592,7 +592,7 @@ void AssetController::requestInputColorSpaces() {
     inputColorCatalog_.reset();
     auto submission = scheduler_.submit<std::shared_ptr<InputColorCatalog>>(
         runtime::TaskRequest(
-            "Prepare input colour choices",
+            "Prepare input color choices",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu),
         [settings, working](runtime::TaskContext& context) {
@@ -637,7 +637,7 @@ void AssetController::requestInputColorSpaces() {
         inputColorCatalog_ = std::make_shared<InputColorCatalog>();
         inputColorCatalog_->settings = settings;
         inputColorCatalog_->workingColorSpaceId = working;
-        inputColorCatalog_->diagnostic = tr("Colour choices are unavailable while processing "
+        inputColorCatalog_->diagnostic = tr("Color choices are unavailable while processing "
                                             "capacity is full.");
         emit changed();
     }
@@ -753,7 +753,7 @@ QString AssetController::inputColorSpaceDisplay(const document::AssetId id) cons
         return colourSpaceDisplayName(asset->interpretation.inputColorSpaceId);
     switch (asset->interpretation.colorSpace) {
     case document::AssetColorSpace::Raw:
-        return tr("Raw data (no colour conversion)");
+        return tr("Raw data (no color conversion)");
     case document::AssetColorSpace::Srgb:
         return tr("Legacy sRGB");
     case document::AssetColorSpace::Linear:
@@ -1123,7 +1123,7 @@ void AssetController::startThumbnails() {
     const auto time = session_.currentTime();
     const auto capturedColor = runtime::captureEvaluationColorIntent(session_.colorIntent());
     if (!capturedColor) {
-        emit diagnostic(tr("Media thumbnail colour intent could not be captured"));
+        emit diagnostic(tr("Media thumbnail color intent could not be captured"));
         return;
     }
     const auto& colorIntent = *capturedColor;
@@ -1280,7 +1280,7 @@ void AssetController::startThumbnails() {
                 }
                 if (!selected.available) {
                     preview.problem = selected.inputColorSpaceWarning.empty()
-                                          ? "The image's colour cannot be interpreted"
+                                          ? "The image's color cannot be interpreted"
                                           : selected.inputColorSpaceWarning;
                     return preview;
                 }
@@ -1947,7 +1947,7 @@ void AssetController::poll() {
                 inputColorCatalog_->settings = *inputColorCatalogRequestedSettings_;
                 inputColorCatalog_->workingColorSpaceId = inputColorCatalogRequestedWorking_;
                 inputColorCatalog_->diagnostic =
-                    tr("OCIO colour choices could not be prepared. Reopen the picker to retry.");
+                    tr("OCIO color choices could not be prepared. Reopen the picker to retry.");
             }
             inputColorCatalogRequestedSettings_.reset();
             emit changed();

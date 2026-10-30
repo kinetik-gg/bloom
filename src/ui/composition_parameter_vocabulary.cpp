@@ -3,6 +3,12 @@
 #include "properties_registry_row.hpp"
 #include <QCoreApplication>
 #include <QSignalBlocker>
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/tokens.hpp>
+#include <limits>
+#include <optional>
+#include <tuple>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -211,7 +217,7 @@ bool refreshImageLayerSelector(kit::KDropdown& selector, const CompositionSessio
     QList<std::pair<QString, QString>> items;
     if (part != nullptr)
         for (const auto& layer : part->colourLayers)
-            items.push_back({layer.empty() ? QObject::tr("Colour (root)")
+            items.push_back({layer.empty() ? QObject::tr("Color (root)")
                                            : QString::fromStdString(layer),
                              QString::fromStdString(layer)});
     const auto current = boundNodeText(session, node, document::kImageLayerParameterRole);
@@ -219,15 +225,15 @@ bool refreshImageLayerSelector(kit::KDropdown& selector, const CompositionSessio
         // A data-only part: nothing to choose; the note says what to use instead.
         const QSignalBlocker blocker(selector);
         selector.clearItems();
-        selector.addItem(QObject::tr("No colour layer"), current);
+        selector.addItem(QObject::tr("No color layer"), current);
         selector.setCurrentIndex(0);
         selector.setEnabled(false);
         selector.setMutedValue(true);
-        selector.setToolTip(QObject::tr("No colour layer — use Channels"));
+        selector.setToolTip(QObject::tr("No color layer — use Channels"));
         return true;
     }
     return fillProbeSelector(selector, items, current, part != nullptr,
-                             QObject::tr("Colour (root)"));
+                             QObject::tr("Color (root)"));
 }
 
 bool refreshCryptomatteLayerSelector(kit::KDropdown& selector, const CompositionSession& session,
@@ -259,7 +265,7 @@ QString imageSourceColourNote(const CompositionSession& session, const document:
             : selectedPart(*parts, boundNodeText(session, node, document::kImagePartParameterRole));
     const auto layer = boundNodeText(session, node, document::kImageLayerParameterRole).toStdString();
     return part != nullptr && std::ranges::find(part->colourLayers, layer) == part->colourLayers.end()
-               ? QObject::tr("No colour layer — use Channels")
+               ? QObject::tr("No color layer — use Channels")
                : QString{};
 }
 
@@ -283,6 +289,167 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
         items.append({QCoreApplication::translate("PropertiesSelector", option.label.c_str()),
                       option.value});
     return items;
+}
+
+
+bool isEffectColorSpaceSchema(const std::string_view schema) {
+    return schema == "bloom.ocio-cst.from" || schema == "bloom.ocio-cst.to" ||
+           schema == "bloom.ocio-file.process-space";
+}
+
+bool isInputColorSpaceSchema(const std::string_view schema) {
+    return isEffectColorSpaceSchema(schema) ||
+           schema == document::kImageInputColorSpaceIdParameterSchemaKey ||
+           schema == document::kVideoInputColorSpaceIdParameterSchemaKey;
+}
+
+namespace {
+[[nodiscard]] std::optional<color::ResolvedBloomNeutralConfig>
+inputColorConfig(const CompositionSession& session) {
+    const auto& settings = session.colorSettings();
+    const auto* builtIn =
+        std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
+    if (builtIn == nullptr ||
+        settings.ocioConfig.expectedRevision.algorithm != document::OcioRevisionAlgorithm::Sha256)
+        return {};
+    auto result = color::resolveOcioBuiltIn(
+        color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
+        settings.ocioConfig.expectedRevision.digest, session.colorIntent().workingColorSpaceId);
+    if (!result.ready())
+        return {};
+    return std::move(result).takeResolved();
+}
+
+[[nodiscard]] QString sourceAssetInputColorSpace(const CompositionSession& session,
+                                                 const document::NodeRecord* node) {
+    if (node == nullptr)
+        return {};
+    for (const auto& binding : node->parameters) {
+        if (binding.role != "asset")
+            continue;
+        const auto stored = session.constantStringValue(binding.parameterId);
+        if (!stored)
+            return {};
+        bool numeric = false;
+        const auto raw = stored->toULongLong(&numeric);
+        if (!numeric)
+            return {};
+        const auto* asset = session.snapshot().project().findAsset(
+            document::AssetId::fromRaw(static_cast<std::uint64_t>(raw)));
+        if (asset == nullptr)
+            return {};
+        if (const auto* controller = session.assetController())
+            return controller->inputColorSpaceDisplay(asset->id);
+        return asset->interpretation.inputColorSpaceId.empty()
+                   ? QString{}
+                   : QString::fromStdString(asset->interpretation.inputColorSpaceId);
+    }
+    return {};
+}
+
+[[nodiscard]] std::int64_t sourceLegacyInputColorSpace(const CompositionSession& session,
+                                                       const document::NodeRecord* node) {
+    const auto* composition = session.composition();
+    if (!node || !composition)
+        return 0;
+    for (const auto& binding : node->parameters) {
+        if (binding.role != "colorSpace")
+            continue;
+        const auto* parameter = composition->parameters().find(binding.parameterId);
+        if (!parameter)
+            return 0;
+        const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
+        if (!constant)
+            return 0;
+        const auto* value = std::get_if<std::int64_t>(&constant->value);
+        return value ? *value : 0;
+    }
+    return 0;
+}
+
+} // namespace
+
+void populateColorSpaceSelector(kit::KDropdown& selector, const CompositionSession& session,
+                                const std::string_view schemaKey, const QString& current) {
+    const QSignalBlocker blocker(selector);
+    selector.setSearchable(true);
+    selector.clearItems();
+    const bool effect = isEffectColorSpaceSchema(schemaKey);
+    const auto automatic = selector.addItem(effect ? QObject::tr("Working space")
+                                                   : QObject::tr("Auto"),
+                                            QString{});
+    selector.setItemToolTip(automatic, effect ? QObject::tr("Use the composition working color space")
+                                              : QObject::tr("Inherit the asset's automatic interpretation"));
+    const auto config = inputColorConfig(session);
+    if (!config) {
+        const auto unavailable = selector.addItem(QObject::tr("OCIO config unavailable"), QString{});
+        selector.setItemEnabled(unavailable, false);
+    } else {
+        auto spaces = config->colorSpaces();
+        std::ranges::sort(spaces, [](const auto& left, const auto& right) {
+            return std::tie(left.family, left.id) < std::tie(right.family, right.id);
+        });
+        for (const auto& space : spaces) {
+            const auto family = QString::fromStdString(space.family);
+            const auto name = QString::fromStdString(space.id);
+            const auto label = family.isEmpty() ? name : family + QStringLiteral(" / ") + name;
+            const auto index = selector.addItem(label, name);
+            selector.setItemToolTip(index, QObject::tr("OCIO color space id: %1").arg(name));
+        }
+    }
+    auto index = selector.findData(current);
+    if (index < 0 && !current.isEmpty()) {
+        index = selector.addItem(QObject::tr("Missing config space"), current);
+        selector.setItemToolTip(index, current);
+    }
+    selector.setCurrentIndex(index < 0 ? automatic : index);
+    selector.setWidthFloor(kit::px(kit::Size::PropertiesDropdownWidth));
+}
+
+void refreshColorSpaceSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const document::NodeRecord* node, const std::string_view schemaKey,
+                               const QString& stored) {
+    const QSignalBlocker blocker(selector);
+    const bool effect = isEffectColorSpaceSchema(schemaKey);
+    auto automatic = effect ? QObject::tr("Working space") : QObject::tr("Auto");
+    if (!effect && stored.isEmpty()) {
+        if (sourceLegacyInputColorSpace(session, node) != 0)
+            automatic = QObject::tr("Legacy Color Space choice");
+        else {
+            const auto resolved = sourceAssetInputColorSpace(session, node);
+            if (!resolved.isEmpty())
+                automatic = resolved;
+        }
+    }
+    selector.setItemText(0, automatic);
+    selector.setItemToolTip(
+        0, effect ? QObject::tr("Composition working color space: %1")
+                        .arg(QString::fromStdString(
+                            std::string(session.colorIntent().workingColorSpaceId)))
+           : sourceLegacyInputColorSpace(session, node) != 0
+               ? QObject::tr("The source's legacy Color Space choice overrides the asset input "
+                             "color space")
+               : QObject::tr("Inherit the asset's input interpretation"));
+    const auto index = selector.findData(stored);
+    if (index >= 0)
+        selector.setCurrentIndex(index);
+}
+
+void refreshLutSelector(kit::KDropdown& selector, const CompositionSession& session,
+                        const std::int64_t current) {
+    const QSignalBlocker blocker(selector);
+    selector.clearItems();
+    selector.addItem(QObject::tr("Choose LUT"), QVariant::fromValue(std::int64_t{0}));
+    for (const auto& asset : session.snapshot().project().assets())
+        if (asset.kind == document::AssetKind::Lut &&
+            asset.id.value() <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+            selector.addItem(QString::fromStdString(asset.name),
+                             QVariant::fromValue(static_cast<std::int64_t>(asset.id.value())));
+    if (current != 0 && selector.findData(QVariant::fromValue(current)) < 0)
+        selector.addItem(QObject::tr("Missing LUT"), QVariant::fromValue(current));
+    const auto index = selector.findData(QVariant::fromValue(current));
+    if (index >= 0)
+        selector.setCurrentIndex(index);
 }
 
 } // namespace bloom::ui

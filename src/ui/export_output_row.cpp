@@ -393,8 +393,8 @@ void OutputRow::buildQuality(QVBoxLayout& rows) {
                             tr("Compression"));
     f_->compressionRow = addRow(*q, parent, tr("Compression"), {f_->compression});
     f_->colourSpace = named(new kit::KDropdown(parent), QStringLiteral("exportColourSpace"),
-                            tr("Colour space"));
-    f_->colourSpaceRow = addRow(*q, parent, tr("Colour space"), {f_->colourSpace});
+                            tr("Color space"));
+    f_->colourSpaceRow = addRow(*q, parent, tr("Color space"), {f_->colourSpace});
     f_->display = named(new kit::KDropdown(parent), QStringLiteral("exportDisplay"), tr("Display"));
     f_->displayRow = addRow(*q, parent, tr("Display"), {f_->display});
     f_->view = named(new kit::KDropdown(parent), QStringLiteral("exportView"), tr("View"));
@@ -782,11 +782,11 @@ void OutputRow::fillColour(const ExportColourChoices& colours,
             // A name the configuration no longer offers stays visible rather than turning blank.
             index = dropdown.addItem(current, current);
             dropdown.setItemToolTip(index, QCoreApplication::translate(
-                                               "ExportOutputRow", "Not in this project's colour setup"));
+                                               "ExportOutputRow", "Not in this project's color setup"));
         }
         dropdown.setCurrentIndex(index);
     };
-    fillChoices(*f_->colourSpace, tr("Working colour space"), colours.colourSpaces,
+    fillChoices(*f_->colourSpace, tr("Working color space"), colours.colourSpaces,
                 qs(settings.outputColorSpaceId));
     const auto display = qs(settings.displayName);
     std::vector<std::pair<QString, QString>> displays;

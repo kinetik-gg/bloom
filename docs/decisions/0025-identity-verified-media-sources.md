@@ -47,7 +47,7 @@ time reading the same file again (issue #356).
   explicitly, and coarse-timestamp or network filesystems may hide a same-size rewrite within one
   timestamp tick. Explicit refresh/relink and the immutable decode snapshot bound the damage: a
   decode never mixes old and new bytes.
-- The behaviour is identical on Linux, macOS and Windows; only the identity query differs.
+- The behavior is identical on Linux, macOS and Windows; only the identity query differs.
 
 ## Related
 

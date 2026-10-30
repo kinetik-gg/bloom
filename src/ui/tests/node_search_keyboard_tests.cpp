@@ -278,10 +278,10 @@ void testSearchKeyboardAndMenus() {
                QStringList{
                    QStringLiteral("Sources"), QStringLiteral("Layers"),
                    QStringLiteral("Compositing"), QStringLiteral("Transform"),
-                   QStringLiteral("Filters"), QStringLiteral("Colour"), QStringLiteral("Values"),
+                   QStringLiteral("Filters"), QStringLiteral("Color"), QStringLiteral("Values"),
                    QStringLiteral("Math"), QStringLiteral("Convert"), QStringLiteral("String"),
-                   QStringLiteral("Logic"), QStringLiteral("Time"), QStringLiteral("Color"),
-                   QStringLiteral("Vector"), QStringLiteral("Utilities"), QStringLiteral("Output")},
+                   QStringLiteral("Logic"), QStringLiteral("Time"),
+                   QStringLiteral("Color Values"), QStringLiteral("Vector"), QStringLiteral("Utilities"), QStringLiteral("Output")},
            "every populated section is headed, in category order, and the empty ones are absent");
     expect(list->model()->index(0, 0).data(kit::kSearchSectionRole).toBool() &&
                list->model()->index(0, 0).flags() == Qt::NoItemFlags,
@@ -493,17 +493,17 @@ void testSearchKeyboardAndMenus() {
         for (const auto& category : node_editor::nodeCategoryOrder())
             expected.append(node_editor::nodeCategoryName(category));
         expect(sections == expected, "whose sections are the registry's categories, in order");
-        auto* colour = addMenu->findChild<QMenu*>("nodeAddCategoryMenu.Colour");
+        auto* colour = addMenu->findChild<QMenu*>("nodeAddCategoryMenu.Color");
         QStringList colourNodes;
         if (colour)
             for (auto* entry : colour->actions())
                 colourNodes.append(entry->text());
-        expect(colourNodes.contains("OCIO Colour Space Transform") &&
+        expect(colourNodes.contains("OCIO Color Space Transform") &&
                    colourNodes.contains("OCIO File Transform") &&
                    colourNodes.contains("Exposure") && colourNodes.contains("Offset") &&
                    colourNodes.contains("Multiply") && colourNodes.contains("Invert") &&
                    colourNodes.size() == 6,
-               "Colour offers the registered image-effect nodes");
+               "Color offers the registered image-effect nodes");
         auto* output = named(menu, "nodeAddCompositionOutputAction");
         expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),
                "a singleton already present is listed disabled with its refusal");

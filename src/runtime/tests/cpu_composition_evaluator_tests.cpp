@@ -764,7 +764,7 @@ void testLayerTransformShapesTheFrame(Expectations& expectations) {
         squareTransformPlan({.position = kSquareCentre, .scale = document::Vec2d{0.5, 1.0}});
     const auto narrowedMask = alphaMask(evaluator.evaluate(narrowed, requestFor(*narrowed), {}));
     expectations.expect(narrowedMask.has_value() && *narrowedMask == kVerticalBar,
-                        "a half scale on one axis narrows the layer about its own centre exactly");
+                        "a half scale on one axis narrows the layer about its own center exactly");
 
     // The same narrowing plus a quarter turn: scale applies first, then rotation, so the vertical
     // bar becomes a horizontal one, and every sample coordinate stays exact.
@@ -781,7 +781,7 @@ void testLayerTransformShapesTheFrame(Expectations& expectations) {
                                                .scale = document::Vec2d{0.5, 1.0}});
     const auto anchoredMask = alphaMask(evaluator.evaluate(anchored, requestFor(*anchored), {}));
     expectations.expect(anchoredMask.has_value() && *anchoredMask == kAnchoredBar,
-                        "the anchor, not the centre, is the point scale and rotation hold still");
+                        "the anchor, not the center, is the point scale and rotation hold still");
 
     // A zero scale factor collapses the layer to no area: the Layer Output publishes no image at
     // all and the stack composites nothing, which is an entirely transparent frame rather than a
@@ -967,14 +967,14 @@ void testAnimatedSolidColorChangesPixelsOverTime(Expectations& expectations) {
         auto request = requestFor(*plan);
         const auto time = core::RationalTime::create(numerator, denominator);
         if (!time.has_value()) {
-            throw std::logic_error("animated colour fixture time must be valid");
+            throw std::logic_error("animated color fixture time must be valid");
         }
         request.time = *time;
         const auto result = evaluator.evaluate(plan, request, {});
         render::Rgba32f storage = render::Rgba32f::transparent();
         const auto* sampled = pixel(result, 0, 0, storage);
         if (result.status() != runtime::EvaluationStatus::Evaluated || sampled == nullptr) {
-            throw std::logic_error("animated colour fixture must evaluate");
+            throw std::logic_error("animated color fixture must evaluate");
         }
         return sampled->red();
     };
@@ -984,13 +984,13 @@ void testAnimatedSolidColorChangesPixelsOverTime(Expectations& expectations) {
     const float atMidpoint = channelAt(1, 2);
     const float atEnd = channelAt(1, 1);
     expectations.expect(atStart == 0.0F && atEnd == 1.0F,
-                        "an animated solid reproduces its colour keys exactly at their own times");
+                        "an animated solid reproduces its color keys exactly at their own times");
     expectations.expect(atFirstThird > 0.0F && atFirstThird < atMidpoint && atMidpoint < atEnd,
-                        "and the frames between them carry distinct, increasing colour values -- "
+                        "and the frames between them carry distinct, increasing color values -- "
                         "the request time really reaches the pixels");
     // The eased factor at the exact first third is 7/27, applied to a 0 -> 1 ramp.
     expectations.expect(atFirstThird == static_cast<float>(7.0 / 27.0),
-                        "an eased colour segment lands on the exact eased factor, not the linear "
+                        "an eased color segment lands on the exact eased factor, not the linear "
                         "one");
     expectations.expect(atMidpoint == 0.5F,
                         "and the symmetric handles put the exact midpoint at exactly one half");
@@ -1481,11 +1481,11 @@ void testIdentityAndPreparedHandoff(Expectations& expectations) {
         expectations.expect(owned.has_value() && another.has_value() &&
                                 *owned == borrowed.colorIntent && *owned == *another &&
                                 owned->storage != another->storage,
-                            "colour string ownership does not change semantic identity");
+                            "color string ownership does not change semantic identity");
         if (owned.has_value()) {
             const auto reused = runtime::captureEvaluationColorIntent(*owned);
             expectations.expect(reused.has_value() && reused->storage == owned->storage,
-                                "matching immutable colour strings reuse their typed owner");
+                                "matching immutable color strings reuse their typed owner");
         }
         retainedColorFrame = evaluator.evaluate(firstPlan, borrowed, {}).frame();
         working.assign(4096, 'x');
@@ -1497,7 +1497,7 @@ void testIdentityAndPreparedHandoff(Expectations& expectations) {
                 runtime::kLinearRec709SceneColorSpaceId &&
             retainedColorFrame->identity().colorIntent.ocioConfigUri ==
                 runtime::kBloomNeutralOcioConfigUri,
-        "published CPU frame owns raw request colour strings after mutation/destruction");
+        "published CPU frame owns raw request color strings after mutation/destruction");
     const auto equivalentPlan = publishPlan(firstPlan->copyDefinition());
     const auto divergentPlan = oneSolidPlan({0.0, 1.0, 0.0, 1.0});
     const auto first = evaluator.evaluate(firstPlan, requestFor(*firstPlan), {});

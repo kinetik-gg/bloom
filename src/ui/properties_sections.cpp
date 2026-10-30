@@ -60,7 +60,7 @@ void refreshColor(CompositionSession& session, const std::string_view schemaKey,
         field->setValue(channels[index++]);
     }
     if (!display)
-        chip->setToolTip(QObject::tr("Colour conversion unavailable or preparing"));
+        chip->setToolTip(QObject::tr("Color conversion unavailable or preparing"));
 }
 
 std::optional<core::Color4d>

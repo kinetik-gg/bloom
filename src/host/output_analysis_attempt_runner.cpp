@@ -44,7 +44,7 @@ OutputMediaDisplayCommandV1::command(GpuExportProvider& provider,
     }
     if (!provider.gpuDisplayPreparationAvailable()) {
         // The bootstrap may still publish the shared OCIO context; try again on a later frame.
-        unavailableReason_ = "GPU colour preparation is unavailable on this provider";
+        unavailableReason_ = "GPU color preparation is unavailable on this provider";
         return nullptr;
     }
     const runtime::EvaluationColorIntent intent{.workingColorSpaceId = workingColorSpaceId_,

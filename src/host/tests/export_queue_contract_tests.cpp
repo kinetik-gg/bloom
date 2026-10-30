@@ -118,7 +118,7 @@ int main() {
     check.code = "export.check.colour-tags.match";
     check.expected = host::ExportColourTags{1, 1, 1, false};
     check.observed = host::ExportColourTags{1, 1, 1, false};
-    failures += expect(check.expected == check.observed, "colour tags compare structurally");
+    failures += expect(check.expected == check.observed, "color tags compare structurally");
 
     host::ExportPreset preset;
     preset.id = std::string(host::kExportDefaultVideoPresetId);

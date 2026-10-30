@@ -223,13 +223,13 @@ OperationResult SetAssetInputColor::apply(document::Draft& draft) const {
     if (legacy_ > document::AssetColorSpace::Raw ||
         (legacy_ != document::AssetColorSpace::Auto && !inputColorSpaceId_.empty()))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Choose one input colour interpretation");
+                                         "Choose one input color interpretation");
     auto updated = *asset;
     updated.interpretation.colorSpace = legacy_;
     updated.interpretation.inputColorSpaceId = inputColorSpaceId_;
     if (!updated.validate().ok())
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Invalid input colour space id");
+                                         "Invalid input color space id");
     if (updated.interpretation == asset->interpretation)
         return OperationResult::noChange();
     asset->interpretation = std::move(updated.interpretation);

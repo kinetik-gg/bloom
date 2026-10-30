@@ -332,7 +332,7 @@ void testEditingOperations(Expectations& expectations) {
     const auto* repeated = std::get_if<std::string>(&grown.outputs[0]);
     expectations.expect(!grown.failed && repeated != nullptr && repeated->size() == 2050 &&
                             repeated->substr(2048) == "xy",
-                        "Repeat honours counts above the former clamp");
+                        "Repeat honors counts above the former clamp");
     const auto empty =
         run(Kernel::StringRepeat, {text(""), std::numeric_limits<std::int64_t>::max()});
     expectations.expect(!empty.failed && holds(empty, 0, std::string{}),
@@ -406,7 +406,7 @@ void testAmplificationBudgets(Expectations& expectations) {
     const auto* widened = std::get_if<std::string>(&wide.outputs[0]);
     expectations.expect(!wide.failed && widened != nullptr && widened->size() == 257 &&
                             widened->back() == 'x',
-                        "Pad honours widths above the former clamp");
+                        "Pad honors widths above the former clamp");
     limits.availableStringBytes = 7;
     const auto replace =
         run(Kernel::StringReplace, {text("aaaa"), text("a"), text("bb")}, {}, limits);

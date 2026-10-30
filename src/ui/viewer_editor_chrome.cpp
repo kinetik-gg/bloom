@@ -278,7 +278,7 @@ void ViewerEditor::rebuildDisplayViewControl() {
     if (!resolved.has_value() || resolved->displays().empty()) {
         viewerDisplayView_->addItem(tr("Unavailable"));
         viewerDisplayView_->setItemToolTip(
-            0, tr("Display / View: the colour configuration offers no display"));
+            0, tr("Display / View: the color configuration offers no display"));
         viewerDisplayView_->setCurrentIndex(0);
         viewerDisplayView_->setEnabled(false);
         viewerDisplayView_->setMutedValue(true);
@@ -403,7 +403,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
         kit::icon(kit::IconId::TransparencyGrid, kit::IconRole::Control));
     transparencyGridAction_->setToolTip(
         tr("Transparency grid: show a checkerboard instead of the composition background "
-           "colour; viewer display only"));
+           "color; viewer display only"));
     connect(transparencyGridAction_, &QAction::toggled, this,
             [this](const bool enabled) { setTransparencyGrid(enabled); });
     transparencyGridButton_ = makeFooterButton(
@@ -608,7 +608,8 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     backgroundDropdown_->setObjectName("viewerBackgroundDropdown");
     backgroundDropdown_->setAccessibleName(tr("Background"));
     for (const auto* name : kBackgroundNames) {
-        backgroundDropdown_->addItem(tr(name));
+        // "Grey" is the persisted setting value; the visible word is American English.
+        backgroundDropdown_->addItem(std::string_view(name) == "Grey" ? tr("Gray") : tr(name));
     }
     const auto backdrop = viewerBackdropFromSettings(QSettings());
     background_ = viewerBackgroundFor(backdrop.background);

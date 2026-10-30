@@ -20,23 +20,23 @@ namespace {
     case color::OcioColorSpaceProcessorError::None:
         return {};
     case color::OcioColorSpaceProcessorError::MissingInputColorSpace:
-        return "the input colour-space id is missing from the selected OCIO config";
+        return "the input color-space id is missing from the selected OCIO config";
     case color::OcioColorSpaceProcessorError::MissingWorkingColorSpace:
-        return "the working colour-space id is missing from the selected OCIO config";
+        return "the working color-space id is missing from the selected OCIO config";
     case color::OcioColorSpaceProcessorError::InputColorSpaceIsData:
-        return "the selected input colour space is a data space";
+        return "the selected input color space is a data space";
     case color::OcioColorSpaceProcessorError::WorkingColorSpaceInvalid:
-        return "the selected destination colour space is a data space";
+        return "the selected destination color space is a data space";
     case color::OcioColorSpaceProcessorError::TransformBuildFailed:
-        return "the OCIO colour-space transform could not be built";
+        return "the OCIO color-space transform could not be built";
     case color::OcioColorSpaceProcessorError::CpuProcessorUnavailable:
-        return "the OCIO CPU colour-space processor is unavailable";
+        return "the OCIO CPU color-space processor is unavailable";
     case color::OcioColorSpaceProcessorError::UnsupportedFloatingPointEnvironment:
         return "the CPU floating-point environment is not the Bloom reference environment";
     case color::OcioColorSpaceProcessorError::InvalidColorSpaceId:
-        return "the colour-space id is invalid";
+        return "the color-space id is invalid";
     }
-    return "the OCIO colour-space transform is unavailable";
+    return "the OCIO color-space transform is unavailable";
 }
 
 } // namespace
@@ -81,8 +81,8 @@ resolveImageInputColorSpace(const color::ResolvedBloomNeutralConfig& config,
         if (legacy == media::ImageColorSpace::Auto && probe.bitDepth != 8 && probe.bitDepth != 16)
             return InputColorSpaceResolution{
                 "", "",
-                "Automatic input colour interpretation supports only 8/16-bit "
-                "PNG, JPEG, and TIFF; choose an explicit OCIO colour space",
+                "Automatic input color interpretation supports only 8/16-bit "
+                "PNG, JPEG, and TIFF; choose an explicit OCIO color space",
                 false, true};
         return InputColorSpaceResolution{std::string(config.sRgbTextureColorSpaceId()),
                                          std::string(config.sRgbTextureColorSpaceId()),
@@ -121,11 +121,11 @@ resolveImageInputColorSpace(const color::ResolvedBloomNeutralConfig& config,
         if (!linear.empty())
             return InputColorSpaceResolution{linear, linear, {}, false, true};
         return InputColorSpaceResolution{
-            "", "", "The OCIO config has no scene-linear Rec.709 colour space; choose one",
+            "", "", "The OCIO config has no scene-linear Rec.709 color space; choose one",
             false, true};
     }
     return InputColorSpaceResolution{
-        "", "", "EXR chromaticities are not recognized; choose an explicit OCIO colour space",
+        "", "", "EXR chromaticities are not recognized; choose an explicit OCIO color space",
         false, true};
 }
 
@@ -136,14 +136,14 @@ prepareInputColorProcessor(const color::ResolvedBloomNeutralConfig& config,
         return {};
     if (resolution.id.empty()) {
         diagnostic = resolution.warning.empty()
-                         ? "No input colour space was resolved from the media metadata"
+                         ? "No input color space was resolved from the media metadata"
                          : resolution.warning;
         return {};
     }
     auto prepared =
         color::CpuColorSpaceProcessor::prepare(config, resolution.id, config.processColorSpaceId());
     if (!prepared) {
-        diagnostic = "Input colour space '" + resolution.id +
+        diagnostic = "Input color space '" + resolution.id +
                      "' is unavailable: " + errorName(prepared.error());
         return {};
     }

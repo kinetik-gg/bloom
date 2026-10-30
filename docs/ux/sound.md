@@ -85,7 +85,7 @@ Category **E** is an event sound (default on); **I** is an interaction sound (de
 | Programmatic toggle (restore, reset, sync) | same signal without a press | none | Silent | n/a |
 | Dropdown item chosen | `KDropdown::activated` | I | select | Off |
 | Radio group or segmented control changed by the user | `KRadioGroup::currentIndexChanged` during a press or key | I | select | Off |
-| Tool switched | a `KIconToggle` in the contextual bar tool group (`contextBarTools`) checked | I | tool_switch | Off |
+| Tool switched | a `KIconToggle` in the toolbar tool group (`contextBarTools`) checked | I | tool_switch | Off |
 | Drag started (Assets to Timeline, files) | `QEvent::DragEnter` the first time (`interaction_sounds.cpp`) | I | drag_start | Off |
 | Drop | `QEvent::Drop` (`asset_drop.cpp`, `layer_drop.cpp` targets) | I | drop | Off |
 | Scrub, playhead drag, canvas drag, marquee | timeline, viewer | none | Silent, and mutes interaction cues until release | n/a |
@@ -98,5 +98,5 @@ Category **E** is an event sound (default on); **I** is an interaction sound (de
 
 ## Not covered
 
-- Per-sound customisation, other packs and custom files.
+- Per-sound customization, other packs and custom files.
 - Sound for panel focus, layout changes or notifications from other applications.

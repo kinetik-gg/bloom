@@ -127,7 +127,7 @@ inline constexpr core::Color4d kFixtureTextColor{1.0, 1.0, 1.0, 1.0};
     requireFixture(composition->parameters().insert(
                        {kSolidColorId, std::string(document::kSolidColorParameterSchemaKey),
                         ConstantValueSource{kFixtureSolidColor}}),
-                   "source fixture solid colour parameter must be accepted");
+                   "source fixture solid color parameter must be accepted");
     requireFixture(composition->parameters().insert({kTextContentId,
                                                      std::string(document::kTextParameterSchemaKey),
                                                      ConstantValueSource{std::string("Title")}}),
@@ -139,7 +139,7 @@ inline constexpr core::Color4d kFixtureTextColor{1.0, 1.0, 1.0, 1.0};
     requireFixture(composition->parameters().insert(
                        {kTextColorId, std::string(document::kTextColorParameterSchemaKey),
                         ConstantValueSource{kFixtureTextColor}}),
-                   "source fixture text colour parameter must be accepted");
+                   "source fixture text color parameter must be accepted");
     requireFixture(project.validate().ok(), "source fixture project must validate");
     return project;
 }
@@ -147,7 +147,7 @@ inline constexpr core::Color4d kFixtureTextColor{1.0, 1.0, 1.0, 1.0};
 [[nodiscard]] const document::Color4AnimationCurve&
 color4Curve(const document::Snapshot& snapshot, const document::AnimationCurveId id) {
     const auto* result = composition(snapshot).animationCurves().findColor4(id);
-    requireFixture(result != nullptr, "colour animation curve must remain addressable");
+    requireFixture(result != nullptr, "color animation curve must remain addressable");
     return *result;
 }
 
@@ -210,12 +210,12 @@ void testColorKeyOperations(TestContext& test) {
     Document document(makeSourceProject());
     CommandStack stack(document);
 
-    Transaction create("Animate solid colour", document.snapshot().revision());
+    Transaction create("Animate solid color", document.snapshot().revision());
     create.emplace<CreateAnimationForParameter>(kCompositionId, kSolidColorId, time(0, 1));
     const auto created = stack.execute(std::move(create));
     const auto curveId = created.outputId<document::AnimationCurveId>(kAnimationCurveOutput);
     test.expect(created.changed() && curveId.has_value(),
-                "a solid colour parameter accepts animation and reports its curve");
+                "a solid color parameter accepts animation and reports its curve");
     if (!curveId.has_value()) {
         return;
     }
@@ -233,12 +233,12 @@ void testColorKeyOperations(TestContext& test) {
                     "animation never changes the picture at the initial time");
     }
 
-    Transaction insert("Insert colour key", document.snapshot().revision());
+    Transaction insert("Insert color key", document.snapshot().revision());
     insert.emplace<InsertColor4Keyframe>(kCompositionId, *curveId, time(1, 1),
                                          core::Color4d{1.0, 0.0, 0.0, 0.5},
                                          document::KeyframeInterpolation::EaseInOut);
     const auto inserted = stack.execute(std::move(insert));
-    test.expect(inserted.changed(), "a colour key inserts at a free exact time");
+    test.expect(inserted.changed(), "a color key inserts at a free exact time");
     {
         const auto& curve = color4Curve(document.snapshot(), *curveId);
         test.expect(componentKeyTimes(curve) == std::vector{time(0, 1), time(1, 1)} &&
@@ -249,26 +249,26 @@ void testColorKeyOperations(TestContext& test) {
 
     // An alpha outside the unit interval is not a representable authoring colour, so the command
     // refuses it on exactly the terms a constant colour is refused.
-    Transaction bad("Insert invalid colour key", document.snapshot().revision());
+    Transaction bad("Insert invalid color key", document.snapshot().revision());
     bad.emplace<InsertColor4Keyframe>(kCompositionId, *curveId, time(3, 2),
                                       core::Color4d{0.0, 0.0, 0.0, 4.0});
     const auto rejected = stack.execute(std::move(bad));
     test.expect(!rejected.changed() && rejected.status == CommandStatus::Rejected,
-                "a colour key outside the authoring-colour domain is rejected");
+                "a color key outside the authoring-colour domain is rejected");
 
     // SetKeyframeAtTime's colour overload: updates the exact-time key, preserving its KeyframeId.
     const auto originalKeyId =
         color4Curve(document.snapshot(), *curveId).components[0].keyframes.front().id;
-    Transaction set("Set colour at time", document.snapshot().revision());
+    Transaction set("Set color at time", document.snapshot().revision());
     set.emplace<SetKeyframeAtTime>(kCompositionId, *curveId, time(0, 1),
                                    core::Color4d{0.1, 0.2, 0.3, 1.0});
     const auto setResult = stack.execute(std::move(set));
     test.expect(setResult.changed() &&
                     setResult.outputId<document::KeyframeId>(kKeyframeOutput) == originalKeyId,
-                "the colour SetKeyframeAtTime updates the exact-time key and preserves its ID");
+                "the color SetKeyframeAtTime updates the exact-time key and preserves its ID");
 
     // And back to a constant, carrying the chosen colour.
-    Transaction revert("Freeze solid colour", document.snapshot().revision());
+    Transaction revert("Freeze solid color", document.snapshot().revision());
     revert.emplace<ConvertAnimationToConstant>(kCompositionId, kSolidColorId,
                                                core::Color4d{0.9, 0.8, 0.7, 1.0});
     const auto reverted = stack.execute(std::move(revert));
@@ -279,19 +279,19 @@ void testColorKeyOperations(TestContext& test) {
     test.expect(reverted.changed() && colorValue != nullptr &&
                     *colorValue == core::Color4d{0.9, 0.8, 0.7, 1.0} &&
                     composition(document.snapshot()).animationCurves().find(*curveId) == nullptr,
-                "converting a colour animation back to a constant erases the curve atomically");
+                "converting a color animation back to a constant erases the curve atomically");
 }
 
 void testComponentKeyOperations(TestContext& test) {
     Document document(makeSourceProject());
     CommandStack stack(document);
 
-    Transaction create("Animate colour components", document.snapshot().revision());
+    Transaction create("Animate color components", document.snapshot().revision());
     create.emplace<CreateAnimationForParameter>(kCompositionId, kSolidColorId, time(0, 1));
     const auto created = stack.execute(std::move(create));
     const auto curveId = created.outputId<document::AnimationCurveId>(kAnimationCurveOutput);
     test.expect(created.changed() && curveId.has_value(),
-                "component test creates a colour animation curve");
+                "component test creates a color animation curve");
     if (!curveId.has_value())
         return;
 

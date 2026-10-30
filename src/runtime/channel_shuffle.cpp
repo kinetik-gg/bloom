@@ -303,7 +303,7 @@ gatherChannelShuffle(const ChannelShuffleSelection& selection, const bool conver
                     target[channel] = target[3] > 0.0F ? target[channel] / target[3] : 0.0F;
         }
         if (processor != nullptr && !processor->apply(row))
-            return {{}, "Shuffle colour conversion failed", false,
+            return {{}, "Shuffle color conversion failed", false,
                     media::ImageDiagnosticCode::ColorSpaceUnavailable};
         auto outputRow = builder.value()->row(y);
         if (!outputRow)

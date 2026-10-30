@@ -178,7 +178,7 @@ int run(int argc, char** argv) {
                 if (overlap && std::abs(first.center().y() - second.center().y()) > 0.01)
                     fail(label + ": " + nameOf(*controls[a].widget) + " and " +
                          nameOf(*controls[b].widget) +
-                         QStringLiteral(" share a row but not a centre (%1 vs %2)")
+                         QStringLiteral(" share a row but not a center (%1 vs %2)")
                              .arg(first.center().y())
                              .arg(second.center().y()));
             }

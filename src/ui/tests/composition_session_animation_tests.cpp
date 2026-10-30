@@ -602,7 +602,7 @@ void testKeyframeGestureReachesEveryAnimatableSchema() {
 
     // The colour curve really is a colour curve, and it holds the authored colour.
     const auto* color = session.parameterForSelection(document::kTextColorParameterRole);
-    require(color != nullptr, "the text colour parameter resolves");
+    require(color != nullptr, "the text color parameter resolves");
     const auto* colorSource = std::get_if<document::AnimationCurveSource>(&color->source);
     require(colorSource != nullptr, "and it is animated");
     const auto* colorCurve =
@@ -613,7 +613,7 @@ void testKeyframeGestureReachesEveryAnimatableSchema() {
         seededColor = colorCurve->components[index].keyframes.size() == 1 &&
                       colorCurve->components[index].keyframes.front().value == authoredColor[index];
     require(seededColor,
-            "a colour parameter gets a COLOUR curve seeded with its own authored colour");
+            "a color parameter gets a COLOR curve seeded with its own authored color");
 
     // An animated parameter's value edit at a time with no key inserts one (the AE rule), through
     // the same write path a constant edit uses.
@@ -627,7 +627,7 @@ void testKeyframeGestureReachesEveryAnimatableSchema() {
     require(session.setSelectedOpacity(0.5), "editing an animated value commits");
     require(session.keyframeDiamondState(document::kOpacityParameterRole) ==
                 ui::KeyframeDiamondState::AnimatedWithKey,
-            "and inserts a key at the current time, which is the AE behaviour");
+            "and inserts a key at the current time, which is the AE behavior");
 }
 
 // Task S5, item 2: the selected key's interpolation, through the session path the timeline menu

@@ -93,7 +93,7 @@ CpuGpuSceneBuilder::build(const std::shared_ptr<const CompiledCompositionPlan>& 
         const auto color = captureEvaluationColorIntent(request.colorIntent);
         if (!color)
             return failed(PreparedGpuSceneDiagnosticCode::AllocationFailure,
-                          "Scene colour intent could not be captured");
+                          "Scene color intent could not be captured");
         capturedRequest.colorIntent = *color;
         return buildImpl(plan, capturedRequest, cancellation);
     } catch (const std::bad_alloc&) {

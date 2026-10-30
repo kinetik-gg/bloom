@@ -4,7 +4,7 @@ Bloom keeps two kinds of saved choice apart:
 
 - **Global preferences** are user-wide choices for your installation. They live in this Preferences
   window and are stored outside any project.
-- **Project settings** are part of one `.bloom` file. Colour configuration is the current example,
+- **Project settings** are part of one `.bloom` file. Color configuration is the current example,
   under **File → Project Settings…**.
 
 Open **Edit → Preferences…** (⌘, on macOS, where the operating system moves it into the Bloom
@@ -23,7 +23,7 @@ or create, is refused under the field and OK waits.
 | --- | --- | --- |
 | General | Audio playback, loop playback | Immediately |
 | Sounds | Play sounds (master), volume, event sounds, interaction sounds, render notifications, and a Play test sound button. See [UI sound feedback](../ux/sound.md) | Immediately |
-| Viewer | Resolution, the background around the composition frame (Solid, Grey, Black, White), the transparency grid inside it, and the safe-areas, centre-cross, thirds, rulers and pixel-grid overlays | Immediately |
+| Viewer | Resolution, the background around the composition frame (Solid, Gray, Black, White), the transparency grid inside it, and the safe-areas, center-cross, thirds, rulers and pixel-grid overlays | Immediately |
 | Timeline | Time format, snapping, keyframes, graph editor, layer column width | Immediately |
 | Node Graph | Link style, snap to grid, grid size | Immediately |
 | Memory & Caches | RAM and VRAM headroom, media disk cache enable/directory/budget | Headroom on Apply or OK; disk cache after restart |

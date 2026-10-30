@@ -1,7 +1,7 @@
 # UI Feedback: Sounds And Notifications
 
 Status: current. Owner: `src/ui` (`ui_feedback`, `ui_sound_engine`, `interaction_sounds`,
-`system_notifier`). The user-facing behaviour and the event audit are in
+`system_notifier`). The user-facing behavior and the event audit are in
 [`ux/sound.md`](../ux/sound.md).
 
 ## Rule

@@ -468,7 +468,7 @@ void testLayerTransformQuarterTurnsAreExact(Expectations& expectations) {
     expectations.expect(quarterOk && quarter[0][0] == sourcePixels[2] &&
                             quarter[0][1] == sourcePixels[0] && quarter[1][0] == sourcePixels[3] &&
                             quarter[1][1] == sourcePixels[1],
-                        "a 90 degree rotation is an exact clockwise permutation of pixel centres");
+                        "a 90 degree rotation is an exact clockwise permutation of pixel centers");
 
     // Half a turn is the exact reversal of both axes.
     const auto [halfOk, half] = rowsOf(transform({.rotationDegrees = 180.0}, imageWindow));
@@ -500,7 +500,7 @@ void testLayerTransformQuarterTurnsAreExact(Expectations& expectations) {
     expectations.expect(
         cornerOk && corner[0][0] == sourcePixels[0] && corner[0][1] == Rgba32f::transparent() &&
             corner[1][0] == Rgba32f::transparent() && corner[1][1] == Rgba32f::transparent(),
-        "an anchor at a corner pivots about that corner, not about the centre");
+        "an anchor at a corner pivots about that corner, not about the center");
 }
 
 void testLayerTransformScaleAndBounds(Expectations& expectations) {

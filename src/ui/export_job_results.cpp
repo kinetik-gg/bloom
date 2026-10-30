@@ -66,7 +66,7 @@ namespace {
     case host::ExportCheck::Timing:
         return tr("The frame timing doesn't match");
     case host::ExportCheck::ColourTags:
-        return tr("The colours aren't tagged as asked");
+        return tr("The colors aren't tagged as asked");
     case host::ExportCheck::Container:
         return tr("The file isn't the kind you asked for");
     case host::ExportCheck::Audio:
@@ -113,8 +113,8 @@ struct Line final {
                 const auto name = !settings.outputColorSpaceId.empty()
                                       ? qs(settings.outputColorSpaceId)
                                       : qs(settings.displayName);
-                add(name.isEmpty() ? tr("Colours tagged correctly")
-                                   : tr("Colours tagged as %1").arg(name),
+                add(name.isEmpty() ? tr("Colors tagged correctly")
+                                   : tr("Colors tagged as %1").arg(name),
                     StatusTone::Neutral);
             }
             continue;

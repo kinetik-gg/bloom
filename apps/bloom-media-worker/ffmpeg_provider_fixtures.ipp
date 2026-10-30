@@ -542,7 +542,7 @@ void playerReference(const std::filesystem::path& clip, const std::filesystem::p
     require(sws_setColorspaceDetails(scale, sws_getCoefficients(matrix), 0,
                                      sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16,
                                      1 << 16) >= 0,
-            "Reference colour details");
+            "Reference color details");
     std::vector<std::uint8_t> rgb(static_cast<std::size_t>(frame->width) *
                                   static_cast<std::size_t>(frame->height) * 3U);
     std::array<std::uint8_t*, 4> planes{rgb.data(), nullptr, nullptr, nullptr};
@@ -589,13 +589,13 @@ bool generateFixtures(const std::string& directory) {
                "H.264 baseline I_PCM macroblocks, GOP 12; ProRes 422; 64x48; 48 frames at 24/1\n"
                "Luma background 16+3*N; seven-segment frame numbers; Rec.709 limited\n"
                "Additional ProRes 4444 alpha fixture uses 512/1023 opacity\n"
-               "12-frame H.264 colour fixtures: untagged, BT.2020/PQ, BT.2020/HLG\n"
+               "12-frame H.264 color fixtures: untagged, BT.2020/PQ, BT.2020/HLG\n"
                "12-frame timing fixtures: VFR and 90-degree display-matrix H.264 (all IDR),\n"
                "top-field-first interlaced ProRes 422, RGB48 TIFF in MOV, 2:1 SAR H.264\n"
                "12-frame untagged 1280x720 ProRes 422 (tiled numbered pattern)\n"
                "1200-frame H.264 (pattern repeats every 48 frames) for lazy indexing\n"
                "2-frame 7680x4320 Rec.709 ProRes 422 (tiled numbered pattern)\n"
-               "2-frame H.264 colour patches (BT.709 tagged, untagged BT.601) with their\n"
+               "2-frame H.264 color patches (BT.709 tagged, untagged BT.601) with their\n"
                "FFmpeg swscale RGB24 decodes (limited Y'CbCr to full-range R'G'B')\n"
                "PCM mono 48000 Hz: sample[n]=((n%997)-498)/1024\n"
                "Original synthetic content; generated at test time; no external media\n";

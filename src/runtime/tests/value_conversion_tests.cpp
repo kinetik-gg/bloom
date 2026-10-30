@@ -149,14 +149,14 @@ void testScalarAndIntegerToString(Expectations& expectations) {
     const auto* wideText = std::get_if<std::string>(&wide.outputs[0]);
     expectations.expect(!wide.failed && wideText != nullptr && wideText->size() == 257 &&
                             wideText->back() == '7',
-                        "integer formatting honours width beyond 256");
+                        "integer formatting honors width beyond 256");
     const auto wideScalar =
         run(Kernel::ScalarToString,
             {7.0, std::int64_t{0}, false, std::int64_t{257}, std::string{}, std::string{}});
     const auto* scalarText = std::get_if<std::string>(&wideScalar.outputs[0]);
     expectations.expect(!wideScalar.failed && scalarText != nullptr && scalarText->size() == 257 &&
                             scalarText->back() == '7',
-                        "scalar formatting honours width beyond 256");
+                        "scalar formatting honors width beyond 256");
     runtime::ValueUtilityLimits tiny;
     tiny.maxStringBytes = 32;
     tiny.availableStringBytes = 8;

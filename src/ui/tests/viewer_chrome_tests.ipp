@@ -120,7 +120,7 @@ void testViewerFooterLayoutAtEveryWidth(Expectations& expectations) {
             const int left = control("viewerStepToStartButton")->geometry().left();
             const int right = control("viewerTimeReadout")->geometry().right();
             expectations.expect(std::abs((left + right) / 2 - width / 2) <= 2,
-                                "the transport and readout sit centred in a wide footer");
+                                "the transport and readout sit centered in a wide footer");
             expectations.expect(control("viewerTimeReadout")->geometry().left() -
                                         control("timelineLoopIndicator")->geometry().right() <=
                                     ui::kit::px(ui::kit::Spacing::ChromeGap) + 1,
@@ -281,7 +281,7 @@ void testViewerEmptyProjectChrome(Expectations& expectations) {
         invitation != nullptr &&
             std::abs(invitation->geometry().center().x() - canvas.center().x()) <= 1 &&
             std::abs(invitation->geometry().center().y() - canvas.center().y()) <= 1,
-        "the invitation is centred on the canvas");
+        "the invitation is centered on the canvas");
     if (button != nullptr)
         button->click();
     expectations.expect(newCompositionRuns == 1,

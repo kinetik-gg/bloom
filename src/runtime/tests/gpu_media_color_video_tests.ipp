@@ -7,7 +7,7 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
                          CpuCompositionEvaluator& evaluator, const std::filesystem::path& fixtures,
                          const GpuSceneOcioContext& ocioContext) {
     if (fixtures.empty() || !std::filesystem::is_directory(fixtures)) {
-        std::cout << "NOTE: real-video colour vectors skipped (no --fixtures directory)\n";
+        std::cout << "NOTE: real-video color vectors skipped (no --fixtures directory)\n";
         return;
     }
     auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});

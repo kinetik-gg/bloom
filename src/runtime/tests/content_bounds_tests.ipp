@@ -43,17 +43,17 @@ void testContentBounds(Expectations& expectations) {
     layer.rotation.source = 90.0;
     const auto rotatedPlan = publishPlan(rotated);
     const auto result = evaluator.evaluate(rotatedPlan, requestFor(*rotatedPlan), {});
-    expectations.expect(result.frame() != nullptr, "off-centre transformed solid evaluates");
+    expectations.expect(result.frame() != nullptr, "off-center transformed solid evaluates");
     if (!result.frame())
         return;
     const auto& geometry = result.frame()->evaluatedBounds()[1];
     const std::array<document::Vec2d, 4> polygon{{{8.5, 0}, {8.5, 8}, {6.5, 8}, {6.5, 0}}};
     expectations.expect(
         geometry.polygon == polygon && geometry.anchor == document::Vec2d{8, 6},
-        "scale then clockwise rotation about off-centre anchor has exact polygon and parent pivot");
+        "scale then clockwise rotation about off-center anchor has exact polygon and parent pivot");
     // Analytic coverage: x=[6.5,8.5], y=[0,8], half-covered edge columns 6 and 8.
     expectations.expect(boundsPixelDigest(*result.frame()) == 15538055505238530469ULL,
-                        "off-centre rotated solid RGBA32F golden");
+                        "off-center rotated solid RGBA32F golden");
 
     const auto cached = evaluator.evaluate(rotatedPlan, requestFor(*rotatedPlan), {});
     const auto hit = evaluator.evaluate(rotatedPlan, requestFor(*rotatedPlan), {});
@@ -125,7 +125,7 @@ void testContentBoundsEdgeCases(Expectations& expectations) {
         textFrame.frame() &&
             textFrame.frame()->evaluatedBounds()[0].local == runtime::ContentBounds{0, 2, 21, 31} &&
             textFrame.frame()->evaluatedBounds()[1].anchor == document::Vec2d{8, 10},
-        "multiline text keeps its complete glyph box larger than the frame and centres its anchor");
+        "multiline text keeps its complete glyph box larger than the frame and centers its anchor");
 
     auto invalid = oneSolidPlan()->copyDefinition();
     localSolid(invalid, 0, 1000000, 1000000, 90);

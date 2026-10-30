@@ -71,7 +71,7 @@ class CatalogWorkerHold final {
   public:
     explicit CatalogWorkerHold(runtime::TaskScheduler& scheduler)
         : submission_(scheduler.submit<void>(
-              runtime::TaskRequest("Hold input colour catalogue worker",
+              runtime::TaskRequest("Hold input color catalogue worker",
                                    {.kind = runtime::TaskOwnerKind::Application,
                                     .id = runtime::TaskOwnerId::fromRaw(999)},
                                    runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu),
@@ -104,7 +104,7 @@ void inputColorCatalogFollowsWorkingSpace() {
     ui::ProjectHost host(scheduler);
     ui::CompositionSession session(*host.liveDocumentAndStack().first,
                                    *host.liveDocumentAndStack().second, host.lowestCompositionId());
-    commands::Transaction seed("Seed colour catalogue composition", session.snapshot().revision());
+    commands::Transaction seed("Seed color catalogue composition", session.snapshot().revision());
     seed.emplace<commands::AddComposition>("Main", document::CompositionFormat{},
                                            core::RationalTime::fromInteger(10));
     const auto seeded = session.executeTransaction(std::move(seed));
@@ -355,7 +355,7 @@ void run() {
     auto* inputSpace = properties.findChild<ui::kit::KDropdown*>("propertiesImageInputColorSpace");
     require(inputSpace && inputSpace->count() > 1 &&
                 inputSpace->itemText(0).startsWith("Auto (resolved: "),
-            "Properties resolves Auto input colour space and lists config spaces");
+            "Properties resolves Auto input color space and lists config spaces");
     auto* dimensions = properties.findChild<ui::kit::KLabel*>("propertiesImageDimensions");
     require(dimensions && dimensions->text() == QString::fromUtf8("32 × 16"), "source dimensions");
     // ADR 0026: the part and layer pickers read the probe through the Assets worker.
@@ -370,8 +370,8 @@ void run() {
         QTest::qWait(10);
     }
     require(layerPicker && layerPicker->count() == 1 &&
-                layerPicker->itemText(0) == "Colour (root)",
-            "the layer picker lists exactly the still's root colour layer");
+                layerPicker->itemText(0) == "Color (root)",
+            "the layer picker lists exactly the still's root color layer");
     auto* partPicker = properties.findChild<ui::kit::KDropdown*>("propertiesImagePart");
     require(partPicker && !partPicker->isEnabled() &&
                 partPicker->itemText(partPicker->currentIndex()) == "First part",

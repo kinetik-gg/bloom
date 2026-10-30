@@ -20,8 +20,8 @@ Bloom has no layer mask, track matte or Mask value type:
 
 The pieces a matte needs already exist. Set Alpha and Multiply Alpha (`ImageCombineKernel`, fixed by
 #361) read a second image as coverage through an Alpha/Red/Green/Blue/Luma selector with an invert
-bit, with GPU parity on every required route. Separable blur and other neighbourhood effects run on
-the GPU as generated neighbourhood programs.
+bit, with GPU parity on every required route. Separable blur and other neighborhood effects run on
+the GPU as generated neighborhood programs.
 
 ## Decision
 
@@ -60,7 +60,7 @@ The mask path is in the layer's content space: the pixel space of the image that
 Output, before the layer transform. A mask therefore moves, scales and rotates with its layer, and
 feather and expansion are measured in content pixels.
 
-Coverage of one mask at pixel centre `p`:
+Coverage of one mask at pixel center `p`:
 
 ```text
 s = signed distance from p to the path's flattened outline (negative inside; nonzero winding)
@@ -135,7 +135,7 @@ TrackMatte = { source: LayerId, channel: Alpha|Luma, inverted }
   fields, and a Merge entry naming a track-matte effect are additive: no existing plan value changes
   meaning, and an older evaluator refuses the new shapes rather than misreading them.
 
-The CPU evaluator is the reference. The GPU runs the mask kernel as one fixed neighbourhood
+The CPU evaluator is the reference. The GPU runs the mask kernel as one fixed neighborhood
 program through the same production preparation path as the separable blur. The host flattens
 each outline once and packs the segments, their reciprocal factors and the per-mask controls into a
 read-only storage buffer that every dispatch uploads; the shader text never changes. The data bytes
@@ -202,8 +202,8 @@ matte command declares its composition `renderScope()`.
   document field on every path anchor (`PathAnchorMode`: Corner, Mirrored, Aligned, Free, Auto),
   persisted in 1.24, carried by Path keys and by scripting path values (`mode`). It is editing
   intent only: the curve is the stored points and handles. Older paths infer it from their
-  handles. Auto handles are Catmull-Rom from the neighbouring anchors and are recomputed by any
-  edit that moves a neighbour. `docs/ux/ui-grammar.md` owns the gestures.
+  handles. Auto handles are Catmull-Rom from the neighboring anchors and are recomputed by any
+  edit that moves a neighbor. `docs/ux/ui-grammar.md` owns the gestures.
 - **Scripting.** Python, the CLI and MCP add and edit masks through `bloom.layer.add-mask`,
   `set-mask-path`, `animate-mask-path`, `stop-animating-mask-path`, `remove-mask`, `move-mask`,
   `set-mask-mode`, `set-mask-inverted` and `rename-mask`, and set mattes through
@@ -222,7 +222,7 @@ matte command declares its composition `renderScope()`.
   Windows use the existing supported CPU fallback until their GPU qualification.
 - Matte apply reuses the qualified Multiply Alpha path, so only the mask kernel and the Image Mix
   mask binding are new GPU work.
-- A Path curve is whole-value, unlike the component curves of vectors and colours. Key summaries and
+- A Path curve is whole-value, unlike the component curves of vectors and colors. Key summaries and
   the graph view treat a path key as a key without a scalar value.
 - Documents without masks or mattes compile to the same operations as
   before.

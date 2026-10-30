@@ -169,9 +169,9 @@ void testDistribution(TestContext& test) {
         test.expect(result.changed(), "distributing three layers changes the middle one");
         test.expect(near(*fixture.constant(a.position), {50, 100}) &&
                         near(*fixture.constant(c.position), {700, 100}),
-                    "the outermost centres stay");
+                    "the outermost centers stay");
         test.expect(near(*fixture.constant(b.position), {375, 100}),
-                    "the inner centre is evenly spaced, whatever its width");
+                    "the inner center is evenly spaced, whatever its width");
     }
     // Four unevenly sized layers in an arbitrary request order.
     {
@@ -199,7 +199,7 @@ void testDistribution(TestContext& test) {
                         near(fixture.constant(layers[2].position)->y, 500) &&
                         near(fixture.constant(layers[0].position)->y, 100) &&
                         near(fixture.constant(layers[3].position)->y, 700),
-                    "four uneven layers get centres 100, 300, 500, 700");
+                    "four uneven layers get centers 100, 300, 500, 700");
     }
     {
         // Composition: the outermost layers' outer edges land on the frame; Key Object keeps the
@@ -224,7 +224,7 @@ void testDistribution(TestContext& test) {
         test.expect(near(*fixture.constant(a.position), {50, 0}) &&
                         near(*fixture.constant(c.position), {950, 0}) &&
                         near(*fixture.constant(b.position), {500, 0}),
-                    "the outer edges reach the frame and the centre is between");
+                    "the outer edges reach the frame and the center is between");
         test.expect(fixture.stack.undo().changed(), "the composition distribution undoes");
         const auto d = fixture.solid("D", {900, 0});
         auto withKey = geometry;

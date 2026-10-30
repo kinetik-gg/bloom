@@ -19,22 +19,22 @@ ViewerToolInfo viewerToolInfo(const ViewerTool tool) {
                 "Zoom"};
     case ViewerTool::Rectangle:
         return {tr("Rectangle"), QStringLiteral("R"),
-                tr("Drag; Shift constrains; Alt draws from centre"), "Rectangle"};
+                tr("Drag; Shift constrains; Alt draws from center"), "Rectangle"};
     case ViewerTool::Ellipse:
         return {tr("Ellipse"), QStringLiteral("E"),
-                tr("Drag; Shift makes a circle; Alt draws from centre"), "Ellipse"};
+                tr("Drag; Shift makes a circle; Alt draws from center"), "Ellipse"};
     case ViewerTool::Polygon:
         return {tr("Polygon"),
                 {},
-                tr("Drag a five-sided polygon; Shift constrains; Alt draws from centre"),
+                tr("Drag a five-sided polygon; Shift constrains; Alt draws from center"),
                 "Polygon"};
     case ViewerTool::Star:
         return {tr("Star"),
                 {},
-                tr("Drag a five-point star; Shift constrains; Alt draws from centre"),
+                tr("Drag a five-point star; Shift constrains; Alt draws from center"),
                 "Star"};
     case ViewerTool::Line:
-        return {tr("Line"), {}, tr("Drag; Shift snaps to 45 degrees; Alt draws from centre"),
+        return {tr("Line"), {}, tr("Drag; Shift snaps to 45 degrees; Alt draws from center"),
                 "Line"};
     case ViewerTool::Pen:
         return {tr("Pen"), QStringLiteral("P"),

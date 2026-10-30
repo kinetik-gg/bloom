@@ -988,7 +988,7 @@ void MainWindow::createWorkspaceActions() {
             [this] { workspaceHost_->toggleMaximizeActiveArea(); });
 
     windowMenu_->addSeparator();
-    contextBarAction_ = windowMenu_->addAction(tr("Context Bar"));
+    contextBarAction_ = windowMenu_->addAction(tr("Toolbar"));
     contextBarAction_->setObjectName(QStringLiteral("windowContextBarAction"));
     contextBarAction_->setCheckable(true);
     contextBarAction_->setChecked(true);

@@ -91,7 +91,7 @@ kit::KDialog* buildH264EncoderDialog(QWidget& owner, H264EncoderService& service
                             ? QObject::tr("Checking the H.264 encoder…")
                             : QObject::tr("The H.264 encoder (Cisco OpenH264) is not installed. "
                                           "Bloom fetches Cisco's binary only after you accept "
-                                          "its licence, or you can locate a copy you downloaded."));
+                                          "its license, or you can locate a copy you downloaded."));
         bar->setVisible(busy);
         cancel->setVisible(busy);
         buttons->setVisible(true);

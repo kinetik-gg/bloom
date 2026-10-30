@@ -216,7 +216,7 @@ void testKeyframeIntervals(TestContext& test) {
     test.expect(spans(key(6, 1.0), {{2, 9}}),
                 "a key appended after the last key covers from it on");
     test.expect(spans(key(4, 0.5), {{2, 6}}),
-                "an inserted key covers its two neighbouring segments");
+                "an inserted key covers its two neighboring segments");
     test.expect(spans(key(4, 0.75), {{2, 6}}), "a re-valued key covers its two segments");
     test.expect(spans(fixture.stack.undo(), {{2, 6}}), "undo replays the key interval");
     (void)fixture.stack.redo();
@@ -228,13 +228,13 @@ void testKeyframeIntervals(TestContext& test) {
     requireFixture(curve != nullptr && curve->keyframes.size() == 3, "three keys");
     const auto first = curve->keyframes.front().id;
     test.expect(spans(apply<DeleteKeyframe>(fixture, curveId, first), {{1, 4}}),
-                "deleting the first key covers the held lead-in to its neighbour");
+                "deleting the first key covers the held lead-in to its neighbor");
     const auto middle =
         composition(fixture.document.snapshot()).animationCurves().findScalar(curveId)->keyframes;
     test.expect(spans(apply<MoveKeyframes>(
                           fixture, std::vector<KeyframeMove>{{{curveId, middle.front().id}, t(5)}}),
                       {{1, 6}}),
-                "moving a key covers its old and new neighbourhoods");
+                "moving a key covers its old and new neighborhoods");
 
     // An unreachable node's animation is render-neutral.
     const auto blur = addNode(fixture, "bloom.gaussian-blur");
@@ -318,17 +318,17 @@ void testBackgroundColorIsPresentationOnly(TestContext& test) {
     const core::Color4d after{0.8, 0.2, 0.4, 1.0};
     const auto set = apply<SetCompositionBackgroundColor>(fixture, after);
     test.expect(set.changed() && !set.renderAffecting && !set.affectedTimes.has_value(),
-                "a background colour edit changes the document but no rendered pixel");
+                "a background color edit changes the document but no rendered pixel");
     test.expect(composition(fixture.document.snapshot()).backgroundColor() == after,
-                "the edit stores the new background colour");
+                "the edit stores the new background color");
     const auto undone = fixture.stack.undo();
     test.expect(undone.changed() && !undone.renderAffecting &&
                     composition(fixture.document.snapshot()).backgroundColor() == before,
-                "undo restores the colour and is still not render-affecting");
+                "undo restores the color and is still not render-affecting");
     const auto redone = fixture.stack.redo();
     test.expect(redone.changed() && !redone.renderAffecting &&
                     composition(fixture.document.snapshot()).backgroundColor() == after,
-                "redo reapplies the colour, not render-affecting");
+                "redo reapplies the color, not render-affecting");
     Transaction mixed("Mixed", fixture.document.snapshot().revision());
     mixed.emplace<SetCompositionBackgroundColor>(kCompositionId, before);
     mixed.emplace<SetLayerEnabled>(kCompositionId, kFirstLayerId, false);

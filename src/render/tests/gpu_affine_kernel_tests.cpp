@@ -190,7 +190,7 @@ void testSamplesMatchOracle(Expectations& expectations) {
                 }
             }
             expectations.expect(zeroFactors,
-                                "a 90-degree rotation interpolates nothing (exact pixel centres)");
+                                "a 90-degree rotation interpolates nothing (exact pixel centers)");
         }
     }
 }

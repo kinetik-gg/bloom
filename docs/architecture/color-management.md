@@ -18,7 +18,7 @@ Updated: 2026-09-18
 
 Document schema 1.20 gives every image and video asset a durable `inputColorSpaceId` beside the
 legacy integer interpretation. An empty id is Auto. A non-empty id is resolved only in the exact
-OCIO configuration and revision selected by the project; it must name a non-data colour space.
+OCIO configuration and revision selected by the project; it must name a non-data color space.
 Image and Video source nodes retain their integer `colorSpace` rows (`0` inherits the asset, and
 the legacy `sRGB`/`Linear`/`Raw` values remain for compatibility) and add a non-animatable string
 `inputColorSpaceId` row. An empty node id inherits the asset's id or automatic interpretation.
@@ -34,7 +34,7 @@ durable id is not guessed.
 and premultiplication order, and records the config content revision in the processor identity.
 Missing ids, data spaces, invalid working spaces, non-invertible transforms, unavailable CPU
 processors, hostile-resource failures, and an incompatible floating-point environment are typed
-failures. The existing display-inverse `CpuInputProcessor` remains the colour-picker boundary.
+failures. The existing display-inverse `CpuInputProcessor` remains the color-picker boundary.
 
 ### Automatic asset rules
 
@@ -53,13 +53,13 @@ Auto resolution is format-specific and never uses an ambient `$OCIO` or a decode
 | Video: linear transfer | Working space |
 | Video: BT.2020 + PQ tags | The config's Rec.2100 PQ space (active or inactive); refused by name when the config has none |
 | Video: BT.2020 + HLG tags | The config's Rec.2100 HLG space, otherwise the synthesized `Rec.2100-HLG (Bloom)` space |
-| Video: missing tags | Filled by the size convention (Rec.709 for HD, Rec.601 for SD, BT.709 transfer, limited range; [media I/O](media-io.md)) and resolved as above, with the visible note "Colour tags missing — assumed Rec.709 with the sRGB transfer. Change in Assets → Input Colour" (Rec.601 for SD, Rec.2020 without the transfer clause for wide-gamut streams) |
-| Video: other Rec.2020 tags | Typed refusal naming the input-colour override |
+| Video: missing tags | Filled by the size convention (Rec.709 for HD, Rec.601 for SD, BT.709 transfer, limited range; [media I/O](media-io.md)) and resolved as above, with the visible note "Color tags missing — assumed Rec.709 with the sRGB transfer. Change in Assets → Input Color" (Rec.601 for SD, Rec.2020 without the transfer clause for wide-gamut streams) |
+| Video: other Rec.2020 tags | Typed refusal naming the input-color override |
 
 ### Ordinary SDR video default
 
 A config-managed video conversion decodes only the stream's Y'CbCr matrix and range; the transfer
-belongs to the input colour space. Auto therefore resolves ordinary Rec.709/601 and untagged SDR
+belongs to the input color space. Auto therefore resolves ordinary Rec.709/601 and untagged SDR
 video to the config's sRGB-texture space (`srgb_rec709_display` in Bloom Neutral, `sRGB - Texture`
 in ACES 1.3 CG): the R'G'B' is interpreted with the sRGB display transfer, exactly as players and
 Bloom's own 8-bit stills are shown, so through the default sRGB view footage matches a player's
@@ -71,7 +71,7 @@ scene-linear `lin_rec709_scene`: the encoded R'G'B' entered the working space as
 the display encoded it again, so video looked pale ([ADR 0032](../decisions/0032-sdr-video-colour-default.md)).
 The resolved input space is part of every video cache key, so frames, thumbnails and RAM-preview
 entries made under the old default are never reused. A reference test compares both the CPU
-reference and the GPU route with FFmpeg's decode of generated H.264 colour patches (within 2 codes
+reference and the GPU route with FFmpeg's decode of generated H.264 color patches (within 2 codes
 per channel, mean 0.75).
 
 ### Synthesized Rec.709 camera input space
@@ -100,7 +100,7 @@ pinned config that lacks one gains `Rec.2100-HLG (Bloom)` in memory. Its definit
 light to the config reference, is:
 
 1. OCIO 2.5 built-in `CURVE - HLG-OETF-INVERSE` (BT.2100 HLG signal to scene light, scaled so a
-   signal of 0.42 is 18% grey);
+   signal of 0.42 is 18% gray);
 2. the BT.2020 (D65) RGB to CIE XYZ matrix derived from the BT.2020 primaries; then
 3. to the reference primaries: the inverse BT.709 RGB-to-XYZ matrix for Bloom Neutral (linear
    Rec.709 reference), or the inverse OCIO built-in `UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD` for
@@ -111,7 +111,7 @@ The HLG built-in style is valid only in configs of version 2.4 or later, and the
 processor built in a minimal raw 2.4 config (one 65,536-entry half-domain 1D LUT) and embeds that
 op in the space, so each pinned config keeps its version and its in-memory copy passes OCIO's
 `Config::validate()` with no errors or warnings. The embedded op gives the same CPU output and the
-same GPU processor cache id as the built-in; every existing colour-space pair and display/view of
+same GPU processor cache id as the built-in; every existing color-space pair and display/view of
 both configs keeps an identical CPU and GPU processor cache id.
 
 It is scene-referred: no HLG OOTF and no system gamma are applied. HLG is defined on scene light
@@ -123,10 +123,10 @@ anywhere. Because the definition uses OCIO built-ins, transform identity include
 `synthesizedColorSpaceIdentity()` (`bloom-hlg-scene-v1;ocio=<version>`) as well as the space id.
 
 ARRI LogC3 and RED Log3G10 are not container-tagged automatic cases. The Assets and Properties
-pickers list every non-data colour space, grouped by the config's family, so an artist can choose
+pickers list every non-data color space, grouped by the config's family, so an artist can choose
 those spaces explicitly for camera footage. The resolved id and config revision are shown in the
 Assets tooltip and source row; video tooltips also retain the numeric H.273 container tags.
-The Assets input-colour choice is an undoable asset command. Effective interpretation is selected
+The Assets input-color choice is an undoable asset command. Effective interpretation is selected
 in this order: a source's exact config id, its explicit legacy choice, the asset's exact config id,
 then the asset's legacy or automatic choice. The source row shows when its legacy choice is
 superseded. An asset choice applies to every source that inherits from it.
@@ -141,26 +141,26 @@ space, config, display, or packing change cannot reuse differently displayed pix
 The CPU AP0 EXR read is pinned against the OCIO reference processor to an absolute channel delta of
 `1e-5`; Neutral sRGB PNG defaults retain the existing byte-identical goldens.
 
-## Current Version 1.19 Decisions — Working Colour Space
+## Current Version 1.19 Decisions — Working Color Space
 
 Document schema 1.19 revises the earlier fixed-process-space decision. `ColorSettings.processColorSpaceId`
-is the project's working colour space: it must resolve, in the selected OCIO configuration, to a
-non-data scene-linear colour space. The durable identity is the colour-space id together with the
+is the project's working color space: it must resolve, in the selected OCIO configuration, to a
+non-data scene-linear color space. The durable identity is the color-space id together with the
 selected configuration's content revision. A composition may carry an optional
 `workingColorSpaceId`; absent means inherit the project value. An override is accepted only when the
-same selected configuration exposes that exact scene-linear colour space. A failed or unavailable
+same selected configuration exposes that exact scene-linear color space. A failed or unavailable
 resolution is typed and fail-closed; Bloom never silently falls back to an ambient OCIO config.
 
-New projects use Bloom Neutral v1 and `lin_rec709_scene`. Project Settings → Colour can select that
+New projects use Bloom Neutral v1 and `lin_rec709_scene`. Project Settings → Color can select that
 default or OCIO 2.5's built-in ACES 1.3 CG configuration
 `ocio://cg-config-v1.0.0_aces-v1.3_ocio-v2.1`; its revision is derived from OCIO's serialized
 content. The working-space picker is populated from the selected config, with the `scene_linear`
 role preselected. External `config.ocio` and `.ocioz` references remain explicit durable locators;
 `$OCIO` is only a suggested picker path and is never an evaluation fallback.
 
-Authored Solid, Text, and Shape colours are numeric values in the effective working space. The colour
-picker edits sRGB-encoded values and converts through the selected config's `sRGB - Texture` colour
-space. Changing the working space re-interprets existing numbers; “convert existing colours” is the
+Authored Solid, Text, and Shape colors are numeric values in the effective working space. The color
+picker edits sRGB-encoded values and converts through the selected config's `sRGB - Texture` color
+space. Changing the working space re-interprets existing numbers; “convert existing colors” is the
 opt-in undoable path for preserving appearance.
 
 The process/display split remains: process evaluation and blending use the effective working space,
@@ -252,7 +252,7 @@ counterpart.
 The Viewer footer stores the selected pair under a revision-scoped, per-viewer QSettings key and
 includes it in `PreviewRequestIdentity`, the RAM-preview key, and display-preparation identities.
 Changing it therefore re-prepares display pixels without invalidating the working-space process
-cache. The colour picker's inverse remains pinned to the config's sRGB authoring pair; it is not
+cache. The color picker's inverse remains pinned to the config's sRGB authoring pair; it is not
 changed by the review display selection.
 
 The footer's Look toggle is a viewer-only request setting. When off, viewer evaluation sets
@@ -394,7 +394,7 @@ ao = as + ab * (1 - as)
 
 `co` is the premultiplied result channel; `as` and `ab` are source and backdrop alpha.
 
-**Alpha compositing is source-over for every mode.** Only the colour combination changes, so a blend
+**Alpha compositing is source-over for every mode.** Only the color combination changes, so a blend
 mode never makes a layer cover more or less of what is beneath it than its own alpha says. The alpha
 expression above is evaluated with exactly the arithmetic the source-over kernel uses.
 
@@ -422,7 +422,7 @@ range.
 
 The vocabulary is deliberately the separable modes only. Each one combines the corresponding channels
 of two pixels and nothing else, so each has one closed formula over scene-linear values. A
-luminosity, saturation, hue, or colour mode would have to commit to a luminance model and a gamut the
+luminosity, saturation, hue, or color mode would have to commit to a luminance model and a gamut the
 process space does not fix, and belongs with a qualified colorimetry decision rather than with this
 set.
 
@@ -681,14 +681,14 @@ without blocking the UI, and eviction never invalidates a handle retained by an 
 Killing a helper invalidates all handles in its generation before another request can observe them.
 There is no process-global mutable OCIO config or unbounded processor history.
 
-## UI Colour Boundary
+## UI Color Boundary
 
-Authoring colour parameters remain straight `Color4d` values whose numeric interpretation is the
+Authoring color parameters remain straight `Color4d` values whose numeric interpretation is the
 effective project/composition working space. Solid, Text, Shape, Color value and Color operand
 schemas retain the historical `bloom.reference.linear-srgb` authoring label for schema
 compatibility; it no longer means that the stored numbers are permanently Rec.709 values. Opening
 or migrating a document never rewrites those numbers. Changing the working space re-interprets
-them, while the explicit Convert Existing Colours command preserves appearance as an undoable
+them, while the explicit Convert Existing Colors command preserves appearance as an undoable
 operation.
 
 The qualified `PreparedCpuDisplayProcessorHandle` exposes `referenceToDisplay(Color4d)` and
@@ -699,12 +699,12 @@ The forward result clamps RGB to [0, 1]. The inverse retains extended range and 
 lossless optimization mode so display white does not acquire artificial HDR values. The existing
 forward frame processor, config digest, display identity and identity goldens are unchanged.
 The pair is tested within an absolute `3e-5` float tolerance on the unclipped domain. Clipping is
-not invertible: an HDR reference colour must remain available separately from its display swatch.
+not invertible: an HDR reference color must remain available separately from its display swatch.
 
 `KColor` carries a `Display` or `Reference` tag. QColor, hex and HSV/HSL representations are
 Display-only; attempting to paint or format a Reference value directly returns no display value.
 The kit receives a conversion callable from `CompositionSession::colorConverter(schemaKey)`;
-it has no dependency on project types or OCIO. The accessor accepts the four reference colour
+it has no dependency on project types or OCIO. The accessor accepts the four reference color
 schemas above and refuses unknown encodings. Each session prepares its immutable built-in processor
 off the UI thread, publishes readiness through a timer, and cancels publication when destroyed.
 Worker-owned state contains no widget or session pointer; session destruction never waits for the
@@ -712,31 +712,31 @@ worker. Pending or failed conversion disables reference swatches and leaves expl
 reference numbers available. A failed preparation reports a session diagnostic. This currently
 supports the same fixed Bloom Neutral v1 display/view as the viewer.
 
-Properties (Solid, Text and registry colour rows) and node-card colour cells bind this accessor.
+Properties (Solid, Text and registry color rows) and node-card color cells bind this accessor.
 Their chips and picker controls paint Display values and emit Reference values to the existing
-session commands. Hex text, recent colours, sampled screen colours, HSV/HSL and the picker's
+session commands. Hex text, recent colors, sampled screen colors, HSV/HSL and the picker's
 available spatial forms describe display sRGB. Merely opening or closing a picker preserves the
 original reference value, including HDR RGB and alpha, and issues no command.
 
 Expanded Properties RGBA fields normally show normalized display values. If any stored RGB
 channel is negative or above 1, all four fields show the original reference numbers with a
-`reference` suffix. The swatch still shows the converted, clamped display colour. Typing an
+`reference` suffix. The swatch still shows the converted, clamped display color. Typing an
 out-of-range RGB value into a display field authors that channel as a reference value and switches
 the row to reference presentation. Unchanged channels retain their exact reference numbers, so
 editing alpha or one component cannot accumulate conversion error in the others. Composition
 background preferences already use Display values and retain that interpretation: the Viewer
-fills its composition frame with the composition Background Colour as display-encoded RGB (alpha
+fills its composition frame with the composition Background Color as display-encoded RGB (alpha
 ignored) and composites the display-referred image over it in display space, on the CPU paint and
-the GPU present alike, exactly as it composites over its surround and Transparency Grid; the colour
+the GPU present alike, exactly as it composites over its surround and Transparency Grid; the color
 therefore needs no display transform of its own and never enters a process image. The timeline
-colour rows apply the same boundary: an in-range colour presents normalized display numbers in its
+color rows apply the same boundary: an in-range color presents normalized display numbers in its
 expanded R/G/B/A rows, a signed or HDR RGB channel switches the whole row to exact reference
 numbers, and commits convert back through the session `colorConverter` and existing commands.
 
 Regression pins cover display `#F03B2E` becoming approximately reference
 `(0.871367, 0.043735, 0.027321)`, the Properties and node-chip pixels matching that pick, the
 qualified viewer pipeline producing RGBA8 `(240, 59, 46, 255)`, stable repeated hex edits, HDR edits,
-and unchanged stored colour numbers after a production 1.9-to-1.10 document migration. UI pins
+and unchanged stored color numbers after a production 1.9-to-1.10 document migration. UI pins
 run at DPR 1, 1.25, 1.5 and 2.
 
 ## Alpha And Pixel Flow
@@ -829,10 +829,10 @@ semantics advances once, 5 → 6, to identify image input and sequence evaluatio
 plan 3, animation 2 and Bloom Neutral v1 identities stay fixed. Output identity goldens were
 independently derived using the S5 byte-envelope oracle with those four version values.
 
-## Explicit Colour Space Transform
+## Explicit Color Space Transform
 
 `bloom.ocio-colour-space-transform` uses the shared image-effect operation. Its constant String
-parameters `from` and `to` select non-data colour-space ids from the exact project OCIO config;
+parameters `from` and `to` select non-data color-space ids from the exact project OCIO config;
 an empty id means the effective working space. `bypass` defaults to false. Explicit transforms
 may target nonlinear spaces such as ACEScct; the project working space remains scene-linear.
 
@@ -845,11 +845,11 @@ and status line. Bypass and true identity share the input pixels exactly.
 
 ## Show Look Nodes And LUT Assets
 
-The Colour menu contains `bloom.ocio-colour-space-transform` and `bloom.ocio-file-transform`.
+The Color menu contains `bloom.ocio-colour-space-transform` and `bloom.ocio-file-transform`.
 Both lower to the reusable image-effect operation. CST resolves `from` and `to` in the exact
 selected config, with an empty id meaning the effective working space. File Transform resolves
 `processSpace` the same way and executes working → process space → LUT → process space → working.
-For the ACES show workflow this is ACEScg → ACEScct → show LUT → ACEScct → ACEScg. Colour kernels
+For the ACES show workflow this is ACEScg → ACEScct → show LUT → ACEScct → ACEScg. Color kernels
 un-premultiply RGB, preserve alpha, and re-premultiply after processing; zero alpha remains zero.
 
 LUT assets accept `.cube`, `.clf`, `.spi1d` and `.spi3d`. Import captures the existing locator and
@@ -862,7 +862,7 @@ hits. A canonical `.cube` whose table is the exact identity grid with the defaul
 exact identity, including HDR values outside that domain; no clamp or process-space round trip is
 introduced. OCIO-proven identity processors use the same path. No imported image or LUT is rewritten.
 
-External LUT parsing, processor construction and application use the supervised colour helper.
+External LUT parsing, processor construction and application use the supervised color helper.
 The Linux implementation sends anonymous sealed resources and distinct pixel slabs over a private
 socket with descriptor, inode, length and nonce checks. The helper verifies structural limits again
 before OCIO and checks OCIO's parsed 3D grid sizes before preparing a CPU processor, including

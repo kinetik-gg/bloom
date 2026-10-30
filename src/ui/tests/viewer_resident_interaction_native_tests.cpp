@@ -706,7 +706,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 session.selectLayer(selectedLayer);
             }
             checks.expect(session.setSelectedSolidColor(core::Color4d{0.95, 0.1, 0.85, 1.0}),
-                          "the Solid colour change is one document transaction");
+                          "the Solid color change is one document transaction");
             checks.expect(
                 waitForResidentRevision(controller, *viewer, session.snapshot().revision(), 30s),
                 "a second distinct resident frame reaches the viewer");

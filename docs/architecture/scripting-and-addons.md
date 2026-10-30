@@ -193,7 +193,7 @@ revocation rule.
 
 - **Owner side (UI thread).** The application-lifetime `ui::LiveSessionAdapter` publishes the mirror
   (render source, editor context with selected nodes and layers, the Viewer's display and view, the
-  project path) on every snapshot, composition, selection, time, colour-settings and save change.
+  project path) on every snapshot, composition, selection, time, color-settings and save change.
   `CompositionSession::documentRebound` revokes the generation before any refresh can publish the
   new document, and `ProjectHost::sessionReplaced` starts the next generation with a fresh command
   event stream. The adapter drains at most one commit per event-loop slice through
@@ -248,11 +248,11 @@ registry and compared against the checked-in file by the Python conformance test
 operation ID has a complete argument schema and a working factory, so the discoverable set and the
 callable set are the same. Operations accept positional arguments in schema order and keywords
 alike; `Proxy` objects and raw stable IDs are interchangeable for ID arguments; tuples and lists
-read as vectors and colours; and a time is a whole frame, a `Fraction`, a float or an exact
+read as vectors and colors; and a time is a whole frame, a `Fraction`, a float or an exact
 `(numerator, denominator)` pair. Arguments marked contextual in the schema -- `composition`, `time`,
 `layer`, `selection`, `layers` -- default to the live `bloom.context` values, which `help()` states and the
 CLI and MCP clients apply identically. `Proxy.__repr__` reads `<Composition 1 'Composition 1'>` and
-`bloom.context` summarises project, composition, selection and time. `ui`, `addons`, `props` and contribution
+`bloom.context` summarizes project, composition, selection and time. `ui`, `addons`, `props` and contribution
 `types` are reserved stubs that raise `NotImplementedError` with ADR references. The registered Script editor uses kit controls and a shared interpreter owned by a scripting
 thread. It reads and commits through the shared `scripting::LiveSessionHost` (see "The live
 session host" below): a lease per live generation supplies immutable snapshots and plain context

@@ -1,6 +1,6 @@
 void testQueuedColorIntentOwnership(Expectations& expectations) {
     using namespace bloom;
-    auto project = makeTestProject("Queued colour capture");
+    auto project = makeTestProject("Queued color capture");
     const auto compositionId = project.initialCompositionId;
     document::Document document(std::move(project.project));
     commands::CommandStack commands(document);
@@ -30,7 +30,7 @@ void testQueuedColorIntentOwnership(Expectations& expectations) {
          .displayName = {},
          .viewName = {}});
     expectations.expect(waitUntil([&] { return gate.entered(); }),
-                        "colour capture task enters before producer mutation");
+                        "color capture task enters before producer mutation");
     const auto retainedIdentity = controller.state().desiredIdentity;
     working.assign(4096, 'x');
     uri.assign(4096, 'y');
@@ -41,10 +41,10 @@ void testQueuedColorIntentOwnership(Expectations& expectations) {
     expectations.expect(controller.settings().colorIntent.storage &&
                             controller.settings().colorIntent.ocioConfigUri ==
                                 std::string(256, 'z'),
-                        "colour update stores owning intent before next asynchronous request");
+                        "color update stores owning intent before next asynchronous request");
     gate.release();
     expectations.expect(waitUntil([&] { return originalSurvived.load(); }),
-                        "cancelled queued worker still reads its original exact colour strings");
+                        "cancelled queued worker still reads its original exact color strings");
     expectations.expect(
         retainedIdentity.has_value() && retainedIdentity->colorIntent.storage &&
             retainedIdentity->colorIntent.workingColorSpaceId ==

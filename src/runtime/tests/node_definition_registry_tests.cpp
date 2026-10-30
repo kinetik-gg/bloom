@@ -273,7 +273,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                                 document::ParameterValue{document::kDefaultRotationDegrees} &&
                             layer->parameters[5].defaultValue ==
                                 document::ParameterValue{document::kDefaultBlendModeValue},
-                        "the transform defaults are the identity transform -- centre anchor, unit "
+                        "the transform defaults are the identity transform -- center anchor, unit "
                         "scale, no rotation -- and the blend mode defaults to Normal");
     expectations.expect(registry.registerDefinition(customSolid()) ==
                             runtime::NodeRegistrationStatus::Frozen,

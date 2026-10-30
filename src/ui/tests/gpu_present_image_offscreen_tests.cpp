@@ -275,8 +275,8 @@ void testSurroundFrameAndGrid(Expectations& expectations,
                                   std::pair{11, 11}, std::pair{1, 6}, std::pair{10, 6}})
             surroundExact = surroundExact && same(pixelAt(rendered.pixels, x, y), Rgba8{19, 19, 19, 255});
         expectations.expect(surroundExact,
-                            label + ": the surround is exactly the surround colour, never the "
-                                    "frame colour or the checker");
+                            label + ": the surround is exactly the surround color, never the "
+                                    "frame color or the checker");
         if (!grid) {
             // The destination's top-left texel is opaque red, so the frame colour shows where the
             // image is transparent: compare a pixel on the half-alpha white quadrant against the
@@ -287,7 +287,7 @@ void testSurroundFrameAndGrid(Expectations& expectations,
                                     std::abs(static_cast<int>(halfWhite.green) - over(40)) <= 3 &&
                                     std::abs(static_cast<int>(halfWhite.blue) - over(90)) <= 3,
                                 "grid off: a half-transparent pixel composites over the "
-                                "composition background colour");
+                                "composition background color");
         }
     }
 }

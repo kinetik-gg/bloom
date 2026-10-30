@@ -523,7 +523,7 @@ void testMidChainCardsCarryBothPortDots(Expectations& expectations) {
     // every parameter role became linkable.
     expectations.expect(fixture.scene()->nodeSocketsForTest(*sourceNodeId) ==
                             ui::NodeSockets{true, true},
-                        "a source card carries an operand socket for its colour and one output");
+                        "a source card carries an operand socket for its color and one output");
     expectations.expect(fixture.scene()->nodeSocketsForTest(*boundaryNodeId) ==
                             ui::NodeSockets{true, true},
                         "the layer boundary card carries both: it consumes the source and feeds "

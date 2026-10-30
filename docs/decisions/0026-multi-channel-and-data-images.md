@@ -7,7 +7,7 @@ Date: 2026-10-23
 ## Context
 
 Bloom's only image transport is the canonical process image: premultiplied Float32 RGBA with the
-frame's working-space colour identity (`evaluation-primitives.md`, "Colour And Alpha Contract").
+frame's working-space color identity (`evaluation-primitives.md`, "Color And Alpha Contract").
 The OpenEXR reader accepts one part with R/G/B/A or Y/A channels and rejects everything else
 (`exr_backend.cpp`). VFX plates and renders routinely carry several layers in one file or in
 several parts: beauty plus AOVs (diffuse, specular), data passes (depth, normals, motion vectors,
@@ -15,7 +15,7 @@ position, UVs, object and Cryptomatte IDs) and arbitrary named channels.
 
 Data channels cannot pass through the process image unchanged:
 
-- input colour conversion would alter them;
+- input color conversion would alter them;
 - premultiplication and the "alpha zero makes RGB zero" canonicalization destroy them;
 - bilinear filtering corrupts IDs;
 - Cryptomatte stores 32-bit hashes as float bit patterns that must survive bit for bit.
@@ -23,7 +23,7 @@ Data channels cannot pass through the process image unchanged:
 `evaluation-primitives.md` already states the rule that "Depth, normals, motion vectors, UVs, object
 IDs, and arbitrary data channels are not color", but no transport exists for them.
 
-This record defines the descriptor, packing, colour encoding, cache identity, GPU representation
+This record defines the descriptor, packing, color encoding, cache identity, GPU representation
 and migration for multi-channel images. It is a prerequisite for issue #364 (Cryptomatte).
 
 ## Decision
@@ -39,13 +39,13 @@ and migration for multi-channel images. It is a prerequisite for issue #364 (Cry
   - **role:** `ColorR/G/B`, `Alpha`, `Luminance`, `Depth`, `Normal{X,Y,Z}`, `Motion{U,V}`,
     `Position{X,Y,Z}`, `Uv{U,V}`, `Id`, `Coverage` or `Data`;
   - **source sample kind:** `half`, `float` or `uint`;
-  - **value encoding:** `Colour` (with the layer's input colour space) or `Data` (raw numbers).
+  - **value encoding:** `Colour` (with the layer's input color space) or `Data` (raw numbers).
 - The channel set also carries the part's string metadata (OpenEXR header attributes such as
   `cryptomatte/<hash>/manifest`) as an immutable, bounded key/value map. Metadata is never
   interpreted by the transport itself.
 - A new socket kind, `SocketValueKind::ChannelSet`, carries it. There is no implicit conversion
   between `ChannelSet` and `Image` in either direction. Conversion happens only in the explicit
-  operations in §4 and through the Image source's colour output (§3).
+  operations in §4 and through the Image source's color output (§3).
 - Masks remain a separate kind; a channel set is not a mask. A ChannelSet → Mask conversion uses
   the Mask kind owned by lane timeline-masking (#360); the interface is agreed with that lane
   before the Cryptomatte node lands.
@@ -62,27 +62,27 @@ and migration for multi-channel images. It is a prerequisite for issue #364 (Cry
 - **Admission.** Budget admission charges `channels × pixels × 4` bytes through the existing pixel
   and host-retention ledgers. A selection that names fewer channels decodes only those channels.
 
-### 3. Image source selection, colour encoding and the decode path
+### 3. Image source selection, color encoding and the decode path
 
 - **New parameters.** Image source version 2 (`bloom.image-source` v2) adds two String parameters:
   - `part`: an EXR part name; empty means the first part;
   - `layer`: a layer name; empty means the root layer.
   It also gains a second output, `channels` (ChannelSet), carrying every channel of the selected
   part.
-- **Colour output.** The existing `image` output is derived from the selected layer:
-  - `<layer>.R/G/B[/A]` or `<layer>.Y[/A]` when present, decoded through the existing colour path:
-    input colour space, premultiplication policy (#362 alpha-association inheritance), process image.
-  - A layer without colour channels (for example only `depth.Z`) gives no colour output; the
+- **Color output.** The existing `image` output is derived from the selected layer:
+  - `<layer>.R/G/B[/A]` or `<layer>.Y[/A]` when present, decoded through the existing color path:
+    input color space, premultiplication policy (#362 alpha-association inheritance), process image.
+  - A layer without color channels (for example only `depth.Z`) gives no color output; the
     `image` output reports a typed diagnostic and stays unavailable.
-- **Data channels.** Channels whose role is not colour or alpha are decoded raw. They are never
+- **Data channels.** Channels whose role is not color or alpha are decoded raw. They are never
   converted, premultiplied, repaired by the non-finite policy (NaN is kept in data channels) or
   bilinearly filtered.
-- **Colour channels inside a channel set** keep their source values plus their declared input
-  colour space. They are converted only when an explicit operation asks for colour (§4).
+- **Color channels inside a channel set** keep their source values plus their declared input
+  color space. They are converted only when an explicit operation asks for color (§4).
 - **Still images.** PNG, JPEG and every other still with an immutable revision decoder also provide
   the `channels` output (owner, 2026-10-24): their decoded `R`, `G`, `B` and, when the file carries
   alpha, `A` as straight samples in [0, 1], with roles `ColorR/G/B` and `Alpha`, encoding `Colour`
-  and the asset's input colour space. Grey files expose `R = G = B`. The `channels` output therefore
+  and the asset's input color space. Gray files expose `R = G = B`. The `channels` output therefore
   behaves the same for every image source.
 - **Probe.** The probe enumerates parts (name, view, type, windows) and each part's channels and
   layers, and keeps per-part chromaticities. Multipart scanline and single-level tiled parts are
@@ -99,7 +99,7 @@ and migration for multi-channel images. It is a prerequisite for issue #364 (Cry
 These are new compiled operations. Each is GPU-required under
 `gpu_coverage_contract.hpp`, has a CPU reference, and is bit-exact unless stated otherwise.
 
-| Node | Input → output | Behaviour |
+| Node | Input → output | Behavior |
 | --- | --- | --- |
 | Shuffle | ChannelSet [+ Image] → Image or ChannelSet | Maps named channels or constants (0, 1) to the four output slots or to new names. **To Image:** each mapping declares either `Colour` (convert from the channels' input space to the working space, then premultiply by the mapped alpha) or `Raw` (values enter working-space RGB unchanged, the mapped alpha or 1 is used, and premultiplication follows the process contract; the artist owns the meaning). Raw mapping is never implicit. |
 | Channel Copy | ChannelSet × 2 → ChannelSet | Copies named channels from B into A. Windows are unioned and missing samples are explicit zeros. |
@@ -109,10 +109,10 @@ These are new compiled operations. Each is GPU-required under
   to a ChannelSet. Spatial work happens after an explicit Shuffle to Image. A later record may add
   point-sampled transforms for data.
 - **Viewer inspection.** The Viewer shows any channel or layer of a ChannelSet directly, as raw
-  greyscale (one channel) or RGB (three channels or a layer's colour channels), without wiring a
+  grayscale (one channel) or RGB (three channels or a layer's color channels), without wiring a
   Shuffle. Artists inspect AOVs, depth, motion and Cryptomatte this way. This is a Viewer display
   choice (session state, like the existing channel display remap): it never changes the project,
-  the compiled plan or any render/export result, and it applies no colour conversion or
+  the compiled plan or any render/export result, and it applies no color conversion or
   premultiplication to Data channels.
 - The Image source's proxy resolution applies to channel sets by point sampling with the shared
   PointResampleV1 rule (ADR 0025 / #362), which keeps IDs exact.
@@ -128,13 +128,13 @@ These are new compiled operations. Each is GPU-required under
 - `imageLoad`/`imageStore` preserve every bit (as PointResampleV1 already relies on), so shuffles,
   copies and removals are exact gathers.
 - Uploads reuse the rooted, phase-charged upload path, with one upload per group.
-- A dedicated single-channel format (`R32_SFLOAT`) is an optional later optimisation behind the
+- A dedicated single-channel format (`R32_SFLOAT`) is an optional later optimization behind the
   same descriptor; it does not change semantics.
 - Every new operation needs, before it is complete:
   - CPU/GPU parity (bit-exact for gathers; the existing 2e-6 bound for Shuffle `Colour` mappings);
   - invalidation and cache identity;
   - cancellation;
-  - budget and retirement behaviour.
+  - budget and retirement behavior.
 
 ### 6. Cache identity
 
@@ -142,10 +142,10 @@ These are new compiled operations. Each is GPU-required under
   layer, and the ordered channel names and source sample kinds. The decoder identity becomes
   `bloom-image-decode-4`.
 - **Channel-set entries** are keyed by source digest, member frame, part, the ordered channel list
-  and proxy scale. Colour interpretation is not part of the key, because channel sets hold source
+  and proxy scale. Color interpretation is not part of the key, because channel sets hold source
   values.
 - **Shuffle keys** include the full mapping, each mapping's encoding mode, and — for `Colour`
-  mappings — the input colour space, working space, config revision and synthesized-space identity
+  mappings — the input color space, working space, config revision and synthesized-space identity
   (#362).
 - Compiled-plan semantics and CPU evaluator semantics versions increase by one each.
 - **Output identity.** The layered EXR preset (§7) adds the written channel list and types to the
@@ -180,7 +180,7 @@ These are new compiled operations. Each is GPU-required under
 
 - The process-image contract is unchanged; every existing operation, kernel and fixture keeps its
   semantics.
-- Data channels get a typed, loss-free path. Converting data into colour pixels is always an
+- Data channels get a typed, loss-free path. Converting data into color pixels is always an
   explicit, keyed Shuffle decision.
 - Memory grows with the number of selected channels; budgets and ledgers charge it explicitly.
 - The ChannelSet socket and image source v2 touch the document schema, node registry, compiler,
@@ -209,17 +209,17 @@ open to owner review; none changes a rendered or exported pixel the decision def
   node fixtures run through it with native parity.
 - **GPU representation.** Instead of resident `rgba32f` lane groups, host preparation gathers the
   mapped source channels into one raw RGBA upload (decode layout only: source samples, constants,
-  zero outside a channel's window), and the proxy PointResampleV1 gather and the Colour mapping's
+  zero outside a channel's window), and the proxy PointResampleV1 gather and the Color mapping's
   OCIO pass run on the GPU, exactly as for an Image source. Only the four mapped channels are
   decoded and uploaded.
 - **Shuffle controls.** The RGB triple shares one mode (`Colour` or `Raw`, default `Colour`); alpha
-  is never colour converted. `associated` (default on) says the mapped RGB is premultiplied by the
+  is never color converted. `associated` (default on) says the mapped RGB is premultiplied by the
   mapped alpha. A `layer` parameter names the Shuffle's channel output (`<layer>.R/G/B/A`).
 - **Names.** The Remove node is shown as "Select Channels" because it keeps or drops by pattern;
   its type id is `bloom.channel-remove`.
 - **Caching.** Channel sets are not a separate cache entry: the Shuffle's raw gather is cached as
   a GPU upload under the source decode identities and mapping, and its CPU result is memoised by
-  the evaluator's operation cache with the colour interpretation.
+  the evaluator's operation cache with the color interpretation.
 - **Composition Output.** The `channels` input and `layers` parameter are optional, so the output
   node keeps schema 1; `SetNodeParameterValue` binds an optional parameter on its first edit, which
   also lets a migrated Image source v1 gain `part` and `layer`.
@@ -240,10 +240,10 @@ open to owner review; none changes a rendered or exported pixel the decision def
   pass (`CryptomatteCoverageV1`) followed by the proxy PointResampleV1. The matte is bit-identical
   to the CPU reference.
 - **Viewer.** An inspection with no channels shows a pixel output port directly; it previews the
-  matte. A selected Cryptomatte shows the ID-colour preview (a viewer-only `preview` inspection
+  matte. A selected Cryptomatte shows the ID-color preview (a viewer-only `preview` inspection
   port, the same GPU kernel in a second mode). The eyedropper maps the Viewer point through the
   displaying layer's evaluated transform and reads the frame at the node's layer clock.
-- **Rank layers are data.** Cryptomatte `<type>NN` layers are never colour layers, and a data-only
+- **Rank layers are data.** Cryptomatte `<type>NN` layers are never color layers, and a data-only
   source's absent Image output is information, not a failure, in preview and render (Q1).
 
 ## Related

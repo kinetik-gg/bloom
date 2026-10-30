@@ -283,7 +283,7 @@ void testDescriptorAndCancellation(Expectations& expectations, const std::string
     expectations.expect(
         codeOf(resolver.resolve(fixture.app(), packageFor(fixture), {}, []() { return true; })) ==
             GpuShaderToolResolveError::Cancelled,
-        "cancellation before hashing is honoured");
+        "cancellation before hashing is honored");
 }
 
 void testCancelledRetry(Expectations& expectations, const std::string& glslang,

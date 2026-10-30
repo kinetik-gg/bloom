@@ -406,7 +406,7 @@ void testKeyframeRowsCoverTheLayerSourceNodeToo(Expectations& expectations) {
     const DeferredWidgetCleanup panelCleanup;
     session.selectLayer(ids.layer);
     expectations.expect(panel.findChildren<QWidget*>().size() == 1 && panel.isVisible(),
-                        "an animated colour on the layer's SOURCE node gets its own keyframe lane, "
+                        "an animated color on the layer's SOURCE node gets its own keyframe lane, "
                         "even though nothing on the boundary node is animated");
 
     // And the two nodes' lanes coexist: six in total once all five boundary parameters animate too.

@@ -122,7 +122,7 @@ void testAcesCstExtraction(Expectations& expectations) {
     const auto other = bloom::color::buildOcioGpuProgramForCst(*resolved, "ACES2065-1", "ACEScct");
     expectations.expect(other.succeeded() && other.program() != nullptr &&
                             other.program()->contentIdentity != program->contentIdentity,
-                        "a different destination colour space mutates the content identity");
+                        "a different destination color space mutates the content identity");
 
     const auto identity = bloom::color::buildOcioGpuProgramForCst(*resolved, "ACEScg", "ACEScg");
     expectations.expect(identity.error() == OcioGpuProgramError::IdentityTransform,
@@ -131,10 +131,10 @@ void testAcesCstExtraction(Expectations& expectations) {
     const auto missing =
         bloom::color::buildOcioGpuProgramForCst(*resolved, "NotAColorSpace", "ACEScg");
     expectations.expect(missing.error() == OcioGpuProgramError::UnsupportedColorSpace,
-                        "an unknown colour space is a typed refusal");
+                        "an unknown color space is a typed refusal");
     const auto invalid = bloom::color::buildOcioGpuProgramForCst(*resolved, "", "ACEScg");
     expectations.expect(invalid.error() == OcioGpuProgramError::InvalidRequest,
-                        "an empty colour-space id is an invalid request");
+                        "an empty color-space id is an invalid request");
 }
 
 void testAcesDisplayExtraction(Expectations& expectations) {

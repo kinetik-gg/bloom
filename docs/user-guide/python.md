@@ -76,7 +76,7 @@ for operation_id, operation in bloom.ops.registry().items():
 ```
 
 Proxies print as what they are: `<Composition 1 'Composition 1'>`, `<Node 12 'Solid'>`, and
-`<Node 12 (stale)>` once the object is gone. `repr(bloom.context)` summarises the project,
+`<Node 12 (stale)>` once the object is gone. `repr(bloom.context)` summarizes the project,
 composition, selection size and time.
 
 `bloom.data.snapshot()` returns an immutable revisioned projection. Collections such as
@@ -91,7 +91,7 @@ underscore (`bloom.asset.import` becomes `bloom.ops.asset.import_`). Every regis
 complete argument schema and a working factory, so everything you can discover you can call.
 
 Calls take positional arguments in schema order, keywords, or both. IDs may be integers or live
-proxies; vectors and colours may be tuples or lists; a time may be a whole frame, a `Fraction`, a
+proxies; vectors and colors may be tuples or lists; a time may be a whole frame, a `Fraction`, a
 float or an exact `(numerator, denominator)` pair. An `int` is a whole frame of the composition the
 operation edits, at its frame rate; a `Fraction`, a float and a pair are seconds. At 24 fps,
 `set_duration(48)` and `set_duration(Fraction(2))` both make a two-second composition.
@@ -109,7 +109,7 @@ bloom.ops.composition.set_duration(Fraction(3, 2))
 `bloom.ops.composition.set_settings` is the Composition Settings dialog as one undoable operation:
 pass only what changes. Frame rate and pixel aspect are exact numerator/denominator pairs, `duration`
 and `start` (the timecode of frame 0) are times, an empty `workingColorSpace` returns to the project
-space, and `anchor` (0 to 8, row by row from top left, default 4 for centre) decides where existing
+space, and `anchor` (0 to 8, row by row from top left, default 4 for center) decides where existing
 layers sit when the size changes. Layer and key times are never rewritten. Composition presets are
 per-user application settings of the desktop app and are not operations.
 
@@ -137,7 +137,7 @@ ADR 0022 and ADR 0012 references.
 ### Align and distribute
 
 `bloom.ops.layer.align_layers` lines layers up and `bloom.ops.layer.distribute_layers` spaces their
-centres evenly, exactly as the context bar's selection actions do
+centers evenly, exactly as the toolbar's selection actions do
 ([ADR 0031](../decisions/0031-contextual-tool-bar.md),
 [Layer Alignment](../architecture/layer-alignment.md)):
 

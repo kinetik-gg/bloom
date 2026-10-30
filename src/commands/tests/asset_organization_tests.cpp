@@ -221,14 +221,14 @@ void testWideImageAssetCommand(TestContext& test) {
 }
 void testAssetInputColor(TestContext& test) {
     auto initial =
-        document::makeNewProject("Input colour", "Main", core::RationalTime::fromInteger(1));
+        document::makeNewProject("Input color", "Main", core::RationalTime::fromInteger(1));
     document::AssetRecord asset;
     asset.id = AssetId::fromRaw(1);
     asset.kind = document::AssetKind::Image;
     asset.locator = {"file", "project-relative", "media/test.png", "file:///media/test.png"};
     asset.width = 4;
     asset.height = 3;
-    requireFixture(initial.project.addAsset(asset), "input colour asset fixture");
+    requireFixture(initial.project.addAsset(asset), "input color asset fixture");
     Document document(std::move(initial.project));
     CommandStack stack(document);
     const auto original = document.snapshot();

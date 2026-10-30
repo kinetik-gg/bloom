@@ -317,16 +317,16 @@ mcp::McpUiResult McpLiveUiBinding::setColorSettings(const document::ColorSetting
                         tr("Bloom is busy with a project operation. Try again in a moment."));
     switch (project_.setColorSettings(settings)) {
     case Status::Updated:
-        return uiOk(tr("The project colour settings changed."));
+        return uiOk(tr("The project color settings changed."));
     case Status::NoChange:
-        return uiOk(tr("The project already uses these colour settings."));
+        return uiOk(tr("The project already uses these color settings."));
     case Status::ReadOnly:
         return uiResult(McpUiRefusal::ReadOnly,
-                        tr("%1 is read-only, so its colour settings cannot change.")
+                        tr("%1 is read-only, so its color settings cannot change.")
                             .arg(quoted(projectName())));
     case Status::InvalidSettings:
         return uiResult(McpUiRefusal::InvalidArgument,
-                        tr("Those colour settings cannot be used."));
+                        tr("Those color settings cannot be used."));
     case Status::InvalidSession:
         break;
     }

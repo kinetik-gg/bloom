@@ -640,7 +640,7 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         refused.status = TaskSubmissionStatus::InvalidRequest;
         refused.diagnostic =
             previewDiagnostic("bloom.runtime.gpu-preview-color-intent-capture-failed",
-                              "Preview colour intent could not be captured.");
+                              "Preview color intent could not be captured.");
         return refused;
     }
     identity.colorIntent = *color;

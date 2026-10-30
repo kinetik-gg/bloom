@@ -32,7 +32,7 @@ selector operations, recipes, UI surfaces and optional domains.
 | Shape | Seven modes, fill/stroke, Viewer drawing and pen editing | Several shape operands are constant-only; path streams/modifiers absent |
 | Text | Raster text, font/layout controls, editable Viewer text | Portable shaping, animators and text-on-path |
 | Composition | Layer transforms, Layer Stack displayed as Merge, Composition Output, nested composition | Image Mix/matte/alpha operators, standalone transform/canvas nodes |
-| Color effects | OCIO Colour Space Transform and File Transform | Ordinary grading, filter, keying and matte effects |
+| Color effects | OCIO Color Space Transform and File Transform | Ordinary grading, filter, keying and matte effects |
 | Values | Constants, math, vectors, switches, time, random, conversions and strings | Exposed advanced scalar/matrix/motion functions; do not mistake these for image effects |
 | Data readers | Data Sample, Ramp Sample, Table Lookup and Point Set Read backend/persistence | Named typed picker and ordinary desktop create/edit workflow |
 | Graph organization | Reroute and presentation frames | Reusable groups with typed exposed ports |

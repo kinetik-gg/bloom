@@ -224,7 +224,7 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
         const auto pixel = render::solidPixelFromStraightLinearRec709Scene(fillColor->value);
         if (!pixel) {
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                        "Shape fill colour is not evaluable");
+                        "Shape fill color is not evaluable");
         }
         OperationKey geometryKey;
         geometryKey.add(std::string{"gpu-shape-fill-coverage-v1"});
@@ -274,7 +274,7 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
         const auto pixel = render::solidPixelFromStraightLinearRec709Scene(strokeColor->value);
         if (!pixel) {
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
-                        "Shape stroke colour is not evaluable");
+                        "Shape stroke color is not evaluable");
         }
         OperationKey geometryKey;
         geometryKey.add(std::string{"gpu-shape-stroke-coverage-v1"});

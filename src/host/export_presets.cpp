@@ -471,7 +471,7 @@ ExportAvailability exportProjectAvailability(const document::ExportOutputSetting
          !settings.viewName.empty()) &&
         settings.outputColorSpaceId != project.processColorSpaceId)
         return unavailable(ExportAvailabilityCode::ColourNameMissing,
-                           "The project's colour configuration has no output named here",
+                           "The project's color configuration has no output named here",
                            ExportRemedy::OpenProjectSettings);
     return available();
 }

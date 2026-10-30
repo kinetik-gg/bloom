@@ -740,7 +740,7 @@ void waitingForViewer(TestContext& context) {
     context.expect(row->findChild<kit::KProgressBar*>()->busy(), "waiting for the Viewer shows a busy bar");
     const auto status = ep::jobStatus(rig.port.snapshot()->jobs[0]);
     context.expect(ep::toneColor(status.tone) == kit::Color::Muted,
-                   "waiting for the Viewer is neutral ink, never an error colour");
+                   "waiting for the Viewer is neutral ink, never an error color");
 }
 
 void progressInTheRow(TestContext& context) {
@@ -951,8 +951,8 @@ void resultsInPlainWords(TestContext& context) {
     context.expect(passed.contains("File opens") && passed.contains("Right number of frames") &&
                        passed.contains("Rendered on the GPU"),
                    "the checks read as File opens, Right number of frames, Rendered on the GPU");
-    context.expect(std::ranges::any_of(passed, [](const QString& line) { return line.startsWith("Colours tagged"); }),
-                   "the colour tags read as Colours tagged as ...");
+    context.expect(std::ranges::any_of(passed, [](const QString& line) { return line.startsWith("Colors tagged"); }),
+                   "the color tags read as Colors tagged as ...");
     context.expect(std::ranges::any_of(passed, [](const QString& line) { return line.contains("40 of 280 frames reused"); }),
                    "reused frames are reported");
     context.expect(!passed.join('\n').contains("Timing") && !passed.join('\n').contains("Digest"),
@@ -996,12 +996,12 @@ void formatSettings(TestContext& context) {
                               "Cached frames", "Include audio", "Sample rate", "After render"})
         context.expect(movieLabels.contains(QString::fromLatin1(label)),
                        (std::string("a movie shows ") + label).c_str());
-    for (const auto* label : {"Compression", "Colour space", "File numbering", "File names", "Bake look",
+    for (const auto* label : {"Compression", "Color space", "File numbering", "File names", "Bake look",
                               "Reuse cached frames", "Encoder", "Bit rate"})
         context.expect(!movieLabels.contains(QString::fromLatin1(label)),
                        (std::string("a movie does not show ") + label).c_str());
     const auto imageLabels = labelsOf(rig.output(2, 21));
-    for (const auto* label : {"Compression", "Colour space", "File numbering", "File names", "Include the look"})
+    for (const auto* label : {"Compression", "Color space", "File numbering", "File names", "Include the look"})
         context.expect(imageLabels.contains(QString::fromLatin1(label)),
                        (std::string("an EXR sequence shows ") + label).c_str());
     for (const auto* label : {"Quality target", "Use", "Display", "View", "Include audio", "Sample rate"})
@@ -1015,8 +1015,8 @@ void formatSettings(TestContext& context) {
     auto* image = rig.output(2, 21);
     auto* space = image->findChild<kit::KDropdown*>("exportColourSpace");
     context.expect(space != nullptr && image->findChild<kit::KLineEdit*>("exportColourSpace") == nullptr &&
-                       space->count() >= 2 && space->itemText(0) == "Working colour space",
-                   "Colour space is a dropdown that starts with the working space");
+                       space->count() >= 2 && space->itemText(0) == "Working color space",
+                   "Color space is a dropdown that starts with the working space");
     auto* display = rig.output(1, 11)->findChild<kit::KDropdown*>("exportDisplay");
     auto* view = rig.output(1, 11)->findChild<kit::KDropdown*>("exportView");
     context.expect(display != nullptr && view != nullptr &&
@@ -1028,7 +1028,7 @@ void formatSettings(TestContext& context) {
     if (space->count() >= 2) {
         space->chooseIndex(1);
         context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "editOutput 2 21 settings",
-                       "choosing a colour space is one command");
+                       "choosing a color space is one command");
     }
     rig.port.calls.clear();
     if (display->count() >= 2) {
@@ -1187,7 +1187,7 @@ void editsAreOneCommand(TestContext& context) {
         if (action->objectName() == "exportClearLabelAction")
             action->trigger();
     context.expect(rig.port.calls.size() == 1 && rig.port.calls[0] == "editJob 2 label=clear",
-                   "Remove label colour is one command");
+                   "Remove label color is one command");
     // A refusal is shown in the row, not swallowed.
     rig.port.nextEdit = {false, "Edits are locked while the job runs.", std::nullopt, std::nullopt, {}};
     rig.row(2)->findChild<kit::KSwitch*>("exportJobEnabled")->setChecked(false);

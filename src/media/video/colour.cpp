@@ -34,7 +34,7 @@ constexpr std::int32_t kTransferPq = 16, kTransferHlg = 18;
 constexpr std::int32_t kPrimariesBt2020 = 9;
 // The interpretation that resolves a refused stream, named in every diagnostic.
 constexpr std::string_view kOverride =
-    "; choose an input colour space for the asset (Assets, Input Colour...) or its Video node";
+    "; choose an input color space for the asset (Assets, Input Color...) or its Video node";
 [[nodiscard]] bool knownMatrix(const std::int32_t matrix) {
     return matrix == kMatrixBt709 || matrix == kMatrixBt470bg || matrix == kMatrixSmpte170m ||
            matrix == kMatrixBt2020Ncl;
@@ -53,7 +53,7 @@ constexpr std::string_view kOverride =
 [[nodiscard]] std::string missingTags(const ColourTags& tags, const bool needTransfer) {
     std::vector<std::string_view> missing;
     if (tags.primaries <= 0 || tags.primaries == 2)
-        missing.emplace_back("colour primaries");
+        missing.emplace_back("color primaries");
     if (needTransfer && (tags.transfer <= 0 || tags.transfer == 2))
         missing.emplace_back("transfer characteristics");
     // Matrix 0 (identity) is the declared matrix of an RGB-coded stream, not a missing tag.
@@ -123,10 +123,10 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
     if (!validLayout(frame) || overrideTransfer > 3 || !std::isfinite(horizontalScale) ||
         !std::isfinite(verticalScale) || horizontalScale <= 0 || horizontalScale > 1 ||
         verticalScale <= 0 || verticalScale > 1)
-        return Unavailable{Error::InvalidValue, "Invalid video colour request"};
+        return Unavailable{Error::InvalidValue, "Invalid video color request"};
     if (configManaged && applyProcessor && processor == nullptr)
         return Unavailable{Error::InvalidValue,
-                           "A config-managed video conversion needs a colour processor"};
+                           "A config-managed video conversion needs a color processor"};
     // The same convention the resolver applies to the stream (owner decision 2026-10-24); a frame
     // carries no rate, and the BT.470BG and SMPTE 170M matrices are identical.
     auto tags = assumeMissingVideoColour(frame.colour,
@@ -146,7 +146,7 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
         // untagged stream uses the chosen space's matrix family and video (limited) range.
         if (inputColorSpaceId.empty())
             return Unavailable{Error::InvalidValue,
-                               "A config-managed video input needs a colour-space id"};
+                               "A config-managed video input needs a color-space id"};
         tags.matrix = effectiveMatrix(frame.colour, inputColorSpaceId, tags.matrix);
         if (!knownRange(tags.range))
             tags.range = 1;
@@ -154,7 +154,7 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
                tags.primaries == kPrimariesBt2020 || tags.matrix == kMatrixBt2020Ncl) {
         // Legacy transfer overrides never reinterpret wide-gamut or HDR streams.
         return Unavailable{Error::Unavailable,
-                           "Rec.2020, PQ and HLG video is interpreted only through the colour "
+                           "Rec.2020, PQ and HLG video is interpreted only through the color "
                            "config" +
                                std::string(kOverride)};
     } else if ((tags.primaries != 1 && tags.primaries != kMatrixBt470bg &&
@@ -168,7 +168,7 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
             Error::Unavailable,
             missing.empty()
                 ? "This Rec.2020, PQ, HLG or non-Rec.709 video is interpreted only through the "
-                  "colour config" +
+                  "color config" +
                       std::string(kOverride)
                 : "Video stream has no " + missing + " tag" + std::string(kOverride)};
     }
@@ -180,7 +180,7 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
         return Unavailable{Error::Unavailable, "Video pixel layout is not qualified"};
     if (rgbCoded && !configManaged)
         return Unavailable{Error::Unavailable,
-                           "RGB-coded video is interpreted only through the colour config" +
+                           "RGB-coded video is interpreted only through the color config" +
                                std::string(kOverride)};
     const auto width = frame.planes[0].width, height = frame.planes[0].height;
     const auto w = static_cast<std::uint32_t>(std::max(1.0, std::ceil(width * horizontalScale)));
@@ -197,7 +197,7 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
         return Unavailable{Error::Oversized, "Video frame exceeds the image budget"};
     for (std::uint32_t y = 0; y < h; ++y) {
         if (cancel && cancel())
-            return Unavailable{Error::Cancelled, "Video colour conversion cancelled"};
+            return Unavailable{Error::Cancelled, "Video color conversion cancelled"};
         auto row = builder.value()->row(y);
         const auto sy = std::min(height - 1, static_cast<std::uint32_t>(y / verticalScale));
         std::vector<std::array<float, 4>> convertedRow;
@@ -238,7 +238,7 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
             }
         }
         if (configManaged && applyProcessor && !processor->apply(convertedRow))
-            return Unavailable{Error::Unavailable, "Input colour conversion failed"};
+            return Unavailable{Error::Unavailable, "Input color conversion failed"};
         if (configManaged) {
             for (std::uint32_t x = 0; x < w; ++x) {
                 const auto& sample = convertedRow[x];
@@ -283,7 +283,7 @@ VideoInputColorSpaceResolution resolveVideoInputColorSpace(
             std::string(pq ? config.rec2100PqColorSpaceId() : config.rec2100HlgColorSpaceId());
         if (space.empty())
             return refuse(std::string("The OCIO config has no Rec.2100 ") + (pq ? "PQ" : "HLG") +
-                          " colour space" + std::string(kOverride));
+                          " color space" + std::string(kOverride));
         return selected(config, std::move(space), true);
     }
     if (const auto missing = missingTags(tags, true); !missing.empty())
@@ -294,7 +294,7 @@ VideoInputColorSpaceResolution resolveVideoInputColorSpace(
     // config's Rec.709 camera space) is an explicit interpretation, never the Auto default.
     const auto sdrDisplay = [&] {
         if (config.sRgbTextureColorSpaceId().empty())
-            return refuse("The OCIO config has no sRGB texture colour space" +
+            return refuse("The OCIO config has no sRGB texture color space" +
                           std::string(kOverride));
         return selected(config, std::string(config.sRgbTextureColorSpaceId()), true);
     };
@@ -310,7 +310,7 @@ VideoInputColorSpaceResolution resolveVideoInputColorSpace(
     if (tags.transfer == 8)
         return selected(config, std::string(config.processColorSpaceId()), true);
     return VideoInputColorSpaceResolution{
-        "", "", "Video transfer tags are unsupported; choose an explicit config colour space",
+        "", "", "Video transfer tags are unsupported; choose an explicit config color space",
         false, true};
 }
 
@@ -351,9 +351,9 @@ AssumedVideoColour assumeMissingVideoColour(const ColourTags& source,
     // Says what Auto now assumes: the matrix family and, for SDR, the sRGB display transfer the
     // R'G'B' is shown with (ADR 0032).
     const bool sdr = !wide && (tags.transfer == 1 || tags.transfer == 6 || tags.transfer == 13);
-    result.note = std::string("Colour tags missing — assumed ") +
+    result.note = std::string("Color tags missing — assumed ") +
                   (wide ? "Rec.2020" : hd ? "Rec.709" : "Rec.601") +
-                  (sdr ? " with the sRGB transfer" : "") + ". Change in Assets → Input Colour";
+                  (sdr ? " with the sRGB transfer" : "") + ". Change in Assets → Input Color";
     // v2: the SDR assumption resolves to the sRGB texture space instead of the camera/linear one.
     result.identity = "assumed-colour-v2:" + filled + ":" + std::to_string(tags.primaries) + "," +
                       std::to_string(tags.transfer) + "," + std::to_string(tags.matrix) + "," +

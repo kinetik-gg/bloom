@@ -266,9 +266,9 @@ void AssetsEditor::showContextMenu(const QPoint position) {
         if (asset && (asset->kind == document::AssetKind::Image ||
                       asset->kind == document::AssetKind::Sequence ||
                       asset->kind == document::AssetKind::Video))
-            add(tr("Input Colour…"), "assetsInputColorAction", [this, id] {
+            add(tr("Input Color…"), "assetsInputColorAction", [this, id] {
                 editInputColor(id);
-            })->setToolTip(tr("Interpret the footage's colour"));
+            })->setToolTip(tr("Interpret the footage's color"));
         add(tr("Replace Footage…"), "assetsReplaceFootageAction", [this, id] {
             if (auto* controller = session_.assetController())
                 controller->relink(id, this);

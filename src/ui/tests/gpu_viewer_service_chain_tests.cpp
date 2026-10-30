@@ -498,7 +498,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             (action->objectName() == QLatin1String("viewerSafeAreasAction") ||
              text.contains(QLatin1String("Thirds")) || text.contains(QLatin1String("Rulers")) ||
              text.contains(QLatin1String("Pixel Grid")) ||
-             text.contains(QLatin1String("Centre")))) {
+             text.contains(QLatin1String("Center")))) {
             action->setChecked(false);
         }
     }

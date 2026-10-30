@@ -36,7 +36,7 @@ void testProxyInputDescriptor() {
     const auto result = runtime::detail::gpuSceneCommandDescriptorOf(commands, 0, 0);
     expect(result && result->data == *proxy.value() && result->display == *display.value() &&
                result->pixelAspect == *aspect,
-           "Fit resolves proxy media data, display and pixel aspect without a colour effect");
+           "Fit resolves proxy media data, display and pixel aspect without a color effect");
 }
 
 render::Rgba32fImage
@@ -90,11 +90,11 @@ void testKernel() {
         return;
     expect(alpha(*fit.image, 4, 0) == 0 && alpha(*fit.image, 4, 7) == 0 &&
                alpha(*fit.image, 4, 3) == 0.5F,
-           "Fit centres a wide image with transparent letterbox rows");
+           "Fit centers a wide image with transparent letterbox rows");
     expect(alpha(*fill.image, 4, 0) > 0 && alpha(*resize.image, 4, 0) > 0,
            "Fill crops the wide image and Resize stretches it without letterbox rows");
     expect(alpha(*fill.image, 0, 3) > 0,
-           "centred Fill removes the transparent leftmost source column");
+           "centered Fill removes the transparent leftmost source column");
     bool negative = false, hdr = false;
     for (const auto pixel : fit.image->pixels()) {
         negative = negative || pixel.red() < 0;

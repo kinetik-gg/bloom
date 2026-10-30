@@ -480,7 +480,7 @@ void viewerDrop(Fixture& fixture) {
                         if (const auto* value = std::get_if<document::Vec2d>(&constant->value))
                             position = *value;
         expect(position && position->x == 160.0 && position->y == 90.0,
-               "each layer (footage and nested composition) is centred in the composition");
+               "each layer (footage and nested composition) is centered in the composition");
     }
     expect(session.undo() && fixture.stack() == before, "the Viewer drop is one undo step");
 }

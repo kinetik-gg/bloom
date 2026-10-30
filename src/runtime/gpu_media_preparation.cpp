@@ -348,7 +348,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
                                            MediaUploadOutcome& outcome,
                                            GpuSceneMediaStatistics& statistics) {
     if (ocioContext.preparer == nullptr) {
-        outcome.failure = "No GPU OCIO preparer is configured for media colour";
+        outcome.failure = "No GPU OCIO preparer is configured for media color";
         return false;
     }
     const GpuOcioCommandGeometry geometry{
@@ -372,7 +372,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
             // space, so no effect command is emitted.
             return true;
         }
-        outcome.failure = "GPU media colour preparation failed: " +
+        outcome.failure = "GPU media color preparation failed: " +
                           std::string{gpuOcioPreparationErrorName(prepared.error)};
         return false;
     }

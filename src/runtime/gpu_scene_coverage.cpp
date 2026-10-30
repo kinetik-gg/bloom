@@ -81,7 +81,7 @@ std::optional<GpuSceneLeafFailure> buildCoverageSolidLeaf(
     }
     const auto pixel = render::solidPixelFromStraightLinearRec709Scene(color->value);
     if (!pixel) {
-        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Solid colour is not evaluable");
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Solid color is not evaluable");
     }
 
     OperationKey geometryKey;
@@ -284,7 +284,7 @@ std::optional<GpuSceneLeafFailure> buildTextCoverageLeaf(
     }
     const auto pixel = render::solidPixelFromStraightLinearRec709Scene(color->value);
     if (!pixel) {
-        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Text colour is not evaluable");
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Text color is not evaluable");
     }
     const auto parameters = render::TextRasterParameters::create(size->value, size->value);
     if (!parameters) {
@@ -426,7 +426,7 @@ std::optional<GpuSceneLeafFailure> buildTextLeafCoverageLeaf(
     }
     const auto pixel = render::solidPixelFromStraightLinearRec709Scene(color->value);
     if (!pixel) {
-        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Text colour is not evaluable");
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Text color is not evaluable");
     }
     const auto parameters =
         render::TextRasterParameters::create(size->value * hScale, size->value * vScale);

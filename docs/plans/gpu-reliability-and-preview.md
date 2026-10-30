@@ -506,7 +506,7 @@ source reuse/presentation, batching, measured width-two and sustained/platform g
 
 Combined final-readback staging increment (2026-10-10), joined in the bounded final-output closure:
 the [owning contract](../architecture/gpu-backend.md#rooted-combined-final-readback-staging-bounded-final-output-slice)
-threads the existing admitted `FinalProcessingPhase` through the output-colour stage and the single
+threads the existing admitted `FinalProcessingPhase` through the output-color stage and the single
 combined readback. The same native buffer token converts already-planned staging/native debit,
 while CPU vectors, final builder and source images remain separately reserved. Its 19-path focused
 checkpoint adds exact retained authority, actual staging backing, existing-slot foreign Pending
@@ -514,7 +514,7 @@ handoff, native owner fence retirement outside the lock, and preview/final pendi
 It does not yet own CPU process/encoded output allocations or upload buffers.
 
 Legacy direct native checks preserve the existing pixel oracles; new rooted fault controls separately
-exercise cleanup and foreign owner lifetime. The complete output-colour evaluator whole target
+exercise cleanup and foreign owner lifetime. The complete output-color evaluator whole target
 passes in 537 ms (72 MiB), including two immediate successful evaluated requests at phase capacity
 one, proving normal completion alias release. Separate helper/stage cases in that same target check
 identity and effect budget refusal followed by immediate re-admission: attempt-owned aliases release
@@ -851,7 +851,7 @@ readback. Presentation still performs native GPU work. Core and synchronization 
 clean. Genuine expired admission combined with foreign eviction reports failure, not a budget
 completion. Fixtures use private/offscreen surfaces and leave the owner's app session untouched.
 
-These synthetic local uniform-colour EXR sequence checks use a private raw native target and
+These synthetic local uniform-color EXR sequence checks use a private raw native target and
 150 ms pacing between presentations. They qualify display dimensions, retention admission and warm
 reuse; they do not establish TS010/heavy EXR/SMB throughput, actual playback-clock cadence,
 every-refresh continuity or desktop responsiveness. RGBA32F working

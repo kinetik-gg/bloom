@@ -235,7 +235,7 @@ void testFreeTextWorkingSpaces(Expectations& expectations) {
         const auto identity = prepareIdentity(evaluateTinyFrame({0.25, 0.5, 0.75, 1.0}, name));
         const auto expected = outputColorIdDescriptorV1(name);
         expectations.expect(outputColorIdFromDescriptorV1(expected) == std::string(name),
-                            "a free-text colour-space name round-trips through its descriptor");
+                            "a free-text color-space name round-trips through its descriptor");
 
         auto pngInputValue = pngInput(descriptor());
         pngInputValue.process = readySource(identity);

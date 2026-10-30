@@ -50,13 +50,13 @@ yyjson_mut_val* liveColorSettings(McpServerCore::State& core, Json& out, McpCall
                            false);
     const auto current = call.session.renderSourceSnapshot().colorSettings;
     if (!current)
-        return colorResult(out, "unavailable", "This project has no colour settings", std::nullopt,
+        return colorResult(out, "unavailable", "This project has no color settings", std::nullopt,
                            false);
     auto resolved = host::resolveProjectColorSettings(*current, *choice, std::move(working));
     if (!resolved.settings)
         return colorResult(out, "invalid-settings", resolved.reason, current, false);
     if (*resolved.settings == *current)
-        return colorResult(out, "no-change", "The project already uses these colour settings",
+        return colorResult(out, "no-change", "The project already uses these color settings",
                            current, true);
     McpUiResult applied;
     if (!core.dependencies.exports.run(
@@ -73,12 +73,12 @@ yyjson_mut_val* liveColorSettings(McpServerCore::State& core, Json& out, McpCall
         auto* diagnostic = out.object();
         out.set(diagnostic, "code", out.text(uiRefusalCode(applied.refusal)));
         out.set(diagnostic, "message",
-                out.text(applied.message.empty() ? "Bloom refused the colour settings."
+                out.text(applied.message.empty() ? "Bloom refused the color settings."
                                                  : applied.message));
         out.set(value, "diagnostic", diagnostic);
         return value;
     }
-    return colorResult(out, "updated", "The project colour settings changed", resolved.settings,
+    return colorResult(out, "updated", "The project color settings changed", resolved.settings,
                        true);
 }
 

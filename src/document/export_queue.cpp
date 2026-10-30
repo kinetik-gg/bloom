@@ -182,7 +182,7 @@ ValidationResult validateExportOutput(const ExportOutput& output) {
         result.add(ValidationCode::InvalidValue, "settings.videoBitrateKbps",
                    "Video bit rate must be 1..2000000 kbit/s");
     checkText(settings.compression, "settings.compression", "Compression", result);
-    checkText(settings.outputColorSpaceId, "settings.outputColorSpace", "Output colour space",
+    checkText(settings.outputColorSpaceId, "settings.outputColorSpace", "Output color space",
               result);
     checkText(settings.displayName, "settings.display", "Display", result);
     checkText(settings.viewName, "settings.view", "View", result);

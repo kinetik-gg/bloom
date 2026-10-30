@@ -239,7 +239,7 @@ void testTheQIconEngineIsCachedAndMapsOnToFill(Expectations& expectations) {
                         "QIcon::On renders the Fill weight, from the same cache entry");
     const QPixmap twoX = glyph.pixmap(QSize(16, 16), 2.0, QIcon::Normal, QIcon::Off);
     expectations.expect(twoX.devicePixelRatio() == 2.0 && twoX.width() == 32,
-                        "the engine honours the requested device pixel ratio");
+                        "the engine honors the requested device pixel ratio");
 }
 
 void testPixmapsAreDevicePixelRatioAware(Expectations& expectations) {

@@ -462,6 +462,27 @@ class NodeItem final : public QGraphicsObject {
     void addEdge(NodeEdgeItem& edge) { edges_.push_back(&edge); }
     void clearEdges() { edges_.clear(); }
 
+    // Every control the card built for one parameter role (a color has a chip plus channel cells).
+    [[nodiscard]] QList<QWidget*> controlsForRole(const QString& role) const {
+        QList<QWidget*> found;
+        for (const auto* child : childItems()) {
+            const auto* proxy = qgraphicsitem_cast<const QGraphicsProxyWidget*>(child);
+            if (proxy == nullptr || proxy->widget() == nullptr)
+                continue;
+            // A row is hosted in a wrapper; the control that carries the role is inside it.
+            auto* host = proxy->widget();
+            bool innerFound = false;
+            for (auto* inner : host->findChildren<QWidget*>())
+                if (inner->property("nodeParameterRole").toString() == role) {
+                    found.append(inner);
+                    innerFound = true;
+                }
+            if (!innerFound && host->property("nodeParameterRole").toString() == role)
+                found.append(host);
+        }
+        return found;
+    }
+
     [[nodiscard]] QWidget* fieldWidget(const QString& objectName) const {
         for (const auto* child : childItems()) {
             const auto* proxy = qgraphicsitem_cast<const QGraphicsProxyWidget*>(child);
@@ -1086,10 +1107,17 @@ class NodeItem final : public QGraphicsObject {
             declared->schemaKey == document::kImagePartParameterSchemaKey ||
             declared->schemaKey == document::kImageLayerParameterSchemaKey ||
             declared->schemaKey == document::kCryptomatteLayerParameterSchemaKey;
+        // The same dropdown kinds Properties builds for the same schemas (see
+        // PropertiesRegistryRow): OCIO color spaces, the LUT asset and the audio asset are
+        // closed pick lists, never a text or number field.
+        const bool colorSpaceSelector = isInputColorSpaceSchema(declared->schemaKey);
+        const bool assetSelector = declared->schemaKey == "bloom.image.asset" ||
+                                   declared->schemaKey == "bloom.video.asset" ||
+                                   declared->schemaKey == "bloom.audio.asset" ||
+                                   declared->schemaKey == "bloom.ocio-file.lut";
         if (const auto items = selectorItems(declared->schemaKey);
-            fontSelector || probeSelector || !items.isEmpty() ||
-            (declared->schemaKey == "bloom.image.asset" ||
-             declared->schemaKey == "bloom.video.asset")) {
+            fontSelector || probeSelector || colorSpaceSelector || assetSelector ||
+            !items.isEmpty()) {
             row.selector = new kit::KDropdown;
             row.selector->setObjectName(
                 declared->schemaKey == "bloom.image.asset" ? "nodeImageAsset"
@@ -1097,7 +1125,10 @@ class NodeItem final : public QGraphicsObject {
                 : declared->schemaKey == document::kImageLayerParameterSchemaKey ? "nodeImageLayer"
                 : declared->schemaKey == document::kCryptomatteLayerParameterSchemaKey
                     ? "nodeCryptomatteLayer"
-                    : "nodeOperandSelector");
+                : colorSpaceSelector                                 ? "nodeOperandColorSpace"
+                : declared->schemaKey == "bloom.ocio-file.lut"        ? "nodeOperandLut"
+                : declared->schemaKey == "bloom.audio.asset"          ? "nodeOperandAudioAsset"
+                                                                      : "nodeOperandSelector");
             row.selector->setAccessibleName(label);
             row.selector->setControlSize(kit::KDropdown::ControlSize::Dense);
             if (fontSelector) {
@@ -1108,7 +1139,13 @@ class NodeItem final : public QGraphicsObject {
                                     : platform::FontCatalogueProvider::embeddedCatalogue().faces;
                 for (const auto& face : row.fontFaces)
                     row.selector->addItem(nodeFontDisplayName(face), nodeFontReference(face));
-            } else {
+            } else if (colorSpaceSelector) {
+                if (session_ != nullptr)
+                    populateColorSpaceSelector(*row.selector, *session_, declared->schemaKey,
+                                               QString{});
+                else
+                    row.selector->addItem(tr("Auto"), QString{});
+            } else if (!assetSelector) {
                 for (const auto& item : items)
                     row.selector->addItem(item.first, QVariant::fromValue(item.second));
             }
@@ -1467,12 +1504,26 @@ class NodeItem final : public QGraphicsObject {
                                     refreshCryptomatteLayerSelector(*row.selector, *session_,
                                                                     *node);
                             }
+                        } else if (parameter != nullptr &&
+                                   isInputColorSpaceSchema(parameter->schemaKey)) {
+                            refreshColorSpaceSelector(*row.selector, *session_,
+                                                      composition.graph().findNode(id_),
+                                                      parameter->schemaKey,
+                                                      QString::fromStdString(*stored));
+                        } else if (parameter != nullptr &&
+                                   parameter->schemaKey == "bloom.audio.asset") {
+                            refreshAudioAssetSelector(*row.selector, *session_,
+                                                      QString::fromStdString(*stored));
                         } else {
                             (videoSource_ ? refreshVideoAssetSelector : refreshImageAssetSelector)(
                                 *row.selector, *session_, QString::fromStdString(*stored));
                         }
                     }
-                if (const auto* stored = std::get_if<std::int64_t>(value)) {
+                if (const auto* stored = std::get_if<std::int64_t>(value);
+                    stored != nullptr && session_ && parameter != nullptr &&
+                    parameter->schemaKey == "bloom.ocio-file.lut") {
+                    refreshLutSelector(*row.selector, *session_, *stored);
+                } else if (stored != nullptr) {
                     const QSignalBlocker blocker(row.selector);
                     for (int item = 0; item < row.selector->count(); ++item) {
                         if (row.selector->itemData(item).value<std::int64_t>() == *stored) {

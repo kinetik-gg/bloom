@@ -166,7 +166,7 @@ template <typename Expect> void auditUi3(WindowFixture& fixture, const Expect& e
                     std::pair{document::kStringLengthNodeType, "String"},
                     std::pair{document::kCompareNodeType, "Logic"},
                     std::pair{document::kFrameNumberNodeType, "Time"},
-                    std::pair{document::kHueShiftNodeType, "Color"},
+                    std::pair{document::kHueShiftNodeType, "Color Values"},
                     std::pair{document::kVector2MathNodeType, "Vector"},
                     std::pair{document::kCompositionSizeNodeType, "Values"}})
         expect(category(type) == expected, window, "F24 normalized node category");

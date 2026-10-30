@@ -80,7 +80,7 @@ OpenH264's source is built only as a private FFmpeg link-time stub. Cisco's redi
 not bundled, and installation requires an explicit licence-consent record, a supervised bounded
 download, decompression, digest verification, and atomic publication. VA-API is a separate
 hardware execution key with no determinism claim; its tuple is advertised only when the worker
-initialises the hardware path. The export dialog exposes a typed “H.264 encoder not installed”
+initializes the hardware path. The export dialog exposes a typed “H.264 encoder not installed”
 reason, one-click install/locate controls, and a VA-API alternative.
 
 ## Accepted v0 amendment: WAV and MP3 preview audio (2026-09-15)
@@ -121,7 +121,7 @@ These limits bound resources but do not isolate memory corruption. A bounded dec
 not interruptible; cancellation is checked before/after it and within conversion and scans.
 All I/O, hashing, scanning, decode and proxy work executes off the UI thread with diagnostics,
 activity and safe task shutdown. Audio, video, arbitrary codecs, general provider workers,
-metadata colour-profile interpretation and HDR import stay outside this exception.
+metadata color-profile interpretation and HDR import stay outside this exception.
 
 PNG8/PNG16 and JPEG use display-referred sRGB, inverted through the existing Bloom Neutral
 `srgb_rec709_display` transform. Straight alpha is premultiplied after conversion. Per-node

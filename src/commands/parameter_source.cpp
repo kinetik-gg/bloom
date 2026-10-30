@@ -141,7 +141,7 @@ std::string valueText(const document::ParameterValue& value) {
     if (std::holds_alternative<document::Vec3d>(value))
         return "a vector3";
     if (std::holds_alternative<core::Color4d>(value))
-        return "a colour";
+        return "a color";
     return "this value";
 }
 

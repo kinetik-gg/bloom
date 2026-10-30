@@ -62,13 +62,13 @@ any image producer to any image consumer, including chains before a Layer Output
 The ordinary graph dependency validation continues to reject cycles.
 
 Effects preserve their input's content bounds, data window, display window, and pixel aspect.
-Colour kernels unpremultiply RGB when alpha is positive, transform straight RGB, and multiply by
+Color kernels unpremultiply RGB when alpha is positive, transform straight RGB, and multiply by
 that same alpha before publishing RGBA32F. Alpha is unchanged; zero-alpha pixels remain exact
 transparent black. Identity and bypass share the original image without a divide/multiply round
 trip. Negative and HDR RGB are retained if finite.
 
-The first image-effect definitions are OCIO Colour Space Transform and OCIO File Transform.
-Their registry category is Colour, ordered after Compositing and not persisted. Each owns one
+The first image-effect definitions are OCIO Color Space Transform and OCIO File Transform.
+Their registry category is Color, ordered after Compositing and not persisted. Each owns one
 `input` Image socket and one `image` Image output. Any image producer may feed an effect, and its
 output may feed another effect or any image consumer; ordinary graph validation still rejects
 cycles. For example: Solid → CST → File Transform → CST → Layer Output. Parameters remain command-
@@ -200,7 +200,7 @@ Each local matrix applies position, anchor, scale and rotation using the local c
 below. Ancestor transforms compose transitively, retaining shear from nonuniform scales and
 rotations. Opacity, blend mode, enabled, solo and time range are not inherited. An empty, disabled,
 unconnected or out-of-range parent still contributes its authored transform. Empty parent content
-uses a zero bounds centre. A collapsed ancestor transform collapses its children.
+uses a zero bounds center. A collapsed ancestor transform collapses its children.
 
 The compiler evaluates parents before children while preserving the authored Merge order. Bounds,
 anchor positions and overlay polygons use the same composed matrix as pixels. Raster sources
@@ -243,22 +243,22 @@ The Layer Output version-4 authoring order is:
 
 | Role | Schema key | Type | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `position` | `bloom.transform.position` | Vec2d | composition centre at creation | Composition-space point where the anchor lands |
-| `anchor` | `bloom.transform.anchor` | Vec2d | `{0, 0}` | Offset from the centre of local content bounds |
+| `position` | `bloom.transform.position` | Vec2d | composition center at creation | Composition-space point where the anchor lands |
+| `anchor` | `bloom.transform.anchor` | Vec2d | `{0, 0}` | Offset from the center of local content bounds |
 | `scale` | `bloom.transform.scale` | Vec2d | `{1, 1}` | Per-axis factor about the anchor |
 | `rotation` | `bloom.transform.rotation` | Float64 | `0` | Clockwise degrees about the anchor |
 | `opacity` | `bloom.layer.opacity` | Float64 | `1` | Coverage multiplier |
 
-All five are animatable. For local point `p`, bounds centre `c`, and parent-space point `q`:
+All five are animatable. For local point `p`, bounds center `c`, and parent-space point `q`:
 
 ```
 a = c + anchor
 q = position + R(rotation) * S(scale) * (p - a)
 ```
 
-Pixel edges use integer coordinates and pixel centres use half-integers in this authoring space.
-The resampler converts to its integer-centred lattice once. A fresh composition-sized Solid therefore
-fills the frame exactly, and fresh Text sits centred. Changing anchor while holding position fixed
+Pixel edges use integer coordinates and pixel centers use half-integers in this authoring space.
+The resampler converts to its integer-centered lattice once. A fresh composition-sized Solid therefore
+fills the frame exactly, and fresh Text sits centered. Changing anchor while holding position fixed
 moves content because position continues to place the new pivot. Rotation is clockwise with Y down;
 pixel aspect affects presentation, not the authored rotation.
 
@@ -277,7 +277,7 @@ The Layer Output boundary also owns how the layer combines with what is beneath 
 
 | Role | Schema key | Type | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `blendMode` | `bloom.layer.blend-mode` | Int64 | `0` (`Normal`) | How this layer's colour combines with the layers beneath it |
+| `blendMode` | `bloom.layer.blend-mode` | Int64 | `0` (`Normal`) | How this layer's color combines with the layers beneath it |
 
 The value is an enumeration stored as a small integer under one closed, durable mapping — `Normal`,
 `Add`, `Multiply`, `Screen`, `Overlay`, `Darken`, `Lighten`, `Difference` as `0` through `7`. The
@@ -357,7 +357,7 @@ key (and, for the value library's shared operand schemas, by role). Each present
 kind (a continuous number, an exact whole number, a choice, or other), the hard range in stored
 units -- the schema's own domain, never a narrower editor cap -- the soft range a slider spans, the
 step and decimals in displayed units, the displayed unit, and the display scale between the stored
-and the shown number (opacity is stored 0..1 and shown 0..100 %). A colour's alpha component alone
+and the shown number (opacity is stored 0..1 and shown 0..100 %). A color's alpha component alone
 is confined to [0, 1] (`componentPresentation()`). Presentation is not project truth: it is not
 serialized, takes no part in any schema or registry version, and validation never reads it, so
 changing it needs no document migration. Every built-in parameter is named in the table
@@ -538,7 +538,7 @@ not document errors. Zoom, framing, grouping, and transient gestures remain sess
 each connected component a longest-path rank from its sources toward Composition Output, then uses
 stable barycenter sweeps in both directions to reduce crossings. Rank columns use the maximum card
 width in that rank plus `Spacing::L`; cards in a column use their measured heights plus the same
-gap, and the columns are vertically centred. Components are stacked below each other. Node-group
+gap, and the columns are vertically centered. Components are stacked below each other. Node-group
 members are kept as contiguous rank blocks, while the group's frame follows the resulting member
 bounding rectangle. `Arrange Selection` runs the same algorithm on the induced selected subgraph and
 translates the result back to the selection bounding-box top-left. Both publish one `MoveNodes`
@@ -547,7 +547,7 @@ transaction and do not change graph, parameter, or group membership truth.
 Creation uses the complementary local rule. A free requested point is retained; otherwise the new
 card probes the rank-grid slot nearest to its connection, down before up and then by column, with
 an indexed rectangle collision test and `Spacing::L` clearance. A disconnected card uses the view
-centre supplied by the caller. Structured layer creation places its Layer Output one gap left of
+center supplied by the caller. Structured layer creation places its Layer Output one gap left of
 the Merge slot it feeds and the source one gap left of that Layer Output. Existing cards are never
 moved by these placement probes.
 
@@ -582,7 +582,7 @@ positions each line within it. `wrap` breaks at word boundaries inside the box w
 newlines always win. Vertical alignment positions the line stack at the top, middle or bottom of
 the box. Clip keeps the box bounds and clips coverage; Grow lets content extend the coverage window.
 With no box, point text retains content-sized bounds, alignment acts within the widest line as
-before, and anchor mode selects the left, centre or right baseline anchor. Shaping and bidi remain
+before, and anchor mode selects the left, center or right baseline anchor. Shaping and bidi remain
 deferred.
 
 Source rows are projected from the current registry in Nodes and Timeline. The color role
@@ -794,7 +794,7 @@ and preserves the slot and edge IDs; a body drop appends. A press where there is
 artist's -- what a node is for -- so it is declared beside the type rather than derived from
 `NodeLoweringKind`, which spans several sections at once. The built-ins are Solid and Text under
 `Sources`, the layer boundary under `Layers`, Merge under `Compositing`, image effects under
-`Color` (shown as **Colour**), Output under `Output`, the
+`Color` (shown as **Color**), Output under `Output`, the
 literal value sources and `Time` under `Values`, the arithmetic under `Math`, and the plumbing,
 logic and conversions under `Utilities` (see **Value Graph And Drivers** and
 [value-node-library.md](value-node-library.md)).
@@ -900,7 +900,7 @@ the node, feed it from the link's source, point the link's destination at it -- 
 undo. Disconnecting its last link removes it in the SAME transaction: a reroute is a bend in a wire,
 and once both ends are gone there is nothing left for it to be.
 
-It is drawn as a 10px dot in the kind's own colour, with no header, no name and no rows; its tooltip
+It is drawn as a 10px dot in the kind's own color, with no header, no name and no rows; its tooltip
 says what kind it carries, or that it is unconnected and will take the kind of the link it joins. A
 reroute carrying an image is ELIDED in the image pass exactly as a muted node is; one carrying a
 number is compiled into the value pass. Both are the same pass-through evaluation the eight per-kind
@@ -928,7 +928,7 @@ upstream of an operand -- and three of the kinds have no curve model at all.
 | Utilities | Mix Color | Four independent straight-value channel interpolations. Not vector math over four floats: a Color is not a Vec4, and no gamut or OCIO step is implied |
 | Utilities | Compare | Six predicates over two Scalars; Equal and NotEqual spend the node's epsilon, the four orderings do not |
 | Utilities | Switch | One definition per socket kind. Bloom has no polymorphic port, and a socket that retyped itself would be a socket that does not know what it carries |
-| Utilities | Separate/Combine XY, XYZ, RGBA | Pure de/interleave. Channel extraction is the only way to read a colour's channels as numbers, by the no-implicit-Color-to-Vec4 rule |
+| Utilities | Separate/Combine XY, XYZ, RGBA | Pure de/interleave. Channel extraction is the only way to read a color's channels as numbers, by the no-implicit-Color-to-Vec4 rule |
 | Utilities | Random | Deterministic hash of its seed into `[min, max)`. No entropy source: a cached or exported frame has to agree with the frame that produced it, so a seeded value changes over time only when something wires a changing number into the seed |
 | Utilities | Reroute | One definition per kind, Image included. Pure pass-through; an Image Reroute is elided during image lowering and costs nothing at evaluation |
 
@@ -954,7 +954,7 @@ explained, the same way a missing module or a mute bypass already behaves.
 
 #### Animatable Value Literals
 
-A literal **Scalar**, **Vector 2** and **Colour** node's own authored value is ANIMATABLE: their schema
+A literal **Scalar**, **Vector 2** and **Color** node's own authored value is ANIMATABLE: their schema
 keys join `isScalarAnimatableSchemaKey`, `isVec2AnimatableSchemaKey` and `isColor4AnimatableSchemaKey`
 respectively, so the existing keyframe commands, the existing curve kinds, the existing exact rational
 sampler and the existing keyframe diamond all serve them without a second path. A value literal on a
@@ -1291,15 +1291,15 @@ Viewer Rectangle, Ellipse, Polygon, Star and Line tools freeze `ViewerMapping` a
 only an outline until release. `AddShapeLayer` accepts optional initial position, size, endpoints
 and Path geometry; validation, source/Layer/slot creation and initial values publish in one
 transaction. A 100 × 50 drag from (10,20) to (110,70) stores size (100,50) and Layer position
-(60,45), because position names the content centre. Shift makes squares/circles, keeps polygons/stars regular, or snaps line angle
-to 45-degree steps; Alt uses the press point as centre. Polygon and Star keep the schema default
+(60,45), because position names the content center. Shift makes squares/circles, keeps polygons/stars regular, or snaps line angle
+to 45-degree steps; Alt uses the press point as center. Polygon and Star keep the schema default
 of five points, editable afterward in Properties. A click uses the documented viewer default size.
 
 Pen drafts retain composition-space anchors and absolute handles in session state. Closing or
-finishing creates one Path layer with its position at the path bounds centre. Open pen paths start
+finishing creates one Path layer with its position at the path bounds center. Open pen paths start
 with fill off and a white stroke on; closed paths retain the normal shape fill default. Selected
 Path anchors and handles edit through the session override channel, with one undo entry per drag
-or anchor deletion. The tool adjusts the Layer anchor offset as the path bounds centre changes,
+or anchor deletion. The tool adjusts the Layer anchor offset as the path bounds center changes,
 keeping the existing local-to-world mapping stable during authoring. Path source data stays a
 constant; these gestures do not introduce path animation.
 
@@ -1317,7 +1317,7 @@ edge; Line never fills. An empty path produces no image.
 `fillEnabled`, `fillColor`, `strokeEnabled`, `strokeColor`, and `strokeWidth` apply to every kind.
 New lines start with fill off and a white stroke on. Stroke alignment maps Center/Inside/Outside
 to 0/1/2, joins map Miter/Round/Bevel to 0/1/2, caps map Butt/Round/Square to 0/1/2, and fill rules
-map NonZero/EvenOdd to 0/1. Open strokes always use centre alignment. Size, fill/stroke colors and
+map NonZero/EvenOdd to 0/1. Open strokes always use center alignment. Size, fill/stroke colors and
 stroke width are animatable and expose optional typed driver sockets; all other v1 controls are
 inline constants. A Path has neither a socket nor an animation curve.
 
@@ -1338,7 +1338,7 @@ shear affect both the shape and its stroke. Opacity applies after fill/stroke co
 
 The whole-pixel translation path preserves established source coverage bit for bit. Image sources
 and other raster boundaries retain bilinear sampling. Source-space bounds still define the native
-centre and anchor; the world polygon and output support describe placement. Coverage rows accept
+center and anchor; the world polygon and output support describe placement. Coverage rows accept
 absolute output coordinates, keeping the geometry independent of a future ROI request.
 
 Vector output keys include the complete composed affine matrix through OperationKey, source

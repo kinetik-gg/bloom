@@ -1358,7 +1358,7 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
     const auto drivenResult = compile(std::move(driven), registry);
     expectations.expect(drivenResult.status == runtime::SnapshotCompileStatus::Compiled &&
                             drivenResult.plan,
-                        "a Colour parameter driven by a Colour value node compiles");
+                        "a Color parameter driven by a Color value node compiles");
     if (drivenResult.plan) {
         const auto& plan = *drivenResult.plan;
         expectations.expect(plan.valueOperations().size() == 1 && plan.valueOutputCount() == 1,
@@ -1369,7 +1369,7 @@ void testParameterSourcesAndDiagnosticIds(Expectations& expectations) {
         expectations.expect(solid != plan.operations().end() &&
                                 std::holds_alternative<runtime::ValueOutputIndex>(
                                     std::get<runtime::CompiledSolid>(*solid).color.source),
-                            "the driven colour operand resolves to a value-graph output");
+                            "the driven color operand resolves to a value-graph output");
     }
 
     // ADAPTED (task DRIVE-1): the other half of the same rule used to be that only Scalar, Vector2
@@ -1690,7 +1690,7 @@ void testOverrideVectorKindsAndLimits(Expectations& expectations) {
                             std::get<double>(text->size.source) == 42.0 &&
                             std::get<core::Color4d>(text->color.source) ==
                                 core::Color4d{0.2, 0.3, 0.4, 0.5},
-                        "one request lowers string, scalar, integer, colour and vector overrides");
+                        "one request lowers string, scalar, integer, color and vector overrides");
     auto full = overrides;
     full.push_back({{}, kTextLineHeight, 1.25});
     full.push_back({{}, kTextLetterSpacing, 2.0});

@@ -50,7 +50,7 @@ void run(const std::filesystem::path& directory) {
                                          configRevision};
     cache.store(transformedKey, first);
     check(cache.find(transformedKey) == first,
-          "input colour-space, working-space, and config revision form the video cache key");
+          "input color-space, working-space, and config revision form the video cache key");
     check(!cache.find({probe.sourceDigest, 0, 12, 0, "sRGB - Texture", "ACEScg", {}}),
           "a changed config revision misses the video frame cache");
     cache.setByteBudget(0);
@@ -308,8 +308,8 @@ void colourInterpretation(const std::filesystem::path& directory) {
         const auto pqMatrix = fill({9, 16, 2, 1}, 3840, 2160, 24);
         const auto tagged = fill({1, 1, 1, 1}, 64, 48, 24);
         check(hd.assumed && hd.tags == provider::ColourTags{1, 1, 1, 1} &&
-                  hd.note == "Colour tags missing — assumed Rec.709 with the sRGB transfer. "
-                             "Change in Assets → Input Colour",
+                  hd.note == "Color tags missing — assumed Rec.709 with the sRGB transfer. "
+                             "Change in Assets → Input Color",
               "untagged HD assumes Rec.709 limited range with the visible note");
         check(pal.tags == provider::ColourTags{5, 6, 5, 1} &&
                   ntsc.tags == provider::ColourTags{6, 6, 6, 1} &&
@@ -338,7 +338,7 @@ void colourInterpretation(const std::filesystem::path& directory) {
     const auto blue = [&](unsigned x) { return pixels[x].blue(); };
     check(std::abs(blue(1) - (blue(0) + blue(2)) / 2.0F) < 1e-5F && blue(0) < blue(1) &&
               blue(1) < blue(2) && std::abs(blue(3) - blue(2)) < 1e-6F,
-          "4:2:0 chroma is reconstructed with a filter, not nearest neighbour");
+          "4:2:0 chroma is reconstructed with a filter, not nearest neighbor");
     // The decoder reports the generated fixtures' tags exactly.
     for (const auto& [name, tags] : std::array<std::pair<const char*, provider::ColourTags>, 3>{
              {{"untagged-h264.mp4", {2, 2, 2, 0}},
@@ -348,7 +348,7 @@ void colourInterpretation(const std::filesystem::path& directory) {
         const auto probe = std::get<provider::ProbeResult>(session.probe());
         const auto decoded = session.frame(probe, 0, 3, 0, nullptr);
         check(std::holds_alternative<Frame>(decoded) && std::get<Frame>(decoded)->colour == tags,
-              "colour fixtures carry their tags through decode");
+              "color fixtures carry their tags through decode");
     }
     // The untagged HD fixture: no primaries, transfer or matrix survive decode, and the frame
     // converts under the assumed Rec.709 interpretation instead of being refused.

@@ -268,7 +268,7 @@ void SummaryStrip::refresh(const QList<QTreeWidgetItem*>& selection) {
                         : colourSpaceDisplayName(asset->interpretation.inputColorSpaceId);
             const bool premultiplied = asset->interpretation.alphaAssociation ==
                                        document::AssetAlphaAssociation::Premultiplied;
-            colourLong = tr("Colour: %1").arg(input) +
+            colourLong = tr("Color: %1").arg(input) +
                          (premultiplied ? tr(" · Premultiplied alpha") : tr(" · Straight alpha"));
             QStringList colourFacts{space, premultiplied ? tr("Premultiplied") : tr("Straight")};
             if (const auto warning =

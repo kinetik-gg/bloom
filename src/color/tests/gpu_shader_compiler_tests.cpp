@@ -203,7 +203,7 @@ void testStaticRejections(Expectations& expectations, const std::string& glslang
     request = baseRequest(glslang, spirvVal);
     const auto beforeCancelled = compiler.compile(request, []() { return true; });
     expectations.expect(beforeCancelled.status == GpuShaderCompileStatus::Cancelled,
-                        "cancellation before launch is honoured");
+                        "cancellation before launch is honored");
 }
 
 void testDiagnosticCeilings(Expectations& expectations, const std::string& glslang,

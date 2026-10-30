@@ -7,11 +7,11 @@ Date: 2026-10-30
 ## Context
 
 Ordinary Rec.709 and untagged SDR video (phone and camera H.264) looked washed out by default and
-only looked right after its input colour was changed. The cause was in Auto resolution, not in the
+only looked right after its input color was changed. The cause was in Auto resolution, not in the
 YUV conversion:
 
 - A config-managed video conversion decodes only the stream's Y'CbCr matrix and range and leaves
-  the transfer to the input colour space (`videoToInputColorSpace`, transfer code 8).
+  the transfer to the input color space (`videoToInputColorSpace`, transfer code 8).
 - Under Bloom Neutral v1, Auto resolved Rec.709 and assumed Rec.709/601 video to the config's
   "Rec.709 video space", which Neutral mapped to its scene-linear `lin_rec709_scene`. The encoded
   R'G'B' therefore entered the working space as linear light, and the default sRGB display view
@@ -38,11 +38,11 @@ the double encoding.
 2. **Camera interpretations stay explicit.** `Rec.709 Camera (Bloom)` (BT.709 inverse OETF) is
    synthesized into every pinned config that lacks a Rec.709 camera space, now including Bloom
    Neutral (no primaries matrix there, since Neutral's reference is linear Rec.709), so the camera
-   interpretation is an explicit Input Colour choice under every pinned config. PQ, HLG, Rec.2020,
+   interpretation is an explicit Input Color choice under every pinned config. PQ, HLG, Rec.2020,
    log and every other explicit or legacy choice are unchanged, and HDR Auto resolution is
    unchanged.
-3. **The visible note says what is assumed.** An untagged SDR stream's note reads "Colour tags
-   missing — assumed Rec.709 with the sRGB transfer. Change in Assets → Input Colour" (Rec.601 for
+3. **The visible note says what is assumed.** An untagged SDR stream's note reads "Color tags
+   missing — assumed Rec.709 with the sRGB transfer. Change in Assets → Input Color" (Rec.601 for
    SD). The assumption identity becomes `assumed-colour-v2`, and the resolved input space id is part
    of video cache identity, so every cached frame, thumbnail and RAM-preview entry made under the old
    default is a different key.
@@ -53,7 +53,7 @@ the double encoding.
    not return. The assumption is not recorded per asset: the old look was a defect, not a choice,
    and explicit choices (including an explicit `lin_rec709_scene`) were always stored and are kept
    exactly.
-5. **Regression evidence.** Generated 64x48 H.264 colour-patch fixtures (BT.709-tagged, and
+5. **Regression evidence.** Generated 64x48 H.264 color-patch fixtures (BT.709-tagged, and
    untagged SD so Rec.601 is assumed) carry FFmpeg/swscale's RGB24 decode of their first frame.
    Both the CPU reference route and the GPU route (the sRGB-texture to working-space conversion is
    a dispatched GPU OCIO effect with CPU parity, read back once) are shown through the default view

@@ -1227,9 +1227,9 @@ OperationRegistry OperationRegistry::builtIn() {
 
     add("bloom.animation.insert-color4-keyframe",
         {compositionArgument(),
-         need("curve", ValueKind::Id, StableId{1}, "The colour curve to key."), timeArgument(),
+         need("curve", ValueKind::Id, StableId{1}, "The color curve to key."), timeArgument(),
          need("value", ValueKind::Color4, core::Color4d{1.0, 0.0, 0.0, 1.0},
-              "The colour at that time."),
+              "The color at that time."),
          interpolationArgument()},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
@@ -1558,7 +1558,7 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.animation.update-color4-keyframe",
         {compositionArgument(), need("curve", ValueKind::Id, StableId{1}, "The curve to edit."),
          need("keyframe", ValueKind::Id, StableId{1}, "The key to re-place."), timeArgument(),
-         need("value", ValueKind::Color4, core::Color4d{1.0, 0.0, 0.0, 1.0}, "The new colour."),
+         need("value", ValueKind::Color4, core::Color4d{1.0, 0.0, 0.0, 1.0}, "The new color."),
          interpolationArgument()},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
@@ -1879,7 +1879,7 @@ OperationRegistry OperationRegistry::builtIn() {
         {need("asset", ValueKind::Id, StableId{1}, "The image or video asset to interpret."),
          maybe("legacy", ValueKind::String, "auto", "Auto, sRGB, Linear or Raw. Defaults to Auto."),
          maybe("inputColorSpaceId", ValueKind::String, "",
-               "An exact colour-space id in the selected OCIO config; clears the legacy choice.")},
+               "An exact color-space id in the selected OCIO config; clears the legacy choice.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto asset = id(args, op, "asset", error);
@@ -1898,7 +1898,7 @@ OperationRegistry OperationRegistry::builtIn() {
                 return failure(op, "legacy", "expects auto, srgb, linear or raw");
             if (inputId && !inputId->empty() && choice != document::AssetColorSpace::Auto)
                 return failure(op, "inputColorSpaceId",
-                               "expects no legacy choice when an OCIO colour-space id is set");
+                               "expects no legacy choice when an OCIO color-space id is set");
             return OperationCreateResult(
                 std::make_unique<commands::SetAssetInputColor>(
                     document::AssetId::fromRaw(*asset), choice, inputId.value_or(std::string{})),
@@ -2042,7 +2042,7 @@ OperationRegistry OperationRegistry::builtIn() {
          maybe("frameRateDenominator", ValueKind::Integer, std::int64_t{1},
                "Frame-rate denominator. Defaults to 1."),
          maybe("background", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 1.0},
-               "Background colour. Defaults to opaque black.")},
+               "Background color. Defaults to opaque black.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto name = text(args, op, "name", error);
@@ -2086,15 +2086,15 @@ OperationRegistry OperationRegistry::builtIn() {
          maybe("start", ValueKind::Time, std::int64_t{0},
                "The timecode of frame 0: whole frames, or [numerator, denominator] seconds."),
          maybe("dropFrame", ValueKind::Boolean, false,
-               "Drop-frame timecode labels (honoured at 29.97 and 59.94 fps)."),
+               "Drop-frame timecode labels (honored at 29.97 and 59.94 fps)."),
          maybe("background", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 1.0},
-               "Background colour."),
+               "Background color."),
          maybe("workingColorSpace", ValueKind::String, "ACEScg",
-               "Working colour space id; an empty string follows the project."),
+               "Working color space id; an empty string follows the project."),
          maybe("actionSafe", ValueKind::Double, 0.9, "Action-safe fraction, 0..1."),
          maybe("titleSafe", ValueKind::Double, 0.8, "Title-safe fraction, inside action safe."),
          maybe("anchor", ValueKind::Integer, std::int64_t{4},
-               "Resize anchor 0..8 (row * 3 + column); 4 keeps content centred.")},
+               "Resize anchor 0..8 (row * 3 + column); 4 keeps content centered.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -2211,7 +2211,7 @@ OperationRegistry OperationRegistry::builtIn() {
 
     add("bloom.composition.set-background-color",
         {compositionArgument(), need("color", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 1.0},
-                                     "The background colour.")},
+                                     "The background color.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -2352,7 +2352,7 @@ OperationRegistry OperationRegistry::builtIn() {
          need("kind", ValueKind::String, "rectangle",
               R"("rectangle", "ellipse", "triangle", "polygon", "star", "line" or "path".)"),
          maybe("position", ValueKind::Vec2, document::Vec2d{960.0, 540.0},
-               "Layer position. Defaults to the composition centre."),
+               "Layer position. Defaults to the composition center."),
          maybe("size", ValueKind::Vec2, document::Vec2d{400.0, 300.0}, "Shape size."),
          maybe("lineStart", ValueKind::Vec2, document::Vec2d{0.0, 0.0},
                "First point of a line shape."),
@@ -2423,9 +2423,9 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.layer.add-solid",
         {compositionArgument(), need("name", ValueKind::String, "Red", "The layer name."),
          need("color", ValueKind::Color4, core::Color4d{1.0, 0.0, 0.0, 1.0},
-              "The solid colour as (r, g, b, a)."),
+              "The solid color as (r, g, b, a)."),
          maybe("position", ValueKind::Vec2, document::Vec2d{960.0, 540.0},
-               "Layer position. Defaults to the composition centre."),
+               "Layer position. Defaults to the composition center."),
          maybe("opacity", ValueKind::Double, 1.0, "Layer opacity in 0..1. Defaults to 1.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
@@ -2448,11 +2448,11 @@ OperationRegistry OperationRegistry::builtIn() {
         {compositionArgument(), need("name", ValueKind::String, "Title", "The layer name."),
          need("text", ValueKind::String, "Hello, Bloom!", "The text content."),
          maybe("position", ValueKind::Vec2, document::Vec2d{960.0, 540.0},
-               "Layer position. Defaults to the composition centre."),
+               "Layer position. Defaults to the composition center."),
          maybe("opacity", ValueKind::Double, 1.0, "Layer opacity in 0..1. Defaults to 1."),
          maybe("size", ValueKind::Double, 72.0, "Em size in pixels."),
          maybe("color", ValueKind::Color4, core::Color4d{1.0, 1.0, 1.0, 1.0},
-               "Fill colour. Defaults to opaque white.")},
+               "Fill color. Defaults to opaque white.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -2560,7 +2560,7 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.layer.set-label-color",
         {compositionArgument(), layerArgument(),
          maybe("color", ValueKind::Vec3, document::Vec3d{255.0, 128.0, 0.0},
-               "Label colour as (r, g, b) in 0..255. Omit to clear the label.")},
+               "Label color as (r, g, b) in 0..255. Omit to clear the label.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -3332,7 +3332,7 @@ OperationRegistry OperationRegistry::builtIn() {
             if (const auto* constant = findArgument(args, "value")) {
                 authoredValue = parameterValueOf(*constant);
                 if (!authoredValue.has_value()) {
-                    return failure(op, "value", "expects a number, text, vector or colour");
+                    return failure(op, "value", "expects a number, text, vector or color");
                 }
             }
             if (curve.has_value()) {

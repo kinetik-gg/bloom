@@ -72,10 +72,10 @@ std::optional<std::string> compositionSettingsIssue(const CompositionSettings& s
     if (!settings.timecode.isValid())
         return "The start timecode must not be negative";
     if (!settings.background.isValid())
-        return "The background colour is invalid";
+        return "The background color is invalid";
     if (settings.workingColorSpaceId &&
         !document::validateWorkingColorSpaceId(*settings.workingColorSpaceId).ok())
-        return "The working colour space is invalid";
+        return "The working color space is invalid";
     if (!settings.safeAreas.isValid())
         return "Safe areas must be 1 to 100 percent, with title safe inside action safe";
     return std::nullopt;

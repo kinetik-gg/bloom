@@ -63,7 +63,7 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   which need a restart, and what is project or session state instead.
 - [Memory](user-guide/memory.md) — the RAM and VRAM headroom preferences, how work and caches use
   the rest of the machine, and what actual OS limits apply.
-- [The Context Bar](user-guide/context-bar.md) — the tools, the active tool's options, and aligning
+- [The Toolbar](user-guide/toolbar.md) — the tools, the active tool's options, and aligning
   and distributing layers.
 - [Scripting Bloom with Python](user-guide/python.md) — Python package, transactions and embedding.
 - [Using Bloom from an agent](user-guide/mcp.md) — stdio MCP tools and request limits.
@@ -76,7 +76,7 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 - The UI kit polish release is complete: one control look and height, the shared popup window, the
   Inter/Geist type system, the contextual tool bar ([ADR 0031](decisions/0031-contextual-tool-bar.md),
-  [user guide](user-guide/context-bar.md)) and a UI grammar gate with an empty allowlist. What
+  [user guide](user-guide/toolbar.md)) and a UI grammar gate with an empty allowlist. What
   shipped, the validation evidence and the macOS/Windows gaps are in the
   [release record](plans/ui-kit-polish-release.md).
 - The deterministic CPU preview vertical slice through Batch 3 is implemented and locally verified;
@@ -100,7 +100,7 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   qualification.
 - A shared GPU scene prepares every current compiled pixel operation under a strict fail-closed
   operation and render-route coverage contract, with no pixel exception. The resident preview and
-  final-render routes both evaluate through it, including the general GPU output-colour production
+  final-render routes both evaluate through it, including the general GPU output-color production
   context, a 6000x4000 media+CST+text export with locally verified native execution, and
   capacity-aware resident sizing. The CPU reference evaluator remains the correctness oracle and
   explicit supported fallback; GPU execution is locally exercised on Linux only, and macOS and

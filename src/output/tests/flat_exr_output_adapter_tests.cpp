@@ -153,7 +153,7 @@ void testAcesCgHeaderConformance(support::Expectations& expectations) {
                         "ACEScg export carries the exact AP1 chromaticities");
     const auto* colorInteropId = header.findTypedAttribute<Imf::StringAttribute>("colorInteropID");
     expectations.expect(colorInteropId != nullptr && colorInteropId->value() == "ACEScg",
-                        "ACEScg export records its working colour-space identity");
+                        "ACEScg export records its working color-space identity");
 }
 
 void testWindowBoundsAtSigned32Extremes(support::Expectations& expectations) {

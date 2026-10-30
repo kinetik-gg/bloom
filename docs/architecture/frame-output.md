@@ -30,7 +30,7 @@ or a processing-budget refusal
 must not become an unconstrained CPU escape. The attempt graph defers its Evaluating stage until the
 provider's off-thread bootstrap is terminal, so the first export on a supported device is genuinely
 GPU rather than a CPU fallback that raced the bootstrap. The blocking CPU color stage resolves the
-general output-colour production context -- the OCIO display/effect program -- and prepares the
+general output-color production context -- the OCIO display/effect program -- and prepares the
 immutable GPU output command from the exact resolved processor; the provider's one combined final
 readback transfers the unchanged process payload plus, when present, the encoded output (an RGBA32F
 process effect or straight RGBA8 display) in a single submission. A completed attempt records native
@@ -76,7 +76,7 @@ Updated: 2026-10-23
 
 ## Working-Space Output Contract
 
-The effective working colour space comes from project `ColorSettings.processColorSpaceId` or the
+The effective working color space comes from project `ColorSettings.processColorSpaceId` or the
 active composition's optional override. It is carried with the OCIO config revision in evaluation
 intent and is part of the process/output semantic identity for generalized projects. The legacy
 `lin_rec709_scene` intent keeps the previous identity bytes and goldens.
@@ -499,7 +499,7 @@ Minimal signed decimal is exactly `0` or `-?[1-9][0-9]*`; minimal unsigned decim
 
 Each preset version closes the required descriptor keys for each facet: pixels use `height`,
 `packing`, `sample-type`, `width`; precision uses `component-type`; color uses `color-id`
-(always `utf8:`, because OCIO colour-space names are free text such as `Linear Rec.709 (sRGB)`); alpha
+(always `utf8:`, because OCIO color-space names are free text such as `Linear Rec.709 (sRGB)`); alpha
 uses `association`, `zero-alpha`; channels use `count` followed by zero-based `name-N` and `role-N`;
 either window uses `height`, `origin-x`, `origin-y`, `width`; pixel aspect uses `denominator`,
 `numerator` for the source and `value` (`f32`) for an EXR target; compression uses `method`;
@@ -717,11 +717,11 @@ are not expected to round-trip as file metadata; their semantic effect is what v
 - one flat, single-part, scanline image;
 - channels named exactly `R`, `G`, `B`, `A`, each Float32 with sampling `1 x 1`;
 - premultiplied Float32 samples, without a display transform, clamp or quantization; an optional
-  output colour transform operates on straight RGB and restores the original alpha;
+  output color transform operates on straight RGB and restores the original alpha;
 - exact signed data and display windows after checked conversion to the OpenEXR coordinate domain;
 - increasing-Y scanline order and the declared lossless compression: ZIP (default), PIZ, ZIPS or none;
 - the pixel-aspect rational rounded once to the OpenEXR Float32 attribute; and
-- `colorInteropID` equal to the output colour-space id plus the exact chromaticity bits for that
+- `colorInteropID` equal to the output color-space id plus the exact chromaticity bits for that
   space; an empty output id resolves to the working space and preserves the existing bytes.
 
 The version-field value is OpenEXR version `2` with every feature flag clear: regular single-part
@@ -740,7 +740,7 @@ time code, owner, comments, software, capture date, or host data, fails preset v
 | `screenWindowCenter` | `v2f` | `(0, 0)`, bits `00000000 00000000` |
 | `screenWindowWidth` | `float` | `1`, bits `3f800000` |
 | `chromaticities` | `chromaticities` | values below, in OpenEXR red/green/blue/white order |
-| `colorInteropID` | `string` | exact output colour-space id; legacy default `lin_rec709_scene` |
+| `colorInteropID` | `string` | exact output color-space id; legacy default `lin_rec709_scene` |
 
 The legacy `lin_rec709_scene` `chromaticities` binary32 bit patterns are exact: red `(3f23d70a, 3ea8f5c3)`, green
 `(3e99999a, 3f19999a)`, blue `(3e19999a, 3d75c28f)`, and D65 white
@@ -771,7 +771,7 @@ encoder itself enforces. A window outside that checked ceiling fails typed befor
 than surfacing a library error; the full signed-32 wording above is therefore bounded by this
 explicit version 1 ceiling.
 
-Without a colour transform, the report marks process pixels, alpha, channels and windows `Exact`.
+Without a color transform, the report marks process pixels, alpha, channels and windows `Exact`.
 A working-to-output transform marks Pixels and Color `Approximated` with
 `exr.output-color-transform`; External Dependencies binds the exact OCIO config revision with
 `exr.ocio-external-reference`. Compression records the selected method. The pixel-aspect facet is
@@ -1092,9 +1092,9 @@ preservation report before approval, progresses without blocking interaction, an
 verified atomically published PNG or EXR.
 
 This document is an accepted implementation contract. The version 1 output adapters, preset
-conversion, staged-format verification, the publication coordinator, the general GPU output-colour
+conversion, staged-format verification, the publication coordinator, the general GPU output-color
 production context, and large-frame (6000x4000) GPU export described here are implemented, with
-locally verified native execution. Still pending: a supervised external-config colour helper and
+locally verified native execution. Still pending: a supervised external-config color helper and
 non-built-in locator kinds.
 
 Primary references:
@@ -1138,7 +1138,7 @@ each acknowledgement before preparing the next product: a bounded number of ackn
 unread, a refused product surfaces on the next call, and finish, read and close first collect all
 of them.
 
-### GPU output colour for media
+### GPU output color for media
 
 Video and TIFF delivery transform the process frame to the export's display/view on the GPU. The
 runner prepares the display/view once per range, on the first Evaluating worker after the provider's
@@ -1165,7 +1165,7 @@ coarser than half precision's error: H.264, HEVC, ProRes 422 (proxy, LT, standar
 audio-only outputs always render fresh. A reused frame's approval identity is computed over the
 widened half pixels, because those are the pixels that are encoded, so its process-pixel digest
 differs from a freshly evaluated frame's; the verification records it in
-`ExportDeviceProvenance::framesReused`. A hit skips evaluation, so its output colour needs a
+`ExportDeviceProvenance::framesReused`. A hit skips evaluation, so its output color needs a
 display-only GPU job over the cached image. The export evaluator does not provide one, so
 `detail::compositeFrameReuseAvailableV1()` is false and every frame is evaluated; the CPU display
 transform is never used to serve a hit.
@@ -1192,7 +1192,7 @@ Unknown tokens, repeated/missing frame tokens, overflow, invalid path components
 extensions are refused before publication. A 48-frame handoff to `shot.exr` yields
 `shot.1001.exr` through `shot.1048.exr`.
 
-EXR colour preparation runs as cancellable scheduler work before approval. The approval dialog
+EXR color preparation runs as cancellable scheduler work before approval. The approval dialog
 shows the captured output space and compression and **Look: OFF (handoff)**, or
 `look: baked (N look-tagged effects)`. A Viewer setting cannot change this policy. When a frame
 contains look-tagged effects or explicitly bypasses them, its analysis record appends the domain
@@ -1227,7 +1227,7 @@ publication outcome), device provenance, and typed `ExportCheckResult`s for Reop
 Timing, ColourTags, Container, Audio, Naming, ArtifactDigest, Publication and DeviceProvenance with
 expected and observed values. A frame evaluated on the CPU reference path is a DeviceProvenance
 warning, so it is never presented as a GPU frame. Movies are checked against the worker's reopen
-evidence, including the colour tags and `<container>/<codec>` it read back.
+evidence, including the color tags and `<container>/<codec>` it read back.
 
 **Replacement.** An output's overwrite policy is AskBeforeReplacing (default), Replace or Refuse.
 Destination facts are sampled on a blocking-I/O worker; an existing destination is a

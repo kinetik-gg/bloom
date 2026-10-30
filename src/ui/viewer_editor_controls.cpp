@@ -252,7 +252,7 @@ QString ViewerEditor::applyRemoteChange(const RemoteChange& change) {
     if (change.display || change.view) {
         if (viewerDisplayView_ == nullptr || !viewerDisplayView_->isEnabled() ||
             viewerDisplayView_->count() == 0)
-            return tr("This project's colour configuration offers no display or view to choose.");
+            return tr("This project's color configuration offers no display or view to choose.");
         const auto pairAt = [this](const int index) {
             const auto data = viewerDisplayView_->itemData(index).toStringList();
             return data.size() == 2 ? data : QStringList{QString{}, QString{}};

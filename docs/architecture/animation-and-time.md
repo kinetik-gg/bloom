@@ -32,19 +32,19 @@ No layer, node, timeline, Viewer, Properties editor, or add-on gets a private an
 
 ## KEY-1 Whole-Component Key Audit
 
-The pre-KEY-1 implementation treats a vector or colour key as one value at one time. The
+The pre-KEY-1 implementation treats a vector or color key as one value at one time. The
 whole-value assumptions are deliberately recorded here before the component-curve change:
 
 | Area | Whole-value assumption | Component-curve consequence |
 | --- | --- | --- |
-| Durable model | `Vec2Keyframe` and `Color4Keyframe` store one complete value; `AnimationCurveRecord` has scalar, Vec2, and Color4 alternatives. `Vec3d` is constant-only. | Vector and colour records now contain independently addressable scalar component curves (X/Y, X/Y/Z, or R/G/B/A); the animation source retains a typed default value for components with no keys. |
-| Sampling | `runtime::sampleAnimationCurve()` has one interval factor and mixes both vector channels or all four colour channels together. | Sample each component curve independently, preserving Hold, Linear, and EaseInOut per component; an empty component follows the animation source's default value. |
+| Durable model | `Vec2Keyframe` and `Color4Keyframe` store one complete value; `AnimationCurveRecord` has scalar, Vec2, and Color4 alternatives. `Vec3d` is constant-only. | Vector and color records now contain independently addressable scalar component curves (X/Y, X/Y/Z, or R/G/B/A); the animation source retains a typed default value for components with no keys. |
+| Sampling | `runtime::sampleAnimationCurve()` has one interval factor and mixes both vector channels or all four color channels together. | Sample each component curve independently, preserving Hold, Linear, and EaseInOut per component; an empty component follows the animation source's default value. |
 | Commands | `SetKeyframeAtTime*`, Insert/Update/Delete/Interpolation operations are typed by whole curve kind. Batch `KeyframeAddress` identifies only `{curveId, keyframeId}` and `KeyframePaste` carries a whole typed value. | Add a component address and component command surface; parameter-level operations remain all-component conveniences, while batches accept component-scoped selections. |
-| Session | `toggleKeyframe*()` and `keyframeDiamondState*()` answer one binary state for a parameter's one curve. `KeyframeSelection` and clipboard data carry only curve/key IDs; effective vector/colour readers sample one whole curve. | Add component toggle/state and all/some/none aggregate state; selections carry their component, and effective readers resolve component curves without changing the public effective-value result types. |
+| Session | `toggleKeyframe*()` and `keyframeDiamondState*()` answer one binary state for a parameter's one curve. `KeyframeSelection` and clipboard data carry only curve/key IDs; effective vector/color readers sample one whole curve. | Add component toggle/state and all/some/none aggregate state; selections carry their component, and effective readers resolve component curves without changing the public effective-value result types. |
 | Timeline lanes | `TimelineKeyframeRow`, grid projection, hit-testing, drag ghosts, and selection dispatch in `src/ui/timeline_ruler.*` and `src/ui/timeline_keyframe_gestures.cpp` project one lane per parameter curve. Property rows read Vec2 as two fields and one diamond. | KEY-2 owns component lanes and component diamonds. KEY-1 changes only the session seam and leaves widget wiring untouched. |
 | Compiler/evaluator | `CompiledVec2Curve`/`CompiledColor4Curve` tables are indexed once per parameter; snapshot lowering and CPU preflight/sample/resolve paths assume one whole-value curve and one segment identity. | Compile component tables and sample each component, composing the same typed value for consumers while keeping curve identity and semantics versions stable. |
-| Persistence | Canonical JSON emits `kind: "vec2"`/`"color4"` records with whole-value keys; decode validates those shapes; schema 1.3 introduced Color4; production migration currently ends at 1.8. | Schema 1.9 writes flat component keys and optional animation defaults. The deterministic 1.8 → 1.9 DOM migration splits each legacy vector/colour key at the same exact time and interpolation, preserving sampling and reserving generated key IDs above the old high water. |
-| Identity goldens | Runtime sampling tests pin the sampling version and vector behaviour; output-analysis and process-frame identity tests pin evaluator/sampling versions and derived digests; UI golden images cover the existing whole-property indicators. | Re-run the identity checks on the final commit. Do not change evaluator or sampling versions when migrated-document samples remain bit-identical; document any justified change and re-derive affected goldens only if required. |
+| Persistence | Canonical JSON emits `kind: "vec2"`/`"color4"` records with whole-value keys; decode validates those shapes; schema 1.3 introduced Color4; production migration currently ends at 1.8. | Schema 1.9 writes flat component keys and optional animation defaults. The deterministic 1.8 → 1.9 DOM migration splits each legacy vector/color key at the same exact time and interpolation, preserving sampling and reserving generated key IDs above the old high water. |
+| Identity goldens | Runtime sampling tests pin the sampling version and vector behavior; output-analysis and process-frame identity tests pin evaluator/sampling versions and derived digests; UI golden images cover the existing whole-property indicators. | Re-run the identity checks on the final commit. Do not change evaluator or sampling versions when migrated-document samples remain bit-identical; document any justified change and re-derive affected goldens only if required. |
 
 The implementation touch points are therefore `src/document/animation.*` and parameter schema
 predicates, `src/commands/animation_operations.*`, `src/runtime/animation_sampling.*`, curve
@@ -58,7 +58,7 @@ and value offset -- is finite. NaN and the infinities are not authorable, not st
 writable:
 
 - the commands refuse one with `OperationIssueCode::InvalidValue` (every keyframe insert, update,
-  set-at-time, paste, handle edit and value edit; a whole-value vector or colour argument is split
+  set-at-time, paste, handle edit and value edit; a whole-value vector or color argument is split
   across its components and each component value is admitted on the same terms)
 - `AnimationCurveStore` refuses one on insert and update, and reports one from `validate()`, so a
   bypass of the commands is caught by `Document::commit()` and by the test suite rather than
@@ -95,10 +95,10 @@ AnimationCurveRecord = ScalarCurve | Vec2Curve | Vec3Curve | Color4Curve
 AnimationCurveSource = { curveId, optional typed defaultValue }
 ```
 
-Vector and colour keys are no longer whole values. Each component has its own strictly increasing
+Vector and color keys are no longer whole values. Each component has its own strictly increasing
 exact-rational timeline, key IDs, and outgoing interpolation; component timelines may be empty,
 but a curve has at least one key overall. Two keys at the same normalized time are invalid within
-one component. Values are finite, and colour alpha remains in `[0, 1]`. The final key of every
+one component. Values are finite, and color alpha remains in `[0, 1]`. The final key of every
 non-empty component is canonical `Linear` on every mutation. A component with no keys samples the
 typed `AnimationCurveSource.defaultValue`, which is the parameter's unkeyed constant component.
 
@@ -108,7 +108,7 @@ collapsed layer summary, a diamond, a paste. Nothing stores that union, so no wr
 second copy of the same facts in step with the first.
 
 A `Color4Curve` carries straight/unassociated authoring RGBA, the same encoding a constant solid or
-text color already uses. A colour key is valid on exactly the terms `core::Color4d::isValid()`
+text color already uses. A color key is valid on exactly the terms `core::Color4d::isValid()`
 states: finite RGB -- negative and HDR channels included -- and alpha within `[0, 1]`. Finiteness is
 the store's own rule for every component key; the narrower alpha domain belongs to the parameter
 that owns the curve, so it is enforced by the animation commands and by
@@ -172,7 +172,7 @@ the sampler keeps its "no `libm`, no `long double`, no compiler-specific extende
 
 Endpoints stay exact: the transform maps `0` to exactly `0` and `1` to exactly `1`. At the interval's
 exact thirds it is exactly `7/27` and `20/27`, and at the exact midpoint exactly `1/2`. Only the
-segment's LEFT key decides its mode, so a `Hold` key is unaffected by an eased neighbour.
+segment's LEFT key decides its mode, so a `Hold` key is unaffected by an eased neighbor.
 
 `kAnimationSamplingSemanticsVersion` is `2`. It enters compiled-plan compatibility and cache
 identity alongside scalar, evaluator, and image primitive versions; it moved from `1` when
@@ -185,7 +185,7 @@ governing the segment that starts at it and an `incomingHandle` governing the se
 it. `time` is a fraction of THAT segment's duration measured from the key the handle belongs to;
 `value` is an offset from that key's own value. The defaults are `time = 1/3` and `value = 0`,
 which are exactly the fixed handles the pre-handle `EaseInOut` carried. A handle therefore belongs
-to one scalar axis, which is why a vector or colour key is addressed through its component: there
+to one scalar axis, which is why a vector or color key is addressed through its component: there
 is no whole-value key for an offset to move along.
 
 For segment `k_i -> k_{i+1}` with `Δt = t_{i+1} - t_i` and `EaseInOut` on the LEFT key, the curve is
@@ -327,7 +327,7 @@ transaction. A component diamond keys or removes only X/Y/Z or R/G/B/A; an unkey
 retains its animation default. Removing the final component key restores the typed source default.
 
 Properties and node cards retain one aggregate parameter diamond and expose a separate diamond
-beside every component cell. Timeline vector and colour rows expose component diamonds before
+beside every component cell. Timeline vector and color rows expose component diamonds before
 their numeric fields and a second disclosure level for individually named component rows.
 A component row edits only its component through the session command adapter, both for constants
 and animation; an animated edit at a new time creates only that component's key.
@@ -594,7 +594,7 @@ from another retained segment's cache entry when possible. RAM and background re
 frames the new provenance no longer accepts; a unitary live reset (a whole-render or unknown edit)
 cancels the RAM run as before. `evaluationChanged()` is reserved for NON-document transitions whose
 snapshot revisions are unchanged but whose pixels are not -- the qualified display transform becoming
-available, a colour-settings change, and rebind -- and still forces a fresh derivation; that is why a
+available, a color-settings change, and rebind -- and still forces a fresh derivation; that is why a
 "same revision" test can never be used to keep a display-qualified frame.
 
 **Split reuse (SPLIT-2).** An output-equivalent `SplitLayerAtTime` publishes a deliberately EMPTY
@@ -640,7 +640,7 @@ keyframe/animation operation declare `Operation::parameterEditScope()`; the comm
 that composition's parameters and curves ONCE per transaction (`Work::parameterFootprintDiffs`). A
 changed constant or source changes the whole duration; a changed curve changes, per component, only
 `[previous key, next key)` around each added, removed, moved or re-valued key (holds extend the first
-and last key to the composition's ends, and handles and interpolation never reach past a neighbour).
+and last key to the composition's ends, and handles and interpolation never reach past a neighbor).
 That time is intersected with where the parameter's owner can reach output: a gating layer's span,
 the whole composition when it reaches Composition Output ungated, nothing when it is unreachable
 (solo-excluded, disabled, a later slot of a muted Merge, or unconnected). A changed driver binding,
@@ -1009,7 +1009,7 @@ other overrides, and bypass frame/plan caches. Path is a constant authoring kind
 Pen creation holds only a session draft and screen-space outline until close or Enter. A selected
 Path anchor/handle drag freezes the evaluated local-to-composition transform and the viewer mapping.
 It stages the complete Path through the value-edit seam; the Layer anchor offset compensates for
-changes to the geometric bounds centre. Path and compensation commit in one transaction. Alt breaks
+changes to the geometric bounds center. Path and compensation commit in one transaction. Alt breaks
 handle symmetry; Delete removes the selected anchor in one transaction. Escape, capture loss,
 window deactivation, resize, selection, revision, composition and time changes cancel the gesture.
 No rasterisation, media I/O or evaluation runs on the pointer event path.
@@ -1021,12 +1021,12 @@ session time and sampled base value. `updateValueEdit(value)` validates and publ
 value through the same request override channel. `liveValue(parameterId)` and the typed effective
 readers return that value immediately; Properties, node cards and timeline rows refresh from
 `liveValueChanged`, independently of preview completion. Matching typed setters stage their values
-while an edit is active, preserving each surface's units and colour conversion.
+while an edit is active, preserving each surface's units and color conversion.
 
 Numeric typing publishes every valid finite change; incomplete text leaves the last valid preview
 visible. Horizontal scrubbing and arrow steps use the same seam. Release, Enter or focus-out calls
 `commitValueEdit()` once; Escape calls `cancelValueEdit()` and restores the base with no transaction.
-A component field keys only its component. Linked vector controls and the colour picker edit the
+A component field keys only its component. Linked vector controls and the color picker edit the
 whole value. Animated values keep their curves and author at the captured exact time. Zero-change,
 cancelled, stale, time-switched and composition-switched edits create no history. Driven and locked
 parameters refuse live authoring. Discrete enum choices remain one immediate command per choice.
@@ -1043,7 +1043,7 @@ decoded still-image source entry (CACHE-1); an explicit evaluation bypass
 
 ## Required Verification
 
-- live numeric and colour edits request Interactive overrides before any transaction, refresh peer
+- live numeric and color edits request Interactive overrides before any transaction, refresh peer
   surfaces, commit one history entry, and cancel without history
 - the first Interactive request submits immediately; completed live frames present during continuous
   input and meet a generous offscreen latency bound independently of Jobs monitor polling
@@ -1254,7 +1254,7 @@ in [ADR 0024](../decisions/0024-layer-owned-time.md#8-projection-and-footprints)
 
 `SetCompositionSettings` (the Composition Settings dialog, and `bloom.composition.set-settings`
 through the operation registry) replaces a composition's name, format, duration, timecode,
-background, working colour space and safe areas as one undoable command. Its render footprint is the
+background, working color space and safe areas as one undoable command. Its render footprint is the
 whole composition at every time, which also invalidates every composition that nests it. Settings
 equal to the current ones commit nothing, and an invalid value is refused with a plain reason before
 anything changes. Under [ADR 0024](../decisions/0024-layer-owned-time.md) time belongs to layers and
@@ -1273,8 +1273,8 @@ is exact, so the edit rewrites no time:
   timecode); frames and times are untouched.
 - **Size.** The 3 × 3 resize anchor decides where existing layers sit: each unlocked, unparented
   layer's position moves by `(newWidth - oldWidth) * column / 2` and
-  `(newHeight - oldHeight) * row / 2` (column and row 0, 1, 2 from top left), so centre keeps layers
-  centred and top left keeps them at the same offset from that corner. The shift is applied to the
+  `(newHeight - oldHeight) * row / 2` (column and row 0, 1, 2 from top left), so center keeps layers
+  centered and top left keeps them at the same offset from that corner. The shift is applied to the
   constant, to every key of an animated position, and to its default; a driven position is left to
   its driver. Parented layers follow their parent, and locked layers stay where they are, as every
   command leaves locked layers untouched. Undo restores every moved value exactly.

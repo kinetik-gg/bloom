@@ -321,7 +321,7 @@ int runTests(int argc, char** argv) {
                             "switch: the config/working switch changes the command identity");
         expectations.expect(
             !bloom::runtime::gpuDisplayProgramMatchesRequest(neutralProgram, acesBinding),
-            "switch: the Neutral program is refused for the ACES binding (no stale colour)");
+            "switch: the Neutral program is refused for the ACES binding (no stale color)");
         expectations.expect(
             !bloom::runtime::gpuDisplayProgramMatchesRequest(acesProgram, neutralBinding),
             "switch: the ACES program is refused for the Neutral binding");

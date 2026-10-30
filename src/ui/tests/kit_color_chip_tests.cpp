@@ -61,7 +61,7 @@ void testReferenceColourRequiresConverter(Expectations& expectations) {
     expectations.expect(chip.color() == reference && changed.empty(),
                         "pending conversion refuses display edits to a reference chip");
     expectations.expect(!reference.toQColor().isValid() && reference.toHex(false).isEmpty(),
-                        "reference colours cannot be painted or formatted as display values");
+                        "reference colors cannot be painted or formatted as display values");
 }
 
 void testChipCarriesItsColor(Expectations& expectations) {

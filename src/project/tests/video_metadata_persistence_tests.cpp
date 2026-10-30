@@ -163,17 +163,17 @@ void videoColourDefaultMigration() {
         auto draft = document.draft(document.snapshot());
         auto* asset = draft.project().findAsset(AssetId::fromRaw(1));
         if (asset == nullptr)
-            throw std::logic_error("video colour default asset");
+            throw std::logic_error("video color default asset");
         asset->interpretation.inputColorSpaceId = explicitId;
         if (!document.commit(document.snapshot().revision(), std::move(draft)).committed())
-            throw std::logic_error("video colour default commit");
+            throw std::logic_error("video color default commit");
         auto text = encode(document);
         const auto current = encode(document);
         text = replaceRegex(text, R"("minor": 29(\s*\}))", "\"minor\": 27$1");
         stripExportQueueV1_29(text);
         auto operation = memory();
         auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
-        expect(static_cast<bool>(parsed), "1.27 video colour fixture parses");
+        expect(static_cast<bool>(parsed), "1.27 video color fixture parses");
         if (!parsed)
             continue;
         const auto older = decodeDocumentEnvelope(parsed.document()->root());
@@ -186,9 +186,9 @@ void videoColourDefaultMigration() {
         const auto upgraded = decodeDocumentEnvelope(*migrated.migratedRoot());
         expect(older && upgraded && *older.value() == *upgraded.value() &&
                    upgraded.value()->assets.front().interpretation.inputColorSpaceId == explicitId,
-               "the migrated video asset keeps its Auto or explicit input colour exactly");
+               "the migrated video asset keeps its Auto or explicit input color exactly");
         auto reparsed = parseStrictJsonDom(std::as_bytes(std::span(current)), {}, operation);
-        expect(static_cast<bool>(reparsed), "the 1.29 video colour document parses");
+        expect(static_cast<bool>(reparsed), "the 1.29 video color document parses");
         if (!reparsed)
             continue;
         const auto saved = decodeDocumentEnvelope(reparsed.document()->root());

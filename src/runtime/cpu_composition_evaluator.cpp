@@ -1975,7 +1975,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
     if (!capturedColor)
         return EvaluationResult::failed(
             diagnostic(EvaluationDiagnosticCode::AllocationFailure,
-                       "Evaluation colour intent could not be captured"));
+                       "Evaluation color intent could not be captured"));
     request.colorIntent = *capturedColor;
     // CACHE-1 separates two bypasses that used to share one pointer. `request.bypassOperationCache`
     // is the explicit evaluation bypass: it disables DERIVED operation memoization and the

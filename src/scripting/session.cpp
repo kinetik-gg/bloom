@@ -173,7 +173,7 @@ Session::setColorSettings(const std::string_view config,
                 std::nullopt};
     auto current = renderSourceSnapshot().colorSettings;
     if (!current)
-        return {"unavailable", "This session has no project colour settings", std::nullopt};
+        return {"unavailable", "This session has no project color settings", std::nullopt};
     auto resolved =
         host::resolveProjectColorSettings(*current, *choice, std::move(workingColorSpaceId));
     if (!resolved.settings)
@@ -183,19 +183,19 @@ Session::setColorSettings(const std::string_view config,
     // server's McpLiveUiPort::setColorSettings.
     if (binding_)
         return {"unavailable",
-                "Change the colour settings with Project Settings > Colour in this window",
+                "Change the color settings with Project Settings > Color in this window",
                 current};
     const auto status = session_->setColorSettings(*resolved.settings);
     const auto after = renderSourceSnapshot().colorSettings;
     switch (status) {
     case host::ProjectSessionColorSettingsStatus::Updated:
-        return {"updated", "The project colour settings changed", after};
+        return {"updated", "The project color settings changed", after};
     case host::ProjectSessionColorSettingsStatus::NoChange:
-        return {"no-change", "The project already uses these colour settings", after};
+        return {"no-change", "The project already uses these color settings", after};
     case host::ProjectSessionColorSettingsStatus::ReadOnly:
         return {"read-only", "The project is read-only", after};
     case host::ProjectSessionColorSettingsStatus::InvalidSettings:
-        return {"invalid-settings", "The colour settings are not valid", after};
+        return {"invalid-settings", "The color settings are not valid", after};
     case host::ProjectSessionColorSettingsStatus::InvalidSession:
         break;
     }

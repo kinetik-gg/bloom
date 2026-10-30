@@ -192,13 +192,13 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
     const auto initialInterpretation = asset->interpretation;
     const auto initialColorIntent = runtime::captureEvaluationColorIntent(session_.colorIntent());
     if (!initialColorIntent) {
-        emit session_.commandRejected(tr("The project colour configuration is unavailable."));
+        emit session_.commandRejected(tr("The project color configuration is unavailable."));
         return;
     }
     // Issue #381 (Interpret Footage) will replace this dialog; it stays a minimal kit port.
     auto check = std::make_shared<ProjectChangeCheck>(session_);
     auto* dialog =
-        new kit::KDialog(tr("Input Colour — %1").arg(QString::fromStdString(asset->name)),
+        new kit::KDialog(tr("Input Color — %1").arg(QString::fromStdString(asset->name)),
                          QStringLiteral("assetsInputColorDialog"), *this);
     auto* explanation = new kit::KLabel(
         tr("Choose how this asset's pixels are interpreted. A source node can override this "
@@ -244,7 +244,7 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
         const QSignalBlocker blocked(selector);
         selector->clearItems();
         selector->addItem(tr("Automatic (from media tags)"), QStringLiteral("auto"));
-        selector->addItem(tr("Raw data (no colour conversion)"), QStringLiteral("raw"));
+        selector->addItem(tr("Raw data (no color conversion)"), QStringLiteral("raw"));
         selector->addItem(tr("Legacy sRGB"), QStringLiteral("srgb"));
         selector->addItem(tr("Legacy Linear"), QStringLiteral("linear"));
         if (const auto* spaces = guardedController->inputColorSpaces()) {
@@ -258,11 +258,11 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
                 selector->addItem(family.isEmpty() ? name : family + QStringLiteral(" / ") + name,
                                   QStringLiteral("id:") + name);
             }
-            status->setText(tr("OCIO colour spaces from the selected project configuration."));
+            status->setText(tr("OCIO color spaces from the selected project configuration."));
         } else if (!guardedController->inputColorCatalogDiagnostic().isEmpty()) {
             status->setText(guardedController->inputColorCatalogDiagnostic());
         } else {
-            status->setText(tr("Preparing OCIO colour spaces…"));
+            status->setText(tr("Preparing OCIO color spaces…"));
         }
         if (selector->findData(selected) < 0 && selected.startsWith(QStringLiteral("id:"))) {
             selector->addItem(tr("Current space unavailable: %1").arg(selected.mid(3)), selected);
@@ -286,8 +286,8 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
     };
     dialog->setValidator([stale]() -> std::optional<kit::KRefusal> {
         if (stale())
-            return kit::KRefusal{nullptr, tr("This asset or its colour configuration changed "
-                                             "while choosing input colour. Cancel and open the "
+            return kit::KRefusal{nullptr, tr("This asset or its color configuration changed "
+                                             "while choosing input color. Cancel and open the "
                                              "picker again.")};
         return std::nullopt;
     });
@@ -315,13 +315,13 @@ void AssetsEditor::editInputColor(const document::AssetId id) {
                 guardedController ? guardedController->inputColorSpaces() : nullptr;
             if (!spaces || std::ranges::none_of(
                                *spaces, [&](const auto& space) { return space.id == inputId; })) {
-                emit session->commandRejected(tr("That OCIO colour space is unavailable. Reopen "
+                emit session->commandRejected(tr("That OCIO color space is unavailable. Reopen "
                                                  "the picker after the configuration is ready."));
                 return;
             }
         } else if (choice != QStringLiteral("auto"))
             return;
-        commands::Transaction transaction("Set Asset Input Colour", session->snapshot().revision());
+        commands::Transaction transaction("Set Asset Input Color", session->snapshot().revision());
         transaction.emplace<commands::SetAssetInputColor>(id, legacy, std::move(inputId));
         (void)session->executeTransaction(std::move(transaction));
     });

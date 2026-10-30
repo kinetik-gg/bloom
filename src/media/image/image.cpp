@@ -174,7 +174,7 @@ applyInputProcessor(const std::shared_ptr<const render::Rgba32fImage>& image,
         }
         if (!processor->apply(row))
             return {{},
-                    "Input colour conversion failed",
+                    "Input color conversion failed",
                     false,
                     ImageDiagnosticCode::ColorSpaceUnavailable};
         auto outputRow =
@@ -188,7 +188,7 @@ applyInputProcessor(const std::shared_ptr<const render::Rgba32fImage>& image,
                 sample[0] * sample[3], sample[1] * sample[3], sample[2] * sample[3], sample[3]);
             if (!output)
                 return {{},
-                        "Input colour conversion produced an invalid pixel",
+                        "Input color conversion produced an invalid pixel",
                         false,
                         ImageDiagnosticCode::ColorSpaceUnavailable};
             (*outputRow.value())[x] = *output.value();
@@ -197,7 +197,7 @@ applyInputProcessor(const std::shared_ptr<const render::Rgba32fImage>& image,
     auto output = std::move(*builder.value()).freeze();
     if (!output)
         return {{},
-                "Input colour conversion produced an invalid image",
+                "Input color conversion produced an invalid image",
                 false,
                 ImageDiagnosticCode::ColorSpaceUnavailable};
     return {std::make_shared<const render::Rgba32fImage>(std::move(*output.value())), {}};
@@ -442,7 +442,7 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
                     resolved.resolved()->processColorSpaceId());
                 if (!prepared)
                     return {{},
-                            "Input colour space is unavailable in the selected config",
+                            "Input color space is unavailable in the selected config",
                             false,
                             ImageDiagnosticCode::ColorSpaceUnavailable};
                 processor = std::move(prepared).takeProcessor();
@@ -518,7 +518,7 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
                     resolved.resolved()->processColorSpaceId());
                 if (!prepared)
                     return {{},
-                            "Input colour space is unavailable in the selected config",
+                            "Input color space is unavailable in the selected config",
                             false,
                             ImageDiagnosticCode::ColorSpaceUnavailable};
                 processor = std::move(prepared).takeProcessor();
@@ -526,7 +526,7 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
         }
         if (convert && !processor && !compatibilityProcessor)
             return {{},
-                    "Input colour processor could not be prepared",
+                    "Input color processor could not be prepared",
                     false,
                     ImageDiagnosticCode::ColorSpaceUnavailable};
         const auto window = render::ImageWindow::create(0, 0, width, height);
@@ -558,7 +558,7 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
             if (convert && ((processor && !processor->apply(row)) ||
                             (compatibilityProcessor && !compatibilityProcessor->apply(row))))
                 return {{},
-                        "Input colour conversion failed",
+                        "Input color conversion failed",
                         false,
                         ImageDiagnosticCode::ColorSpaceUnavailable};
             auto outputRow = builder.value()->row(static_cast<std::int64_t>(y));
@@ -567,7 +567,7 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
                 auto pixel = render::Rgba32f::fromPremultiplied(
                     sample[0] * sample[3], sample[1] * sample[3], sample[2] * sample[3], sample[3]);
                 if (!pixel)
-                    return {{}, "Input colour conversion produced an invalid pixel"};
+                    return {{}, "Input color conversion produced an invalid pixel"};
                 (*outputRow.value())[static_cast<std::size_t>(x)] = *pixel.value();
             }
             if (progress)

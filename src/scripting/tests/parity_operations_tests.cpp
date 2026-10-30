@@ -407,7 +407,7 @@ void colorSettings() {
                neutral.settings->processColorSpaceId == "lin_rec709_scene",
            "neutral takes its only working space");
     expect(fixture.session->snapshot().revision() == revision,
-           "colour settings are not a document edit");
+           "color settings are not a document edit");
 }
 
 void descriptions() {

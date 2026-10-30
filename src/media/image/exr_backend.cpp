@@ -576,14 +576,14 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
                 if (!prepared)
                     return failure<std::shared_ptr<const render::Rgba32fImage>>(
                         ImageDiagnosticCode::ColorSpaceUnavailable,
-                        "Input colour space is unavailable in the selected config");
+                        "Input color space is unavailable in the selected config");
                 processor = std::move(prepared).takeProcessor();
             }
         }
         if (convert && !processor && !compatibilityProcessor)
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
                 ImageDiagnosticCode::ColorSpaceUnavailable,
-                "Input colour processor could not be prepared");
+                "Input color processor could not be prepared");
 
         const auto bandSamples =
             static_cast<std::size_t>(chunkRows) * static_cast<std::size_t>(width);
@@ -674,7 +674,7 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
                                 (compatibilityProcessor && !compatibilityProcessor->apply(row))))
                     return failure<std::shared_ptr<const render::Rgba32fImage>>(
                         ImageDiagnosticCode::ColorSpaceUnavailable,
-                        "Input colour conversion failed");
+                        "Input color conversion failed");
                 auto outputRow = builder.value()->row(
                     static_cast<std::int64_t>(layout->dataWindow.min.y) +
                     static_cast<std::int64_t>(first) + static_cast<std::int64_t>(local));
@@ -767,7 +767,7 @@ decodeExrParts(Imf::MultiPartInputFile& input, const ImageInterpretation& interp
                                 "The selected OpenEXR layer is not present");
     if (!layout->colour)
         return failure<Decoded>(ImageDiagnosticCode::NoColourChannels,
-                                "No colour layer — use Channels");
+                                "No color layer — use Channels");
     Imf::InputPart part(input, *index);
     return decodeExrInput(part, *layout, interpretation, std::move(processor), cancel, progress,
                           pixelBudget);

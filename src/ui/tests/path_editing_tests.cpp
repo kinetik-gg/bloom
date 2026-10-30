@@ -187,10 +187,10 @@ int main() {
                "Auto handles are (next - previous) / 6 either side");
         pe::moveAnchors(path, {2}, {0, 60});
         expect(near(*path.anchors[1].outHandle, {100 + 200.0 / 6.0, 10}),
-               "moving a neighbour recomputes the Auto anchor");
+               "moving a neighbor recomputes the Auto anchor");
         pe::moveAnchors(path, {0}, {0, -60});
         expect(near(*path.anchors[1].inHandle, {100 - 200.0 / 6.0, -20}),
-               "moving the other neighbour recomputes it too");
+               "moving the other neighbor recomputes it too");
     }
 
     // Adding a point on a segment keeps the shape.

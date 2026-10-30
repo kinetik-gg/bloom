@@ -53,7 +53,7 @@ Replace trial execution in search/menus with shared read-only eligibility over o
 
 Parent: #320. Depends on color-intent correctness slice.
 
-Add an undoable asset-level input interpretation control. Show effective precedence between source legacy Color Space and config Input colour space so a visible choice cannot silently do nothing. Prepare still/video thumbnails using a qualified display processor and cache its identity. Preflight named ACES handoff/review choices against the selected config before export.
+Add an undoable asset-level input interpretation control. Show effective precedence between source legacy Color Space and config Input color space so a visible choice cannot silently do nothing. Prepare still/video thumbnails using a qualified display processor and cache its identity. Preflight named ACES handoff/review choices against the selected config before export.
 
 Keep this as three sequential bounded slices: asset command+picker; thumbnail display processing; output capability-aware dialog. Tests cover asset/source override/invalidation, ACES thumbnail vs display output, unsupported presets and explicit diagnostics. External OCIO runtime support is separately planned, not enabled by selectors alone.
 

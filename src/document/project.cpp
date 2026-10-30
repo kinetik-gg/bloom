@@ -443,7 +443,7 @@ ValidationResult Composition::validate() const {
         result.append("workingColorSpaceId", validateWorkingColorSpaceId(*workingColorSpaceId_));
     if (!backgroundColor_.isValid())
         result.add(ValidationCode::InvalidValue, "backgroundColor",
-                   "Invalid composition background colour");
+                   "Invalid composition background color");
     if (!safeAreas_.isValid())
         result.add(ValidationCode::InvalidValue, "safeAreas", "Invalid composition safe areas");
     for (const auto& layer : graph().layerOutputs()) {

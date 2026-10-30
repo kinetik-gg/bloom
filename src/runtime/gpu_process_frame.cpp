@@ -780,7 +780,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
     const auto capturedColor = captureEvaluationColorIntent(request.colorIntent);
     if (!capturedColor)
         return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BadAllocation,
-                       "GPU evaluation colour intent could not be captured");
+                       "GPU evaluation color intent could not be captured");
     request.colorIntent = *capturedColor;
     // Reentrancy: a progress callback runs on the CALLING CPU worker (scene preparation) or, for
     // the native-phase event, on the owner. Reject a nested evaluate() from either the same calling

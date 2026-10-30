@@ -92,7 +92,7 @@ void licenseTextMatchesCiscoFixture() {
     const std::string expected((std::istreambuf_iterator<char>(file)),
                                std::istreambuf_iterator<char>());
     test::check(expected == OpenH264Runtime::binaryLicenseText(),
-                "embedded Cisco licence text matches the downloaded terms");
+                "embedded Cisco license text matches the downloaded terms");
 }
 
 // Consent is recorded once in Bloom.conf, however often Bloom installs, and earlier duplicated

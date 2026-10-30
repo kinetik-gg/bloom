@@ -229,7 +229,7 @@ int run(int argc, char** argv) {
                   << " | " << colour.toStdString() << '\n';
         require(colour.count(QStringLiteral("assumed")) == 1 && !colour.contains("lin_rec709") &&
                     !colour.contains("srgb_rec709"),
-                "the video header names its colour plainly and states the note once");
+                "the video header names its color plainly and states the note once");
         require(headerLine(*assets, "assetsSelectionKind").contains(" frames), "),
                 "the video header shows timecode with the frame count");
         capture(QStringLiteral("01-video-header"), *window);

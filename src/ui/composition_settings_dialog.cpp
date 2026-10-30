@@ -270,7 +270,7 @@ class ResizeAnchorGrid final : public kit::KAnchorGrid {
     }
     [[nodiscard]] static QString anchorName(const int index) {
         static constexpr std::array<const char*, 9> kNames{"Top Left",    "Top",    "Top Right",
-                                                           "Left",        "Centre", "Right",
+                                                           "Left",        "Center", "Right",
                                                            "Bottom Left", "Bottom", "Bottom Right"};
         return CompositionSettingsDialog::tr("Existing layers keep their place relative to: %1")
             .arg(CompositionSettingsDialog::tr(kNames[static_cast<std::size_t>(index)]));
@@ -667,7 +667,7 @@ void CompositionSettingsDialog::buildBasic(kit::KForm& form, kit::KForm& advance
 
     background_ = new kit::KColorChip(body);
     background_->setObjectName(QStringLiteral("newCompositionBackgroundColor"));
-    background_->setAccessibleName(tr("Background Colour"));
+    background_->setAccessibleName(tr("Background Color"));
     // The same words on the chip and its hex: a pointer over either gets the render rule.
     const QString backgroundTip =
         tr("Shown in the Viewer behind the composition. Renders keep transparency, like After "
@@ -677,7 +677,7 @@ void CompositionSettingsDialog::buildBasic(kit::KForm& form, kit::KForm& advance
     backgroundHex_->setObjectName(QStringLiteral("compositionSettingsBackgroundHex"));
     backgroundHex_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     backgroundHex_->setToolTip(backgroundTip);
-    form.addRow(tr("Background Colour"), row(body, {background_, backgroundHex_}));
+    form.addRow(tr("Background Color"), row(body, {background_, backgroundHex_}));
     connect(background_, &kit::KColorChip::colorChanged, this, [this](const kit::KColor& color) {
         backgroundHex_->setText(color.toHex(false).toUpper());
         if (updating_)
@@ -693,8 +693,8 @@ void CompositionSettingsDialog::buildAdvanced(kit::KForm& form) {
 
     workingSpace_ = new kit::KDropdown(body);
     workingSpace_->setObjectName(QStringLiteral("compositionSettingsWorkingSpace"));
-    workingSpace_->setAccessibleName(tr("Working colour space"));
-    form.addRow(tr("Working Colour Space"), workingSpace_);
+    workingSpace_->setAccessibleName(tr("Working color space"));
+    form.addRow(tr("Working Color Space"), workingSpace_);
 
     anchorGrid_ = new ResizeAnchorGrid(body);
     anchorGrid_->setAccessibleName(tr("Resize Anchor"));

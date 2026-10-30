@@ -847,7 +847,7 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
 
     if (style_.alignment && (*style_.alignment < 0 || *style_.alignment > 2))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Text alignment must be left, centre or right");
+                                         "Text alignment must be left, center or right");
     std::optional<document::AssetId> fontAssetId;
     if (style_.font) {
         if (style_.font->kind != document::AssetKind::Font)
@@ -938,7 +938,7 @@ OperationResult AddComposition::apply(document::Draft& draft) const {
     }
     if (!background_.isValid())
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Invalid composition background colour");
+                                         "Invalid composition background color");
     const auto format = document::CompositionFormat::create(format_.width(), format_.height(),
                                                             format_.pixelAspect(), frameRate_);
     if (!format) {

@@ -501,8 +501,8 @@ void PropertiesEditor::buildDocumentSection(QVBoxLayout* layout) {
 
     documentBackground_ = new kit::KColorChip(body);
     documentBackground_->setObjectName(QStringLiteral("compositionBackgroundColor"));
-    documentBackground_->setAccessibleName(tr("Background Colour"));
-    addRow(rows, body, makeRowLabel(tr("Background Colour"), body), nullptr, documentBackground_);
+    documentBackground_->setAccessibleName(tr("Background Color"));
+    addRow(rows, body, makeRowLabel(tr("Background Color"), body), nullptr, documentBackground_);
     connect(documentBackground_, &kit::KColorChip::colorChanged, this,
             [this](const kit::KColor& color) {
                 commands::Transaction transaction("Set Composition Background",

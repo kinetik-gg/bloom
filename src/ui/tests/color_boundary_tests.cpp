@@ -90,7 +90,7 @@ void boundaryPins() {
     if (!format)
         std::abort();
     auto project =
-        document::makeNewProject("Colour", "Main", core::RationalTime::fromInteger(10), *format);
+        document::makeNewProject("Color", "Main", core::RationalTime::fromInteger(10), *format);
     const auto id = project.initialCompositionId;
     document::Document document(std::move(project.project));
     commands::CommandStack stack(document);
@@ -212,7 +212,7 @@ void shapeColorPin() {
     const auto format = document::CompositionFormat::create(4, 4);
     if (!format)
         std::abort();
-    auto project = document::makeNewProject("Shape Colour", "Main",
+    auto project = document::makeNewProject("Shape Color", "Main",
                                             core::RationalTime::fromInteger(10), *format);
     const auto id = project.initialCompositionId;
     document::Document document(std::move(project.project));
@@ -232,9 +232,9 @@ void shapeColorPin() {
     expect(waitUntil([&] { return static_cast<bool>(session.colorConverter()); }),
            "session converter prepares off-thread");
     expect(static_cast<bool>(session.colorConverter("bloom.shape.fill-color")),
-           "the shape source's fill-color schema is a recognized colour schema");
+           "the shape source's fill-color schema is a recognized color schema");
     expect(static_cast<bool>(session.colorConverter("bloom.shape.stroke-color")),
-           "the shape source's stroke-color schema is a recognized colour schema");
+           "the shape source's stroke-color schema is a recognized color schema");
 
     QWidget window;
     auto* layout = new QVBoxLayout(&window);
@@ -276,10 +276,10 @@ void shapeColorPin() {
            "the registry row's chip and red channel field are found");
 
     expect(shapeChip != nullptr && shapeChip->isEnabled(),
-           "the registry colour row's chip is enabled, exactly like the Solid row's");
+           "the registry color row's chip is enabled, exactly like the Solid row's");
     if (shapeChip != nullptr) {
         shapeChip->openPicker();
-        expect(shapeChip->isPickerOpen(), "the registry colour row's chip click opens the picker");
+        expect(shapeChip->isPickerOpen(), "the registry color row's chip click opens the picker");
         shapeChip->closePicker();
     }
     expect(shapeRed != nullptr && shapeRed->unit().isEmpty(),
@@ -301,7 +301,7 @@ void shapeColorPin() {
 
 void relativeArchiveIntentPin() {
     auto initial =
-        document::makeNewProject("Relative Colour", "Main", core::RationalTime::fromInteger(10));
+        document::makeNewProject("Relative Color", "Main", core::RationalTime::fromInteger(10));
     const auto compositionId = initial.initialCompositionId;
     document::Document authored(std::move(initial.project));
     commands::CommandStack stack(authored);
@@ -326,7 +326,7 @@ void workingSpaceConverterPin() {
     const auto format = document::CompositionFormat::create(4, 4);
     if (!format)
         std::abort();
-    auto project = document::makeNewProject("Working Colour", "Main",
+    auto project = document::makeNewProject("Working Color", "Main",
                                             core::RationalTime::fromInteger(10), *format);
     const auto id = project.initialCompositionId;
     document::Document document(std::move(project.project));
@@ -384,7 +384,7 @@ void workingSpaceConverterPin() {
                std::abs(p3->blue - redone->blue) < 1e-6F,
            "redo restores the override swatch transform");
 
-    auto replacement = document::makeNewProject("Rebound Colour", "Main",
+    auto replacement = document::makeNewProject("Rebound Color", "Main",
                                                 core::RationalTime::fromInteger(10), *format);
     const auto replacementId = replacement.initialCompositionId;
     document::Document replacementDocument(std::move(replacement.project));
@@ -406,7 +406,7 @@ void migrationPin() {
     commands::CommandStack stack(original);
     ui::CompositionSession session(original, stack, id);
     const core::Color4d oldNumbers{0.86, 0.04, 2.5, 0.75};
-    expect(session.addSolidLayer("Legacy solid", oldNumbers), "legacy colour fixture authored");
+    expect(session.addSolidLayer("Legacy solid", oldNumbers), "legacy color fixture authored");
     auto snapshot = original.snapshot();
     const auto settings =
         document::makeBloomNeutralColorSettingsV1(color::kBloomNeutralV1ConfigDigest);
@@ -480,7 +480,7 @@ void migrationPin() {
     ui::PropertiesEditor panel(reopened);
     expect(parameter && reopened.constantColorValue(parameter->id) == oldNumbers &&
                reopened.snapshot().revision() == revision && reopenedStack.size() == 0,
-           "migrated old document keeps every stored colour number; UI adds no command");
+           "migrated old document keeps every stored color number; UI adds no command");
 }
 void acesThumbnailDisplayPin() {
     const auto revision = color::ocioBuiltInContentRevision(

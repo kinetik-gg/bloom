@@ -86,7 +86,7 @@ with defaults, never implied.
 
 - Output is deterministic and independent of the process locale. `.` is the decimal separator
   whatever `LC_NUMERIC` says.
-- Negative `decimals` and `padWidth` mean zero. Nonnegative requests are honoured when their
+- Negative `decimals` and `padWidth` mean zero. Nonnegative requests are honored when their
   spelling fits the per-value and retained-output byte allowances. An unrepresentable precision or
   exhausted allowance produces the typed empty-string fallback and a node-scoped diagnostic;
   formatting never reports a shorter, successful answer.
@@ -118,7 +118,7 @@ it is known when the plan is built rather than delivered per frame.
 ## The Catalogue At A Glance
 
 Sixty-two node types, in five groups. Each group has its own section below with the full shape and
-the edge behaviour of every row.
+the edge behavior of every row.
 
 | Group | Count | Category | What it is for |
 | --- | --- | --- | --- |
@@ -154,7 +154,7 @@ carries no socket.
 | Node | Inputs | Outputs | Notes |
 | --- | --- | --- | --- |
 | Scalar To String | `value` Scalar, `decimals` Integer (2), `trimZeros` Boolean (false), `padWidth` Integer (0), `prefix` String, `suffix` String | `result` String | Fixed-point, then optional zero-trim, then zero-pad, then decoration. Non-finite prints as the empty number |
-| Integer To String | `value` Integer, `padWidth` Integer (0), `prefix` String, `suffix` String; selector `radix` (10) | `result` String | Radix 2/8/10/16 offered; any radix 2-36 the document carries is honoured. Digits above 9 are lowercase |
+| Integer To String | `value` Integer, `padWidth` Integer (0), `prefix` String, `suffix` String; selector `radix` (10) | `result` String | Radix 2/8/10/16 offered; any radix 2-36 the document carries is honored. Digits above 9 are lowercase |
 | Boolean To String | `value` Boolean, `trueText` String (`true`), `falseText` String (`false`) | `result` String | The labels are the artist's; nothing is capitalized for them |
 | Color To String | `color` Color, `includeAlpha` Boolean (false), `uppercase` Boolean (false) | `result` String | `#RRGGBB` or `#RRGGBBAA`. Channels are clamped into [0, 1] and rounded to nearest, ties away from zero |
 | Vector 2 To String | `vector` Vector2, `separator` String (`, `), `decimals` Integer (2) | `result` String | Components joined with the authored separator, each fixed-point |
@@ -240,7 +240,7 @@ Category `String`.
 | Trim | `text` String | `result` String | ASCII whitespace, both ends |
 | Case | `text` String; selector `mode` (Upper) | `result` String | Upper, Lower, Title. ASCII only |
 | Pad | `text` String, `width` Integer (0), `fill` String (space); selector `side` (Start) | `result` String | Width in scalars. The fill contributes its FIRST scalar only; an empty fill pads nothing |
-| Repeat | `text` String, `count` Integer (1) | `result` String | Negative counts mean zero; positive counts are honoured within the byte allowance. Empty text returns empty even for a huge count |
+| Repeat | `text` String, `count` Integer (1) | `result` String | Negative counts mean zero; positive counts are honored within the byte allowance. Empty text returns empty even for a huge count |
 | Contains | `text` String, `search` String, `caseSensitive` Boolean (true) | `result` Boolean | An empty search is contained |
 | Starts With | `text` String, `search` String, `caseSensitive` Boolean (true) | `result` Boolean | An empty search matches |
 | Ends With | `text` String, `search` String, `caseSensitive` Boolean (true) | `result` Boolean | An empty search matches |
@@ -304,7 +304,7 @@ conversions and the logic stayed in `Utilities`, because a predicate and a wire 
 | Rotate 2D | `vector` Vector2, `degrees` Scalar, `pivot` Vector2 | `result` Vector2 | Counter-clockwise in a Y-up frame, about the authored pivot |
 | Polar To Cartesian | `radius` Scalar (1), `degrees` Scalar | `result` Vector2 | |
 | Cartesian To Polar | `vector` Vector2 | `radius` Scalar, `angle` Scalar | Angle in degrees over (-180, 180]. The ORIGIN answers 0, because it has no direction |
-| Separate HSV | `color` Color | `hue`, `saturation`, `value`, `alpha` Scalars | Hue in degrees over [0, 360). A grey has no hue and answers 0 |
+| Separate HSV | `color` Color | `hue`, `saturation`, `value`, `alpha` Scalars | Hue in degrees over [0, 360). A gray has no hue and answers 0 |
 | Combine HSV | `hue`, `saturation`, `value` (1), `alpha` (1) Scalars | `result` Color | Hue WRAPS; saturation is clamped into [0, 1] |
 | Hue Shift | `color` Color, `degrees` Scalar | `result` Color | Hue is periodic, so the shift wraps rather than clamping |
 | Luminance | `color` Color | `result` Scalar | Rec.709 weights through `bloom/core/color.hpp`, never retyped in a kernel. Alpha takes no part |
@@ -376,7 +376,7 @@ image-producing operation and publishes four ordinary Vector2 outputs in composi
 - `size`: the evaluated output width and height;
 - `origin`: the evaluated output left and top edge;
 - `anchor`: the authored/evaluated anchor carried by the operation; and
-- `center`: the evaluated output rectangle centre.
+- `center`: the evaluated output rectangle center.
 
 The compiler lowers the connected image operation to `CompiledBoundsReadout{operationIndex}`. The
 evaluator runs the ordinary value pass first, evaluates the image plan and its memoised bounds, then
@@ -408,17 +408,17 @@ The current UI category order and normalized family mapping are owned by [UI gra
 Value-family normalization is a presentation projection. COLOR-3 adds the non-persisted
 `NodeCategory::Color` for image effects.
 
-## Colour Image Effects
+## Color Image Effects
 
 These definitions operate on images and use `NodeLoweringKind::ImageEffect`, independently of the
-Color value nodes. They appear under Add → Colour after Compositing.
+Color value nodes. They appear under Add → Color after Compositing.
 
 | Node | Image ports | Constant parameters | Behavior |
 | --- | --- | --- | --- |
-| OCIO Colour Space Transform (`bloom.ocio-colour-space-transform`) | `input` → `image` | `from`, `to` (String, empty working space); `bypass` (false) | Exact-config non-data source/destination conversion |
+| OCIO Color Space Transform (`bloom.ocio-colour-space-transform`) | `input` → `image` | `from`, `to` (String, empty working space); `bypass` (false) | Exact-config non-data source/destination conversion |
 | OCIO File Transform (`bloom.ocio-file-transform`) | `input` → `image` | `lut` (Integer asset id, 0 unset); `interpolation` (Linear/Tetrahedral/Best, Linear default); `direction` (Forward/Inverse, Forward default); `processSpace` (String, empty working space); `bypass`, `look` (false) | Working → process space → LUT → working; digest-verified external LUT |
 
 Missing or refused processing yields a typed warning and the unchanged input image. The look flag
 marks a File Transform for request-level bypass; it does not alter its saved wiring. See
-[colour management](color-management.md#show-look-nodes-and-lut-assets) for limits and platform
+[color management](color-management.md#show-look-nodes-and-lut-assets) for limits and platform
 fallbacks, and [image effects](layer-graph-model.md#image-effects) for alpha handling.

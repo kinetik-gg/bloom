@@ -507,7 +507,7 @@ void PropertiesEditor::addCryptomatteRows(const document::NodeRecord& node,
         toggle->setObjectName("propertiesCryptomattePreview");
         toggle->setCheckable(true);
         toggle->setAccessibleName(name);
-        toggle->setToolTip(tr("Show every object in its own colour in the Viewer"));
+        toggle->setToolTip(tr("Show every object in its own color in the Viewer"));
         auto* row = new kit::KPropertyRow(label, nullptr, {toggle}, section->body());
         row->setProperty("rowLabel", name);
         section->bodyLayout()->addWidget(row);

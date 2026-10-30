@@ -1288,9 +1288,9 @@ QString ProjectHost::videoColourDefaultNotice(const host::SessionOpenResult& res
         return {};
     const auto videos = affected == 1 ? tr("1 video") : tr("%1 videos").arg(affected);
     return tr("This project was saved by an earlier version of Bloom. Video without a chosen input "
-              "colour now looks the way video players show it, so it is less pale than before. "
+              "color now looks the way video players show it, so it is less pale than before. "
               "This affects %1 in this project. To interpret a video differently, choose its "
-              "input colour in Assets → Input Colour.")
+              "input color in Assets → Input Color.")
         .arg(videos);
 }
 

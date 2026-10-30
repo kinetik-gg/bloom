@@ -146,7 +146,7 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
             timer->stop();
             timer->deleteLater();
             if (!ready)
-                reportUnavailable(tr("Colour conversion unavailable"));
+                reportUnavailable(tr("Color conversion unavailable"));
             Q_EMIT snapshotChanged();
             // The qualified display transform landing changes pixels without changing the document
             // revision, so it is an evaluation transition rather than a live-document edit.
@@ -224,14 +224,14 @@ bool CompositionSession::setWorkingColorSpaceOverride(std::optional<std::string>
     }
     if (colorSpaceId.has_value()) {
         if (!document::validateWorkingColorSpaceId(*colorSpaceId).ok()) {
-            reportUnavailable(QStringLiteral("Invalid working colour space id"));
+            reportUnavailable(QStringLiteral("Invalid working color space id"));
             return false;
         }
         const auto* builtIn =
             std::get_if<document::BuiltInOcioConfigLocator>(&colorSettings_.ocioConfig.locator);
         if (builtIn == nullptr || colorSettings_.ocioConfig.expectedRevision.algorithm !=
                                       document::OcioRevisionAlgorithm::Sha256) {
-            reportUnavailable(QStringLiteral("The selected OCIO configuration needs its colour "
+            reportUnavailable(QStringLiteral("The selected OCIO configuration needs its color "
                                              "helper before this override can be used"));
             return false;
         }
@@ -239,7 +239,7 @@ bool CompositionSession::setWorkingColorSpaceOverride(std::optional<std::string>
             color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
             colorSettings_.ocioConfig.expectedRevision.digest, *colorSpaceId);
         if (!resolution.ready()) {
-            reportUnavailable(QStringLiteral("The selected colour space is not a scene-linear "
+            reportUnavailable(QStringLiteral("The selected color space is not a scene-linear "
                                              "space in this configuration"));
             return false;
         }

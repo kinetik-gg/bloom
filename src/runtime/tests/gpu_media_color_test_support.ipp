@@ -118,7 +118,7 @@ firstResample(const PreparedGpuScene& scene) {
     const auto* upload = firstUpload(*prepared.scene);
     const auto* ocio = firstOcio(*prepared.scene);
     expectations.expect(upload != nullptr && ocio != nullptr,
-                        label + ": emits a raw upload and a real OCIO colour command");
+                        label + ": emits a raw upload and a real OCIO color command");
     if (upload == nullptr || ocio == nullptr) {
         return false;
     }
@@ -168,7 +168,7 @@ firstResample(const PreparedGpuScene& scene) {
                         label + ": the native descriptor matches the scene");
     const auto counters = executor.counters();
     expectations.expect(counters.ocioEffectDispatches >= 1,
-                        label + ": the colour conversion was a dispatched GPU OCIO effect");
+                        label + ": the color conversion was a dispatched GPU OCIO effect");
     const auto readback = bloom::render::readbackResidentImage(*run.image, kReadbackBudget);
     expectations.expect(readback.hasValue(), label + ": the output reads back for the oracle");
     if (!readback) {
@@ -200,7 +200,7 @@ firstResample(const PreparedGpuScene& scene) {
     bool release = false;
     CancellationToken token;
     auto submission = scheduler.submit<void>(
-        TaskRequest("gpu media colour cancel token",
+        TaskRequest("gpu media color cancel token",
                     {.kind = TaskOwnerKind::Composition, .id = TaskOwnerId::fromRaw(88)}),
         [&](TaskContext& context) {
             {

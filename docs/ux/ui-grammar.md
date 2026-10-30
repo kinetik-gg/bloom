@@ -31,11 +31,11 @@ summary strip's 64 × 40 Field well (`Cell::Strip`), showing a worker-decoded pr
 without changing its aspect ratio; it never loads anything.
 The panel switcher is the icon variant of **KDropdown**, with the same height, styling,
 interaction and popup. Menus are created only through `kit::makeMenu`. A popup is a
-`KPopupWindow` and a list in one is a `KPopupList` (dropdowns, the Add search, the colour picker);
+`KPopupWindow` and a list in one is a `KPopupList` (dropdowns, the Add search, the color picker);
 no surface positions, shadows or dismisses a popup of its own.
 Dialogs are `KDialog` and its forms: `kit::confirm`, `kit::inform`, `kit::promptText`,
 `kit::promptRange`, `kit::chooseFile` and the `KTaskDialog` progress-then-summary modal (see
-"Dialogs" below). The contextual bar under the menu bar is the `ContextBar`; the one active tool
+"Dialogs" below). The toolbar under the menu bar is the `ContextBar`; the one active tool
 lives in the `ToolController`.
 Constructing QToolButton, QPushButton, QComboBox, QLineEdit, QCheckBox, QSlider,
 QLabel, QMenu, QPlainTextEdit or QTextEdit outside the kit is a quality violation, and so is using
@@ -92,7 +92,7 @@ panel header maximize and full screen, the Timeline and Assets footer buttons, d
 buttons), `KIconToggle`, every `KDropdown` closed field (the panel switcher, the composition and
 layer pickers, Fit, Resolution, Channel, Display / View, the Timeline row's Blending, Parent and
 Matte, Properties and node-card dropdowns, dialog dropdowns), the frame of a square `KColorChip`
-(the colour itself is the swatch inside it), the `KSection` header buttons, and the
+(the color itself is the swatch inside it), the `KSection` header buttons, and the
 `KRadioGroup` segmented bar, whose segments share the plate, hover rung and Selected plate.
 
 The exceptions are deliberate and closed:
@@ -109,14 +109,14 @@ header icon buttons and dropdown fields this look replaced.
 
 Every control in a row is one `Size::Control` (26) tall at every device pixel ratio and paints
 its body in `kit::controlBody()`: `controlBounds()`, `Spacing::ControlInset` in on every side, so
-every painted body is `ToggleCell` (24) tall and shares its row's vertical centre. Icon buttons
-and toggles are `Control` squares, the context bar's tools included. A dense strip whose geometry
+every painted body is `ToggleCell` (24) tall and shares its row's vertical center. Icon buttons
+and toggles are `Control` squares, the toolbar's tools included. A dense strip whose geometry
 is a fixed cell pitch (the timeline's layer switches) uses `ToggleCell` cells instead, which are already
 exactly that body; that is the one compact token, and no call site sizes a control of its own.
 `KButton`'s Compact size is the same height with tighter padding, and `KDropdown::ControlSize::Dense`
 likewise. `control_geometry_tests.cpp` walks every chrome row, panel header and row of the
-main-window fixture (the context bar, Viewer, Timeline, Nodes, Assets, Properties) and holds both rules, and checks
-that every kind's resting colours come from the one recipe.
+main-window fixture (the toolbar, Viewer, Timeline, Nodes, Assets, Properties) and holds both rules, and checks
+that every kind's resting colors come from the one recipe.
 
 ## Rasterization and type
 
@@ -139,9 +139,9 @@ Panels return `EditorChromeSpec`: header switcher, selectors, menus and trailing
 footer leading controls, transport, readouts and trailing controls. `EditorArea` owns their
 layout and one measure-only overflow algorithm, with hysteresis and a stable minimum. A row is
 either a menu-collapse row (menus fold into a "…" button once the row, with any elidable dropdown
-at its `setElideFloor` width, no longer fits) or a priority row: controls in Leading, Centre
-(`beginCentre`) and Trailing groups separated by `Spacing::ChromeGroupGap` (12), the Centre group
-centred while it fits, and controls that carry a collapse rank (`setCollapse`) or a compact form
+at its `setElideFloor` width, no longer fits) or a priority row: controls in Leading, Center
+(`beginCentre`) and Trailing groups separated by `Spacing::ChromeGroupGap` (12), the Center group
+centered while it fits, and controls that carry a collapse rank (`setCollapse`) or a compact form
 (`setCompactForm`) giving way in rank order into an icon overflow button whose menu offers each
 collapsed control as its own action or submenu. The row publishes `collapseThreshold` (the width
 everything needs), `collapsed` and `collapseLevel`; a control that changes width re-lays the row
@@ -181,7 +181,7 @@ yet." and how else to add one. A note (`exportPlatformNote`) says where export c
 `exportStartNote` says what a Start All started and what waits for the artist's OK.
 
 A job row (`exportJobRow`) is a `kit::KRow` header on the Assets row recipe (Size::ListRow, hover,
-selection ring): caret, label colour chip, the **Include in Start All** switch, name (edited in
+selection ring): caret, label color chip, the **Include in Start All** switch, name (edited in
 place with `kit::KInlineEdit`, by double click or F2), composition, range chip, status, a fixed
 `KProgressBar` with the frame count and time left while it runs, **one job button** and the
 overflow menu. The job button is Secondary and shows the one verb that fits the state: Start,
@@ -195,7 +195,7 @@ the Properties label column across the Render group and every output.
 An output row has its own header (caret, switch, format, where it saves, state, menu) over a body
 with **Format**, **Save to** (a `KPathField` with browse inside it and a small Secondary **?**
 for the name tokens), **If a file is there**, a folded **Quality** group with only the settings of
-the chosen format (Colour space, Display and View are `KDropdown`s of what the project offers)
+the chosen format (Color space, Display and View are `KDropdown`s of what the project offers)
 and **After render**. The question "A file called X is already in Y." is an inline row at the top
 of the output with **Replace it** and **Choose another name** (both Secondary), and the job opens
 itself when it asks; Start All never opens a second dialog.
@@ -208,28 +208,28 @@ cannot run is a visible Muted line in the job or output it concerns; the tooltip
 Failure lines never carry stage, code or facet numbers: the raw text is behind **Show details** and
 **Copy details**.
 
-## Status bar, context bar and tools
+## Status bar, toolbar and tools
 
 The existing native window frame and application menu bar remain unchanged. No branding,
 workspace tabs or custom title bar are part of this grammar revision.
 
-`WindowStatusBar` composes a single `Control`-height `UiSmall` row: version, colour state,
+`WindowStatusBar` composes a single `Control`-height `UiSmall` row: version, color state,
 readiness, dropped frames when measured, cache when populated, and transient/persistent messages.
 The cache cell combines RAM-preview frames with operation-cache hits, misses, retained bytes and
 effective budgets; its tooltip names those two cache accounts when the compact cell is dense, and
 states the rule the budgets came from: Bloom reserves `max(8 GiB, 40%)` of memory for the rest of
 the machine and its default caches never exceed half of physical memory. The tooltip explains where
 a number came from; it never becomes a second place to read the numbers themselves.
-Colour state is tinted text with no filled badge. It remains visible on every central page,
-and reports unavailable colour state when no preview controller exists. Readiness and cache
-use muted ink; a colour-state failure remains explicit. `UiSmall` preserves mixed case with
+Color state is tinted text with no filled badge. It remains visible on every central page,
+and reports unavailable color state when no preview controller exists. Readiness and cache
+use muted ink; a color-state failure remains explicit. `UiSmall` preserves mixed case with
 natural tracking. `KSurface` owns neutral surface backgrounds.
 
-**The context bar** ([ADR 0031](../decisions/0031-contextual-tool-bar.md)) is the second fixed
+**The toolbar** (the contextual bar of [ADR 0031](../decisions/0031-contextual-tool-bar.md)) is the second fixed
 surface: one `ContextBarHeight` (32) row directly under the menu bar, a `Control` row inside
 `ChromePadding`, on `Surface` with one `Border` hairline below it. It is a row of the window's
 central column, not a `QToolBar`, so it cannot be docked, floated or moved and the native macOS
-menu bar is untouched; Window > Context Bar hides it, and that choice persists with the workspace
+menu bar is untouched; Window > Toolbar hides it, and that choice persists with the workspace
 UI state (`workspace/context-bar-visible`), never in the project. While the read-only placeholder
 is showing, the bar is disabled. It is a kit priority row (`EditorArea::buildChromeRow`) in three
 regions:
@@ -244,14 +244,14 @@ regions:
   it; the shape slot adds how to reach the other shapes. The tools never collapse.
 - **Tool options**, after the tools: only options backed by real session or document state, and
   only for the active tool. Select and the Pen show the anchor handle-mode strip (below); the shape
-  tools, Line and the Pen show Fill (a check box and a square colour chip), Stroke (the same) and
+  tools, Line and the Pen show Fill (a check box and a square color chip), Stroke (the same) and
   the stroke width; Text shows the font, size and alignment. With a shape or text layer selected
   the options are that layer's, edited with the same parameter commands Properties uses (one undo
   step per edit, a key at the playhead on an animated value); with none selected they are the style
   new shapes and new text start with, which is session state in the `ToolController` and authors
   nothing until something is drawn. Hand, Zoom and the eyedropper have no options. There is no
   transform-gizmo mode and no snapping in the Viewer, so Select has no slot for them.
-- **Selection actions**, against the right edge: Align (left edges, horizontal centres, right
+- **Selection actions**, against the right edge: Align (left edges, horizontal centers, right
   edges; top edges, vertical middles, bottom edges), Distribute (horizontally, vertically) and
   an "Align To" dropdown (Composition, Selection, Key Object). Key Object is the primary selected
   layer, named in the dropdown ("Key Object (Title)") and its tooltip. These are the same actions as
@@ -265,7 +265,7 @@ at the end of the tool options: Distribute first, then Align To, then Align, the
 and text options, then the handle modes. The menu offers each collapsed group whole: the action
 groups as submenus, the option groups as the same controls bound to the same state.
 
-Bar buttons, toggles, segmented controls, check boxes, colour chips and the overflow button are
+Bar buttons, toggles, segmented controls, check boxes, color chips and the overflow button are
 `Qt::NoFocus`: clicking them never takes keyboard focus from the Viewer. A field (the stroke width,
 the font, the size, Align To) takes focus while it is edited, commits on Enter or Escape like every
 field, and then hands focus back to the Viewer that last had it. Every control has an accessible
@@ -301,7 +301,7 @@ cancelled, because there is nothing valid left to confirm.
 
 Rectangle, Ellipse, Polygon, Star and Line draw a live Accent outline on press-drag. Shift constrains
 rectangles and ellipses to equal sides, keeps polygons and stars regular, or snaps a line to 45-degree steps; Alt draws from the press point
-as centre. Polygon and Star start with five points. Release creates and selects the layer
+as center. Polygon and Star start with five points. Release creates and selects the layer
 with one undo entry. The selection gizmo appears with the evaluated frame.
 
 Pen clicks append straight anchors; dragging an anchor during creation pulls Mirrored handles.
@@ -321,16 +321,16 @@ a key at the playhead), and follows the Escape-confirms rule above.
 - Handles follow the anchor's mode. Corner has none; Mirrored keeps them collinear and equal, so
   dragging one moves the other symmetrically; Aligned keeps them collinear, so dragging one
   rotates the other at its own length; Free leaves the other alone; Auto derives both from the
-  neighbouring anchors (Catmull-Rom) and recomputes them whenever a neighbour moves, and dragging an
+  neighboring anchors (Catmull-Rom) and recomputes them whenever a neighbor moves, and dragging an
   Auto handle turns the anchor Aligned.
 - Alt-click an anchor toggles Corner and its previous curved mode (Mirrored the first time).
   Alt-drag from an anchor pulls out new Mirrored handles. Alt-drag a handle moves it alone and
   leaves the anchor Free.
 - The anchor mode strip -- a kit segmented control with Corner, Mirrored, Aligned, Free and Auto --
-  is the Select and Pen tools' option in the context bar (`contextBarAnchorMode`), and acts on the
+  is the Select and Pen tools' option in the toolbar (`contextBarAnchorMode`), and acts on the
   anchors selected in the Viewer that last had focus; with none selected it stays, disabled. It shows the selection's mode, or no option for a mixed selection,
   and choosing one converts every selected anchor. A curved mode on a Corner pulls handles sized
-  from its neighbours; Mirrored and Aligned straighten existing handles onto their common tangent.
+  from its neighbors; Mirrored and Aligned straighten existing handles onto their common tangent.
 - Right-click on an anchor or the selection offers the same five modes, Delete Point(s) and, for a
   shape path, Open Path / Close Path.
 - With the Pen, clicking a segment adds an anchor there by splitting the curve, so the shape is
@@ -387,7 +387,7 @@ The footer (`viewerFooter`) is a priority row of three groups:
 | Group | Controls |
 | --- | --- |
 | Leading (view and display) | Channel (`ViewerChannelWidth`), Transparency Grid toggle, ROI toggle, Clear ROI, exposure (EV) and gamma (`ViewerAdjustWidth`), Display / View (its items' widest, `DropdownWidth`..`ViewerDisplayViewWidth`), Look |
-| Centre (time) | Go to start, step back, play/pause, step forward, go to end, loop, the frame field, centred in the row while there is room and never stranded from the transport |
+| Center (time) | Go to start, step back, play/pause, step forward, go to end, loop, the frame field, centered in the row while there is room and never stranded from the transport |
 | Trailing (framing and quality) | Zoom (`ViewerZoomWidth` floor), Resolution (`ViewerResolutionWidth`), RAM Preview |
 
 As the footer narrows, controls leave the row in this order, each offered in the View options
@@ -408,7 +408,7 @@ Clear ROI shows only while a region exists. RAM Preview is a labelled Secondary 
 controller's progress (Caching n%, RAM Cached). Exposure and gamma show an `NonDefaultMark` Accent
 dot while they differ from 0 / 1 and reset by a double-click on their label or from their context
 menu. Display / View shows the view name (qualified by its display only when several displays
-share it); the display, view and colour space are in its tooltip and the View menu. Background is
+share it); the display, view and color space are in its tooltip and the View menu. Background is
 chosen from View; the retired `viewerBackgroundDropdown` and `viewerResolutionReadout` identities
 remain for automation.
 
@@ -429,18 +429,18 @@ duration.
 The canvas has two backdrops, as in After Effects, and they are separate questions:
 
 - **The surround** is the content area outside the composition frame. View > Background chooses
-  it: Solid (the default, the `Canvas` token), Grey (`CanvasGrey`), Black (`CanvasBlack`) or White
+  it: Solid (the default, the `Canvas` token), Gray (`CanvasGrey`), Black (`CanvasBlack`) or White
   (`CanvasWhite`). It never draws inside the frame. Stored as `viewer/background` by name.
 - **Inside the frame**, behind transparent and partly transparent pixels, the Viewer shows the
-  composition's own Background Colour from Composition Settings, opaque. View > Transparency Grid
+  composition's own Background Color from Composition Settings, opaque. View > Transparency Grid
   (off by default, `viewer/transparency-grid`) replaces it with the Viewer checker
   (`ViewerCheckerLight` / `ViewerCheckerDark` on the `ViewerChecker` grid from the content area's
   top-left).
 
 Both are display-referred and the image composites over them in display space (the authored
-Background Colour is a display value; see `docs/architecture/color-management.md`), identically on
+Background Color is a display value; see `docs/architecture/color-management.md`), identically on
 the CPU path and the GPU present. They are presentation only: never process or export alpha, never
-image content in a cache. Editing the Background Colour is one non-render-affecting undoable step,
+image content in a cache. Editing the Background Color is one non-render-affecting undoable step,
 so the Viewer re-presents the frame it already has instead of re-evaluating. A stored pre-split
 `Checkerboard` background reads as Solid with the Transparency Grid on (unless a grid value was
 stored since).
@@ -458,7 +458,7 @@ context menu. Dropdown-backed submenus mirror their footer dropdown item for ite
 
 | Menu | Contents |
 | --- | --- |
-| View | Fit (`Ctrl+0`), 100% (`Ctrl+1`), Zoom In, Zoom Out, Zoom ▸ (the zoom presets), Resolution ▸; Channel ▸, Display / View ▸, Look, Reset Exposure and Gamma, Region of Interest, Clear Region of Interest; Guides ▸ (Safe Areas `Ctrl+Alt+S`, Safe Area Preset ▸, Custom Safe Areas…, Centre Cross, Thirds, Rulers, Pixel Grid), Background ▸ (Solid, Grey, Black, White: the surround), Transparency Grid |
+| View | Fit (`Ctrl+0`), 100% (`Ctrl+1`), Zoom In, Zoom Out, Zoom ▸ (the zoom presets), Resolution ▸; Channel ▸, Display / View ▸, Look, Reset Exposure and Gamma, Region of Interest, Clear Region of Interest; Guides ▸ (Safe Areas `Ctrl+Alt+S`, Safe Area Preset ▸, Custom Safe Areas…, Center Cross, Thirds, Rulers, Pixel Grid), Background ▸ (Solid, Gray, Black, White: the surround), Transparency Grid |
 | Select | Select All / Deselect All / Invert (`Ctrl+A`, `Ctrl+Shift+A`, `Ctrl+Alt+A`), naming their target: anchors while a path is edited (the Pen tool, a selected mask, or an anchor selection), layers otherwise |
 | Add | Solid, Text; the shape kinds; Import and Add… (the drop path's import, then layers at the playhead) |
 | Canvas context menu | On a layer: Select it, Duplicate Layer, Delete Layer; then Fit, 100%, Zoom In, Zoom Out; Add ▸, Guides ▸; Composition Settings…. The anchor menu stays first while a path is edited |
@@ -491,7 +491,7 @@ worker runs. A narrow status bar elides the line while preserving the complete t
 accessible name. Leaving the viewer clears the cell immediately, including when an earlier probe is
 still completing.
 
-Viewer selection bounds use Accent cosmetic hairlines snapped to device-pixel centres. Eight
+Viewer selection bounds use Accent cosmetic hairlines snapped to device-pixel centers. Eight
 `GizmoHandle` squares use Surface fill and Accent outlines; the anchor uses a crosshair ring.
 `GizmoRotateZone` is the outside-corner hit radius. These dimensions remain in logical screen
 pixels as zoom, pan, proxy and pixel aspect change. The same ViewerMapping drives overlays and
@@ -502,7 +502,7 @@ hit-testing. Selection geometry never enters process pixels or export.
 A card uses one `NodeTitleBand` row: its Title Case derived display name is left-aligned in Ui,
 and its category is right-aligned in muted UiSmall at the same vertical center.
 Artist-authored names remain intact. The body uses `PropertyRow` pitch with real kit value
-fields, dropdowns, line edits, colour chips and read-only labels hosted in scene proxies.
+fields, dropdowns, line edits, color chips and read-only labels hosted in scene proxies.
 Parameter sockets sit on the card edge at their corresponding control row; transport-only
 ports have separate rows. Vector components share the first component's socket. Connected
 parameters retain the existing hidden-editor/driver behavior. Ordered multi-input ports retain
@@ -513,7 +513,7 @@ resize remains authoritative above that minimum. `Arrange All` lays out the grap
 longest-path ranks place sources and value drivers before their consumers, and stable barycenter
 sweeps order each rank to reduce crossings. Each rank uses its maximum measured card width plus one
 `Spacing::L` gap; cards in a rank use their measured heights plus the same gap, and shorter ranks
-are vertically centred. Disconnected components stack below one another. Nodes in a group remain a
+are vertically centered. Disconnected components stack below one another. Nodes in a group remain a
 contiguous rank block, and the frame is recomputed from its members after the transaction.
 `Arrange Selection` applies the same rule to the induced selection and preserves its bounding-box
 top-left. Both commands are one undoable `MoveNodes` transaction; Arrange All fits the canvas after
@@ -558,6 +558,40 @@ inside its `ValueFieldLabelColumn` cap. `KListSurface` paints the common flat em
 `KRow` owns populated rows and column headings. A heading explicitly identifies its shorter
 `Control` pitch through `headerRow`.
 
+### Node card field controls
+
+A node card shows the same control Properties shows for the same parameter, from the same
+document vocabulary, so the two cannot drift:
+
+| Parameter kind | Control on the card and in Properties |
+| --- | --- |
+| Enum (anything `document::parameterEnumOptions` lists) | `KDropdown` with those labels (Properties shows Text Alignment as its icon segmented control) |
+| OCIO color space (Color Transform from/to, OCIO File process space, image and video input color space) | searchable `KDropdown` filled by `populateColorSpaceSelector`, refreshed by `refreshColorSpaceSelector` |
+| LUT, image, video, audio asset; font; Image part and layer; Cryptomatte layer | `KDropdown` (`refreshLutSelector` and the asset and probe refreshers) |
+| Bool | `KSwitch` |
+| Color | `KColorChip` (compact on the card) with channel cells |
+| Integer, float, vector | `KValueField` configured from `ParameterPresentation` |
+| String | `KLineEdit`, only for free text (Text content, string operands, channel names) |
+
+A pick list is never a text or number field on either surface. The test
+`bloom.ui.node-field-controls` adds every registered node type and asserts this for every
+parameter. Rows changed by the audit (old control to new control on the card):
+
+| Node | Parameter | Kind | Old | New |
+| --- | --- | --- | --- | --- |
+| Color Transform | From, To | color space (string) | text field | dropdown |
+| OCIO File Transform | Process space | color space (string) | text field | dropdown |
+| OCIO File Transform | LUT | asset (int) | value field | dropdown |
+| Image source, Video source | Input color space | color space (string) | text field | dropdown |
+| Audio source | Asset | asset (string) | text field | dropdown |
+| Text source | Vertical alignment (Top, Middle, Bottom) | enum (int) | value field | dropdown |
+| Text source | Anchor mode (Left, Center, Right) | enum (int) | value field | dropdown |
+| Text source | Overflow (Clip, Grow) | enum (int) | value field | dropdown |
+| Channel Shuffle | Mode (Color, Raw) | enum (int) | value field | dropdown |
+
+Every other parameter already used the Properties control (enums as dropdowns, bools as switches,
+colors as chips, numbers as value fields, free text as text fields).
+
 ## Layout and specialized metrics
 
 The default is five editors in two rows. The full-width top row is Assets, Viewer, Nodes,
@@ -586,7 +620,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `TimelineLeftColumn` | 576 | Four 24px toggles + name + two 100px dropdown columns |
 | `GizmoHandle / GizmoRotateZone` | 8 / 16 | Viewer transform handles / outside-corner rotation radius |
 | `ViewerWorkPadding` | 48 | Padded image work area |
-| `ContextBarHeight` | 32 | The context bar under the menu bar: `Control` + 2 × `ChromePadding` |
+| `ContextBarHeight` | 32 | The toolbar under the menu bar: `Control` + 2 × `ChromePadding` |
 | `ViewerChannelWidth` | 80 | Channel dropdown |
 | `ViewerModeWidth` | 108 | RAM Preview command floor (widened to its widest label) |
 | `ViewerAdjustWidth` | 72 | Exposure and gamma fields |
@@ -626,7 +660,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `SliderTrack / SliderHandle` | 4 / 12 | `KSlider` |
 | `RangeTrack / RangeHandle` | 6 / 8 | `KRangeSelector` |
 | `SwitchTrackWidth / SwitchTrackHeight` | 30 / 16 | `KSwitch` |
-| `RadioMark / RadioDot` | 14 / 6 | `KRadioGroup` discrete mark and its selected dot (even, so it centres on the pixel grid) |
+| `RadioMark / RadioDot` | 14 / 6 | `KRadioGroup` discrete mark and its selected dot (even, so it centers on the pixel grid) |
 | `PickerSquare / PickerMarker / CheckerCell` | 160 / 8 / 8 | `KColorPicker` square, marker, and every alpha checkerboard cell |
 
 `kKeyDiamondRadius` is 4.5 and `kNodeCanvasHalfExtent` is 262144 logical pixels. Ratios,
@@ -636,8 +670,8 @@ centering divisors and wheel detents are unitless computations, not pixel dimens
 
 `bloom-quality-check` rejects, outside the kit: raw controls (including default construction
 without parentheses and QPlainTextEdit/QTextEdit), forbidden paintEvent, literal dimensions and
-QFont construction; the Qt convenience dialogs and spin boxes; numeric QColor construction, colour
-strings (`#rrggbb`, `rgb(`) and Qt colour names; `.darker(`/`.lighter(`; palette overrides
+QFont construction; the Qt convenience dialogs and spin boxes; numeric QColor construction, color
+strings (`#rrggbb`, `rgb(`) and Qt color names; `.darker(`/`.lighter(`; palette overrides
 (`setPalette`, `setColor(QPalette::...)`); `setStyleSheet`; raw `Qt::Popup`/`Qt::ToolTip` windows;
 literal pen widths; literal `resize(w, h)`; and `Variant::Ghost` other than on a disclosure caret
 (`expand`, `chevron`, `caret`, `disclosure`). The kit's own `.cpp` files are held to the pixel
@@ -657,7 +691,7 @@ The [validation map and capture contract](grammar1-validation.md) identify enfor
 
 Existing object names remain stable, except that ADR 0031 retired the Viewer's tool column
 (`viewerToolColumn`, `viewer<Tool>Tool`, `viewerAnchorModeSwitcher`, `toolColumnMoreButton`). The
-context bar's names are `contextBar`, `contextBarRow`, `contextBarTools`,
+toolbar's names are `contextBar`, `contextBarRow`, `contextBarTools`,
 `contextBarTool<Tool>` (Select, Hand, Zoom, Line, Pen, Text, Cryptomatte; also the shape flyout's
 Rectangle, Ellipse, Polygon and Star actions), `contextBarToolShape`, `contextBarShapeFlyout`,
 `contextBarAnchorOptions`, `contextBarAnchorMode`, `contextBarShapeOptions`, `contextBarShapeFill`,
@@ -689,11 +723,11 @@ name plus `Mode`, a switch's words its name plus `Label`),
 `locateOpenH264Message`), `openh264Consent`, `exportFrameRangeDialog`
 (`exportFrameRangeDestination`, `exportFrameRangeBrowse`), `exportApproval`, the failure notices
 `projectSaveFailed`, `projectOpenFailed`, `projectCopyFailed`, `exportFailed` and
-`projectColorSettingsFailed`, and the label colour picker `timelineLayerLabelColorPicker` (it
+`projectColorSettingsFailed`, and the label color picker `timelineLayerLabelColorPicker` (it
 replaces `timelineLayerLabelColorDialog`). A prompt's heading and detail are `<dialog>Heading` and
 `<dialog>Detail`.
 
-The metric audit covers the status line, the context bar's eight tool slots,
+The metric audit covers the status line, the toolbar's eight tool slots,
 card/control containment and socket-row alignment at DPR 1, 1.5 and 2. It also verifies the timeline menu set remains expanded at
 1600 and 1920 logical-pixel window widths. Whole-window references and final captures run at
 DPR 1 and 1.5. Changed geometry tests use the viewer's real padded mapping.
@@ -734,7 +768,7 @@ audio retains its cell; Spacing::XS separates switch boxes in both header and la
 Headers and rows share the ChromePadding left inset,
 column geometry, and Ui text role. Layer and nested-property disclosures are unboxed 24px hit
 targets with their existing 16px chevrons and an XS gap before the text. KDiamond uses the Bold
-outline at every DPR. Colour parameter rows show only the swatch; expanding the parameter exposes
+outline at every DPR. Color parameter rows show only the swatch; expanding the parameter exposes
 the individual R/G/B/A numeric rows, so narrowing the table never crushes four inline fields.
 Layer rename uses the shared KLineEdit at the name label's horizontal bounds, vertically centered
 in the row; it never covers the chevron or expands as text is typed. It follows column resizing.
@@ -817,7 +851,7 @@ string. New names: `timelinePropertyDriven`, `timelinePropertyDriverLink`,
 `propertiesDriverLink` and `propertiesDrivenValue` are unchanged.
 
 `Color::OnAccent` is white (#ffffff). Kit button painters use it for ink on accent fills,
-including transport, loop, snap and keyframe toggles, and the context bar's active tool.
+including transport, loop, snap and keyframe toggles, and the toolbar's active tool.
 KDropdown's preferred width is the measured widest item plus its icon, padding and chevron; its
 minimum is the same chrome around about six average characters, so a layout short of room elides
 the value instead of overflowing. `setWidthFloor()` is a real floor: the field hugs its widest
@@ -831,13 +865,13 @@ Properties shows every section with no filter strip and no header search. Sectio
 individually with persisted state; there is no Collapse all / Expand all affordance and no
 section menu. KSection headers carry only the chevron, title, and Reset.
 
-Node Add menu and search order is Sources, Layers, Compositing, Transform, Filters, Colour, Values,
-Math, Convert, String, Logic, Time, Color, Vector, Utilities, Output. Transform holds geometric image
+Node Add menu and search order is Sources, Layers, Compositing, Transform, Filters, Color, Values,
+Math, Convert, String, Logic, Time, Color Values, Vector, Utilities, Output. Transform holds geometric image
 operations (Resize, Fit, Crop, Pad, Flip, Rotate 90); Filters holds the blurs. The UI category projection owns normalization;
-the Colour image-effect section projects `NodeCategory::Color`, while Color holds value nodes.
+the Color image-effect section projects `NodeCategory::Color`, while Color Values holds the color value nodes.
 Categories are not persisted, so no migration is needed. Utilities contains only reroute and
 Separate/Combine plumbing (reroutes remain link gestures). Time includes Time, frame readouts and
-time conversions; composition readouts and literals remain Values. HSV operations belong to Color.
+time conversions; composition readouts and literals remain Values. HSV operations belong to Color Values.
 Kit menus with `columnFlow` use real action-backed controls in additional columns, capped at
 `kMenuWindowHeightShare` (0.5) of the owner window and positioned within that window. Empty-canvas
 double-click opens Add search at the cursor. Footer count is hidden at zero; snap and link style
@@ -851,22 +885,22 @@ zoom. Vertices and `kDiamondStroke` (1.5, Bold icon weight at IconSmall) resolve
 pixels. No diamond pixmap is cached or scaled. New automation name: `nodePropertyRow`.
 
 
-## Colour Surfaces
+## Color Surfaces
 
-Colour controls distinguish `Display` sRGB from stored `Reference` linear sRGB through the
-session's `colorConverter()` accessor. Properties colour rows and node-card chips show the same
-converted colour as the qualified Bloom Neutral viewer. Picker hex text, HSV/HSL fields, spatial
-controls, recent colours and screen samples are display sRGB; editing them commits Reference
-values through the existing session command. A Reference-tagged colour cannot be painted directly
+Color controls distinguish `Display` sRGB from stored `Reference` linear sRGB through the
+session's `colorConverter()` accessor. Properties color rows and node-card chips show the same
+converted color as the qualified Bloom Neutral viewer. Picker hex text, HSV/HSL fields, spatial
+controls, recent colors and screen samples are display sRGB; editing them commits Reference
+values through the existing session command. A Reference-tagged color cannot be painted directly
 as a QColor. Opening or closing the picker never changes the document.
 
-Expanded Properties RGBA fields show normalized display numbers for in-range colours. Signed or
+Expanded Properties RGBA fields show normalized display numbers for in-range colors. Signed or
 HDR reference RGB switches the whole row to exact reference numbers with a `reference` suffix;
-the chip continues to show the clamped display colour. Entering an RGB number outside [0, 1]
+the chip continues to show the clamped display color. Entering an RGB number outside [0, 1]
 authors that component in reference space. Editing one field preserves every untouched reference
 channel exactly. Pending or unavailable conversion disables the reference chip and labels numeric
 values as reference. Existing document numbers are preserved; this is a presentation boundary,
-not a data migration. The timeline colour rows use the same boundary: an in-range colour shows
+not a data migration. The timeline color rows use the same boundary: an in-range color shows
 normalized display numbers in its expanded R/G/B/A rows, and a signed or HDR RGB switches the whole
 row to exact reference numbers with the `reference` suffix.
 
@@ -908,9 +942,9 @@ row's left, never at its indent) -- so nested rows are never notched.
 **Glyphs.** Monochrome, in the row's ink (Foreground; Muted on secondary rows; OnAccent selected):
 Composition (`film-strip`), Folder (`folder`, `folder-open` while expanded), Image or EXR
 (`image`), Sequence (`images`), Video (`film-slate`), Audio (`music-notes`), Font (`text-t`) and LUT
-(`sliders-horizontal`). Colour is kept for state: a missing or unshowable source replaces the glyph
-with the warning glyph in Warn ink; an untagged video whose colour was assumed shows the Info glyph
-in the row's ink. The tooltip states the reason, the input colour space and the colour note. A
+(`sliders-horizontal`). Color is kept for state: a missing or unshowable source replaces the glyph
+with the warning glyph in Warn ink; an untagged video whose color was assumed shows the Info glyph
+in the row's ink. The tooltip states the reason, the input color space and the color note. A
 data-only image has no mark.
 
 Every column sorts on a header click; folders stay first and the Data group last in either
@@ -922,22 +956,22 @@ matching ancestors.
 **Summary strip.** One fixed `Size::SummaryStrip` (52: two Control-height lines) for every
 selection, so the tree never moves. With one item: a `KThumbnail::Cell::Strip` well
 (`StripThumbnailWidth` × `StripThumbnailHeight`, 64 × 40, on Field) letterboxing the controller's
-worker thumbnail at its own aspect ratio (Cryptomatte ID colours or the first data channel of a
+worker thumbnail at its own aspect ratio (Cryptomatte ID colors or the first data channel of a
 data-only image; for a composition a frame rendered by the composition preview pipeline; otherwise
 the kind glyph, Muted, never a blank cell); line 1 the name in Ui Foreground, elided, with the usage
 trailing in UiSmall Faint (`Used 3 times in 2 compositions`, `Not used`); line 2 the facts in UiSmall
 Muted as chips separated by thin dots: `Sequence · 2048 × 858 · 0:00:16:02 · 386 f · 24 fps · sRGB ·
 Straight`. Each line's tooltip is its whole sentence (`Sequence · 2048 × 858 · 0:00:16:02 (386
-frames), 24 fps`; `Colour: sRGB (from the file) · Straight alpha`). The colour facts name the input
-colour space by its plain name, then the alpha, then the colour note once; a note, a missing source
+frames), 24 fps`; `Color: sRGB (from the file) · Straight alpha`). The color facts name the input
+color space by its plain name, then the alpha, then the color note once; a note, a missing source
 or an unshowable one turns that part Warn, with the detail in its tooltip
-(`Colour: sRGB · Straight alpha · Colour tags missing — assumed Rec.709 with the sRGB transfer.
-Change in Assets → Input Colour`). Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene`
+(`Color: sRGB · Straight alpha · Color tags missing — assumed Rec.709 with the sRGB transfer.
+Change in Assets → Input Color`). Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene`
 is **Linear Rec.709**, `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space
 **Rec.709 video**); another config's spaces show the names the config gives them. A space Auto read
 from the file's own tags adds `(from the file)` in the tooltip; an assumed one is explained by the
 note alone. Several items: `3 items selected` and their kinds (`2 sequences · 1 composition`). None:
-one centred Faint line of what the project holds (`7 items · 5 sequences · 2 compositions ·
+one centered Faint line of what the project holds (`7 items · 5 sequences · 2 compositions ·
 1 folder`), never an empty tile -- a fixed strip is chosen over collapsing it, so selecting never
 pushes the tree down. View > Show Info hides the strip (`assets/show-info`, per user).
 
@@ -961,7 +995,7 @@ a priority row: as the panel narrows its menus fold one at a time into the overf
 (`dots-three-vertical`) -- Select first, then Add, then View -- and the Search toggle keeps its
 place beside Maximize. Text set by any other route (a Tags cell, automation) opens the row too.
 
-Context menus follow After Effects. An asset: New Composition from Selection, Input Colour…
+Context menus follow After Effects. An asset: New Composition from Selection, Input Color…
 (interpret footage), Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…,
 Delete. A composition: Open, Composition Settings…, Rename, Duplicate, Delete. A folder: Rename,
 Delete. Each ends with New Folder, New Composition… and Import…, which is the whole menu on empty
@@ -1112,7 +1146,7 @@ content needs at that width.
 Dialogs open asynchronously (window-modal, answered through a callback) unless a caller must hand a
 synchronous answer back: the Composition dialog, the
 unsaved-change, open, save and recovery prompts of the project host, Preferences, and prompts nested
-inside an already modal dialog run with `exec()`, each documented at its call site. Edit Tags, Input Colour, Custom Safe Areas, Project Settings — Colour, Delete, Rename Composition,
+inside an already modal dialog run with `exec()`, each documented at its call site. Edit Tags, Input Color, Custom Safe Areas, Project Settings — Color, Delete, Rename Composition,
 Restore Defaults and every failure notice are asynchronous. The keys are in
 [interaction-model.md](interaction-model.md#dialogs).
 
@@ -1121,9 +1155,9 @@ least `DialogWideWidth` wide, titled `New Composition` or `Composition Settings`
 controls, with two tabs in a `kit::KTabs` (After Effects style; no collapsible sections). **Basic**
 holds what most compositions change: Name, Preset with its buttons and summary line, Size with the
 link toggle and the frame aspect beside it in muted Value text (`16:9`, `2.39:1`), Frame Rate,
-Duration with its unit, and Background Colour. **Advanced** holds the rarely changed values: Pixel
+Duration with its unit, and Background Color. **Advanced** holds the rarely changed values: Pixel
 Aspect Ratio, Start, the drop-frame Timecode row (shown only at 29.97 and 59.94 fps), Working
-Colour Space, the Resize Anchor (Composition Settings only, shown once the size changes), and
+Color Space, the Resize Anchor (Composition Settings only, shown once the size changes), and
 Action / Title Safe. Both tabs are `KForm`s of the one dialog, so they share ONE label column, sized
 to the widest label of either, and every field starts at the same x; the dialog is as tall as its
 taller tab, so switching tabs never resizes it, and the tab last shown is shown again for the rest
@@ -1134,7 +1168,7 @@ percentage values `KValueField`, choices `KDropdown` (frame rate is one dropdown
 preset buttons `KIconButton`s with tooltips `Save as preset…` (`IconId::Add`), `Rename preset…`
 (`IconId::Rename`, Phosphor `pencil-simple`) and `Delete preset` (`IconId::Delete`). A muted
 `UiSmall` summary line sits under the preset. Drop-frame is a `KCheckBox` with its clickable
-`KCheckLabel`; Background Colour is a `KColorChip` at its own size with the `#RRGGBB` value beside it
+`KCheckLabel`; Background Color is a `KColorChip` at its own size with the `#RRGGBB` value beside it
 in the Value role; the resize anchor is the Properties Anchor Point `KAnchorGrid` itself. The
 interaction contract is in
 [interaction-model.md](interaction-model.md#composition-dialog).
@@ -1190,7 +1224,7 @@ wrapped `UiSmall` `Muted`, rows `Spacing::S` apart. The one action is a Primary 
 `KProgressBar` is read-only and never takes focus: a `Field` track with fully rounded ends,
 `ProgressTrack` tall, filled with `Accent` from the start to completed / total. **Busy mode**
 (`setBusy()`, or no total) is for work whose size is not known yet: a third-width `Accent` segment
-sweeps across the track and back over 1.6 s, held centred when motion is reduced. A busy bar is
+sweeps across the track and back over 1.6 s, held centered when motion is reduced. A busy bar is
 never an empty, static track, and a determinate bar is used only once the total is known. Disabled, the fill fades to `kDisabledOpacity`.
 
 Automation names: `importProgressDialog`, `importProgressHeading`, `importProgressFile`,
@@ -1204,10 +1238,10 @@ plain reason directly under the offending field: a word-wrapped `KLabel` in `UiS
 first invalid field shows a reason, so the reason always names what to fix next.
 
 The Composition dialog and the composition Properties section expose a `KColorChip` Background
-Colour for the composition itself; the Viewer shows it inside the composition frame. The Viewer's
-surround is chosen separately under View > Background (Solid, Grey, Black, White), and View >
-Transparency Grid swaps the frame's Background Colour for a checker (see "Viewer canvas and empty
-state"). Neither alters composition pixels, the authored Background Colour, or export alpha.
+Color for the composition itself; the Viewer shows it inside the composition frame. The Viewer's
+surround is chosen separately under View > Background (Solid, Gray, Black, White), and View >
+Transparency Grid swaps the frame's Background Color for a checker (see "Viewer canvas and empty
+state"). Neither alters composition pixels, the authored Background Color, or export alpha.
 
 ## Live Value Editing
 
@@ -1254,7 +1288,7 @@ parameter field from the parameter's one presentation (`document::parameterPrese
 slider beside it), step, decimals, unit and display scale. The same parameter therefore scrubs,
 steps and reads identically on all three surfaces; Properties' letter spacing alone layers its
 percent-of-size reading on top. The active field keeps its text/caret or scrub base while peer
-fields show the live number. Colour-picker spatial drags and channel edits use the same
+fields show the live number. Color-picker spatial drags and channel edits use the same
 live/commit/cancel boundary; closing an active picker, with Escape too, accepts its edit. A
 `KSlider` and a `KRangeSelector` keep the same edit-session contract: a drag (or a run of keys) is
 one edit, pressing a slider's handle keeps its grab offset, and grab loss commits. A range
@@ -1313,11 +1347,11 @@ Names and prose use the `Ui` role; numbers, hex, timecode and other machine text
 `KLineEdit` is its historical name and keeps working. `KSearchField` adds a leading magnifier and a
 trailing clear button that shows only with text; its first Escape clears the text and the second is
 left for the surface around it (a popup closes, a panel takes focus back). `KTextArea` is the same
-well for multi-line text: a text layer's content, a job's diagnostics, a licence. The look is
+well for multi-line text: a text layer's content, a job's diagnostics, a license. The look is
 generated from `kit::fieldColors()` into the application sheet; no widget carries its own sheet.
 
 Every in-place editor -- a value field's text entry, a rename, the frame field, the Properties and
-node-card text rows, the colour hex field -- installs the kit inline-edit policy (`kit::KInlineEdit`)
+node-card text rows, the color hex field -- installs the kit inline-edit policy (`kit::KInlineEdit`)
 instead of spelling its keys: Return (Ctrl+Return in a multi-line editor), Escape, Tab and focus loss
 commit; refused text stays open on Return or Tab with the reason, and closes on the last valid value
 for Escape or focus loss; the editor's own context menu and a switch to another window are not
@@ -1335,7 +1369,7 @@ Double-click a text layer with Select, press Enter on a selected text layer, or 
 place a new layer and type. The caret and selection use the render layout's UTF-8 byte positions,
 including wrapped lines and vertical alignment, mapped through the evaluated world transform and
 viewer zoom. The caret uses `Color::Accent` and a cosmetic `Size::Hairline`, snapped to device-pixel
-centres. Selection uses Accent with `kDisabledOpacity`; IME preedit uses an Accent underline.
+centers. Selection uses Accent with `kDisabledOpacity`; IME preedit uses an Accent underline.
 These are display overlays and do not appear in rendered frames or exports.
 
 Click or drag to position/extend the selection. Arrows, Home/End and Shift move/select within text;
@@ -1400,7 +1434,7 @@ trimmed to half their budgets and the status bar shows one transient notice:
 
 > Memory pressure: caches trimmed
 
-It is a status report in the same row as every other notice, not a dialog and not a warning colour:
+It is a status report in the same row as every other notice, not a dialog and not a warning color:
 nothing failed, no work was lost, and the artist has nothing to decide. It says what Bloom did, in
 the past tense, because by the time it appears the trim has already happened. It appears once per
 episode of pressure rather than on every poll, so a machine that stays busy does not repeat it, and

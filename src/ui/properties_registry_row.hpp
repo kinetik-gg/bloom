@@ -26,6 +26,19 @@ void refreshImageAssetSelector(kit::KDropdown& selector, const CompositionSessio
                                const QString& stored);
 void refreshAudioAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
                                const QString& stored);
+// OCIO color-space dropdowns (Color Transform from/to, OCIO File process space, image and video
+// input color space) and the LUT asset dropdown: one fill/refresh shared by Properties and the
+// node cards, so the two cannot offer different lists. Both write the stored id string (empty =
+// Auto / Working space); the LUT writes the asset id integer.
+bool isEffectColorSpaceSchema(std::string_view schemaKey);
+bool isInputColorSpaceSchema(std::string_view schemaKey);
+void populateColorSpaceSelector(kit::KDropdown& selector, const CompositionSession& session,
+                                std::string_view schemaKey, const QString& current);
+void refreshColorSpaceSelector(kit::KDropdown& selector, const CompositionSession& session,
+                               const document::NodeRecord* node, std::string_view schemaKey,
+                               const QString& stored);
+void refreshLutSelector(kit::KDropdown& selector, const CompositionSession& session,
+                        std::int64_t current);
 // ADR 0026 / #364: the Image source's Part and Layer and the Cryptomatte's Layer, offered only as
 // the values the probe actually found (requested on a worker when not yet known; the selector
 // stays disabled and says so until they arrive). Shared by node cards and Properties. Each
@@ -37,7 +50,7 @@ bool refreshImageLayerSelector(kit::KDropdown& selector, const CompositionSessio
 bool refreshCryptomatteLayerSelector(kit::KDropdown& selector, const CompositionSession& session,
                                      const document::NodeRecord& node);
 // The plain note an Image source shows when its selected part and layer have no colour channels
-// ("No colour layer — use Channels"); empty when it has colour or the probe is not known yet.
+// ("No color layer — use Channels"); empty when it has colour or the probe is not known yet.
 QString imageSourceColourNote(const CompositionSession& session, const document::NodeRecord& node);
 void resetPropertiesParameter(CompositionSession& session, document::ParameterId parameter);
 void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QWidget* panel);

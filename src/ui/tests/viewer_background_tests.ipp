@@ -67,10 +67,10 @@ void testViewerSurroundNeverDrawsInsideTheFrame(Expectations& expectations) {
             fixture.viewer.findChild<ui::kit::KDropdown*>("viewerBackgroundDropdown");
         expectations.expect(background != nullptr && background->count() == 4 &&
                                 background->itemText(0) == QStringLiteral("Solid") &&
-                                background->itemText(1) == QStringLiteral("Grey") &&
+                                background->itemText(1) == QStringLiteral("Gray") &&
                                 background->itemText(2) == QStringLiteral("Black") &&
                                 background->itemText(3) == QStringLiteral("White"),
-                            "View > Background offers Solid, Grey, Black and White, no checker");
+                            "View > Background offers Solid, Gray, Black and White, no checker");
         if (background == nullptr)
             return reachQuiescence(fixture.controller, fixture.bridge, fixture.scheduler,
                                    expectations);
@@ -102,7 +102,7 @@ void testViewerSurroundNeverDrawsInsideTheFrame(Expectations& expectations) {
                                     presentColor(request.frameColor) == frame &&
                                     !request.transparencyGrid,
                                 "the GPU present request carries the same surround and frame "
-                                "colours as the CPU paint" +
+                                "colors as the CPU paint" +
                                     label);
             expectations.expect(QSettings().value("viewer/background").toString() ==
                                     QLatin1String(choice.name),
@@ -259,7 +259,7 @@ void testSemiTransparentLayerCompositesOverTheBackground(Expectations& expectati
     ViewerFixture fixture(makeTestProject("Half over background"));
     expectations.expect(fixture.session.addSolidLayer("Half", core::Color4d{0.5, 0.5, 0.5, 1.0}) &&
                             fixture.session.setSelectedOpacity(0.5),
-                        "the composite fixture adds a half-transparent grey layer");
+                        "the composite fixture adds a half-transparent gray layer");
     fixture.session.clearSelection(); // no selection handles over the sampled centre
     fixture.viewer.show();
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),

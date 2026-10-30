@@ -29,7 +29,7 @@ at 1x. Physical pixels are derived from the device pixel ratio only inside paint
 scaling a token where it is defined.
 
 The one place that derivation is mandatory is a hairline. A plain one-logical-pixel pen straddles
-two physical pixels at 125% and 150% scaling and reads as a blurred grey line, so hairlines are
+two physical pixels at 125% and 150% scaling and reads as a blurred gray line, so hairlines are
 snapped to a whole number of physical pixels at the device pixel ratio in use
 (`kit::snappedHairlineWidth`).
 
@@ -58,15 +58,15 @@ snapped to a whole number of physical pixels at the device pixel ratio in use
 | `Ok` | `#3FBF6B` | Success and ready states |
 | `Warn` | `#E6A23C` | Warnings and unsupported states |
 | `Error` | `#E0554E` | Failures and destructive actions |
-| `CheckerLight` / `CheckerDark` | `#999999` / `#666666` | The small-swatch alpha checkerboard: colour chips, swatches and the picker's alpha bar |
+| `CheckerLight` / `CheckerDark` | `#999999` / `#666666` | The small-swatch alpha checkerboard: color chips, swatches and the picker's alpha bar |
 | `ViewerCheckerLight` / `ViewerCheckerDark` | `#3A3A3A` / `#2A2A2A` | The Viewer's Transparency Grid inside the composition frame |
-| `CanvasGrey` | `#808080` | The Viewer's neutral mid-grey surround |
+| `CanvasGrey` | `#808080` | The Viewer's neutral mid-gray surround |
 | `CanvasBlack` / `CanvasWhite` | `#000000` / `#FFFFFF` | The Viewer's exact Black and White surrounds |
 
 `OnAccent` on `Accent` measures 4.6:1, which meets WCAG AA for 12 px interface text; the previous
 `#0C8CE9` measured 3.5:1. A heavier weight does not change a contrast ratio, so the accent itself
-was deepened. The small-swatch checker tones are mid-grey -- the compositing convention -- because
-a few pixels of a dark colour vanish against a pair of dark interface surfaces. The Viewer's
+was deepened. The small-swatch checker tones are mid-gray -- the compositing convention -- because
+a few pixels of a dark color vanish against a pair of dark interface surfaces. The Viewer's
 Transparency Grid covers a whole frame of image, so it uses a deeper pair that stays quiet next to
 dark footage yet reads as a grid (1.26:1) and stays a clear step above the `Canvas` surround
 (1.30:1), so the frame edge still reads. Both pairs feed the CPU paint and the GPU present from
@@ -141,22 +141,22 @@ rules only for widgets whose look comes from a `[bloomKeyboardFocus]` sheet rule
 ### Controls, editor surfaces and layout
 
 The [UI grammar](ui-grammar.md) owns the complete control vocabulary, spacing and size grid,
-shared rows, declared headers/footers, the context bar, node cards, status line and default
+shared rows, declared headers/footers, the toolbar, node cards, status line and default
 workspace proportions. Implement these through the kit rather than duplicating component
 measurements here. The [workspace layout contract](../architecture/workspace-layout.md) owns
 persistence and migration. The existing application menu bar and native window frame remain.
 
-Properties remains a command-backed projection: colour values use the existing colour picker,
+Properties remains a command-backed projection: color values use the existing color picker,
 text uses a command-backed embedded-first font reference selected from the system catalogue, driven rows navigate upstream, and anchor
 placement resolves immutable local bounds asynchronously. UI typography is independent of the
 rendered text face. Viewer guides, backgrounds, channel inspection and zoom remain presentation
 state; they never change cached composition pixels or export semantics.
 
-The colour picker's Sample affordance samples inside Bloom only, one pixel under the pointer per
+The color picker's Sample affordance samples inside Bloom only, one pixel under the pointer per
 move (never a whole-widget grab). Over the Viewer it takes the pixel probe's working-space value --
-the authored colour itself, HDR range included -- rather than the display-referred 8-bit pixel on
+the authored color itself, HDR range included -- rather than the display-referred 8-bit pixel on
 screen; until the probe has resolved that value, and over anything else, it takes the rendered
-pixel. A surface that knows a truer colour than its pixels answers through
+pixel. A surface that knows a truer color than its pixels answers through
 `kit::KColorSampleSource`.
 
 ### Elevation
@@ -165,7 +165,7 @@ pixel. A surface that knows a truer colour than its pixels answers through
 | --- | --- |
 | `Flat` | none |
 | `TimelineBar` | `0 1 2 rgba(0,0,0,.25)` -- a clip bar on its lane |
-| `Popup` | `0 0 8 rgba(0,0,0,.45)` -- menus, dropdown lists, the Add search and the colour picker. Small and symmetric: an offset, bottom-heavy shadow read as a chin under the last row |
+| `Popup` | `0 0 8 rgba(0,0,0,.45)` -- menus, dropdown lists, the Add search and the color picker. Small and symmetric: an offset, bottom-heavy shadow read as a chin under the last row |
 | `Dialog` | `0 12 40 rgba(0,0,0,.6)` |
 | `Drag` | `0 18 48 rgba(0,0,0,.55)` |
 
@@ -215,7 +215,7 @@ weight is a named point on the face's own `wght` axis (`QFont::setWeight()` plus
 `QFont::setVariableAxis()`; Inter's `opsz` is pinned to its text size, 14). FreeType, CoreText
 and DirectWrite therefore draw the same outlines from the same file. Weight is a role, never a
 call-site `setWeight()` or a stylesheet `font-weight`. `KLabel` takes a role, and
-`KLabel::setTone()` is the one way to colour interface text by palette role. A single-line
+`KLabel::setTone()` is the one way to color interface text by palette role. A single-line
 `KLabel` is one `Control` tall; a word-wrapped one grows to its wrapped height.
 
 **Bloom's type roles always win over platform and theme fonts; the platform font never leaks into
@@ -248,7 +248,7 @@ chrome in `Ui`.
 | Accent-item hover | A full-width `Accent` bar with `OnAccent` text -- menu and list rows, never a rounded pill. The row is rectangular and spans the popup frame edge to edge; an antialiased clip to the frame's rounded inner edge shapes the first and last bars, so only the frame is ever rounded |
 | Menu row | A reserved `IconMedium` (16) icon column so text aligns with or without an icon, the shortcut in `Faint` (on the Accent hover bar, `OnAccent` at 72%), and the submenu caret as the Phosphor `CaretRight` glyph. A checked action with its own icon draws the icon in its Fill weight inside a hairline frame; one without an icon shows the check glyph in the icon column. Painted by `kit::AltUnderlineProxyStyle` at the painter's device pixel ratio, not by the stylesheet: QSS has no selector for a shortcut column, and any `QMenu` rule with a box makes `QStyleSheetStyle` draw the whole row itself |
 | Pressed | `AccentPressed` for an accent surface; one surface step down otherwise |
-| Selected row | The one list-row recipe (`kit::paintSelectedRow`): an opaque wash of `Accent` at 24% over the row's own surface, under a `SelectionEdge` (2) `Accent` edge at the row's leading side. Timeline layer rows and lanes, `KRow`, Assets and Jobs share it; the wash keeps content drawn over the row -- clip bars in their own colours -- readable |
+| Selected row | The one list-row recipe (`kit::paintSelectedRow`): an opaque wash of `Accent` at 24% over the row's own surface, under a `SelectionEdge` (2) `Accent` edge at the row's leading side. Timeline layer rows and lanes, `KRow`, Assets and Jobs share it; the wash keeps content drawn over the row -- clip bars in their own colors -- readable |
 | Selected control | A checked button, toggle or segment: the `Accent` plate with `OnAccent` ink |
 | Focus | The control's own single border turns `Accent`, and stays `Accent` while hovered -- see Border above. Never a second outline. On an `Accent` plate the focus border is `Foreground` |
 | Disabled | The control's own resting ink at 40% opacity (`kit::disabledInk`, used by the kit painters and the application palette alike), no hover response, and no pointing-hand cursor |
@@ -350,12 +350,12 @@ Phosphor Icons is Bloom's default interface icon family.
 - An icon does not replace an accessible name. Icon-only controls require a tooltip and accessible
   text; destructive or ambiguous actions should include a visible label where space permits.
 - Do not communicate an important state through icon color alone.
-- **Icons are monochrome; colour only for state or user labels.** A type or kind glyph -- an Assets
+- **Icons are monochrome; color only for state or user labels.** A type or kind glyph -- an Assets
   row, a node card, a Properties header, a menu row -- takes its row's or control's own ink
   (Foreground; Muted where the row is secondary; OnAccent on a selected row), never a per-kind hue.
-  Colour stays where it carries state (Warn for a missing or unshowable source, Error, the Accent of
-  a selection or toggle) and where it is the artist's data (layer and bar label colours, socket
-  kinds). The Timeline clip bars' data-type colours are bar fills, not icons, and keep their table
+  Color stays where it carries state (Warn for a missing or unshowable source, Error, the Accent of
+  a selection or toggle) and where it is the artist's data (layer and bar label colors, socket
+  kinds). The Timeline clip bars' data-type colors are bar fills, not icons, and keep their table
   below.
 - A composition is the `film-strip` glyph wherever one is meant (an Assets row, New Composition,
   the Viewer's composition picker); an image sequence is the `images` stack; RAM Preview has its own
@@ -493,7 +493,7 @@ media, so these two are the least-wrong available choices rather than literal ma
 are on record: `DataImage` (`#3AA5F0`) sits right beside the accent blues and would make a clip read
 as a selected surface while swallowing the 1px `Accent` playhead crossing it; `DataSequence`
 (`#E0554E`) is byte-identical to `Error` and would make a clip read as failed; `DataAudio`
-(`#7C5CFF`) is a neighbouring purple to `DataComposition` and would not be told apart from a solid.
+(`#7C5CFF`) is a neighboring purple to `DataComposition` and would not be told apart from a solid.
 `DataClip` is byte-identical to `Ok`, which is the remaining collision and the mildest one. Kit-owner
 gap: a `DataText` role would remove that collision. A future media-backed or pre-composition layer
 kind takes its own role here on the day it ships.
@@ -539,7 +539,7 @@ These use design pixels in graph space at 100% zoom. They scale with the canvas 
 
 | Surface/state | Rendering or interaction contract |
 | --- | --- |
-| Port socket | Kind-coloured edge dots aligned to parameter rows; geometry is owned by the [UI grammar](ui-grammar.md#node-cards) |
+| Port socket | Kind-colored edge dots aligned to parameter rows; geometry is owned by the [UI grammar](ui-grammar.md#node-cards) |
 | Ordered multi-input | Each Merge's ordered image port: a vertical pill in the kind's `Socket*` token, `kStackSlotPitch` long per ordered slot, divided by `Surface` hairlines. A `Muted` caret marks the position under the pointer during a drag, and the pill highlights compatible image drops; the card shows its input count |
 | Card eyebrow | Each card carries a `UiSmall`/`Faint` kind label above its display name |
 | In-card vocabulary row | A parameter whose value is a closed vocabulary rather than a number takes a Compact `KDropdown` in the card's control column, sized and stretched exactly as a `KValueField` row is. Blending is one example; its value is not animatable and carries no keyframe indicator |

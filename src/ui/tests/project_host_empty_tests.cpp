@@ -333,7 +333,7 @@ void testBlankStatusBarNeutralThenRestores(Expectations& expectations) {
         });
     ui::WindowStatusBar strip(session, &controller, nullptr, nullptr);
     expectations.expect(strip.colorChipTextForTest() == QStringLiteral("No composition"),
-                        "blank status: the colour chip reports no composition instead of "
+                        "blank status: the color chip reports no composition instead of "
                         "Reference (unqualified)");
     expectations.expect(strip.previewStateTextForTest().isEmpty(),
                         "blank status: no preview-unsupported text appears without a composition");
@@ -359,7 +359,7 @@ void testBlankStatusBarNeutralThenRestores(Expectations& expectations) {
     strip.setDisplayedViewer(&viewer);
     expectations.expect(strip.colorChipTextForTest() != QStringLiteral("No composition") &&
                             strip.colorChipTextForTest() != QStringLiteral("No visible viewer"),
-                        "the displayed viewer restores the ordinary colour state");
+                        "the displayed viewer restores the ordinary color state");
     expectations.expect(!strip.previewStateTextForTest().isEmpty(),
                         "the displayed viewer restores ordinary preview activity");
     strip.setDisplayedViewer(nullptr);

@@ -564,7 +564,7 @@ void testShapeLayerStyle(TestContext& test) {
                         document::ParameterValue{stroke} &&
                     createdConstant(lineSnapshot, *lineNode, "strokeWidth") ==
                         document::ParameterValue{3.0},
-                "a line always strokes and never fills, in the style's colour and width");
+                "a line always strokes and never fills, in the style's color and width");
 
     Transaction plain("Add Line", document.snapshot().revision());
     plain.emplace<AddShapeLayer>(kCompositionId, document::ShapeKind::Line);
@@ -622,7 +622,7 @@ void testTextLayerStyle(TestContext& test) {
                                   core::Color4d{1, 1, 1, 1},
                                   TextLayerStyle{std::nullopt, std::int64_t{3}});
     test.expect(stack.execute(std::move(invalid)).status == CommandStatus::Rejected,
-                "an alignment outside left, centre and right is refused");
+                "an alignment outside left, center and right is refused");
 }
 
 void testAddSolidLayerBuildsOneCanonicalTopology(TestContext& test) {

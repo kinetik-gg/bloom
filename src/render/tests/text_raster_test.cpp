@@ -377,7 +377,7 @@ void testTypographyGoldens(Expectations& expectations) {
         digests == std::array<std::uint64_t, 5>{7853883709848069213ULL, 3444746878591692842ULL,
                                                 4373560154211617060ULL, 6681727905294334493ULL,
                                                 17380785927925869081ULL},
-        "left, centre, right, line-height and letter-spacing coverage goldens");
+        "left, center, right, line-height and letter-spacing coverage goldens");
     const auto invalid = TextCoverageBitmap::rasterizeEmbeddedText(
         EmbeddedFace::DejaVuSans, "A", *parameters.value(), generousByteLimit(),
         {TextAlignment::Left, 0, 0, true});
@@ -413,9 +413,9 @@ void testBoxTypographyGoldens(Expectations& expectations) {
     }
     expectations.expect(raster.value()->originX() == 2 && raster.value()->originY() == 35 &&
                             raster.value()->width() == 28 && raster.value()->height() == 28,
-                        "wrapped centred bottom-aligned box bounds golden");
+                        "wrapped centered bottom-aligned box bounds golden");
     expectations.expect(digest == 3600944647390057943ULL,
-                        "wrapped centred bottom-aligned box coverage golden");
+                        "wrapped centered bottom-aligned box coverage golden");
 }
 
 void testLayoutQuery(Expectations& expectations) {

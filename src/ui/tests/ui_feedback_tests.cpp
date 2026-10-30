@@ -163,7 +163,7 @@ void testVolumeAndTestSound(Expectations& check) {
     check.expect(rig.feedback->playTest(draft) && rig.player->played.back().gain == 0.8F,
                  "the test sound plays at the draft volume whatever the categories");
     draft.soundsEnabled = false;
-    check.expect(!rig.feedback->playTest(draft), "the test sound honours the master switch");
+    check.expect(!rig.feedback->playTest(draft), "the test sound honors the master switch");
 }
 
 void testRateLimit(Expectations& check) {

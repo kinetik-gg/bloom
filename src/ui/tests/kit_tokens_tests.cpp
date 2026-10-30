@@ -169,7 +169,7 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
                         "the scrollbar track is one constant 12");
     expectations.expect(kit::px(kit::Size::RadioDot) % 2 == 0 &&
                             kit::px(kit::Size::RadioMark) % 2 == 0,
-                        "the radio dot and mark are even, so the dot centres on the pixel grid");
+                        "the radio dot and mark are even, so the dot centers on the pixel grid");
     // task S1, item 3: the narrowest a menu popup may be.
     expectations.expect(kit::px(kit::Size::MenuMinWidth) == 200, "MenuMinWidth is 200");
 }

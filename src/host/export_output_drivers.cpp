@@ -159,7 +159,7 @@ class DriverBase : public ExportOutputDriver {
                 report_.verification.facets[index] = {id, state};
             if (!exportPreservationFits(state, expected_[index])) {
                 log(runtime::DiagnosticSeverity::Error, "export.check.analysis-policy",
-                    std::string(output::outputFacetDisplayNameV1(id)) + " analysed as " +
+                    std::string(output::outputFacetDisplayNameV1(id)) + " analyzed as " +
                         std::to_string(static_cast<unsigned>(state)) + ", preset expects at most " +
                         std::to_string(static_cast<unsigned>(expected_[index])),
                     frame);
@@ -316,7 +316,7 @@ class ImageDriver final : public DriverBase {
                     return stopNow();
                 if (!result->value() || !*result->value() || !(*result->value())->approvable())
                     return fail(failure(ExportFailureCode::AnalysisRefused, "export.exr.colour",
-                                        "The EXR output colour space or compression is "
+                                        "The EXR output color space or compression is "
                                         "unavailable in this project",
                                         next_));
                 approve(*result->value());
@@ -809,7 +809,7 @@ class ImageDriver final : public DriverBase {
                     if (context.isCancellationRequested())
                         return Result::cancelled();
                     context.reportProgress(
-                        {"ColorPreparing", "EXR output colour", 0, std::nullopt});
+                        {"ColorPreparing", "EXR output color", 0, std::nullopt});
                     auto result = output::prepareFlatExrAttemptV1(*attempt, options, *ledger);
                     if (context.isCancellationRequested())
                         return Result::cancelled();
@@ -817,7 +817,7 @@ class ImageDriver final : public DriverBase {
                 });
         if (!submission.accepted())
             return fail(failure(ExportFailureCode::ResourceRefused, "export.task.refused",
-                                "EXR colour preparation could not be started", next_));
+                                "EXR color preparation could not be started", next_));
         inFlight_.emplace<PrepareHandle>(std::move(submission.handle));
     }
 

@@ -241,7 +241,7 @@ OpenH264RuntimeStatus OpenH264Runtime::verify() const {
     const auto license = root_ / "BINARY_LICENSE.txt";
     if (!std::filesystem::is_regular_file(license) || digestFile(license) != kLicenseDigest) {
         result.failure = OpenH264RuntimeFailure::NotInstalled;
-        result.detail = "OpenH264 binary licence is missing or does not match Cisco's terms";
+        result.detail = "OpenH264 binary license is missing or does not match Cisco's terms";
         return result;
     }
     result.installed = true;
@@ -260,7 +260,7 @@ OpenH264InstallResult OpenH264Runtime::install(
 #else
     if (!explicitConsent)
         return failure(OpenH264RuntimeFailure::ConsentRequired,
-                       "OpenH264 installation requires explicit Cisco licence consent", root_);
+                       "OpenH264 installation requires explicit Cisco license consent", root_);
     if (root_.empty())
         return failure(OpenH264RuntimeFailure::InstallFailed,
                        "Per-user data directory is unavailable", root_);
@@ -338,7 +338,7 @@ OpenH264InstallResult OpenH264Runtime::install(
     license.close();
     if (!license)
         return failure(OpenH264RuntimeFailure::InstallFailed,
-                       "Could not publish OpenH264 binary licence", root_);
+                       "Could not publish OpenH264 binary license", root_);
     if (!recordConsent(root_.parent_path().parent_path() / "Bloom.conf"))
         return failure(OpenH264RuntimeFailure::InstallFailed, "Could not persist OpenH264 consent",
                        root_);
@@ -385,7 +385,7 @@ OpenH264InstallResult OpenH264Runtime::locate(const std::filesystem::path& file,
     license.write(licenseText.data(), static_cast<std::streamsize>(licenseText.size()));
     license.close();
     if (!license)
-        return failure(OpenH264RuntimeFailure::InstallFailed, "Could not write licence", root_);
+        return failure(OpenH264RuntimeFailure::InstallFailed, "Could not write license", root_);
     if (!recordConsent(root_.parent_path().parent_path() / "Bloom.conf"))
         return failure(OpenH264RuntimeFailure::InstallFailed, "Could not persist OpenH264 consent",
                        root_);

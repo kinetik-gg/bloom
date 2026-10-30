@@ -323,7 +323,7 @@ void testEffectStage(Expectations& expectations, GpuDevice& device,
     // program creation/dispatch and exactly one actual process payload.
     const auto identityAccepted = stage->begin(nullptr, input, kBudget);
     expectations.expect(identityAccepted.code == GpuOutputColorDiagnosticCode::None,
-                        "effect: the identity job is accepted after a colour job");
+                        "effect: the identity job is accepted after a color job");
     auto identityPoll = stage->poll();
     while (identityPoll == GpuOutputColorPollResult::Pending) {
         identityPoll = stage->poll();
@@ -339,11 +339,11 @@ void testEffectStage(Expectations& expectations, GpuDevice& device,
                                 identityFrame->counters.programCreations == 0 &&
                                 identityFrame->counters.programReuses == 0 &&
                                 identityFrame->counters.dispatches == 0,
-                            "effect: identity after colour reports zero new colour work");
+                            "effect: identity after color reports zero new color work");
         expectations.expect(identityFrame->counters.readbackSubmissions == 1 &&
                                 identityFrame->counters.transferredPayloads == 1 &&
                                 identityFrame->counters.encodedPayloadBytes == 0,
-                            "effect: identity after colour transfers exactly one process payload");
+                            "effect: identity after color transfers exactly one process payload");
     }
 }
 

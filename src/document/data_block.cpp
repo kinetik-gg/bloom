@@ -306,7 +306,7 @@ ValidationResult DataBlockRecord::validate(const Project* project) const {
     case DataBlockKind::Ramp: {
         const auto* ramp = std::get_if<DataBlockRamp>(&payload);
         if (ramp == nullptr || ramp->stops.empty() || ramp->stops.size() > 4096)
-            result.add(ValidationCode::InvalidValue, "payload", "Invalid colour ramp payload");
+            result.add(ValidationCode::InvalidValue, "payload", "Invalid color ramp payload");
         if (ramp != nullptr) {
             double previous = -std::numeric_limits<double>::infinity();
             for (const auto& stop : ramp->stops) {

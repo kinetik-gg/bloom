@@ -794,11 +794,11 @@ void testCst() {
     const auto missing = planWith({runtime::CstKernel{"missing-colour-space", "ACEScg"}});
     for (int i = 0; i < 2; ++i) {
         const auto refused = evaluator.evaluate(missing, requestFor(*missing), {});
-        expect(samePixels(baseline, refused), "missing colour space passes through exactly");
+        expect(samePixels(baseline, refused), "missing color space passes through exactly");
         expect(refused.diagnostics().size() == 1 &&
                    refused.diagnostics()[0].code ==
                        runtime::EvaluationDiagnosticCode::ColorSpaceMissing,
-               "missing colour space retains typed diagnostic on cold and warm caches");
+               "missing color space retains typed diagnostic on cold and warm caches");
     }
     const auto transparent = planWith({runtime::CstKernel{"ACEScg", "ACEScct"}}, {1, 2, 3, 0});
     const auto zero = evaluator.evaluate(transparent, requestFor(*transparent), {});
@@ -834,7 +834,7 @@ void testLookBypass() {
     const auto retained = planWith({transform});
     const auto expected = evaluator.evaluate(retained, requestFor(*retained), {});
     expect(samePixels(withoutLook, expected),
-           "look bypass skips tagged effects and retains untagged colour processing");
+           "look bypass skips tagged effects and retains untagged color processing");
     expect(!samePixels(withLook, withoutLook), "look flag changes evaluated pixels");
     expect(withLook.frame() && withoutLook.frame() &&
                withLook.frame()->identity() != withoutLook.frame()->identity(),

@@ -101,7 +101,7 @@ void testOutputOptions(Expectations& expectations) {
         auto prepared = output::prepareFlatExrAttemptV1(
             *attempt, {.outputColorSpaceId = "ACES2065-1", .compression = compression}, ledger);
         expectations.expect(prepared.hasAttempt(),
-                            "output colour options produce an approvable report");
+                            "output color options produce an approvable report");
         if (!prepared)
             continue;
         const output::FlatExrExportWriterV1 writer;

@@ -3,7 +3,7 @@
 The current document schema is 1.29. It adds the export queue: the required last project member
 `exportQueue` and the `exportJob`/`exportOutput` allocator namespaces (see "Export Queue In Document
 1.29"). Document 1.28 changed no member: it marks projects saved after ordinary
-and untagged SDR video in Auto began to be shown through the sRGB texture space (see "Video Colour
+and untagged SDR video in Auto began to be shown through the sRGB texture space (see "Video Color
 Default In Document 1.28"). Document 1.27 added the optional composition `folder`, the Assets folder
 that holds a composition (see "Composition Folders In Document 1.27"), on top of the 1.26 Image
 source node v2 (optional `part` and `layer` parameters and a `channels` output; see "Channel Sets
@@ -14,8 +14,8 @@ video stream field order and timecode type and the optional Video node audio str
 optional layer masks and track matte on Layer Output boundaries, the Path animation curve kind and the optional `layerMask` allocator namespace (see
 "Layer Masks In Document 1.24") on top of the 1.23 layer-owned time members (see "Layer Time In
 Document 1.23"), the 1.22 explicit external file-URI asset
-locators, the 1.21 LUT asset kind, 1.20 config-managed asset input colour-space ids,
-the 1.19 optional per-composition working colour-space override, the 1.18 `project.dataBlocks`
+locators, the 1.21 LUT asset kind, 1.20 config-managed asset input color-space ids,
+the 1.19 optional per-composition working color-space override, the 1.18 `project.dataBlocks`
 collection, and the `dataBlock` allocator namespace.
 See [data blocks](data-blocks.md) for the model and provenance contract.
 
@@ -93,7 +93,7 @@ space. `bypassLookNodes` is a request option and is never stored in the project.
 
 Document `1.20` adds `inputColorSpaceId` to every asset interpretation and adds the matching
 non-animatable String parameter to image and video source nodes. The empty id is Auto/inherit; a
-non-empty id is an exact non-data colour-space id in the project's OCIO configuration. The legacy
+non-empty id is an exact non-data color-space id in the project's OCIO configuration. The legacy
 integer interpretation and image/video `colorSpace` parameter remain for compatibility.
 
 Document `1.14` adds the bounded `path` constant value (see "Path values" below).
@@ -394,7 +394,7 @@ is enforced at both ends and never by terminating:
   `SaveArchiveDocumentEncodingFailure::fieldPath` at `SaveArchiveStage::DocumentEncode`. The save
   fails, the file on disk is untouched, and the session stays open and editable so the artist can
   correct the value; the UI names it ("Save failed: `<field>` is not a finite number"). Save, Save
-  As and Save a Copy share the executor and therefore this behaviour.
+  As and Save a Copy share the executor and therefore this behavior.
 - **Reading.** `parseKnownFloat64` refuses a non-finite result, including a decimal that overflows
   to infinity, with `DocumentDecodeError::InvalidFloat64`. JSON has no NaN or infinity literal, so
   no well-formed archive can carry one.
@@ -522,8 +522,8 @@ look, or monitor does not alter either durable value; those selections are sessi
 state.
 
 Each composition may additionally carry `workingColorSpaceId`. It is omitted for inheritance, or is
-an exact scene-linear colour-space id exposed by the project's selected OCIO config. The document
-codec validates its UTF-8/length shape; the colour boundary validates that the chosen config resolves
+an exact scene-linear color-space id exposed by the project's selected OCIO config. The document
+codec validates its UTF-8/length shape; the color boundary validates that the chosen config resolves
 the id. A missing or non-scene-linear id fails closed rather than being replaced with the project
 value. The effective id is written into evaluation intent and output identity, while the project
 config revision remains the shared configuration identity.
@@ -1279,7 +1279,7 @@ frames, exports, or evaluation.
 
 ## Component Keyframes In Document 1.9
 
-The `1.8` → `1.9` ladder step changes vector and colour animation records from whole-value keys to
+The `1.8` → `1.9` ladder step changes vector and color animation records from whole-value keys to
 flat scalar component keys. A `vec2` key names `x` or `y`; a `vec3` key names `x`, `y`, or `z`; a
 `color4` key names `red`, `green`, `blue`, or `alpha`. Every component key retains the legacy key's
 exact rational `time` and `outgoingInterpolation`. Component timelines are independently ordered,
@@ -1322,7 +1322,7 @@ The digest is lowercase SHA-256 of image bytes; a sequence digest hashes ordered
 numbers plus `:` and each member's lowercase digest. Interpretation holds integer `colorSpace`
 (0 Auto, 1 sRGB, 2 Linear, 3 Raw), string `inputColorSpaceId`, and `alphaAssociation` (0 Straight,
 1 Premultiplied). The string is written after the legacy integer and before `alphaAssociation`; an
-empty string means Auto. A non-empty value is an exact non-data colour-space id in the project's
+empty string means Auto. A non-empty value is an exact non-data color-space id in the project's
 selected OCIO configuration. New imports leave the legacy enum at Auto so format metadata and EXR
 chromaticities remain automatic; the enum is retained for compatibility and deterministic migration
 of older documents.
@@ -1498,7 +1498,7 @@ Document `1.26` persists the multi-channel nodes of
 
 - `bloom.image-source` advances to node schema 2. It gains the optional String parameters `part`
   (`bloom.image.part`, an OpenEXR part name; empty is the first part) and `layer`
-  (`bloom.image.layer`, the colour layer; empty is the root layer), and a `channels` ChannelSet
+  (`bloom.image.layer`, the color layer; empty is the root layer), and a `channels` ChannelSet
   output beside `image`.
 - `bloom.channel-shuffle`, `bloom.channel-copy` and `bloom.channel-remove` (node schema 1) are new
   node types. Their String parameters are bounded to 256 bytes (channel names) or 4096 bytes
@@ -1524,7 +1524,7 @@ A composition gains an optional `timecode` member after `workingColorSpaceId` (#
 
 `start` is the timecode of composition time 0, stored as an exact time so it survives a frame-rate
 change; labels show it at the nearest frame of the composition rate. `dropFrame` asks for SMPTE
-drop-frame labels and is honoured only at 30000/1001 and 60000/1001; at any other rate the labels
+drop-frame labels and is honored only at 30000/1001 and 60000/1001; at any other rate the labels
 are non-drop and the stored flag is kept. Neither value changes frames, time, evaluation or output
 identity: they are timecode presentation owned by the composition. The member is written only when
 it differs from the default (start 0, non-drop), so a composition without it keeps its 1.25 bytes.
@@ -1569,13 +1569,13 @@ The `1.28` → `1.29` step `migrateExportQueueV1_28` is self-contained and versi
 `highestIssued`; its already-migrated guard refuses a file that already carries any of them. A
 migrated 1.28 project equals the same project saved at 1.29, with an empty queue.
 
-## Video Colour Default In Document 1.28
+## Video Color Default In Document 1.28
 
 Document `1.28` changes no member ([ADR 0032](../decisions/0032-sdr-video-colour-default.md),
 issue #381). From this version, Auto shows ordinary Rec.709/601 and untagged SDR video through the
 config's sRGB texture space instead of its Rec.709 video space (see
-[colour management](color-management.md#automatic-asset-rules)). The `1.27` → `1.28` DOM step only
-advances the version: Auto stays Auto and every explicit or legacy input colour is kept exactly, so
+[color management](color-management.md#automatic-asset-rules)). The `1.27` → `1.28` DOM step only
+advances the version: Auto stays Auto and every explicit or legacy input color is kept exactly, so
 no per-asset assumption is recorded. The opened document's source version is reported by the open
 path (`SessionOpenResult::openedDocumentSchemaVersion()`). When it is below `1.28` and a video asset
 in Auto has stored stream tags that take the new default, Open shows a one-time information note
@@ -1649,7 +1649,7 @@ organization fields. `video` contains `frames` (canonical unsigned decimal strin
 `duration`, and a nonempty `streams` array (at most 256). A stream contains, in order: `id`, `kind`
 (1 video, 2 audio, 3 data), `codec`, `profile`, `pixelFormat`, `timecode`, `timebase`, `framePeriod`,
 `duration`, `width`, `height`, `sampleRate`, `primaries`, `transfer`, `matrix`, `range`, and
-`channelLayout`. Rates are stored as exact positive reciprocal frame periods. Colour code points
+`channelLayout`. Rates are stored as exact positive reciprocal frame periods. Color code points
 use canonical signed decimal strings; absent tags remain explicit. Stream IDs follow container
 order. Dimensions, strings, timing, audio layout and frame counts are bounded during decoding and
 domain validation. Only video assets may carry this member.
@@ -1659,7 +1659,7 @@ stream supplies its preview sample rate and channel count. Content digest binds 
 cache lookup. ProRes authorization is not project truth: the current provider's explicit
 non-authorized status is execution evidence and appears in the asset tooltip.
 
-## Asset Input Colour Spaces In Document 1.20
+## Asset Input Color Spaces In Document 1.20
 
 The `1.19` → `1.20` migration appends `inputColorSpaceId` to each existing asset interpretation
 and adds the `inputColorSpaceId` String parameter to `bloom.image-source` and `bloom.video-source`.

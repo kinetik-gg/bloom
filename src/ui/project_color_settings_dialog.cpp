@@ -51,7 +51,7 @@ struct Resolved final {
     if (resolved.reason.find("ACES configuration is unavailable") != std::string::npos)
         return {std::nullopt, QObject::tr("The built-in ACES configuration is unavailable in this "
                                           "build, so it cannot be selected.")};
-    return {std::nullopt, QObject::tr("The working colour space \u201c%1\u201d is not offered by "
+    return {std::nullopt, QObject::tr("The working color space \u201c%1\u201d is not offered by "
                                       "that configuration.")
                               .arg(QString::fromStdString(workingId))};
 }
@@ -64,7 +64,7 @@ void showProjectColorSettingsDialog(ProjectHost& host, QWidget& owner) {
         return;
     const auto original = *current;
 
-    auto* dialog = new kit::KDialog(QObject::tr("Project Settings — Colour"),
+    auto* dialog = new kit::KDialog(QObject::tr("Project Settings — Color"),
                                     QStringLiteral("projectColorSettingsDialog"), owner);
     auto* form = dialog->addForm();
     auto* config = new kit::KDropdown(dialog);
@@ -86,8 +86,8 @@ void showProjectColorSettingsDialog(ProjectHost& host, QWidget& owner) {
 
     auto* working = new kit::KDropdown(dialog);
     working->setObjectName(QStringLiteral("projectWorkingColorSpacePicker"));
-    working->setAccessibleName(QObject::tr("Working colour space"));
-    (void)form->addRow(QObject::tr("Working Colour Space"), working);
+    working->setAccessibleName(QObject::tr("Working color space"));
+    (void)form->addRow(QObject::tr("Working Color Space"), working);
     auto* summary = new kit::KLabel(dialog);
     summary->setObjectName(QStringLiteral("projectColorSummary"));
     summary->setWordWrap(true);
@@ -181,8 +181,8 @@ void showProjectColorSettingsDialog(ProjectHost& host, QWidget& owner) {
         const auto status = guard->setColorSettings(std::move(*resolved.settings));
         if (status == host::ProjectSessionColorSettingsStatus::InvalidSettings && window)
             kit::inform(*window, kit::KPromptTone::Error, QObject::tr("Project Settings"),
-                        QObject::tr("The colour configuration was not changed."),
-                        QObject::tr("The selected colour configuration could not be resolved."),
+                        QObject::tr("The color configuration was not changed."),
+                        QObject::tr("The selected color configuration could not be resolved."),
                         QStringLiteral("projectColorSettingsFailed"));
     });
 }

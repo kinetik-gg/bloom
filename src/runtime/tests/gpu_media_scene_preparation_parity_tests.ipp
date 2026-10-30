@@ -123,16 +123,16 @@ void testChangedColourInterpretation(Expectations& expectations,
     const auto reinterpreted = publish(std::move(definition));
 
     checkMediaParity(expectations, evaluator, reinterpreted, requestFor(*reinterpreted),
-                     "changed input colour interpretation");
+                     "changed input color interpretation");
     const auto second = builder.build(reinterpreted, requestFor(*reinterpreted));
     expectations.expect(second.hasValue() &&
                             second.scene->mediaStatistics().imageConversions == 1 &&
                             second.scene->mediaStatistics().uploadCacheHits == 0 &&
                             second.scene->mediaStatistics().uploadCacheMisses == 1,
-                        "a changed input colour interpretation is an upload cache miss");
+                        "a changed input color interpretation is an upload cache miss");
     const auto* uploadFirst = firstUpload(*first.scene);
     const auto* uploadSecond = firstUpload(*second.scene);
     expectations.expect(uploadFirst != nullptr && uploadSecond != nullptr &&
                             uploadFirst->semanticKey != uploadSecond->semanticKey,
-                        "a changed input colour interpretation changes the source key");
+                        "a changed input color interpretation changes the source key");
 }

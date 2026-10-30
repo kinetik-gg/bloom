@@ -77,7 +77,7 @@ QString layerArrangementName(const LayerArrangement arrangement) {
     case LayerArrangement::AlignLeft:
         return LayerAlignmentActions::tr("Align Left Edges");
     case LayerArrangement::AlignHorizontalCentre:
-        return LayerAlignmentActions::tr("Align Horizontal Centres");
+        return LayerAlignmentActions::tr("Align Horizontal Centers");
     case LayerArrangement::AlignRight:
         return LayerAlignmentActions::tr("Align Right Edges");
     case LayerArrangement::AlignTop:

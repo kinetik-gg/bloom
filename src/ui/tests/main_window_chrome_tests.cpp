@@ -837,8 +837,8 @@ void testContextBarIsAFixedSurfaceUnderTheMenuBar(Expectations& expectations) {
         auto* toggle = fixture.window->contextBarAction();
         expectations.expect(bar != nullptr && bar->isVisible() && toggle != nullptr &&
                                 toggle->isCheckable() && toggle->isChecked() &&
-                                toggle->text() == QStringLiteral("Context Bar"),
-                            "the context bar is shown, with a checked Window > Context Bar");
+                                toggle->text() == QStringLiteral("Toolbar"),
+                            "the context bar is shown, with a checked Window > Toolbar");
         if (bar == nullptr || toggle == nullptr)
             return;
         auto* workspace = fixture.window->workspaceHost();
@@ -858,7 +858,7 @@ void testContextBarIsAFixedSurfaceUnderTheMenuBar(Expectations& expectations) {
                             "Composition > Align offers the bar's own Align actions");
         toggle->trigger();
         expectations.expect(!bar->isVisible() && !toggle->isChecked(),
-                            "Window > Context Bar hides the bar");
+                            "Window > Toolbar hides the bar");
         QSettings settings(path, QSettings::IniFormat);
         fixture.window->saveApplicationState(settings);
         settings.sync();
@@ -1040,13 +1040,13 @@ void testWindowStatusBarMessagesClearThemselves(Expectations& expectations) {
     warning.activity = PreviewActivity::Ready;
     warning.diagnostics.push_back({"bloom.runtime.evaluation.color-space-missing",
                                    bloom::runtime::DiagnosticSeverity::Warning,
-                                   "Colour transform bypassed: MissingInputColorSpace",
+                                   "Color transform bypassed: MissingInputColorSpace",
                                    {},
                                    {}});
     expectations.expect(
         previewActivityText(warning) ==
-            QStringLiteral("Colour transform bypassed: MissingInputColorSpace"),
-        "a ready pass-through frame displays its typed colour refusal in the status bar");
+            QStringLiteral("Color transform bypassed: MissingInputColorSpace"),
+        "a ready pass-through frame displays its typed color refusal in the status bar");
     strip->setPersistentMessage(QString{});
     expectations.expect(strip->messageTextForTest().isEmpty(),
                         "status bar messages: clearing the persistent message empties the cell");
@@ -1122,12 +1122,12 @@ void testPreferencesAudioActionMirrorsCommittedPreference(Expectations& expectat
 void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
     bool ok = false;
     Fixture fixture(&ok);
-    expectations.expect(ok, "colour settings: stand-in editors registered");
+    expectations.expect(ok, "color settings: stand-in editors registered");
     if (!ok)
         return;
     MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
     auto* action = window.findChild<QAction*>(QStringLiteral("projectColorSettingsAction"));
-    expectations.expect(action != nullptr, "colour settings: project action exists");
+    expectations.expect(action != nullptr, "color settings: project action exists");
     if (!action)
         return;
 
@@ -1140,11 +1140,11 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
             auto* working =
                 dialog ? dialog->findChild<kit::KDropdown*>("projectWorkingColorSpacePicker")
                        : nullptr;
-            expectations.expect(config && working, "colour settings: dialog has both selectors");
+            expectations.expect(config && working, "color settings: dialog has both selectors");
             if (config && working) {
                 expectations.expect(config->currentData().toString() == expectedConfig &&
                                         working->currentData().toString() == expectedWorking,
-                                    "colour settings: dialog opens on the saved intent");
+                                    "color settings: dialog opens on the saved intent");
                 if (!changeConfig.isEmpty())
                     config->setCurrentIndex(config->findData(changeConfig));
             }
@@ -1167,7 +1167,7 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
     auto aces = *fixture.projectHost.colorSettings();
     const auto revision = bloom::color::ocioBuiltInContentRevision(
         bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
-    expectations.expect(revision.has_value(), "colour settings: ACES revision resolves");
+    expectations.expect(revision.has_value(), "color settings: ACES revision resolves");
     if (!revision)
         return;
     aces.ocioConfig.locator =
@@ -1176,10 +1176,10 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
     aces.processColorSpaceId = "Linear P3-D65";
     expectations.expect(fixture.projectHost.setColorSettings(aces) ==
                             bloom::host::ProjectSessionColorSettingsStatus::Updated,
-                        "colour settings: ACES setup is accepted");
+                        "color settings: ACES setup is accepted");
     choose("aces", "Linear P3-D65");
     expectations.expect(*fixture.projectHost.colorSettings() == aces,
-                        "colour settings: unchanged ACES dialog retains nondefault working space");
+                        "color settings: unchanged ACES dialog retains nondefault working space");
 
     auto external = aces;
     external.ocioConfig.locator =
@@ -1188,10 +1188,10 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
     external.ocioConfig.contextVariables = {{"SHOW", "sample"}};
     expectations.expect(fixture.projectHost.setColorSettings(external) ==
                             bloom::host::ProjectSessionColorSettingsStatus::Updated,
-                        "colour settings: external setup is accepted");
+                        "color settings: external setup is accepted");
     choose("current", "Linear P3-D65");
     expectations.expect(*fixture.projectHost.colorSettings() == external,
-                        "colour settings: unchanged external dialog retains locator and revision");
+                        "color settings: unchanged external dialog retains locator and revision");
 
     choose("current", "Linear P3-D65", "neutral");
     const auto changed = fixture.projectHost.colorSettings();
@@ -1201,7 +1201,7 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
             : std::get_if<bloom::document::BuiltInOcioConfigLocator>(&changed->ocioConfig.locator);
     expectations.expect(builtIn && builtIn->uri == bloom::color::kBloomNeutralV1ConfigUri &&
                             changed->processColorSpaceId == "lin_rec709_scene",
-                        "colour settings: an explicit config choice updates the project");
+                        "color settings: an explicit config choice updates the project");
 }
 
 } // namespace

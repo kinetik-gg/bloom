@@ -175,7 +175,7 @@ GpuOutputColorStage::begin(std::shared_ptr<const PreparedGpuOcioCommand> command
             !executor_->isBoundTo(*device_) || executor_->deviceLost() ||
             phase != device_->retainedProcessingPhase() || (phase && phase->isUnproven())) {
             return {GpuOutputColorDiagnosticCode::DeviceUnavailable,
-                    "output colour requires the exact proven retained processing phase"};
+                    "output color requires the exact proven retained processing phase"};
         }
         if (phase_ != Phase::Idle) {
             // A genuinely retired failure is reusable; a live or unretired submission is refused.

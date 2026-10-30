@@ -11,8 +11,8 @@ Location**. Click a column header to sort by it, and click again to reverse; fol
 the top. Drag a header divider to resize a column or a header to move it. Bloom remembers your
 columns and their widths for the next session.
 
-Compositions show a film strip; every symbol in the list is drawn in the row's own colour, and only
-a warning (missing media) is coloured. An open folder shows an open folder, and a folder's name is
+Compositions show a film strip; every symbol in the list is drawn in the row's own color, and only
+a warning (missing media) is colored. An open folder shows an open folder, and a folder's name is
 followed by how many items it holds, such as **test · 1**. Folders nest by one step per level, so an
 item's symbol sits under its folder's name.
 
@@ -20,8 +20,8 @@ A slim strip at the top of the panel sums up the selection. With one item it sho
 (for a composition, a small render of its first frame; its symbol until a picture is ready), the
 name with how often it is used, and one line of facts to skim, such as
 `Sequence · 2048 × 858 · 0:00:16:02 · 386 f · 24 fps · sRGB · Straight`. Hover over a fact for the
-whole sentence. The colour space has its plain name, such as **sRGB** or **Linear Rec.709**; when
-Bloom had to assume the colour of an untagged video, or a file is missing, that line turns orange
+whole sentence. The color space has its plain name, such as **sRGB** or **Linear Rec.709**; when
+Bloom had to assume the color of an untagged video, or a file is missing, that line turns orange
 and its tooltip says why. With several items selected the strip counts them and their kinds; with
 nothing selected it says what the project holds, such as `7 items · 5 sequences · 2 compositions`.
 Turn **View > Show Info** off to hide the strip.
@@ -92,7 +92,7 @@ together; one **Undo** reverses the whole move. A folder cannot be moved into it
 
 Right-click an item for the commands that apply to it:
 
-- **Media:** New Composition from Selection, Input Colour… (how its colours are interpreted),
+- **Media:** New Composition from Selection, Input Color… (how its colors are interpreted),
   Replace Footage…, Reload Footage, Reveal in File Manager (shows the file selected in your file
   manager, or opens its folder where that is not possible), Rename, Edit Tags…, Delete.
 - **Compositions:** Open, Composition Settings…, Rename, Duplicate, Delete.
@@ -145,7 +145,7 @@ layer. Every layer keeps the length of its media, up to the length of the compos
 lasts its frames, a video or a nested composition its duration. One **Undo** removes the whole
 drop. The new layers are selected afterwards, so their properties show straight away.
 
-Dropping items on the Viewer adds them on top at the playhead, centred in the composition. Files
+Dropping items on the Viewer adds them on top at the playhead, centered in the composition. Files
 dragged from your file manager onto the Timeline or the Viewer are imported first, with the usual
 import progress, and then added as layers where you dropped them; the status bar says how many
 layers were added, and one **Undo** removes the layers while a second removes the import.
@@ -184,7 +184,7 @@ Drag the asset into the Timeline to create a Video source and Layer at the norma
 as long as the video and starting where you drop it.
 The Layer carries image and, when present, audio connections. Its node card shows the first frame;
 a video with audio also supplies a waveform. Properties exposes Asset, Start Frame, Loop Mode and
-legacy Colour Space plus **Input colour space**. Input colour space is Auto by default and is
+legacy Color Space plus **Input color space**. Input color space is Auto by default and is
 resolved from the selected OCIO configuration; choose an explicit config space when the container
 tags are incomplete or the footage is LogC3/Log3G10. Start Frame offsets both image and audio. Loop and Ping-pong affect the image;
 audio follows the ordinary clip duration.

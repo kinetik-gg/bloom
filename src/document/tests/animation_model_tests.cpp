@@ -496,12 +496,12 @@ void testColor4CurveAndEasedInterpolation(ExpectationContext& expectations) {
                              component({scalarKey(15, RationalTime::fromInteger(0), 1.0,
                                                   KeyframeInterpolation::EaseInOut),
                                         scalarKey(16, RationalTime::fromInteger(2), 0.0)})}}),
-                        "a colour curve enters the store, HDR and negative channels included");
+                        "a color curve enters the store, HDR and negative channels included");
     expectations.expect(store.findColor4(AnimationCurveId::fromRaw(1)) != nullptr &&
                             store.findScalar(AnimationCurveId::fromRaw(1)) == nullptr &&
                             store.findVec2(AnimationCurveId::fromRaw(1)) == nullptr,
                         "and the three typed finders are mutually exclusive on it");
-    expectations.expect(store.validate().ok(), "the colour curve validates as stored");
+    expectations.expect(store.validate().ok(), "the color curve validates as stored");
 
     // Finiteness is the STORE's rule for any key. The narrower authoring-colour domain (alpha in
     // the unit interval) belongs to the parameter that owns the curve, so it is enforced by
@@ -511,18 +511,18 @@ void testColor4CurveAndEasedInterpolation(ExpectationContext& expectations) {
                             {component({scalarKey(4, RationalTime::fromInteger(0),
                                                   std::numeric_limits<double>::infinity())}),
                              component({}), component({}), component({})}}),
-                        "a non-finite colour channel is refused");
+                        "a non-finite color channel is refused");
 
     // Keyframe IDs stay project-global across kinds: a colour key may not reuse a scalar key's ID.
     expectations.expect(
         store.insert(ScalarAnimationCurve{
             AnimationCurveId::fromRaw(4),
             {ScalarKeyframe{KeyframeId::fromRaw(9), RationalTime::fromInteger(0), 1.0}}}),
-        "a scalar curve coexists with a colour one");
+        "a scalar curve coexists with a color one");
     expectations.expect(!store.insertKeyframe(AnimationCurveId::fromRaw(1),
                                               bloom::document::AnimationComponent::Red,
                                               scalarKey(9, RationalTime::fromInteger(1), 0.0)),
-                        "a colour key may not reuse a keyframe ID a scalar curve already holds");
+                        "a color key may not reuse a keyframe ID a scalar curve already holds");
 
     // Insert/update/erase behave exactly as the scalar and Vec2 overloads do, and the final key's
     // interpolation is re-normalized to Linear on every mutation.
@@ -530,7 +530,7 @@ void testColor4CurveAndEasedInterpolation(ExpectationContext& expectations) {
                                              bloom::document::AnimationComponent::Red,
                                              scalarKey(5, RationalTime::fromInteger(4), 1.0,
                                                        KeyframeInterpolation::EaseInOut)),
-                        "a colour key inserts at a free exact time");
+                        "a color key inserts at a free exact time");
     const auto* curve = store.findColor4(AnimationCurveId::fromRaw(1));
     expectations.expect(curve != nullptr && curve->components[0].keyframes.size() == 3 &&
                             curve->components[0].keyframes.back().outgoingInterpolation ==
@@ -543,12 +543,12 @@ void testColor4CurveAndEasedInterpolation(ExpectationContext& expectations) {
     expectations.expect(!store.insertKeyframe(AnimationCurveId::fromRaw(1),
                                               bloom::document::AnimationComponent::Red,
                                               scalarKey(6, RationalTime::fromInteger(4), 0.0)),
-                        "an occupied exact time refuses a colour insert, as it does every kind");
+                        "an occupied exact time refuses a color insert, as it does every kind");
     expectations.expect(
         store.eraseKeyframe(AnimationCurveId::fromRaw(1), KeyframeId::fromRaw(5)) &&
             store.findColor4(AnimationCurveId::fromRaw(1))->components[0].keyframes.size() == 2,
-        "erasing a colour key leaves the curve non-empty and ordered");
-    expectations.expect(store.validate().ok(), "every colour mutation leaves the store canonical");
+        "erasing a color key leaves the curve non-empty and ordered");
+    expectations.expect(store.validate().ok(), "every color mutation leaves the store canonical");
 }
 
 // Task S5: the animatable schema set, and which curve kind each member demands.
@@ -562,7 +562,7 @@ void testColorAndScalarSchemaOwnership(ExpectationContext& expectations) {
     expectations.expect(
         isColor4AnimatableSchemaKey(bloom::document::kSolidColorParameterSchemaKey) &&
             isColor4AnimatableSchemaKey(bloom::document::kTextColorParameterSchemaKey),
-        "both colour schemas are Color4-animatable");
+        "both color schemas are Color4-animatable");
     expectations.expect(isScalarAnimatableSchemaKey(bloom::document::kTextSizeParameterSchemaKey),
                         "text size joined the scalar-animatable set");
     expectations.expect(!isAnimatableSchemaKey(bloom::document::kTextParameterSchemaKey),

@@ -466,7 +466,7 @@ void testPreparer(Expectations& expectations,
     expectations.expect(
         preparer.prepare(cstConfig, cst, geometry, options, []() { return true; }).error ==
             GpuOcioPreparationError::CompileCancelled,
-        "cancellation before extraction is honoured");
+        "cancellation before extraction is honored");
 
     GpuOcioProgramPreparer bounded({.maxEntries = 1, .maxBytes = 1ULL << 30});
     (void)bounded.prepare(cstConfig, cst, geometry, options);

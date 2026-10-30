@@ -231,7 +231,7 @@ void ViewerEditor::buildMenus() {
         return action;
     };
     centreCrossAction_ = addOverlayToggle(
-        tr("Centre Cross"), QStringLiteral("viewerCentreCrossAction"), kCentreCrossSetting,
+        tr("Center Cross"), QStringLiteral("viewerCentreCrossAction"), kCentreCrossSetting,
         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C), &overlayOptions_.centreCross);
     thirdsAction_ =
         addOverlayToggle(tr("Thirds"), QStringLiteral("viewerThirdsAction"), kThirdsSetting,

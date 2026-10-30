@@ -661,7 +661,7 @@ void valueNodeCards(App& app) {
     const auto colorNode = app.addByType(document::kColorValueNodeType, {x, 40.0});
     auto* chip = qobject_cast<kit::KColorChip*>(app.editor.graphScene()->nodeFieldForTest(
         colorNode, QStringLiteral("nodeOperandColorChip")));
-    expect(chip != nullptr, "the Colour card carries its chip");
+    expect(chip != nullptr, "the Color card carries its chip");
     if (chip != nullptr) {
         chip->setColor(kit::KColor::fromRgba(0.1F, 0.2F, 0.3F, 1.0F));
         QCoreApplication::processEvents();
@@ -672,7 +672,7 @@ void valueNodeCards(App& app) {
         const auto* held =
             constant == nullptr ? nullptr : std::get_if<core::Color4d>(&constant->value);
         expect(held != nullptr && closeTo(static_cast<float>(held->red), 0.010023),
-               "the Colour card's chip commits its value");
+               "the Color card's chip commits its value");
     }
 }
 

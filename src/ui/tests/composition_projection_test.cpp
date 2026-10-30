@@ -472,7 +472,7 @@ parameterForRole(const bloom::document::Composition& composition,
     auto* solidColorBlue = properties.findChild<ui::kit::KValueField*>("solidColorBlueEditor");
     auto* solidColorAlpha = properties.findChild<ui::kit::KValueField*>("solidColorAlphaEditor");
     if (!require(waitUntil([&] { return solidColorRed && solidColorRed->unit().isEmpty(); }),
-                 "qualified colour presentation becomes ready"))
+                 "qualified color presentation becomes ready"))
         return false;
     if (!require(solidSourceNode != nullptr &&
                      solidSourceNode->typeId == document::kSolidSourceNodeType,

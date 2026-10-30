@@ -35,7 +35,7 @@ element of it:
 | `count` | `bloom.instance.count` | Int64 | `1` | No |
 | `seed` | `bloom.instance.seed` | Int64 | `0` | No |
 | `blendMode` | `bloom.instance.blend-mode` | Int64 | `0` (`Normal`) | No |
-| `origin` | `bloom.instance.origin` | Vec2d | composition centre at creation | Yes |
+| `origin` | `bloom.instance.origin` | Vec2d | composition center at creation | Yes |
 
 `count` is not animatable and not a curve, for the reason a blend mode is not: there is no
 meaningful value between seven copies and eight, so a curve over it could only hold or jump. It can
@@ -64,16 +64,16 @@ resample and blend kernels and an arbitrary one would not.
 | `rotation` | Scalar | `0` | Clockwise degrees about the element's own anchor |
 | `scale` | Vector2 | `{1, 1}` | Per-axis factor about the element's own anchor |
 | `opacity` | Scalar | `1` | Coverage multiplier in `[0, 1]` |
-| `colour` | Color4 | opaque white | A straight multiply over the prototype's colour and alpha |
+| `colour` | Color4 | opaque white | A straight multiply over the prototype's color and alpha |
 | `timeOffset` | Scalar | `0` | Seconds added to the prototype's evaluation time |
 | `blendMode` | Integer | the instancer's mode | Only read through an explicit `Instance Merge` |
 
-An element's anchor is the centre of the prototype's evaluated content bounds. There is no
+An element's anchor is the center of the prototype's evaluated content bounds. There is no
 per-element anchor attribute in v0: an anchor is a property of the picture being copied, and every
 use an artist would put a per-element anchor to is expressible as a position offset.
 
 `colour` is a MULTIPLY, not a material. It scales the prototype's premultiplied pixels, so tinting a
-white prototype works and tinting a photograph darkens it, and neither of those needs a colour
+white prototype works and tinting a photograph darkens it, and neither of those needs a color
 pipeline stage. Per-instance materials are out of v0 (ADR 0023).
 
 Named typed attributes -- arbitrary `Scalar`, `Vector2`, `Integer`, `Boolean` or `Color4` columns
@@ -204,11 +204,11 @@ Layout is not a feature of the instancer. It is a set of pure array value nodes 
 `position[]` and sometimes a `rotation[]`, which an artist wires into the instancer's attributes --
 or does not, and places elements some other way.
 
-| Node | Inputs | Outputs | Behaviour |
+| Node | Inputs | Outputs | Behavior |
 | --- | --- | --- | --- |
 | `Instance Index` | none | `index` Integer[] | `0..count-1` for its scope |
 | `Instance Count` | none | `count` Integer | The scope's count, as an ordinary scalar |
-| `Grid Layout` | `columns` Integer (1), `spacing` Vector2, `centre` Boolean; selector `order` (Row major) | `position` Vector2[] | Row-major or column-major; `centre` shifts the whole block so its bounding box is centred on the origin |
+| `Grid Layout` | `columns` Integer (1), `spacing` Vector2, `centre` Boolean; selector `order` (Row major) | `position` Vector2[] | Row-major or column-major; `centre` shifts the whole block so its bounding box is centered on the origin |
 | `Radial Layout` | `radius` Scalar, `startAngle` Scalar, `sweep` Scalar (360), `alignToTangent` Boolean | `position` Vector2[], `rotation` Scalar[] | A full 360 sweep does not duplicate the endpoint; a partial sweep includes both ends |
 | `Path Follow` | `path` Path, `offset` Scalar, `alignToTangent` Boolean; selector `spacing` (Even) | `position` Vector2[], `rotation` Scalar[] | Even arc-length spacing, or fixed spacing from the start. Arc length is measured on the existing bounded cubic flattening, so a layout and the stroke of the same path agree |
 | `Spacing Relax` | `position` Vector2[], `radius` Scalar[], `strength` Scalar (1); selector `iterations` (8) | `position` Vector2[] | Fixed-count pairwise separation; see determinism below |
@@ -229,7 +229,7 @@ for relaxation, so it is spelled out:
 - **Iteration count is a compile-time selector**, capped at 64. It is not a convergence threshold.
   An early exit on "close enough" makes the result depend on floating-point noise, and two machines
   that stopped on different iterations would render different pictures from one document.
-- **Neighbours are enumerated in index order**, and each iteration reads the previous iteration's
+- **Neighbors are enumerated in index order**, and each iteration reads the previous iteration's
   positions rather than the one being written. A Gauss-Seidel sweep would make the answer depend on
   traversal order, which is an implementation detail that must not be a picture.
 - **All arithmetic goes through the frozen scalar primitives**, so a solver inherits their

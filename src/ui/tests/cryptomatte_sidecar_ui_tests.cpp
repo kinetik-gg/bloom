@@ -3,7 +3,7 @@
 // wired as the owner did (the sidecar's Channels and Image into a Cryptomatte, its Image into the
 // layer). It checks each reported problem:
 //  1. the sidecar is a valid "Sequence [N]" asset with an ID-colour thumbnail, no Relink warning,
-//     and its Image source says plainly "No colour layer — use Channels";
+//     and its Image source says plainly "No color layer — use Channels";
 //  2. Part and Layer (node card and Properties) are dropdowns listing only what the file has;
 //  3. the manifest names are a searchable checklist;
 //  4. Properties shows no "Mask: Resolving…" readout;
@@ -289,14 +289,14 @@ int main(int argc, char** argv) {
                                           : nullptr;
                    return cardPart != nullptr && cardLayer != nullptr &&
                           cardPart->toolTip().isEmpty() && cardLayer->count() > 0 &&
-                          cardLayer->itemText(cardLayer->currentIndex()) == "No colour layer";
+                          cardLayer->itemText(cardLayer->currentIndex()) == "No color layer";
                }),
                "the Image source card shows Part and Layer dropdowns once the file is read");
         expect(cardPart && cardPart->count() == 1 && cardPart->itemText(0) == "First part",
                "the card's Part dropdown lists only the file's one part");
-        expect(cardLayer && cardLayer->itemText(cardLayer->currentIndex()) == "No colour layer" &&
+        expect(cardLayer && cardLayer->itemText(cardLayer->currentIndex()) == "No color layer" &&
                    !cardLayer->isEnabled(),
-               "the card's Layer dropdown says the file has no colour layer");
+               "the card's Layer dropdown says the file has no color layer");
         expect(sourceCard && sourceCard->fieldWidget("nodeOperandTextEditor") == nullptr,
                "the Image source card has no free-text Part or Layer field");
         session.selectNode(source);
@@ -310,8 +310,8 @@ int main(int argc, char** argv) {
                            note = label;
                    return note != nullptr;
                }),
-               "Properties shows the colour note for the data-only source");
-        expect(note && note->text() == "No colour layer — use Channels",
+               "Properties shows the color note for the data-only source");
+        expect(note && note->text() == "No color layer — use Channels",
                "the note says plainly what to use");
 
         // The Cryptomatte card: a Layer dropdown, no matte text field.
@@ -361,7 +361,7 @@ int main(int argc, char** argv) {
             const auto colour = runtime::cryptomatteIdColour(runtime::cryptomatteNameId("sphere"));
             expect(value && std::abs(value.value()->red() - 0.5F * colour[0]) < 1e-5F &&
                        std::abs(value.value()->alpha() - 0.5F) < 1e-5F,
-                   "the preview shows the sphere in its ID colour");
+                   "the preview shows the sphere in its ID color");
         }
         auto* pick = properties->findChild<ui::kit::KButton*>("propertiesCryptomattePick");
         session.tools().setTool(ui::ViewerTool::Select);

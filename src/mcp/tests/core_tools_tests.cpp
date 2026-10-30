@@ -370,7 +370,7 @@ void retiredTransientJobs() {
            "export.log reads the finished transient job after the call returned: " + log);
     const auto after = server.call("export.log", R"({"job":)" + id + R"(,"afterSequence":1})");
     expect(contains(after, R"("entries":[)") && !contains(after, R"("sequence":1,)"),
-           "export.log honours afterSequence on a retired job: " + after);
+           "export.log honors afterSequence on a retired job: " + after);
     auto status = server.call("export.status", "{}");
     expect(contains(status, R"("recentTransientJobs":[{"id":)" + id) &&
                contains(status, R"("transient":true)"),

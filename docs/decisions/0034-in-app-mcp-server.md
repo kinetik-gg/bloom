@@ -67,8 +67,8 @@ Everything `apps/bloom-mcp` implements today moves into `src/mcp`: `json.cpp`, `
 - **Protocol sessions.** Handshake state, client identity and cursor binding move into
   `McpProtocolSession`. stdio has exactly one; the HTTP host has one per `Mcp-Session-Id`.
 - **Concurrency.** `handle()` may run concurrently for different clients and for parallel requests
-  from one client after initialize. Reads use immutable snapshots; commits serialise in the
-  marshal; jobs serialise in the export runner.
+  from one client after initialize. Reads use immutable snapshots; commits serialize in the
+  marshal; jobs serialize in the export runner.
 - **Cancellation.** stdio cancellation today cancels every scheduler task while a call runs. Both
   hosts now give each request its own `std::stop_token`, so `notifications/cancelled` cancels only
   that request's work and never an unrelated application task.
@@ -159,7 +159,7 @@ most 16 queued and a generation that revokes on project replacement. The in-app 
 same mechanism. It moves, Qt-free, into `scripting::LiveSessionHost`, so the Script editor and MCP
 share one mirror, one queue, one generation counter and one revocation rule. The application-
 lifetime adapter in `src/ui` publishes the mirror on every snapshot, composition, selection, time,
-colour-settings, display/view and save change. Its drain applies at most one commit per event-loop
+color-settings, display/view and save change. Its drain applies at most one commit per event-loop
 slice. It wakes on `LiveCommitSubscription` instead of the 16 ms poll the Script editor uses today.
 
 **The request path.**

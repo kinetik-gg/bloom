@@ -154,7 +154,7 @@ void wakeUnblocksAccept() {
     stopped.join();
     expect(status == LoopbackAcceptStatus::Stopped, "a stop token makes accept() return");
     const auto timed = listener->accept(20ms, {});
-    expect(timed.status == LoopbackAcceptStatus::TimedOut, "accept() honours its timeout");
+    expect(timed.status == LoopbackAcceptStatus::TimedOut, "accept() honors its timeout");
 }
 
 void closeUnblocksRead() {
@@ -207,7 +207,7 @@ void closeUnblocksRead() {
     if (idle.connection) {
         std::array<std::byte, 4> buffer{};
         expect(idle.connection->read(buffer, 30ms, {}).status == LoopbackIoStatus::TimedOut,
-               "read() honours its timeout");
+               "read() honors its timeout");
     }
     closeSocket(quiet);
     closeSocket(client);

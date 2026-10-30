@@ -10,7 +10,7 @@ Issue #366 audited the Linux FFmpeg read path. FFmpeg was built without x86 SIMD
 one thread; the VA-API decode code was never selected and hard-coded one render node; every frame
 step other than +1 re-seeked; a session refused concurrent callers with `Busy`; only four sessions
 were retained; the decoded cache was a fixed 256 MiB; and each decoded frame was hashed seven
-times between the worker and the colour conversion.
+times between the worker and the color conversion.
 
 ## Decision
 

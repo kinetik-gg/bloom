@@ -83,7 +83,7 @@ void testKLabelWrapsAndTones(Expectations& expectations) {
     single->setTone(kit::Color::Warn);
     expectations.expect(single->palette().color(QPalette::Active, QPalette::WindowText) ==
                             kit::color(kit::Color::Warn),
-                        "setTone colours the label by its token");
+                        "setTone colors the label by its token");
     expectations.expect(single->palette().color(QPalette::Disabled, QPalette::WindowText) ==
                             kit::disabledInk(kit::color(kit::Color::Warn)),
                         "a disabled toned label fades from its own tone, the one disabled recipe");
@@ -129,7 +129,7 @@ void testTheCheckerboardUsesTheCheckerTokens(Expectations& expectations) {
     painter.end();
     expectations.expect(image.pixelColor(1, 1) == kit::color(kit::Color::CheckerDark) &&
                             image.pixelColor(9, 1) == kit::color(kit::Color::CheckerLight),
-                        "the checkerboard alternates the mid-grey CheckerDark and CheckerLight");
+                        "the checkerboard alternates the mid-gray CheckerDark and CheckerLight");
     expectations.expect(image.pixelColor(31, 31).alpha() == 255,
                         "the square checkerboard reaches its corners");
 }
@@ -169,7 +169,7 @@ void testAnchorDotsAreRoundAndTheRadioDotIsOnTheGrid(Expectations& expectations)
     const QRect dot = grid.pointRect(0);
     expectations.expect(image.pixelColor(dot.left(), dot.top()).alpha() < 128 &&
                             image.pixelColor(dot.center()).alpha() == 255,
-                        "an anchor dot is round: its corner is clear, its centre filled");
+                        "an anchor dot is round: its corner is clear, its center filled");
 
     kit::KRadioGroup radio;
     radio.setPresentation(kit::KRadioGroup::Presentation::Discrete);
@@ -185,7 +185,7 @@ void testAnchorDotsAreRoundAndTheRadioDotIsOnTheGrid(Expectations& expectations)
     const int dotLeft = markLeft + (mark - dot2) / 2;
     const int dotTop = markTop + (mark - dot2) / 2;
     expectations.expect(marks.pixelColor(dotLeft + dot2 / 2, dotTop + dot2 / 2) == accent,
-                        "the selected radio's dot is solid Accent at its centre");
+                        "the selected radio's dot is solid Accent at its center");
     kit::KRadioGroup longLabels;
     longLabels.addOption(QStringLiteral("A rather long first choice"));
     longLabels.addOption(QStringLiteral("A rather long second choice"));

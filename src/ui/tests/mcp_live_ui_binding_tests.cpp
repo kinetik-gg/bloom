@@ -420,7 +420,7 @@ void testBinding() {
             auto changed = port.setColorSettings(*aces.settings);
             expect(changed.ok() && host.isDirty() &&
                        host.colorSettings()->processColorSpaceId == aces.settings->processColorSpaceId,
-                   "colour settings apply and dirty the project");
+                   "color settings apply and dirty the project");
             expect(session.colorSettings().processColorSpaceId == aces.settings->processColorSpaceId,
                    "the session follows at once");
             changed = port.setColorSettings(*aces.settings);
@@ -440,7 +440,7 @@ void testBinding() {
         expect(second.refusal == McpUiRefusal::Busy, "a request during another -> Busy");
         const auto colour = port.setColorSettings(*host.colorSettings());
         expect(colour.refusal == McpUiRefusal::Busy || first.has_value(),
-               "colour settings are Busy while a project opens");
+               "color settings are Busy while a project opens");
         expect(waitFor([&] { return first.has_value(); }) && first->ok(), "the open finishes");
     }
 
@@ -574,7 +574,7 @@ void testBinding() {
         if (settings != nullptr) {
             const auto colour = port.setColorSettings(*settings);
             expect(colour.refusal == McpUiRefusal::ReadOnly || colour.ok(),
-                   "colour settings on a read-only project answer without changing it");
+                   "color settings on a read-only project answer without changing it");
         }
         result = runProject(binding, request(mcp::McpProjectRequestKind::New));
         expect(result.ok(), "New leaves the read-only project");

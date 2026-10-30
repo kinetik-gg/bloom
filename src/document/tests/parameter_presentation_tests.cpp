@@ -104,7 +104,7 @@ void knownPresentations() {
            "opacity is a percentage of a 0..1 factor");
     const auto red = parameterPresentation(kSolidColorParameterSchemaKey, ParameterValueKind::Color4d);
     expect(red.step == 0.01 && red.softMaximum == 1.0,
-           "a colour channel scrubs a hundredth per pixel, not a whole unit");
+           "a color channel scrubs a hundredth per pixel, not a whole unit");
     const auto mix = parameterPresentation("bloom.image-mix.factor", ParameterValueKind::Float64);
     expect(mix.step == 0.01 && mix.maximum == 1.0, "a mix factor scrubs in hundredths");
     const auto frames = parameterPresentation("bloom.image.start-frame", ParameterValueKind::Integer);
@@ -117,7 +117,7 @@ void knownPresentations() {
     const auto alpha = componentPresentation(red, ParameterValueKind::Color4d, 3);
     expect(alpha.minimum == 0.0 && alpha.maximum == 1.0 &&
                componentPresentation(red, ParameterValueKind::Color4d, 0).maximum == red.maximum,
-           "a colour's alpha alone is confined to [0, 1]");
+           "a color's alpha alone is confined to [0, 1]");
     const auto unknown = parameterPresentation("bloom.unregistered", ParameterValueKind::Float64);
     expect(!unknown.named && unknown.kind == ParameterPresentationKind::Number,
            "an unregistered schema falls back by kind, and says so");

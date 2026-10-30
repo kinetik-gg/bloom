@@ -38,23 +38,23 @@ EXR decode runs on a worker and uses the same disk-cache key and thumbnail path 
 **Multi-channel images (ADR 0026, #363).**
 
 - *Probe.* `ImageProbe::parts` lists every part: name, view, scanline or tiled, data and display
-  windows, alpha association, colour tag, channels with their sample kind, the distinct layers
+  windows, alpha association, color tag, channels with their sample kind, the distinct layers
   (everything before a channel name's last `.`; the root layer is empty) and the layers that carry
-  R/G/B or Y colour channels. PNG and JPEG probe as one unnamed part whose channels are R, G, B and,
+  R/G/B or Y color channels. PNG and JPEG probe as one unnamed part whose channels are R, G, B and,
   when the file carries alpha, A. The asset record persists no part list.
-- *Colour selection.* `ImageInterpretation::part` (empty: the first part) and `layer` (empty: the
-  root layer) choose the colour image: the layer's `R/G/B[/A]` (or `Y[/A]`) channels go through the
-  unchanged colour path, while every other channel of the part is ignored by it. A missing part or
-  layer is a typed `PartNotFound` or `LayerNotFound`; a layer without colour channels
-  (`NoColourChannels`) gives no colour image. The decoded-image identity is `bloom-image-decode-4`,
+- *Color selection.* `ImageInterpretation::part` (empty: the first part) and `layer` (empty: the
+  root layer) choose the color image: the layer's `R/G/B[/A]` (or `Y[/A]`) channels go through the
+  unchanged color path, while every other channel of the part is ignored by it. A missing part or
+  layer is a typed `PartNotFound` or `LayerNotFound`; a layer without color channels
+  (`NoColourChannels`) gives no color image. The decoded-image identity is `bloom-image-decode-4`,
   and a non-default part or layer is part of the memory, raw-upload and disk keys.
 - *Channel sets.* `decodeImageChannels()` returns a `render::ChannelSetImage`: the named channels of
   one part (all, or a selection in order) as planar Float32 over the shared data window, with the
-  part's string attributes (Cryptomatte manifests) as metadata and the asset's input colour space
-  recorded for the Colour channels. Values are source values: half widens exactly, uint keeps its
+  part's string attributes (Cryptomatte manifests) as metadata and the asset's input color space
+  recorded for the Color channels. Values are source values: half widens exactly, uint keeps its
   bit pattern, and nothing is converted, premultiplied, repaired or clamped, so negatives, NaN and
   ID hashes survive. Admission charges every plane plus one bounded band and the metadata. Stills
-  expose their decoded R, G, B (and A) as straight Colour channels in [0, 1]; formats without an
+  expose their decoded R, G, B (and A) as straight Color channels in [0, 1]; formats without an
   immutable revision decoder report `UnsupportedChannelSetFormat`.
 - *Cryptomatte.* A Cryptomatte type is read from a part's channels and string metadata only: the
   `<layer>NN` rank channels keep their Float32 bit patterns through `decodeImageChannels()`, and
@@ -62,15 +62,15 @@ EXR decode runs on a worker and uses the same disk-cache key and thumbnail path 
   any metadata key whose `name` is the layer. Half rank channels widen exactly, so IDs survive only
   when the renderer wrote them as Float32, as the specification requires. Only the rank channels of
   the selected layer are decoded (#364). A `<type>NN` layer named by a `cryptomatte/<key>/name`
-  attribute is a rank layer: the probe never lists it among a part's colour layers, so a
-  Cryptomatte-only sidecar EXR has no colour layer and is a data-only asset.
+  attribute is a rank layer: the probe never lists it among a part's color layers, so a
+  Cryptomatte-only sidecar EXR has no color layer and is a data-only asset.
 - *Asset state in Assets.* "Missing — Replace Footage" means only that the imported bytes are gone or
   changed. A present source that cannot be shown as it is (for example a Rec.2020 video awaiting an input
-  colour space) states that problem and its fix instead, and its audio still decodes. An untagged
+  color space) states that problem and its fix instead, and its audio still decodes. An untagged
   video is shown under the assumed Rec.709 or Rec.601 matrix with the sRGB transfer, with an Info
-  mark and its colour note. A
+  mark and its color note. A
   data-only image is valid: it is labelled like any image or sequence (a Sequence of N frames) and its
-  thumbnail is the Cryptomatte ID colours of its first type, or its first data channel as grey. The
+  thumbnail is the Cryptomatte ID colors of its first type, or its first data channel as gray. The
   Image source's Part and Layer pickers read a sequence's parts from its first member.
 - *Sequences.* An unreadable member never aborts a scan: it is reported (up to 32 frames by name,
   then a count) and its frame becomes a gap that holds the preceding frame, as for the #373 batch
@@ -88,7 +88,7 @@ EXR decode runs on a worker and uses the same disk-cache key and thumbnail path 
   one shot therefore register under the default layer transform; ordinary images are unchanged.
 - *Non-finite and out-of-range pixels.* Decode never fails a frame for them. A NaN or infinite
   component becomes 0, alpha is clamped to [0, 1], and a component that overflows on
-  premultiplication or colour conversion is repaired the same way. The v1 process image cannot carry
+  premultiplication or color conversion is repaired the same way. The v1 process image cannot carry
   premultiplied RGB at zero alpha, so additive "emission" pixels become transparent. Every changed
   pixel is counted: the CPU evaluator reports a warning naming the count and GPU preparation records
   `imageRepairedPixels`. The count is reported when the source is decoded; a decoded-cache hit
@@ -361,9 +361,9 @@ and explicitly resolve color, alpha, field, rate, timecode, and audio-layout amb
 interpretation receives its own canonical identity and participates in decode, proxy, render, and
 cache keys.
 
-#### Colour tags and config-managed input spaces (COLOR-2)
+#### Color tags and config-managed input spaces (COLOR-2)
 
-Video H.273 tags remain evidence from the container; they are not themselves OCIO colour-space
+Video H.273 tags remain evidence from the container; they are not themselves OCIO color-space
 ids. With an asset in Auto mode, Bloom maps a video stream with Rec.709 primaries and matrix plus
 BT.709 transfer to the selected config's Rec.709 camera/video space, sRGB transfer to the config's
 sRGB-texture space, and linear transfer to the effective working space. Missing, contradictory, or
@@ -371,8 +371,8 @@ unsupported tags refuse with a typed diagnostic. Rec.2020, HLG, and PQ remain th
 refusal unless the selected config and an explicit artist id provide a separately qualified path.
 
 ARRI LogC3 and RED Log3G10 do not have a container Auto mapping in this contract. Their config
-colour spaces are explicit artist choices. The Assets and Properties pickers enumerate every
-non-data colour space in the exact selected config, grouped by its OCIO family, and preserve the
+color spaces are explicit artist choices. The Assets and Properties pickers enumerate every
+non-data color space in the exact selected config, grouped by its OCIO family, and preserve the
 chosen id on the asset or source node. A source-node id overrides the asset; an empty source id
 inherits the asset's automatic or explicit interpretation.
 
@@ -557,7 +557,7 @@ for the two memory ceilings.
 
 **Cache key.** Content-addressed and restart-stable, deliberately narrower than the evaluator's
 in-process operation-cache key: asset content digest, member/frame, legacy interpretation, resolved
-input colour-space id, effective working-space id, exact OCIO config revision, alpha association,
+input color-space id, effective working-space id, exact OCIO config revision, alpha association,
 the synthesized-space identity of a Bloom-synthesized input space (Rec.2100 HLG: its definition and
 OCIO version; empty, and absent from the key bytes, for ordinary config spaces), and a decoder
 identity/version string (`bloom::media::cache::kImageDecoderIdentity`) bumped
@@ -599,7 +599,7 @@ two bypasses that used to share one switch. An explicit evaluation bypass
 (`request.bypassOperationCache`) disables derived operation memoization and the decoded still-image
 memory and disk entries completely, consult-and-store alike. It is a per-evaluation control, not the
 preview controller's frame-cache refresh, and it does not touch the video decoded cache or
-colour-processor caches. A plan compiled for an interactive parameter override
+color-processor caches. A plan compiled for an interactive parameter override
 (`plan->bypassOperationCache()`) still bypasses derived operation memoization, but may READ an
 already-verified, immutable native decoded STILL-IMAGE entry under its EXISTING content-addressed
 memory source key (`selected.cacheKey`: asset digest, member/frame, interpretation, alpha, input
@@ -678,7 +678,7 @@ Linux motion video uses the separate disk-backed revision described below.
 
 Per-build GPU scene statistics expose encoded bytes read/hashed, revision captures/hits and monotonic
 nanosecond durations for source open/read/seek, SHA-256, metadata probe and actual image decoder
-calls. Decoder duration includes image construction and any requested connected-path input colour
+calls. Decoder duration includes image construction and any requested connected-path input color
 processing; it excludes source I/O, digest, probe, cache lookup and proxy rebasing. New counters
 saturate rather than wrap. A retained upload hit records zero source I/O/hash/probe/decode work,
 instead of replaying the original revision's capture measurements. These are observed stage costs,
@@ -707,7 +707,7 @@ The process supervisor passes only its read descriptor to the fresh Linux worker
 FFmpeg AVIO reads/seeks that exact file. A request claiming immutable bytes without the inherited,
 read-only, anonymous, exact-length regular file is rejected. Ordinary external-path worker requests
 retain their existing source verification. Schema 4 carries bounded snapshot length; a wire value
-alone cannot manufacture source authority. Standard FFmpeg demux/codec and colour boundaries remain
+alone cannot manufacture source authority. Standard FFmpeg demux/codec and color boundaries remain
 unchanged, and this mechanism does not upgrade provider/delivery qualification.
 
 The evaluator retains at most four source-keyed decode sessions. A shared eight-file disk quota
@@ -1464,7 +1464,7 @@ macOS and Windows currently return typed `Unavailable`; their native providers r
 
 Protocol 1, schema 2 adds bounded stream metadata, keyframe indices and planar float audio blocks.
 Probe retains codec/profile identifiers, exact rational timebase and rate, dimensions, original
-pixel-format spelling, H.273 colour tags, channel layout, sample rate, duration and timecode.
+pixel-format spelling, H.273 color tags, channel layout, sample rate, duration and timecode.
 `DemuxIndex` records stream IDs and exact key-packet PTS/DTS. Software video verifies constant
 packet-presentation cadence, then seeks backward to a keyframe and decodes forward until the
 exact requested CFR presentation timestamp. A retained decoder keeps its presentation position:
@@ -1491,10 +1491,10 @@ rest of Bloom sees display geometry:
   horizontally to square pixels with the same bit-exact bilinear `sws` pass; probe reports the
   square-pixel width.
 - Interlace. Interlaced frames are deinterlaced with FFmpeg's `bwdif` filter (libavfilter, enabled
-  in the intake with `buffer` and `buffersink`), field-aware and honouring each frame's field order
+  in the intake with `buffer` and `buffersink`), field-aware and honoring each frame's field order
   (`parity=auto`, one output frame per frame). The retained decoder feeds it the previous decoded
   frame, the requested frame and the next one, which it keeps as a lookahead for the next forward
-  request; at a seek point or the stream end bwdif uses only the neighbours that exist. Hardware
+  request; at a seek point or the stream end bwdif uses only the neighbors that exist. Hardware
   frames that are interlaced fall back to the software decoder.
 - RGB-coded streams (the intake's TIFF-in-MOV) decode to one packed RGBA16 plane with their
   identity matrix tag and are interpreted only through a config input space. The TIFF decoder runs
@@ -1566,10 +1566,10 @@ prefers it on any host with a render node and `0` disables it. The older export-
 VA-API execution key keeps its Development/Incomplete decode declarations, which are not
 selectable. Hardware provides acceleration only; it never changes project semantics.
 Each successful video source selection, on the CPU and GPU routes alike, publishes a
-`VideoSourceReport` (asset digest, decode route, assumed-colour note) on the video source context;
+`VideoSourceReport` (asset digest, decode route, assumed-color note) on the video source context;
 `OperationCache::videoSourceReports()` reads the 32 most recent. The window status bar's video cell
 shows, for the active composition's Video sources, the latest route ("Video: software", "vaapi" or
-"software (fallback: <reason>)") followed by any assumed-colour note, with one line per source in
+"software (fallback: <reason>)") followed by any assumed-color note, with one line per source in
 its tooltip. The report is status beside evaluation, never an evaluation diagnostic, so frames
 that carry it stay cacheable in RAM preview.
 FFmpeg ProRes evidence explicitly records `apple_authorized=false` and no delivery qualification.
@@ -1586,7 +1586,7 @@ the stream's worker address space) against a session budget of a quarter of phys
 at least two so two sources can alternate and at most the eight files the source-snapshot quota
 can retain. Least-recently-used sessions beyond that are retired. `DecodedVideoCache` has a
 separate LRU byte budget and keys frames by content digest, stream, frame index,
-interpretation, colour identity and decode route. Its target is the `playback/decoded-video-cache-bytes`
+interpretation, color identity and decode route. Its target is the `playback/decoded-video-cache-bytes`
 setting, or automatically one sixteenth of physical memory between 256 MiB and 4 GiB. It is a
 reusable pool on the process memory ledger, so an observed OS limit constrains it with the other
 reusable caches. A zero budget disables retention.
@@ -1616,17 +1616,17 @@ fell back to software as designed.
 
 Plane digests are computed once in the worker and verified once when the host decodes the
 message, hashing the planes of large products concurrently. Later consumers of the immutable
-product (the decoded cache and colour conversion) check structure and budget only, so a 16-bit
+product (the decoded cache and color conversion) check structure and budget only, so a 16-bit
 4:4:4 1080p frame is no longer hashed seven times. File content is rehashed before a cache hit, so edits cannot reuse stale decoded pixels.
 Thumbnail and waveform/audio buffers reuse the existing bounded preview storage after the same
 content check; scrubbing does not decode the complete audio clip again.
 No operation-cache or memory-ledger implementation changes are required.
 
-Colour conversion preserves stream tags when a decoder omits them from its frame. The provider
+Color conversion preserves stream tags when a decoder omits them from its frame. The provider
 copies left-sited YUV420P8 directly; any other layout or chroma siting is expanded to bounded
 YUVA444P16 by bit-exact bilinear chroma reconstruction at the frame's H.273 chroma location
 (unspecified 4:2:0 siting is the H.273 default, left). The host reconstructs YUV420P8 chroma with
-the same left-sited bilinear filter rather than nearest neighbour. `src/media/video` performs the
+the same left-sited bilinear filter rather than nearest neighbor. `src/media/video` performs the
 matrix/range step and `src/color` applies the resolved OCIO input-id-to-working-space transform on
 straight RGB before alpha is restored; the GPU route uploads the same host-prepared pre-OCIO RGB
 and runs that transform as a GPU OCIO effect.
@@ -1646,31 +1646,31 @@ Issue #365 interpretation rules:
   interpreted with the sRGB display transfer, as players and Bloom's 8-bit stills are shown. Before
   document 1.28 these streams resolved to the config's Rec.709 video space, which in Bloom Neutral
   was scene-linear, so the encoded signal was shown pale. The Rec.709 camera inverse OETF
-  (`Rec.709 Camera (Bloom)`), Rec.2100 PQ/HLG and log spaces stay explicit Input Colour choices.
-  The assumption is shown as the note "Colour tags missing — assumed Rec.709 with the sRGB
-  transfer. Change in Assets → Input Colour" (Rec.601 for SD; "assumed Rec.2020" without the
-  transfer clause for a wide-gamut stream) in the asset's colour note, an Info mark on its Assets
-  row, and "Auto (assumed: …)" in the input colour display. The filled tags and which of them were
+  (`Rec.709 Camera (Bloom)`), Rec.2100 PQ/HLG and log spaces stay explicit Input Color choices.
+  The assumption is shown as the note "Color tags missing — assumed Rec.709 with the sRGB
+  transfer. Change in Assets → Input Color" (Rec.601 for SD; "assumed Rec.2020" without the
+  transfer clause for a wide-gamut stream) in the asset's color note, an Info mark on its Assets
+  row, and "Auto (assumed: …)" in the input color display. The filled tags and which of them were
   assumed (`assumed-colour-v2:<filled>:p,t,m,r`; v2 since the SDR default changed) are part of the
   video transform and cache identity and of the thumbnail key. Streams the assumption cannot make SDR
   Rec.709/601 (Rec.2020 without PQ/HLG, BT.2020 constant luminance) keep their named refusal.
-- An explicit input colour space is the artist's interpretation and overrides missing tags. The
+- An explicit input color space is the artist's interpretation and overrides missing tags. The
   space supplies primaries and transfer; the stream supplies its YUV matrix and range. When those
   are untagged too, the matrix follows the chosen space's gamut family (BT.2020 non-constant
   luminance for a Rec.2020/Rec.2100 space, otherwise the size convention's BT.709 or BT.601) and
   the range is video (limited). An explicit choice carries no assumption note.
 - Supported YUV matrices are BT.709, BT.601 (470BG/SMPTE 170M) and BT.2020 non-constant luminance.
   BT.2020 constant luminance is refused by name.
-- PQ and HLG streams resolve automatically to the config's Rec.2100 PQ or HLG colour space,
+- PQ and HLG streams resolve automatically to the config's Rec.2100 PQ or HLG color space,
   searched among active and inactive spaces because configs usually hide these display-referred
   spaces from pickers. The pinned ACES 1.3 CG config provides `Rec.2100-PQ - Display`; Bloom
   Neutral has no PQ space, so PQ there is refused with a diagnostic that names the space. Neither
   pinned config defines HLG, so HLG resolves to the synthesized scene-light `Rec.2100-HLG (Bloom)`
-  space ([colour management](color-management.md#synthesized-rec2100-hlg-input-space)). Other
+  space ([color management](color-management.md#synthesized-rec2100-hlg-input-space)). Other
   Rec.2020 streams need an explicit space.
 - On the unmanaged legacy path (no config space), Rec.2020, PQ and HLG stay typed `Unavailable`,
   including under a legacy transfer override. Raw and linear compatibility overrides keep their
-  transfer-only behaviour.
+  transfer-only behavior.
 
 Generated untagged (64x48, the SD case), BT.2020/PQ and BT.2020/HLG H.264 fixtures and an untagged
 1280x720 ProRes 422 fixture (the HD case) check tag plumbing and the assumption. GPU/CPU
@@ -1684,7 +1684,7 @@ generated GLSL folds the half index and the interpolation fraction into one bina
 of up to 2^16, which keeps only 8 to 10 fraction bits; on the steep PQ segment that alone measured
 2.19e-6 relative at 52.37 linear. Bloom's OCIO GPU adapter therefore rewrites every half-domain
 lookup to take the half index from the float's exponent and top ten mantissa bits and the fraction
-from the remaining thirteen, both exact, and to fetch the two neighbouring entries directly. The
+from the remaining thirteen, both exact, and to fetch the two neighboring entries directly. The
 PQ cases then match the CPU oracle exactly.
 
 Tests generate 48-frame H.264 MP4 and ProRes 422 MOV fixtures with burned-in frame numbers and
@@ -1723,7 +1723,7 @@ plus its verified digest, or `vaapi <driver>`. No output is presented as archiva
 qualified.
 
 OpenH264 policy is host-owned and Qt-free. The first install requires explicit consent to Cisco's
-binary licence and stores `media/openh264-consent=2.6.0` in the per-user `Bloom.conf` beside the
+binary license and stores `media/openh264-consent=2.6.0` in the per-user `Bloom.conf` beside the
 `openh264` directory (a Qt-free file, not the application's QSettings store); the entry is written
 once, through a temporary file, however often Bloom installs, and duplicate `[media]` groups left by
 earlier appends collapse to one. It never fetches at startup. The host supervises system `curl` for at most 60 seconds and 16 MiB, then `bunzip2`,
@@ -1813,7 +1813,7 @@ Combined video/AAC SHA-256: `88e3e40e56e68e465d0250f2e45f26b26959f8ce5ab1f8f723b
 Wire protocol version 3 adds encode begin, frame/audio acknowledgements, finish/QC and bounded
 artifact chunks. `EncodeSettingsV1` canonical encoding orders container, codec, profile, audio codec,
 dimensions, rational rate, frame/sample counts, sample rate, channels, BWF description, determinism
-and tolerance digest after its versioned domain; version 2 (#369) adds the colour tags and the bit
+and tolerance digest after its versioned domain; version 2 (#369) adds the color tags and the bit
 rate. Execution byte limits are excluded from semantic identity. The 256×128, 48-frame HQ/PCM
 fixture record (video tolerance profile v2) is 166 bytes and independently derives
 `7e8bea8770830d7257eba98ee80d465a1d0106bbc3e06665f8d171d99b1baa2f`.
@@ -1841,7 +1841,7 @@ H.264/HEVC refusal, cancellation, worker crash/retry, abandoned-client cleanup a
 byte parity for PNG, EXR and TIFF.
 
 
-### Review colour and look evidence (COLOR-5)
+### Review color and look evidence (COLOR-5)
 
 The named **Review H.264 (Rec.709, look on)** deliverable evaluates the captured composition with
 `bypassLookNodes=false`. It unpremultiplies RGB, applies the exact config's
@@ -1854,7 +1854,7 @@ consulted. Unsupported config/display/view combinations fail before encoding.
 Analysis binds the processor identity, actual display/view pair, config revision and
 `look: baked (N look-tagged effects)`; approval and QC retain that description. The existing
 versioned worker tolerance-profile name retains `srgb` for compatibility: its numerical limits
-compare the supplied display-referred samples and do not select the colour transform. The COLOR-5
+compare the supplied display-referred samples and do not select the color transform. The COLOR-5
 2× gain LUT fixture decodes the first review frame through the worker and independently converts
 its tagged Rec.709 YUV to display RGB. Maximum/mean errors are 252/133 in 16-bit units, within
 22938/1967. The same fixture's look-bypassed AP0 handoff has zero error against direct OCIO output.
@@ -1873,7 +1873,7 @@ Issue #369 ships with the export queue ([ADR 0033](../decisions/0033-export-queu
   opens the H.264 and HEVC encode entry points on every render node and prints the answer;
   `output::probeVaapiEncodeV1()` reads it, so no driver code loads into the application. Encoding
   uses the probed node.
-- **Colour tags** come from the output colour intent: `output::outputColourTagsV1()` maps the
+- **Color tags** come from the output color intent: `output::outputColourTagsV1()` maps the
   resolved display to H.273 primaries, transfer and matrix (sRGB displays get the sRGB transfer,
   Rec.1886/Rec.709 BT.709, P3 and Rec.2100 their own code points, unknown displays unspecified), and
   the matrix selects the RGB to YUV coefficients. `EncodeSettingsV1` is version 2 for this; the

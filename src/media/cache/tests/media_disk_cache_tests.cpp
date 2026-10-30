@@ -303,11 +303,11 @@ void testBuildImageCacheKey(Expectations& check) {
     auto changedInput = inputs;
     changedInput.inputColorSpaceId = "ACEScg";
     check.expect(cache::buildImageCacheKey(changedInput, "decoder-v1") != keyA,
-                 "a different input colour-space id changes the key");
+                 "a different input color-space id changes the key");
     auto changedWorking = inputs;
     changedWorking.workingColorSpaceId = "ACEScg";
     check.expect(cache::buildImageCacheKey(changedWorking, "decoder-v1") != keyA,
-                 "a different working colour-space id changes the key");
+                 "a different working color-space id changes the key");
     // A Bloom-synthesized input space contributes its definition and OCIO version; an empty
     // identity keeps every pre-existing key unchanged.
     auto hlg = inputs;
@@ -316,7 +316,7 @@ void testBuildImageCacheKey(Expectations& check) {
     hlgNewerOcio.synthesizedColorSpaceIdentity = "bloom-hlg-scene-v1;ocio=2.5.0";
     const auto hlgKey = cache::buildImageCacheKey(hlg, "decoder-v1");
     check.expect(hlgKey != keyA && cache::buildImageCacheKey(hlgNewerOcio, "decoder-v1") != hlgKey,
-                 "a synthesized colour-space identity, and a change to it, change the key");
+                 "a synthesized color-space identity, and a change to it, change the key");
     auto changedRevision = inputs;
     changedRevision.configDigest = digestOf("config-revision-2");
     check.expect(cache::buildImageCacheKey(changedRevision, "decoder-v1") != keyA,

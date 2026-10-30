@@ -150,7 +150,7 @@ struct WindowFixture {
         while (!session.colorConverter() && timer.elapsed() < 15000)
             QTest::qWait(10);
         if (!session.colorConverter())
-            throw std::runtime_error("Fixture colour converter did not become ready");
+            throw std::runtime_error("Fixture color converter did not become ready");
         QTest::qWait(100);
         auto* stack = window->findChild<TimelineLayerStack*>();
         for (const auto& layer : session.composition()->graph().layerOutputs()) {

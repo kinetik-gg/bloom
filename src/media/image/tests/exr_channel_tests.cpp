@@ -182,8 +182,8 @@ int main() {
                          contains(beauty.layers, "CryptoObject00"),
                      "part layers");
         check.expect(beauty.colourLayers == std::vector<std::string>{"", "diffuse"},
-                     "colour layers are root and diffuse only");
-        check.expect(data.colourLayers.empty(), "data part has no colour layer");
+                     "color layers are root and diffuse only");
+        check.expect(data.colourLayers.empty(), "data part has no color layer");
         const auto id = std::ranges::find_if(beauty.channels, [](const auto& channel) {
             return channel.name == "id";
         });
@@ -205,14 +205,14 @@ int main() {
     const auto& source = **revision.value;
 
     const auto root = media::decodeImage(source, select({}, {}));
-    check.expect(root.value.has_value(), "default selection decodes the root colour layer");
+    check.expect(root.value.has_value(), "default selection decodes the root color layer");
     if (root.value) {
         const auto pixel = (*root.value)->read(1, 1);
         check.expect(pixel && pixel.value()->red() == 0.25F && pixel.value()->alpha() == 1.0F,
-                     "root colour values");
+                     "root color values");
     }
     const auto diffuse = media::decodeImage(source, select({}, "diffuse"));
-    check.expect(diffuse.value.has_value(), "a named colour layer decodes");
+    check.expect(diffuse.value.has_value(), "a named color layer decodes");
     if (diffuse.value) {
         const auto pixel = (*diffuse.value)->read(2, 1);
         check.expect(pixel && pixel.value()->red() == 2.125F && pixel.value()->green() == 3.125F &&
@@ -222,7 +222,7 @@ int main() {
     const auto dataOnly =
         media::decodeImage(source, select("data", "depth"));
     check.expect(!dataOnly && dataOnly.code == media::ImageDiagnosticCode::NoColourChannels,
-                 "a data-only layer has no colour image");
+                 "a data-only layer has no color image");
     const auto missingPart = media::decodeImage(source, select("missing", {}));
     check.expect(!missingPart && missingPart.code == media::ImageDiagnosticCode::PartNotFound,
                  "a missing part is typed");
@@ -253,7 +253,7 @@ int main() {
         const auto red = set.find("R");
         check.expect(red && set.plane(*red)[0] == 0.25F &&
                          set.channels()[*red].encoding == bloom::render::ChannelValueEncoding::Colour,
-                     "colour channels keep source values");
+                     "color channels keep source values");
         check.expect(std::ranges::any_of(set.metadata(),
                                          [](const auto& entry) {
                                              return entry.first == "cryptomatte/abc1234/manifest" &&
@@ -301,9 +301,9 @@ int main() {
                              set.channels()[2].role == bloom::render::ChannelRole::ColorB &&
                              set.channels()[1].encoding ==
                                  bloom::render::ChannelValueEncoding::Colour,
-                         "JPEG channels are R, G, B colour channels without alpha");
+                         "JPEG channels are R, G, B color channels without alpha");
             check.expect(set.colourSpace() == (*jpeg.value)->probe().colorSpaceTag,
-                         "an uninterpreted still records its declared colour space");
+                         "an uninterpreted still records its declared color space");
             check.expect(std::ranges::all_of(set.plane(0),
                                              [](const float value) {
                                                  return value >= 0.0F && value <= 1.0F;
@@ -314,7 +314,7 @@ int main() {
         interpreted.inputColorSpaceId = "sRGB - Texture";
         const auto labelled = media::decodeImageChannels(**jpeg.value, interpreted);
         check.expect(labelled.value && (*labelled.value)->colourSpace() == "sRGB - Texture",
-                     "the asset's input colour space is recorded on the channel set");
+                     "the asset's input color space is recorded on the channel set");
         const auto alphaMissing =
             media::decodeImageChannels(**jpeg.value, {.channels = {"A"}});
         check.expect(!alphaMissing &&

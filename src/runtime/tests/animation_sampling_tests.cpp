@@ -138,7 +138,7 @@ void testBorrowedDocumentSampling(Expectations& expectations) {
     expectations.expect(
         runtime::sampleAnimationCurve(color, time(1), compiledColor.defaultValue).value ==
             runtime::sampleAnimationCurve(compiledColor, time(1)).value,
-        "borrowed colour preserves independent component defaults");
+        "borrowed color preserves independent component defaults");
     curve.keyframes.back().time = curve.keyframes.front().time;
     expectations.expect(runtime::sampleAnimationCurve(curve, time(1)).error ==
                             runtime::AnimationSamplingError::InvalidCurve,
@@ -222,7 +222,7 @@ void testColor4Sampling(Expectations& expectations) {
 
     const auto atFirst = runtime::sampleAnimationCurve(curve, time(0));
     expectations.expect(atFirst && atFirst.value == core::Color4d{0.0, 0.25, 1.0, 0.0},
-                        "a colour curve returns its first key bit-for-bit at and before it");
+                        "a color curve returns its first key bit-for-bit at and before it");
 
     // Every channel takes the SAME shared factor, including a negative one and an HDR one.
     const auto halfway = runtime::sampleAnimationCurve(curve, time(1, 2));
@@ -233,7 +233,7 @@ void testColor4Sampling(Expectations& expectations) {
     // not change between the two keys stays exactly where it was.
     const auto eased = runtime::sampleAnimationCurve(curve, time(4, 3));
     expectations.expect(eased && eased.value == core::Color4d{1.0 + (7.0 / 27.0), 0.75, -1.0, 1.0},
-                        "an eased colour segment uses the same 7/27 factor at its first third");
+                        "an eased color segment uses the same 7/27 factor at its first third");
 
     // A non-finite channel key is not a representable value, so the whole curve is invalid rather
     // than silently sampled. (The narrower authoring-colour domain -- alpha inside the unit
@@ -245,7 +245,7 @@ void testColor4Sampling(Expectations& expectations) {
                               runtime::CompiledKeyframeInterpolation::Linear}};
     const auto refused = runtime::sampleAnimationCurve(invalid, time(0));
     expectations.expect(!refused && refused.error == runtime::AnimationSamplingError::InvalidCurve,
-                        "a non-finite colour channel key invalidates the curve");
+                        "a non-finite color channel key invalidates the curve");
 }
 
 void testSampling(Expectations& expectations) {
@@ -328,7 +328,7 @@ void testIndependentComponentSampling(Expectations& expectations) {
     };
     const auto colorSample = runtime::sampleAnimationCurve(color, time(1, 2));
     expectations.expect(colorSample && colorSample.value == core::Color4d{0.0, 0.625, 0.3, 1.0},
-                        "colour components preserve per-component Hold, Linear and default paths");
+                        "color components preserve per-component Hold, Linear and default paths");
 }
 
 [[nodiscard]] std::uint64_t bits(const double value) noexcept {

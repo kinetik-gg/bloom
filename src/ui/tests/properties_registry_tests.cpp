@@ -118,7 +118,7 @@ void discreteImageRows() {
 }
 
 void colourEffectRows() {
-    auto project = document::makeNewProject("Colour", "Main", core::RationalTime::fromInteger(10));
+    auto project = document::makeNewProject("Color", "Main", core::RationalTime::fromInteger(10));
     const auto composition = project.initialCompositionId;
     for (const auto kind : {document::AssetKind::Lut, document::AssetKind::Image}) {
         document::AssetRecord asset;
@@ -128,7 +128,7 @@ void colourEffectRows() {
         asset.locator = {"file", "project-relative", "show.cube", "file:///show.cube"};
         if (kind == document::AssetKind::Image)
             asset.width = asset.height = 1;
-        expect(project.project.addAsset(asset), "colour picker asset fixture");
+        expect(project.project.addAsset(asset), "color picker asset fixture");
     }
     document::Document document(std::move(project.project));
     commands::CommandStack stack(document);
@@ -170,7 +170,7 @@ void colourEffectRows() {
     expect(definition && definition->category == document::NodeCategory::Color &&
                definition->inputs.front().name == "input" &&
                definition->outputs.front().name == "image",
-           "Colour effect card definition has the image socket pair");
+           "Color effect card definition has the image socket pair");
 }
 
 void upstreamRows() {

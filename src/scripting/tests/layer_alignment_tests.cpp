@@ -250,7 +250,7 @@ void testDistributeAndKeyedPosition() {
     expect(near(centres[0], 100) && near(centres[3], 900) &&
                near(centres[1] - centres[0], centres[2] - centres[1]) &&
                near(centres[2] - centres[1], centres[3] - centres[2]),
-           "the evaluated centres are evenly spaced at the time");
+           "the evaluated centers are evenly spaced at the time");
     const auto snapshot = fixture.session->snapshot();
     const auto* composition = snapshot.project().findComposition(fixture.composition);
     const auto* record = composition->parameters().find(b.position);

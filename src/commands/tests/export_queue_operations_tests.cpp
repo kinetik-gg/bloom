@@ -110,7 +110,7 @@ void testAddEditUndo(TestContext& test) {
     test.expect(run<SetExportJobEnabled>(stack, *jobId, false).changed(), "disable applies");
     test.expect(run<SetExportJobLabelColor>(stack, *jobId, std::array<std::uint8_t, 3>{200, 10, 10})
                     .changed(),
-                "label colour applies");
+                "label color applies");
     test.expect(run<SetExportOutputImport>(stack, *outputId, true).changed(), "import applies");
     test.expect(run<SetExportOutputEnabled>(stack, *outputId, false).changed(),
                 "output disable applies");

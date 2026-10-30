@@ -189,7 +189,7 @@ ExportJobRunner::ExportJobRunner(ExportJobRunnerDependencies dependencies,
     s.colorIntent = exportColorIntent(s.request.colorSettings, *composition);
     if (!s.colorIntent) {
         s.failure = detail::exportFailure(ExportFailureCode::Internal, "export.color-intent",
-                                          "The export colour intent could not be captured");
+                                          "The export color intent could not be captured");
         s.phase = ExportJobRunPhase::Finished;
         return;
     }

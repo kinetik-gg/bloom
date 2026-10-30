@@ -901,7 +901,7 @@ QWidget* PreferencesWindow::buildViewerPage() {
         rows, content, QStringLiteral("preferencesViewerBackgroundDropdown"), tr("Background"));
     background->setToolTip(tr("The canvas around the composition frame"));
     background->addItem(tr("Solid"), QStringLiteral("Solid"));
-    background->addItem(tr("Grey"), QStringLiteral("Grey"));
+    background->addItem(tr("Gray"), QStringLiteral("Grey"));
     background->addItem(tr("Black"), QStringLiteral("Black"));
     background->addItem(tr("White"), QStringLiteral("White"));
     background->setCurrentIndex(
@@ -934,7 +934,7 @@ QWidget* PreferencesWindow::buildViewerPage() {
          &ApplicationPreferences::viewerTransparencyGrid},
         {"preferencesViewerSafeAreasSwitch", QT_TR_NOOP("Safe areas"),
          &ApplicationPreferences::viewerSafeAreas},
-        {"preferencesViewerCentreCrossSwitch", QT_TR_NOOP("Centre cross"),
+        {"preferencesViewerCentreCrossSwitch", QT_TR_NOOP("Center cross"),
          &ApplicationPreferences::viewerCentreCross},
         {"preferencesViewerThirdsSwitch", QT_TR_NOOP("Thirds"),
          &ApplicationPreferences::viewerThirds},

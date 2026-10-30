@@ -132,7 +132,7 @@ declares at least one role. Empty roles mean the tool's installed binary is buil
 support and is not part of the end-user application package; they do not exempt any installed file
 from the prefix inventory and they make no qualified-prefix claim. A reviewed executable tool that
 is a genuine runtime product instead declares its real roles: the pinned `glslangValidator` and
-`spirv-val` GPU colour-compilation tools record `["executable", "license"]`, ship beside the
+`spirv-val` GPU color-compilation tools record `["executable", "license"]`, ship beside the
 desktop, CLI, and MCP executables through `cmake/BloomGpuShaderTools.cmake`, and travel with their
 reviewed license texts and a generated digest inventory rather than claiming build-only status. The frozen 1.0, 1.1, and 1.2
 schema bytes are unchanged, and a 1.2 lock remains closed to the new enums. The generator selects
@@ -143,7 +143,7 @@ an existing 1.3.
 
 Lock schema 1.2 adds the optional `runtimeFetch` record for a component whose distributable binary
 must be obtained by the end user's machine. It binds an HTTPS URL pattern, per-platform archive
-and decompressed-library SHA-256 values, the installed library name, and the vendor licence
+and decompressed-library SHA-256 values, the installed library name, and the vendor license
 artifact. The generated lock is still the only production lock; records under
 `dependencies/lock-components/` remain the generator inputs.
 

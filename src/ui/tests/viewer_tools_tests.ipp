@@ -127,7 +127,7 @@ void testCreationTools(Expectations& expectations) {
                                        (2 * std::cos(std::numbers::pi / 10))) &&
                             toolVector(fixture, "position", 160, 120) &&
                             std::get<std::int64_t>(toolParameter(fixture, "points")) == 5,
-                        "star defaults to five points and supports centred regular drag");
+                        "star defaults to five points and supports centered regular drag");
     toolReady(fixture, expectations);
     fixture.session.tools().setTool(bloom::ui::ViewerTool::Polygon);
     toolDrag(fixture, {80, 80}, {150, 130});
@@ -219,7 +219,7 @@ void testPenTools(Expectations& expectations) {
             const auto outside = result.frame()->processImage().read(10, 10);
             expectations.expect(center && outside && center.value()->alpha() > 0 &&
                                     outside.value()->alpha() == 0,
-                                "pen triangle coverage is positive at centre and zero outside");
+                                "pen triangle coverage is positive at center and zero outside");
         }
     }
     toolKey(fixture, Qt::Key_V);
@@ -912,7 +912,7 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
         const auto expected = pe::autoHandles(t->path, 1);
         expectations.expect(t->path.anchors[1].mode == PathAnchorMode::Auto && expected &&
                                 *t->path.anchors[1].outHandle == expected->second,
-                            name("moving a neighbour recomputes the Auto anchor"));
+                            name("moving a neighbor recomputes the Auto anchor"));
     }
 
     // Alt-click: curved -> Corner -> the previous curved mode.

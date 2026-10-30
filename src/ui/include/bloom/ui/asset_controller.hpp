@@ -156,7 +156,7 @@ class AssetController final : public QObject {
     // True when Auto chose the space from the media tags (or assumed it).
     [[nodiscard]] bool inputColorSpaceAutomatic(document::AssetId id) const;
     // True when Auto resolved an untagged or partly tagged video by the size convention; the
-    // warning is then the visible "Colour tags missing — assumed …" note.
+    // warning is then the visible "Color tags missing — assumed …" note.
     [[nodiscard]] bool inputColorSpaceAssumed(document::AssetId id) const;
     void requestInputColorSpaces();
     // ADR 0026: the part and layer pickers read the image probe through this worker (identity

@@ -212,7 +212,7 @@ under "Layer Transform Resampling"; version 5 added the per-mode blend kernel de
 blend kernel carries a second semantics version that could drift out of the identity a published
 frame records.
 
-- Solid, Text, and Shape authoring colours are straight `Color4d` values stored numerically in the
+- Solid, Text, and Shape authoring colors are straight `Color4d` values stored numerically in the
   effective project/composition working space. The authoring metadata remains distinct from the
   process-image identity. The picker presents sRGB-encoded editing values and converts through the
   selected OCIO config's `sRGB - Texture` space; the evaluator receives only the validated working
@@ -260,12 +260,12 @@ with rotation composed with scale, all turning about the authored anchor (the au
 [`layer-graph-model.md`](layer-graph-model.md), "Layer Transform"). There is no separate translate-only
 kernel in the stage; the translate-only case is a path inside this one.
 
-- **Inverse mapping.** Each output pixel centre maps back to one source coordinate through the
+- **Inverse mapping.** Each output pixel center maps back to one source coordinate through the
   precomputed inverse 2x2 matrix and pivot. Nothing per-pixel computes trigonometry, divides, or
   branches on an authored value.
 - **Quarter turns are exact.** A rotation that is an exact multiple of 90 degrees resolves to exact
   `0` and `±1` cosine and sine instead of `std::cos`/`std::sin` of a rounded radian value, so a
-  quarter turn maps pixel centres onto pixel centres and interpolates nothing. The reduction modulo
+  quarter turn maps pixel centers onto pixel centers and interpolates nothing. The reduction modulo
   360 is exact, so an authored 450 or -90 is as exact as a 90 or 270.
 - **Translate-only is bit-identical to version 3.** Unit scale on both axes together with a rotation
   that reduces to exactly zero resolves to a path that computes the pre-version-4 arithmetic and
@@ -277,7 +277,7 @@ kernel in the stage; the translate-only case is a path inside this one.
 - **Premultiplied edges.** Taps outside the source data window are exact transparent black, and the
   process representation is premultiplied, so interpolating towards that transparent black is already
   the correct edge falloff: no unpremultiply/repremultiply round trip is involved and no edge pixel
-  can carry colour above its own alpha.
+  can carry color above its own alpha.
 - **Bounds.** A layer's output data window covers its transformed local content, including content
   outside the composition; its display window stays the composition's. The transformed bounds are the integer bounding box of
   the forward image of the bilinear support box (the source data window grown by one pixel on every
@@ -300,7 +300,7 @@ kernel in the stage; the translate-only case is a path inside this one.
 
 `bloom.resize` and `bloom.fit` schema 1 lower through the image-effect boundary to the shared
 `ResizeFitKernel`. Resize stretches the input display canvas independently in X and Y. Fit defaults
-to centred Fit (contain); Fill (cover) instead crops centred overflow. Both compute physical aspect
+to centered Fit (contain); Fill (cover) instead crops centered overflow. Both compute physical aspect
 from the source and target pixel aspect ratios. Source data-window offsets and overscan remain
 sampling coordinates; they do not redefine the source display canvas.
 
@@ -344,7 +344,7 @@ contract.
 - **Ordering and blending are separate.** The stack says which layer is above which and is still
   visited in reverse so the first entry is topmost; the mode comes from the Layer Output the entry
   names, so reordering two layers and re-blending one are independent edits.
-- **Alpha is source-over under every mode.** Only the colour combination varies, computed with exactly
+- **Alpha is source-over under every mode.** Only the color combination varies, computed with exactly
   the alpha expression the source-over kernel uses, so a mode never changes how much of the backdrop a
   layer covers.
 - **`Normal` is bit-identical to version 4.** The kernel delegates to the retained source-over row for
@@ -358,7 +358,7 @@ contract.
   alpha-zero backdrop takes the source pixel through unchanged, which is what the fold collapses to
   under every mode. Source-over's other shortcut -- an opaque source replacing the destination -- does
   NOT generalise and is deliberately absent, because every mode but `Normal` still reads the
-  backdrop's colour at full source alpha.
+  backdrop's color at full source alpha.
 - **Nothing is clamped.** A negative or HDR channel survives the blend, and a non-finite or
   finite-overflow result fails the row with a typed error rather than being clipped.
 - **The blend mode is a discrete authored value.** It carries no curve: the schema declares it
@@ -432,7 +432,7 @@ full-resolution author space. Cubic subdivision bounds deviation and control-pol
 and generated geometry at 262,144 points; pathological geometry fails with a diagnostic. The
 reference evaluator checks the floating-point environment before invoking these kernels.
 
-Coverage is deterministic 4×4 centre sampling, with half-open scanline crossings and winding or
+Coverage is deterministic 4×4 center sampling, with half-open scanline crossings and winding or
 parity accumulation. The byte is `(coveredSamples * 255 + 8) / 16`, a linear area fraction.
 Analytic integration is deliberately deferred: the fixed grid gives a small, independently
 verifiable CPU contract. Rectangle corners and ellipses use cubic quarter arcs; ellipses use four
@@ -504,15 +504,15 @@ numeric identity conversion to the process space. Authoring metadata is not rewr
 Canonical `Rgba32f` process storage is premultiplied Float32 RGBA. RGB remains finite and unclamped,
 alpha remains finite in `[0, 1]`, and alpha zero canonicalizes RGB to exact zero. The frame's
 `EvaluationColorIntent` carries the working-space id and OCIO content revision. A qualified OCIO
-config must resolve that exact id as a non-data scene-linear colour space before any operation that
+config must resolve that exact id as a non-data scene-linear color space before any operation that
 needs an OCIO transform; a matching alias, role, or display name is insufficient.
 
-An escaping colour intent retains immutable ownership of its working-space and configuration-URI
+An escaping color intent retains immutable ownership of its working-space and configuration-URI
 strings. `captureEvaluationColorIntent` preserves the aggregate request API, reuses an exact existing
 owner, and reports allocation failure explicitly; ownership does not participate in semantic
 equality. CPU/GPU evaluation, prepared-scene construction and asynchronous preview submission
 capture raw caller views before publication. Preview settings, queued work, RAM/background keys,
-thumbnails and retained frame identities keep that owner across colour changes and New/Open.
+thumbnails and retained frame identities keep that owner across color changes and New/Open.
 Failed capture rejects the request; it never substitutes the Neutral configuration. Immediate UI
 reads may remain borrowed while the session is live; cancelled workers still retain their captured
 strings until they actually finish.
@@ -609,13 +609,13 @@ adjustment and preserve both original display paths bit for bit.
 
 Each viewer prepares its adjusted result on a cancellable worker, coalesces changed controls, and
 rejects retired results. Its controls persist by editor-area identity in QSettings. The shared
-neutral preview, thumbnails, process identities, authored colours, and export requests do not
+neutral preview, thumbnails, process identities, authored colors, and export requests do not
 inherit this adjustment. Adjusted and ROI-padded qualified buffers retain qualified provenance;
 `PreparedPreviewFrame::displayBufferView()` selects the final viewport buffer.
 
 The pixel probe reads straight RGBA8 and its normalized values from that viewport buffer. Reference
 RGBA is the exact premultiplied `lin_rec709_scene` Float32 process value, widened to Float64 without
-a colour transform. A retained process image supports a constant-time pixel read. Display-only
+a color transform. A retained process image supports a constant-time pixel read. Display-only
 cache hits, or positions outside the preview ROI, request a one-pixel ROI through the evaluator on
 a worker. The probe caches one frame/position result, cancels superseded work, and discards late
 results after leave or frame changes. Exposure, gamma, channel display, and background never change
@@ -664,19 +664,19 @@ The planned artist-facing vocabulary is maintained in
 ## Linear and radial gradient sources
 
 `bloom.linear-gradient` and `bloom.radial-gradient` version 1 are independent image-producing
-authoring nodes. Each stores animatable start/end straight RGBA colours and start/end `Vec2d`
+authoring nodes. Each stores animatable start/end straight RGBA colors and start/end `Vec2d`
 coordinates, animatable width/height, and a static integer repeat selector (`0` Clamp, `1`
 Repeat, `2` Mirror). New nodes use the composition extent. Linear starts at the left edge and ends
-at the right edge; radial starts at the composition centre and ends at the right edge. The source
+at the right edge; radial starts at the composition center and ends at the right edge. The source
 has a local data window from `(0,0)` to its resolved extent and inherits the composition display
 window and pixel aspect. Authored coordinates are full-resolution local pixel-edge coordinates;
-sampling uses pixel centres. The proxy request maps centres back to author space using the exact
+sampling uses pixel centers. The proxy request maps centers back to author space using the exact
 horizontal and vertical resolution scales, so controls and composition geometry do not drift.
 
 Linear `t` is projection onto the start-to-end vector. Radial `t` is distance from start divided by
 the start-to-end distance. Horizontal distances are multiplied by physical pixel aspect in both
-formulas. A zero-length vector chooses the first colour. Clamp confines `t` to `[0,1]`, Repeat
-uses its fractional part, and Mirror folds over period two. The two authored colours interpolate
+formulas. A zero-length vector chooses the first color. Clamp confines `t` to `[0,1]`, Repeat
+uses its fractional part, and Mirror folds over period two. The two authored colors interpolate
 in the effective scene-linear working space as straight RGB and independent alpha; the result is
 premultiplied once for the process image. The phase is reduced in binary64 and rounded once to
 Float32 (Mirror folds that Float32 value); alpha is then interpolated in Float32 as two rounded
@@ -688,7 +688,7 @@ the composition display window.
 
 The CPU evaluator shades rows with the shared cancellation and pixel budget gate. The GPU scene
 preparer resolves the same animation operands and windows and emits a semantic key containing both
-straight colours, endpoints, repeat mode, scales, extent, pixel aspect, and the pinned GradientV1
+straight colors, endpoints, repeat mode, scales, extent, pixel aspect, and the pinned GradientV1
 shader digest. The native operation batch executes the gradient compute shader into a resident
 RGBA32F image, including single-generator batches; no full-frame CPU upload stands in for that
 shader. Its normal completion uses the same fence proof, cancellation, image budget, and retirement
@@ -704,11 +704,11 @@ later advances plan semantics to **9** and the evaluator was already at **10**; 
 goldens were re-derived with the oracle in `color5-identity-oracle.md`.
 
 `CompiledImageEffect` contains its source node identity, an earlier input `OperationIndex`, a
-closed kernel variant, and bypass state. Colour-effect bounds follow their input; canvas effects
+closed kernel variant, and bypass state. Color-effect bounds follow their input; canvas effects
 derive new windows and bounds from their sampled margins. Time dependence follows the input and
 any animated or driven margin. The
 initial identity kernel shares immutable input storage, including vector coverage when bypassed.
-Colour kernels use the straight-RGB alpha rule in
+Color kernels use the straight-RGB alpha rule in
 [`layer-graph-model.md`](layer-graph-model.md#image-effects). Future effects add kernels to this
 common operation rather than introducing another source kind.
 
@@ -744,7 +744,7 @@ scene executor. Cache identity includes mode, sampled margins, input content, da
 pixel aspect, resolution, and the GPU shader artifact. The output uses ordinary pixel-budget
 admission and retired resident-image ownership.
 
-Checker is an image source with two animatable straight scene-linear RGBA colours, integer cell
+Checker is an image source with two animatable straight scene-linear RGBA colors, integer cell
 width/height, and integer authored canvas width/height. It classifies a fixed 4×4 grid of samples
 per output pixel in authored coordinates, using the full composition-to-proxy ratio; samples
 outside the authored canvas are transparent. Its CPU reference and resident CheckerV1 compute
@@ -753,7 +753,7 @@ display window and pixel aspect follow the composition. The GPU preparation requ
 composition and proxy dimension to be at most 16,384 because the shader uses bounded unsigned
 32-bit products; larger valid documents receive an explicit Unsupported/CPU fallback diagnostic.
 The single shader dispatch has constant work per pixel regardless of cell frequency. Resolved
-colours, dimensions, windows and shader digest participate in cache identity.
+colors, dimensions, windows and shader digest participate in cache identity.
 
 Multiply Alpha consumes a base image and a matte at matching global pixel coordinates. It reads
 the selected Alpha, straight Red/Green/Blue, or Luma matte channel, treats absent matte pixels as
@@ -778,7 +778,7 @@ Mix's second input stays required, but a connected second image with no pixels a
 time is the same transparent image on both routes.
 
 The plan also carries `bypass` and `look`; `EvaluationRequest::bypassLookNodes` skips only marked
-nodes. Bypass shares upstream image storage and bounds. Active colour transforms materialize the
+nodes. Bypass shares upstream image storage and bounds. Active color transforms materialize the
 RGBA32F image, transform straight RGB, then restore the original alpha association. Alpha zero
 stays transparent black; failures never publish partially transformed rows.
 
@@ -1037,7 +1037,7 @@ placement path. It changes no rendering semantics, schema versions or existing p
 ### Video Source (MEDIA-3)
 
 `bloom.video-source` version 1 lowers to `CompiledVideoSource`: source node, captured video asset,
-start frame, loop mode and colour-space override. It emits image and audio ports. Exact composition
+start frame, loop mode and color-space override. It emits image and audio ports. Exact composition
 time minus `startFrame / compositionRate` maps to the captured video rate. Negative time holds
 frame zero; Hold clamps to the final frame, Loop wraps, and Ping Pong reverses at the endpoints.
 The first video stream supplies pixels. The first audio stream supplies the existing clip model,
@@ -1045,7 +1045,7 @@ using the same start offset and Layer/Merge participation rules; audio beyond it
 Loop and Ping Pong currently apply to image sampling, while audio retains ordinary clip timing.
 
 Evaluation runs the bounded worker session/cache path off the UI thread, then converts supported
-Rec.709 or sRGB-tagged YUV to scene-linear premultiplied pixels. Unsupported colour and changed
+Rec.709 or sRGB-tagged YUV to scene-linear premultiplied pixels. Unsupported color and changed
 content produce diagnostics instead of cached stale pixels. Video source selection participates
 in operation identity, including content digest, stream, frame and interpretation.
 
@@ -1063,7 +1063,7 @@ modulo four; positive turns are clockwise. Generic AddNode/parameter commands ow
 the versioned definitions and parameter records use ordinary project persistence.
 
 At Full resolution and equal-axis proxies these nodes permute the stored pixel lattice without
-colour conversion, unpremultiplication, filtering, alpha arithmetic or HDR clipping. Odd quarter
+color conversion, unpremultiplication, filtering, alpha arithmetic or HDR clipping. Odd quarter
 turns at unequal-axis proxy scales instead conjugate the rotation by those scales and use the
 shared premultiplied bilinear affine sampler on CPU and GPU, preserving Full-reference authored
 bounds and physical aspect. Flip reflects within the input data rectangle.
@@ -1092,7 +1092,7 @@ That harness and the required coverage gate must run on a device before claiming
 ## Separable neighborhood filtering
 
 Gaussian Blur and Box Blur share the CPU/GPU kernel, explicit data-window halo and edge policy
-defined in [Image Filters](image-filters.md). Unlike pointwise colour kernels, they filter associated
+defined in [Image Filters](image-filters.md). Unlike pointwise color kernels, they filter associated
 RGBA and may expand the data window. Preview and final rendering use the same production scene path.
 
 ## Channel sets and Shuffle
@@ -1107,7 +1107,7 @@ plans evaluate unchanged; only their version-bearing identities change.
   `keep`, Copy by pattern where a copied channel replaces a same-named one, and Rename into
   `<layer>.R/G/B/A`). Patterns are comma-separated names, layer names, `*`/`?` globs or `@role`
   tokens (`color`, `alpha`, `luminance`, `depth`, `normal`, `motion`, `position`, `uv`, `id`,
-  `coverage`, `data`). An Image source whose colour `image` output feeds nothing compiles no image
+  `coverage`, `data`). An Image source whose color `image` output feeds nothing compiles no image
   operation.
 - *Shuffle is the pixel operation.* `CompiledChannelShuffle` holds the expression, four slots (a
   resolved channel name or the constants `0` and `1`), a mode and `associated`. At evaluation the
@@ -1118,25 +1118,25 @@ plans evaluate unchanged; only their version-bearing identities change.
   windows, and a sample outside a channel's own window is an explicit zero. The process contract
   then applies as for OpenEXR ingest: non-finite components become 0, alpha is clamped, zero-alpha
   emission is dropped, and every repaired pixel is counted.
-- *Colour and Raw.* `Raw` places the mapped values in working-space RGB unchanged. `Colour` converts
-  the RGB triple from the input colour space of the red slot's source (resolved like an Image
+- *Color and Raw.* `Raw` places the mapped values in working-space RGB unchanged. `Colour` converts
+  the RGB triple from the input color space of the red slot's source (resolved like an Image
   source, including Auto from the part's chromaticities) to the working space. `associated` says
-  the mapped RGB is already premultiplied by the mapped alpha (OpenEXR); a Colour conversion
+  the mapped RGB is already premultiplied by the mapped alpha (OpenEXR); a Color conversion
   unpremultiplies before and premultiplies after it, and a straight mapping is premultiplied once.
-- *GPU.* Host preparation produces the same gather without colour conversion as a raw upload; the
-  proxy PointResampleV1 gather and, for a non-identity Colour mapping, the input-to-working OCIO
+- *GPU.* Host preparation produces the same gather without color conversion as a raw upload; the
+  proxy PointResampleV1 gather and, for a non-identity Color mapping, the input-to-working OCIO
   `ProcessEffect` are GPU commands, exactly as for an Image source. The raw upload is cached under
   the gather identity (source decode identities, slots and `associated`); the CPU result key adds
-  the colour interpretation. The coverage gate carries Required Shuffle, Remove and Channel Copy
+  the color interpretation. The coverage gate carries Required Shuffle, Remove and Channel Copy
   fixtures with native parity.
 - *Viewer inspection.* A Viewer inspection compiles a viewer-only plan that reaches only the
-  inspected ChannelSet and outputs a Raw, associated, alpha-1 Shuffle of one channel (grey) or three
+  inspected ChannelSet and outputs a Raw, associated, alpha-1 Shuffle of one channel (gray) or three
   (RGB). It never enters the composition's own plan, cache entries or any render or export.
 
 ## Cryptomatte
 
 Issue #364 adds `bloom.cryptomatte`, following the Cryptomatte specification (v1.2) as Nuke reads it
-so artists recognise it. Plan and evaluator semantics versions are unchanged: no existing plan
+so artists recognize it. Plan and evaluator semantics versions are unchanged: no existing plan
 evaluates differently.
 
 - *Node.* Inputs: `channels` (ChannelSet, required) and `image` (Image, optional). Outputs: `mask`,
@@ -1176,14 +1176,14 @@ evaluates differently.
   IDs are kept beside it under the selection key, and the coverage command key carries the IDs.
 - *Viewer.* A Viewer inspection with no channels shows a pixel output port directly; the channel
   menu offers "Cryptomatte matte" for a selected Cryptomatte.
-- *ID-colour preview.* Selecting a Cryptomatte with Preview on (Properties, a session display
+- *ID-color preview.* Selecting a Cryptomatte with Preview on (Properties, a session display
   choice, on by default) shows a viewer-only plan of the node's `preview` inspection port: a
-  `CompiledCryptomatte` with `preview` set, whose pixel is, per rank in rank order, `colour += tint x
+  `CompiledCryptomatte` with `preview` set, whose pixel is, per rank in rank order, `color += tint x
   coverage` with `tint_k = 0.15 + byte_k x s` of the ID bits (bits 16-23, 8-15, 0-7; `s` the
   binary32 constant `0x3B5A740E`, 0.85/255, so no division can differ) brightened to `0.5 tint +
-  0.5` for a selected ID, `alpha = clamp(alpha + coverage, 0, 1)` and the colour clamped to alpha.
+  0.5` for a selected ID, `alpha = clamp(alpha + coverage, 0, 1)` and the color clamped to alpha.
   With an image input it is an Image Mix (factor 0.5) whose base is the preview and whose second
-  input is the image, so a data-only or absent image still shows the colours. The same
+  input is the image, so a data-only or absent image still shows the colors. The same
   CryptomatteCoverageV1 kernel runs it (mode 1); CPU and GPU agree bit for bit and the coverage
   contract carries a preview fixture. It never enters a render or export.
 - *Eyedropper.* The Viewer point is mapped into the channel set's frame through the evaluated
@@ -1193,7 +1193,7 @@ evaluates differently.
   clock, resolved exactly as the evaluator resolves it (`detail::resolveClockTimes`), so a retimed
   or offset layer reads the frame it shows. It stores the dominant object's manifest name, or its
   raw ID without one; a point outside the source reports "No object under the cursor".
-- *Data-only sources.* An Image source whose selected part and layer have no colour channels has no
-  Image output (ADR 0026 Q1): the evaluator records the information "No colour layer — use
+- *Data-only sources.* An Image source whose selected part and layer have no color channels has no
+  Image output (ADR 0026 Q1): the evaluator records the information "No color layer — use
   Channels" and produces nothing, in preview and final render alike. Cryptomatte rank layers are
-  never classified as colour layers.
+  never classified as color layers.

@@ -7,7 +7,7 @@ Date: 2026-09-17
 ## Context
 
 Procedural motion design is built on repetition with variation: a hundred copies of one shape laid
-out on a grid, on a ring, or along a path, each carrying its own offset, rotation, colour and delay.
+out on a grid, on a ring, or along a path, each carrying its own offset, rotation, color and delay.
 Bloom has no way to express that today. An artist who wants it duplicates layers, and a hundred
 duplicated layers is a hundred timeline rows, a hundred undo targets, a hundred things to re-edit
 when the design changes, and a document whose size is proportional to a number the artist thinks of
@@ -178,7 +178,7 @@ Editing one element re-evaluates the whole instancer in v0. The baseline measure
 alternative available today is no better, and it gives the later optimization -- per-element dirty
 regions over a retained instancer image -- a number to beat: 18 ms at 500 elements, 61 ms at 2000.
 
-The bounds-margin clip is a real behavioural difference from Merge, and an artist who parents an
+The bounds-margin clip is a real behavioral difference from Merge, and an artist who parents an
 instancer and drags it a long way will see clipped instances and a warning rather than pixels. The
 alternative is an allocation with no upper bound, which is the defect the preflight estimate exists
 to catch.

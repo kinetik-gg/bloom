@@ -965,7 +965,7 @@ void writeArchiveAtMinor(const std::filesystem::path& path, const std::string& d
 void testOlderProjectVideoColourNotice(Expectations& expectations) {
     TempDirectory directory;
     if (!directory.isValid()) {
-        expectations.expect(false, "video colour notice: temp directory is available");
+        expectations.expect(false, "video color notice: temp directory is available");
         return;
     }
     const auto older = directory.path() / "older.bloom";
@@ -987,31 +987,31 @@ void testOlderProjectVideoColourNotice(Expectations& expectations) {
     host.beginOpen(older);
     expectations.expect(waitUntilIdle(host) && openCapture.count == 1 &&
                             openCapture.outcome == ProjectHostOperationOutcome::Published,
-                        "video colour notice: the 1.27 project opens");
+                        "video color notice: the 1.27 project opens");
     expectations.expect(
         !noticeAtSignal.isEmpty() && noticeAtSignal.contains("earlier version of Bloom") &&
             noticeAtSignal.contains("affects 1 video in") &&
-            noticeAtSignal.contains("Input Colour"),
-        "video colour notice: an older project with an Auto video asset shows the note, got: " +
+            noticeAtSignal.contains("Input Color"),
+        "video color notice: an older project with an Auto video asset shows the note, got: " +
             noticeAtSignal.toStdString());
 
     host.beginSaveAs(resaved);
     expectations.expect(waitUntilIdle(host) && saveCapture.count == 1 &&
                             saveCapture.outcome == ProjectHostOperationOutcome::Published,
-                        "video colour notice: the older project saves");
+                        "video color notice: the older project saves");
     host.beginOpen(resaved);
     expectations.expect(waitUntilIdle(host) && openCapture.count == 2 &&
                             openCapture.outcome == ProjectHostOperationOutcome::Published,
-                        "video colour notice: the resaved project opens");
+                        "video color notice: the resaved project opens");
     expectations.expect(noticeAtSignal.isEmpty() && host.openNotice().isEmpty(),
-                        "video colour notice: a project saved at 1.28 shows the note no more");
+                        "video color notice: a project saved at 1.28 shows the note no more");
 
     host.beginOpen(overridden);
     expectations.expect(waitUntilIdle(host) && openCapture.count == 3 &&
                             openCapture.outcome == ProjectHostOperationOutcome::Published,
-                        "video colour notice: the overridden 1.27 project opens");
+                        "video color notice: the overridden 1.27 project opens");
     expectations.expect(noticeAtSignal.isEmpty(),
-                        "video colour notice: an explicit input colour is preserved and needs no "
+                        "video color notice: an explicit input color is preserved and needs no "
                         "note");
     const auto snapshot = host.stateSnapshot();
     auto [document, stack] = host.liveDocumentAndStack();
@@ -1020,7 +1020,7 @@ void testOlderProjectVideoColourNotice(Expectations& expectations) {
             !document->snapshot().project().assets().empty() &&
             document->snapshot().project().assets().front().interpretation.inputColorSpaceId ==
                 "lin_rec709_scene",
-        "video colour notice: the explicit input colour opens exactly as saved");
+        "video color notice: the explicit input color opens exactly as saved");
 }
 
 } // namespace

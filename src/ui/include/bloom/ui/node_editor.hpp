@@ -135,6 +135,9 @@ class NodeGraphicsScene final : public QGraphicsScene {
     // findChild() cannot reach it.
     [[nodiscard]] QWidget* nodeFieldForTest(document::NodeId nodeId,
                                             const QString& fieldObjectName) const;
+    // Every control a card built for one parameter role (audit and tests).
+    [[nodiscard]] QList<QWidget*> nodeControlsForRoleForTest(document::NodeId nodeId,
+                                                             const QString& role) const;
     // Direction summary of the actual per-port child items, retained as a diagnostic contract.
     [[nodiscard]] NodeSockets nodeSocketsForTest(document::NodeId nodeId) const;
 
