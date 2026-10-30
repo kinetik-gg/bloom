@@ -201,8 +201,9 @@ createWithFrameTimes(const OperationSchema& schema, const Arguments& arguments,
     if (!compositionId)
         return failure("a time in frames needs the composition it counts in; pass composition, "
                        "or give the time as an exact [numerator, denominator] in seconds");
-    // A factory that measures at creation needs seconds now, from the context's rate.
-    if (context != nullptr && context->compositionFrameRate) {
+    // A factory that measures at creation needs seconds now, from the context's rate. Every
+    // other operation converts when it applies, so earlier operations in its transaction count.
+    if (measuresNow && context != nullptr && context->compositionFrameRate) {
         if (const auto rate = context->compositionFrameRate(*compositionId);
             rate && rate->first != 0 && rate->second != 0) {
             auto converted = arguments;

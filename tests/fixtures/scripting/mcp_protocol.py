@@ -213,7 +213,10 @@ class Protocol(unittest.TestCase):
                           'capture', 'export.start', 'export.start-all', 'export.pause',
                           'export.resume', 'export.stop', 'export.stop-all', 'export.retry',
                           'export.confirm-replace', 'export.status', 'export.events',
-                          'export.log', 'export.wait', 'export.presets', 'export.script'})
+                          'export.log', 'export.wait', 'export.presets', 'export.script',
+                          'project.save', 'project.save-as', 'project.open', 'project.new',
+                          'project.close', 'editor.reveal', 'selection.set',
+                          'composition.activate', 'transport', 'viewer.set'})
         self.assertTrue(responses[2]['result']['structuredContent']['succeeded'])
         self.assertEqual(responses[3]['result']['structuredContent']['project']['name'], 'MCP')
         self.assertFalse(responses[4]['result']['structuredContent']['succeeded'])
