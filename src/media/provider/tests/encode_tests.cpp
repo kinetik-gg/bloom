@@ -341,14 +341,16 @@ void chromaSampling(const std::filesystem::path& directory) {
         std::cout << "SKIP: VA-API red square — no render node\n";
         return;
     }
+    // Issue #394: 24 frames, six times the worker's four VA-API input surfaces, so a surface that
+    // is not returned to the pool fails the upload. The driver refusing the device, its frame
+    // context or the encoder skips; an upload failure or a verification failure is a failure.
+    settings.frames = 24;
     for (const auto& [codec, profile] :
          {std::pair{"h264", "high"}, std::pair{"hevc", "main"}, std::pair{"hevc", "main10"}}) {
         settings.videoCodec = codec;
         settings.profile = profile;
         EncodeSessionOptionsV1 vaapi;
         vaapi.vaapi = true;
-        // Only the driver refusing (the encoder, its context or a frame upload) skips; a
-        // verification failure is a test failure.
         try {
             (void)run(settings,
                       directory /
@@ -356,7 +358,7 @@ void chromaSampling(const std::filesystem::path& directory) {
                       std::move(vaapi));
         } catch (const std::runtime_error& error) {
             const std::string_view detail = error.what();
-            if (!detail.starts_with("VA-API") &&
+            if ((!detail.starts_with("VA-API") || detail == "VA-API frame upload failed") &&
                 detail != "Encoder refused profile or stream layout" &&
                 detail != "Encoder is not in the intake")
                 throw;
