@@ -216,6 +216,18 @@ exportPlatformAvailability(const document::ExportOutputSettings& settings,
 [[nodiscard]] ExportAvailability
 exportProjectAvailability(const document::ExportOutputSettings& settings,
                           const document::ColorSettings& project);
+// The document 1.29 `settings` object and a whole output ({"preset", "settings", "destination",
+// "enabled", "importIntoAssets"}) as compact JSON, for scripting, MCP and "copy as command".
+// Parsing validates the record; the parsed output has no id (the add operation allocates it).
+[[nodiscard]] std::string exportSettingsToJson(const document::ExportOutputSettings& settings);
+[[nodiscard]] std::optional<document::ExportOutputSettings>
+exportSettingsFromJson(std::string_view json);
+[[nodiscard]] std::string exportOutputToJson(const document::ExportOutput& output);
+[[nodiscard]] std::optional<document::ExportOutput> exportOutputFromJson(std::string_view json);
+// A built-in preset by id (pure; independent of encoders and of any catalogue instance). Its
+// platformAvailability is not evaluated here.
+[[nodiscard]] std::optional<ExportPreset> builtInExportPreset(std::string_view id);
+
 // This build's platform answer for ExportEncoderStatus::exportPlatform.
 [[nodiscard]] constexpr bool exportPlatformSupported() noexcept {
 #if defined(__linux__)

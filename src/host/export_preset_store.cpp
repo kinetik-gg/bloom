@@ -1,6 +1,5 @@
 #include "export_preset_store.hpp"
 
-#include <bloom/media/provider/encode_session.hpp>
 #include <bloom/output/media_output.hpp>
 
 #include <charconv>
@@ -312,6 +311,70 @@ std::string exportSettingsJson(const document::ExportOutputSettings& settings) {
     return out;
 }
 
+std::string exportSettingsToJson(const document::ExportOutputSettings& settings) {
+    return exportSettingsJson(settings);
+}
+
+std::optional<document::ExportOutputSettings> exportSettingsFromJson(const std::string_view json) {
+    if (json.size() > (1U << 20U))
+        return std::nullopt;
+    const auto parsed = Parser(json).parse();
+    return parsed ? settingsFrom(*parsed) : std::nullopt;
+}
+
+std::string exportOutputToJson(const document::ExportOutput& output) {
+    std::string out = "{\"preset\":";
+    quote(out, output.presetId);
+    out += ",\"settings\":" + exportSettingsJson(output.settings) +
+           ",\"destination\":{\"portability\":";
+    quote(out, output.destination.portability);
+    out += ",\"path\":";
+    quote(out, output.destination.path);
+    out += ",\"overwrite\":";
+    quote(out, document::exportOverwriteToken(output.destination.overwrite));
+    out += std::string("},\"enabled\":") + (output.enabled ? "true" : "false") +
+           ",\"importIntoAssets\":" + (output.importIntoAssets ? "true" : "false") + "}";
+    return out;
+}
+
+std::optional<document::ExportOutput> exportOutputFromJson(const std::string_view json) {
+    if (json.size() > (1U << 20U))
+        return std::nullopt;
+    const auto parsed = Parser(json).parse();
+    if (!parsed)
+        return std::nullopt;
+    document::ExportOutput output;
+    if (const auto* preset = string(*parsed, "preset"))
+        output.presetId = *preset;
+    if (const auto* settings = parsed->find("settings")) {
+        auto value = settingsFrom(*settings);
+        if (!value)
+            return std::nullopt;
+        output.settings = std::move(*value);
+    }
+    if (const auto* destination = parsed->find("destination")) {
+        if (const auto* portability = string(*destination, "portability"))
+            output.destination.portability = *portability;
+        if (const auto* path = string(*destination, "path"))
+            output.destination.path = *path;
+        if (const auto* overwrite = string(*destination, "overwrite")) {
+            const auto policy = document::parseExportOverwrite(*overwrite);
+            if (!policy)
+                return std::nullopt;
+            output.destination.overwrite = *policy;
+        }
+    }
+    if (const auto* enabled = boolean(*parsed, "enabled"))
+        output.enabled = *enabled;
+    if (const auto* import = boolean(*parsed, "importIntoAssets"))
+        output.importIntoAssets = *import;
+    auto probe = output;
+    probe.id = document::ExportOutputId::fromRaw(1);
+    if (!document::validateExportOutput(probe).ok())
+        return std::nullopt;
+    return output;
+}
+
 std::optional<std::vector<ExportUserPresetRecord>>
 readExportUserPresets(const std::filesystem::path& path) {
     std::error_code error;
@@ -394,9 +457,7 @@ ExportEncoderStatus probeExportEncoders(const ExportEncoderStatus& initial) {
         status.openh264 = support.software == output::H264EncoderV1::None
                               ? ExportEncoderStatus::OpenH264::NotInstalled
                               : ExportEncoderStatus::OpenH264::NotNeeded;
-    std::error_code error;
-    const auto worker = media::provider::EncodeSessionV1::defaultWorker();
-    status.mediaWorker = !worker.empty() && std::filesystem::is_regular_file(worker, error);
+    status.mediaWorker = output::mediaWorkerAvailableV1();
     const auto vaapi = output::probeVaapiEncodeV1();
     status.vaapiH264 = support.hardwareVaapi && vaapi.h264;
     status.vaapiHevc = support.hardwareVaapi && vaapi.hevc;

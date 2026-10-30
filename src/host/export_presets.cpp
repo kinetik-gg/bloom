@@ -256,6 +256,23 @@ bool exportPreservationFits(const output::OutputPreservationStateV1 actual,
     return static_cast<std::uint8_t>(actual) <= static_cast<std::uint8_t>(expected);
 }
 
+std::optional<ExportPreset> builtInExportPreset(const std::string_view id) {
+    for (const auto& builtIn : makeBuiltIns())
+        if (builtIn.id == id) {
+            ExportPreset preset;
+            preset.id = std::string(builtIn.id);
+            preset.displayName = std::string(builtIn.name);
+            preset.description = std::string(builtIn.description);
+            preset.category = builtIn.category;
+            preset.settings = builtIn.settings;
+            preset.capabilities = capabilitiesFor(builtIn.settings);
+            preset.expectedPreservation = expectedFor(builtIn.settings);
+            preset.projectDependent = builtIn.projectDependent;
+            return preset;
+        }
+    return std::nullopt;
+}
+
 ExportAvailability exportPlatformAvailability(const document::ExportOutputSettings& settings,
                                               const ExportEncoderStatus& encoders) {
     if (!encoders.exportPlatform)
