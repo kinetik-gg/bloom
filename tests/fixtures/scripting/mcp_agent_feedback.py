@@ -158,9 +158,15 @@ class AgentFeedback(unittest.TestCase):
         blend = server.role('blendMode')
         self.assertTrue(server.transact(set_source(fill, value=False))['succeeded'])
         self.assertIs(self.constant(fill), False)
-        # An enumeration member by its label, in any case or spelling.
-        self.assertTrue(server.transact(set_source(blend, value='screen'))['succeeded'])
-        self.assertEqual(self.constant(blend), 3)
+        # An enumeration member by its stored value or its label, in any case; read back as both.
+        for value in (3, 'screen', 'SCREEN', 'Screen'):
+            server.transact(set_source(blend, value=0))
+            self.assertTrue(server.transact(set_source(blend, value=value))['succeeded'], value)
+            record = server.parameter(blend)
+            self.assertEqual((record['value'], record['label']), (3, 'Screen'), value)
+        refused = server.transact(set_source(blend, value=9))
+        self.assertFalse(refused['succeeded'])
+        self.assertIn('7 (Difference)', refused['diagnostics'][0]['message'])
         server.transact(('bloom.layer.add-text', {'composition': 1, 'name': 'T', 'text': 'Hi'}))
         content = server.role('text')
         self.assertTrue(server.transact(set_source(content, value='Hello'))['succeeded'])

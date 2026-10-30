@@ -1,6 +1,8 @@
 // Parameter projections shared by both hosts (moved from apps/bloom-mcp).
 #include "core_internal.hpp"
 
+#include <bloom/document/parameter_enums.hpp>
+
 #include <type_traits>
 
 namespace bloom::mcp {
@@ -71,6 +73,13 @@ yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& valu
             if constexpr (std::is_same_v<T, document::ConstantValueSource>) {
                 out.set(record, "source", out.text("constant"));
                 out.set(record, "value", parameterValue(out, source.value));
+                // An enumeration member reads back as both its stored value and its label.
+                if (const auto* stored = std::get_if<std::int64_t>(&source.value)) {
+                    for (const auto& option : document::parameterEnumOptions(value.schemaKey)) {
+                        if (option.value == *stored)
+                            out.set(record, "label", out.text(option.label));
+                    }
+                }
             } else if constexpr (std::is_same_v<T, document::AnimationCurveSource>) {
                 out.set(record, "source", out.text("curve"));
                 out.set(record, "curveId", out.number(source.curveId.value()));
