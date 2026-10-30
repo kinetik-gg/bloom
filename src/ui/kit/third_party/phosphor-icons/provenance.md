@@ -336,3 +336,7 @@ modification.
 The Export panel icon (2026-10-30) downloaded the same pinned archive, verified its SHA-256 above
 from the downloaded bytes, and extracted `export` in regular, fill and bold from `assets/` without
 modification.
+The Timeline layer table (lane T2, 2026-10-31) downloaded the same pinned archive, verified its
+SHA-256 above from the downloaded bytes, and extracted `ghost` (the Shy switch and the master Shy
+toggle; the pinned release has no peeking-figure glyph) and `funnel-simple` (the label filter) in
+regular, fill and bold from `assets/` without modification.

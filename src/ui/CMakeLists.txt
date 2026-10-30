@@ -45,6 +45,7 @@ target_sources(
         kit/range_selector.cpp
         kit/slider.cpp
         kit/split_handle.cpp
+        kit/swatch_button.cpp
         kit/switch_control.cpp
         kit/theme.cpp
         kit/thumbnail.cpp
@@ -97,6 +98,7 @@ target_sources(
             include/bloom/ui/kit/inline_edit.hpp
             include/bloom/ui/kit/text_field.hpp
             include/bloom/ui/kit/value_expression.hpp
+            include/bloom/ui/kit/swatch_button.hpp
             include/bloom/ui/kit/switch_control.hpp
             include/bloom/ui/kit/tab_bar.hpp
             include/bloom/ui/kit/task_dialog.hpp
@@ -175,6 +177,8 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/folder-open.svg
         kit/third_party/phosphor-icons/regular/lightning.svg
         kit/third_party/phosphor-icons/regular/export.svg
+        kit/third_party/phosphor-icons/regular/ghost.svg
+        kit/third_party/phosphor-icons/regular/funnel-simple.svg
         kit/third_party/phosphor-icons/regular/plugs-connected.svg
         kit/third_party/phosphor-icons/regular/terminal-window.svg
         kit/third_party/phosphor-icons/regular/cursor.svg
@@ -256,6 +260,8 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/folder-open-bold.svg
         kit/third_party/phosphor-icons/bold/lightning-bold.svg
         kit/third_party/phosphor-icons/bold/export-bold.svg
+        kit/third_party/phosphor-icons/bold/ghost-bold.svg
+        kit/third_party/phosphor-icons/bold/funnel-simple-bold.svg
         kit/third_party/phosphor-icons/bold/plugs-connected-bold.svg
         kit/third_party/phosphor-icons/bold/terminal-window-bold.svg
         kit/third_party/phosphor-icons/bold/cursor-bold.svg
@@ -325,6 +331,8 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/folder-open-fill.svg
         kit/third_party/phosphor-icons/fill/lightning-fill.svg
         kit/third_party/phosphor-icons/fill/export-fill.svg
+        kit/third_party/phosphor-icons/fill/ghost-fill.svg
+        kit/third_party/phosphor-icons/fill/funnel-simple-fill.svg
         kit/third_party/phosphor-icons/fill/plugs-connected-fill.svg
         kit/third_party/phosphor-icons/fill/terminal-window-fill.svg
         kit/third_party/phosphor-icons/fill/cursor-fill.svg

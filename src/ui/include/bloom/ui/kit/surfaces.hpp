@@ -5,6 +5,7 @@
 #include <QWidget>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/painting.hpp>
+#include <vector>
 namespace bloom::ui::kit {
 // The rounded frame of a panel, painted LAST. One transparent overlay the size of the panel that
 // (a) fills the four wedges outside the Radius::Panel curve with Color::Background -- the one
@@ -70,12 +71,24 @@ class KListSurface : public QWidget {
         offset_ = offset;
         update();
     }
+    // The rows this surface paints in the list hover step and in the selected-row recipe (by
+    // row index from the top of the list, -1 for none). A child row widget that paints nothing
+    // of its own shows them through; KRow paints the same two states itself.
+    void setRowStates(int hovered, std::vector<int> selected) {
+        hovered_ = hovered;
+        selected_ = std::move(selected);
+        update();
+    }
+    [[nodiscard]] int hoveredRow() const noexcept { return hovered_; }
+    [[nodiscard]] const std::vector<int>& selectedRows() const noexcept { return selected_; }
 
   protected:
     void paintEvent(QPaintEvent*) override;
 
   private:
     int offset_ = 0;
+    int hovered_ = -1;
+    std::vector<int> selected_;
 };
 // A plain widget filled with one colour token: neutral panel surfaces by default, or a marker
 // such as an Accent insertion line. The one way product code fills a widget background.

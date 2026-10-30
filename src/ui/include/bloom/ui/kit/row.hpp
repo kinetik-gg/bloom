@@ -28,9 +28,16 @@ class KRow : public QWidget {
     Q_OBJECT
   public:
     explicit KRow(QWidget* parent = nullptr);
+    // `switches` are ToggleCell cells right after the name (the timeline's Shy switch, After
+    // Effects' Switches column), each preceded by `toggleGap`; the name keeps the extra width.
     void setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<QWidget*>& columns,
-                  QWidget* trailing = nullptr, int toggleGap = 0);
+                  QWidget* trailing = nullptr, int toggleGap = 0,
+                  const QList<QWidget*>& switches = {});
     void setRowState(int index, bool selected);
+    // The list hover step (one surface rung up), the same one KListSurface paints for its rows.
+    // A selected row keeps the selected-row recipe.
+    void setHovered(bool hovered);
+    [[nodiscard]] bool hovered() const noexcept { return hovered_; }
     void setLeadingInset(int inset);
     void setName(const QString& text, std::optional<IconId> disclosure = std::nullopt);
     KIconButton* disclosureButton() const { return disclosure_; }
@@ -48,5 +55,6 @@ class KRow : public QWidget {
     int index_ = 0;
     int leadingInset_ = px(Spacing::RowPadding);
     bool selected_ = false;
+    bool hovered_ = false;
 };
 } // namespace bloom::ui::kit

@@ -155,8 +155,10 @@ void testGeometryTokensCarryTheSpecifiedNumbers(Expectations& expectations) {
     expectations.expect(kit::px(kit::Size::HeaderRow) == 32, "HeaderRow is 32");
     expectations.expect(kit::px(kit::Size::ListRow) == 32, "ListRow is 32");
     expectations.expect(kit::px(kit::Size::TimelineBar) == 20, "TimelineBar is 20");
-    expectations.expect(kit::px(kit::Size::TimelineToggleColumn) == 108,
-                        "TimelineToggleColumn is four 24 px cells plus three XS gaps");
+    expectations.expect(kit::px(kit::Size::TimelineToggleColumn) == 136,
+                        "TimelineToggleColumn is five 24 px cells plus four XS gaps");
+    expectations.expect(kit::px(kit::Size::TimelineSwitchColumn) == 28,
+                        "TimelineSwitchColumn is one 24 px cell plus its XS gap");
     expectations.expect(kit::px(kit::Size::TimelineNameMin) == 120, "TimelineNameMin is 120");
     expectations.expect(kit::px(kit::Size::TimelineColumn) == 100, "TimelineColumn is 100");
     expectations.expect(kit::px(kit::Size::TimelineWorkArea) == 10, "TimelineWorkArea is 10");

@@ -111,6 +111,8 @@ const auto& iconAssets() {
         {IconId::ScriptEditor, QLatin1StringView("terminal-window")},
         {IconId::McpServer, QLatin1StringView("plugs-connected")},
         {IconId::ExportPanel, QLatin1StringView("export")},
+        {IconId::Shy, QLatin1StringView("ghost")},
+        {IconId::LabelFilter, QLatin1StringView("funnel-simple")},
     });
     return entries;
 }

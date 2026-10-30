@@ -262,10 +262,15 @@ enum class Size : int {
     IconLarge = 20,
     TitleBar = 34,
     TimelineBar = 20,
-    TimelineToggleColumn = 4 * ToggleCell + 3 * static_cast<int>(Spacing::XS),
+    // The layer table's leading switch strip: Video, Audio, Solo and Lock, then the Label square
+    // (After Effects' A/V Features and Label columns), five ToggleCells with XS gaps.
+    TimelineToggleColumn = 5 * ToggleCell + 4 * static_cast<int>(Spacing::XS),
+    // The switch cells after the name (Shy): one ToggleCell and its XS gap.
+    TimelineSwitchColumn = ToggleCell + static_cast<int>(Spacing::XS),
     TimelineNameMin = 120,
     TimelineNameDefault = 280,
-    TimelineLeftColumn = TimelineToggleColumn + TimelineNameDefault + 3 * DropdownWidth,
+    TimelineLeftColumn =
+        TimelineToggleColumn + TimelineNameDefault + TimelineSwitchColumn + 3 * DropdownWidth,
     TimelineColumn = 100,
     TimelineWorkArea = 10,
     // task TL-FIX2: the layer-table/lanes divider's draggable hit zone. KSplitHandle paints one

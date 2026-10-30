@@ -125,6 +125,10 @@ enum class IconId : std::uint8_t {
     McpServer,
     // The Export panel (a box with an outgoing arrow).
     ExportPanel,
+    // The Timeline's Shy switch and master Shy toggle (a ghost: the pinned set has no After
+    // Effects style "peeking" glyph), and its label filter (a funnel).
+    Shy,
+    LabelFilter,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add
