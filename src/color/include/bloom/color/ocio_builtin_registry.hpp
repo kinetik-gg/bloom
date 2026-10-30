@@ -141,8 +141,13 @@ ocioBuiltInContentRevision(OcioConfigLocatorKind locatorKind,
 // pair is discovered by scanning every (display, view) pair's resolved color space
 // (OCIO::Config::getDisplayViewColorSpaceName()) against the discovered output color-space name.
 // Scene-light Rec.2100 HLG input space Bloom synthesizes into every resolved pinned config that
-// lacks one (OCIO "CURVE - HLG-OETF-INVERSE" then BT.2020 to the reference primaries; no OOTF).
+// lacks one (OCIO "CURVE - HLG-OETF-INVERSE" scaled so the 75% reference-white signal is 1.0, then
+// BT.2020 to the reference primaries; no OOTF).
 inline constexpr std::string_view kBloomRec2100HlgColorSpaceId = "Rec.2100-HLG (Bloom)";
+// Rec.2100 PQ input space Bloom synthesizes into every resolved pinned config that lacks one
+// (Bloom Neutral v1): OCIO "CURVE - ST-2084_to_LINEAR" scaled so 203 cd/m2 (BT.2408 reference
+// white) is 1.0, then BT.2020 to the reference primaries.
+inline constexpr std::string_view kBloomRec2100PqColorSpaceId = "Rec.2100-PQ (Bloom)";
 // Rec.709 camera input Bloom synthesizes into a resolved pinned config that has no Rec.709 camera
 // space (Bloom Neutral v1 and the ACES 1.3 CG config): the BT.709 inverse OETF (OCIO
 // ExponentWithLinearTransform, gamma 1/0.45, offset 0.099) then Rec.709 to the reference

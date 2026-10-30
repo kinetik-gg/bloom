@@ -1729,10 +1729,11 @@ not fall back to a similarly named space or to an ambient config; the asset rema
 unavailable until the user chooses a valid id.
 
 `Rec.2100-HLG (Bloom)` is a valid persisted id under both pinned configs although neither config
-file defines it: Bloom synthesizes it into the resolved config (HLG-OETF-INVERSE from OCIO 2.5, then
-the BT.2020 to reference-primaries matrix; scene light, no OOTF) whenever the config is resolved,
-so opening a project that names it never depends on the config file. See
-[`color-management.md`](color-management.md#synthesized-rec2100-hlg-input-space).
+file defines it: Bloom synthesizes it into the resolved config (HLG-OETF-INVERSE from OCIO 2.5,
+scaled so the 75% signal is 1.0, then the BT.2020 to reference-primaries matrix; scene light, no
+OOTF) whenever the config is resolved, so opening a project that names it never depends on the
+config file. `Rec.2100-PQ (Bloom)` is likewise valid under Bloom Neutral (ST-2084 to linear, 203
+cd/m2 = 1.0). See [`color-management.md`](color-management.md#synthesized-rec2100-hlg-input-space).
 
 ## Video Stream Metadata In Document 1.25
 

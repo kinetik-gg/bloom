@@ -5,10 +5,12 @@
 #include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/media/video/colour.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <iostream>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -213,8 +215,6 @@ void testVideoRules(Expectations& expectations) {
     expectations.expect(srgb.id == config->sRgbTextureColorSpaceId() &&
                             linear.id == config->processColorSpaceId(),
                         "sRGB and linear container tags map to config spaces");
-    expectations.expect(hdr.id.empty() && !hdr.warning.empty(),
-                        "PQ tags refuse when the config has no Rec.2100 PQ space");
 
     const auto explicitLog = bloom::media::video::resolveVideoInputColorSpace(
         *config, ColourTags{1, 1, 1, 1}, 0, "ARRI LogC3");
@@ -266,8 +266,53 @@ void testVideoRules(Expectations& expectations) {
                             constantLuminance.warning.find("constant-luminance") !=
                                 std::string::npos,
                         "BT.2020 constant luminance is refused by name");
-    expectations.expect(hdr.warning.find("Rec.2100 PQ") != std::string::npos,
-                        "a config without PQ names the missing Rec.2100 space");
+    // Issue #369: Bloom Neutral has no Rec.2100 PQ space; Bloom synthesizes one (as for HLG), so
+    // tagged PQ video imports instead of failing evaluation.
+    expectations.expect(hdr.automatic && hdr.id == bloom::color::kBloomRec2100PqColorSpaceId &&
+                            hdr.warning.empty() && config->rec2100PqColorSpaceId() == hdr.id,
+                        "a Bloom Neutral PQ stream resolves to the synthesized Rec.2100 PQ space");
+    // Exact HDR reference white (BT.2408): 203 cd/m2 PQ and the 75% HLG signal are 1.0 in the
+    // scene-linear working space, like an sRGB still's white. Neutral greys keep R=G=B through the
+    // BT.2020 to Rec.709 primaries (both D65).
+    const auto hdrSamples = [&](const std::string_view id, std::vector<float> signals) {
+        std::string diagnostic;
+        const auto processor = bloom::runtime::detail::prepareInputColorProcessor(
+            *config, {std::string(id), std::string(id), {}, false, true}, diagnostic);
+        std::vector<std::array<float, 4>> pixels;
+        for (const auto signal : signals)
+            pixels.push_back({signal, signal, signal, 1.0F});
+        if (!processor || !processor->apply(pixels))
+            pixels.clear();
+        return pixels;
+    };
+    const auto near = [](const std::array<float, 4>& pixel, const double expected) {
+        const auto bound = 1e-3 * std::max(1.0, expected);
+        return std::abs(static_cast<double>(pixel[0]) - expected) <= bound &&
+               std::abs(static_cast<double>(pixel[1]) - expected) <= bound &&
+               std::abs(static_cast<double>(pixel[2]) - expected) <= bound;
+    };
+    // PQ signal 0.58068888 is 203 cd/m2; 1.0 is 10000 cd/m2 = 10000/203.
+    const auto pqWhite =
+        hdrSamples(bloom::color::kBloomRec2100PqColorSpaceId, {0.5806888810F, 1.0F, 0.0F});
+    expectations.expect(pqWhite.size() == 3 && near(pqWhite[0], 1.0) &&
+                            near(pqWhite[1], 10000.0 / 203.0) && near(pqWhite[2], 0.0),
+                        "PQ: 203 cd/m2 is 1.0 and 10000 cd/m2 is 49.26");
+    // HLG 75% is reference white; 50% is E = 1/12, i.e. (1/12) / 0.26496256 = 0.31451.
+    const auto hlgWhite =
+        hdrSamples(bloom::color::kBloomRec2100HlgColorSpaceId, {0.75F, 0.5F, 0.0F});
+    expectations.expect(hlgWhite.size() == 3 && near(hlgWhite[0], 1.0) &&
+                            near(hlgWhite[1], 0.3145098) && near(hlgWhite[2], 0.0),
+                        "HLG: the 75% signal is 1.0 and 50% is 0.31451 (no OOTF)");
+    // Rec.709 primaries coded with the Rec.601 matrix are ordinary SDR video: the matrix is the
+    // YUV step's, so the sRGB transfer and the BT.709 transfer both show through sRGB texture.
+    for (const auto tags : {ColourTags{1, 13, 6, 1}, ColourTags{1, 1, 6, 1},
+                            ColourTags{1, 13, 5, 2}, ColourTags{6, 13, 1, 1}}) {
+        const auto mixed = bloom::media::video::resolveVideoInputColorSpace(*config, tags, 0, {});
+        expectations.expect(
+            mixed.automatic && mixed.id == config->sRgbTextureColorSpaceId() &&
+                mixed.warning.empty(),
+            "SDR primaries with a Rec.601 or Rec.709 matrix resolve to sRGB texture");
+    }
     const auto neutralHlg =
         bloom::media::video::resolveVideoInputColorSpace(*config, ColourTags{9, 18, 9, 1}, 0, {});
     std::string neutralHlgDiagnostic;

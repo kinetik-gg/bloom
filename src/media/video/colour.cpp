@@ -40,14 +40,21 @@ constexpr std::string_view kOverride =
            matrix == kMatrixBt2020Ncl;
 }
 [[nodiscard]] bool knownRange(const std::int32_t range) { return range == 1 || range == 2; }
-// Ordinary SDR video (ADR 0032): a Rec.709 or Rec.601 (BT.470BG / SMPTE 170M) stream with the
-// BT.709 / SMPTE 170M transfer. Auto shows it through the config's sRGB texture space.
+// Rec.709 or Rec.601 (BT.470BG / SMPTE 170M) primaries, and a matrix the YUV step decodes for
+// SDR: Rec.709, Rec.601, or identity (RGB-coded). The matrix is independent of the primaries:
+// Rec.709 pictures coded with the Rec.601 matrix are common (SD-matrix encoders, some cameras).
+[[nodiscard]] bool sdrPrimaries(const ColourTags& tags) {
+    return tags.primaries == 1 || tags.primaries == kMatrixBt470bg ||
+           tags.primaries == kMatrixSmpte170m;
+}
+[[nodiscard]] bool sdrMatrix(const ColourTags& tags) {
+    return tags.matrix == kMatrixBt709 || tags.matrix == kMatrixBt470bg ||
+           tags.matrix == kMatrixSmpte170m || tags.matrix == 0;
+}
+// Ordinary SDR video (ADR 0032): Rec.709 or Rec.601 primaries and matrix, in any combination, with
+// the BT.709 / SMPTE 170M transfer. Auto shows it through the config's sRGB texture space.
 [[nodiscard]] bool ordinarySdr(const ColourTags& tags) {
-    if (tags.transfer != 1 && tags.transfer != 6)
-        return false;
-    const bool sd = (tags.primaries == kMatrixBt470bg || tags.primaries == kMatrixSmpte170m) &&
-                    (tags.matrix == kMatrixBt470bg || tags.matrix == kMatrixSmpte170m);
-    return sd || (tags.primaries == 1 && (tags.matrix == kMatrixBt709 || tags.matrix == 0));
+    return (tags.transfer == 1 || tags.transfer == 6) && sdrPrimaries(tags) && sdrMatrix(tags);
 }
 // Names every tag a conversion needs but the stream lacks, for diagnostics.
 [[nodiscard]] std::string missingTags(const ColourTags& tags, const bool needTransfer) {
@@ -302,13 +309,15 @@ VideoInputColorSpaceResolution resolveVideoInputColorSpace(
     // Rec.601 SD's matrix is honoured by the YUV conversion; its R'G'B' is shown like Rec.709's.
     if (ordinarySdr(tags))
         return sdrDisplay();
-    if (tags.primaries != 1 || (tags.matrix != kMatrixBt709 && tags.matrix != 0))
+    if (!sdrPrimaries(tags) || !sdrMatrix(tags))
         return refuse("Rec.2020 or other non-Rec.709 video without a PQ or HLG transfer has no "
                       "automatic config space" +
                       std::string(kOverride));
+    // The sRGB transfer is the sRGB texture space whichever SDR matrix coded the picture.
     if (tags.transfer == 13)
         return sdrDisplay();
-    if (tags.transfer == 8)
+    // Linear light is the working space only when its primaries are the working Rec.709 ones.
+    if (tags.transfer == 8 && tags.primaries == 1)
         return selected(config, std::string(config.processColorSpaceId()), true);
     return VideoInputColorSpaceResolution{
         "", "", "Video transfer tags are unsupported; choose an explicit config colour space",

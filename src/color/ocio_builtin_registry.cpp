@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -129,34 +130,45 @@ struct InputColorSpaceMappings final {
     return {m[0], m[1], m[2], 0, m[3], m[4], m[5], 0, m[6], m[7], m[8], 0, 0, 0, 0, 1};
 }
 
-// Synthesizes kBloomRec2100HlgColorSpaceId in an in-memory copy of a pinned config that has no
-// HLG input space. The pinned locator, payload and content revision are unchanged; only the
-// resolved config used for processors gains the space. HLG is scene-referred (BT.2100): the
-// space applies OCIO's built-in "CURVE - HLG-OETF-INVERSE" (signal to scene light, 0.42 -> 18%
-// grey) and the BT.2020 (D65) to reference-primaries matrix. No HLG OOTF / system gamma is
-// applied: that is a display adaptation, and compositing works in scene light.
-[[nodiscard]] OCIO::ConstConfigRcPtr withBloomHlgInput(const OCIO::ConstConfigRcPtr& config,
-                                                       const bool isNeutral) {
-    if (config->getColorSpace(std::string(bloom::color::kBloomRec2100HlgColorSpaceId).c_str()) !=
-        nullptr)
-        return config;
+// HDR reference white (BT.2408): 203 cd/m2, which HLG carries at 75% signal. Bloom's scene-linear
+// working space puts diffuse white at 1.0 (an sRGB still's white), so both Rec.2100 inputs map
+// reference white to 1.0 and SDR and HDR sources composite at the same white.
+constexpr double kHdrReferenceWhiteNits = 203.0;
+// BT.2100 HLG inverse OETF of a 75% signal: normalized scene light E = 0.26496...
+[[nodiscard]] double hlgReferenceWhiteScene() {
+    constexpr double a = 0.17883277, b = 0.28466892, c = 0.55991073;
+    return (std::exp((0.75 - c) / a) + b) / 12.0;
+}
+
+// A Rec.2100 input space synthesized into an in-memory copy of a pinned config: `curve` (an OCIO
+// 2.4 built-in), a uniform `scale` to Bloom's scene-linear units, then the BT.2020 (D65) primaries
+// to the config reference. The pinned locator, payload and content revision are unchanged; only
+// the resolved config used for processors gains the space.
+[[nodiscard]] OCIO::ConstConfigRcPtr
+withBloomRec2100Input(const OCIO::ConstConfigRcPtr& config, const bool isNeutral,
+                      const std::string_view name, const char* const curveStyle, const double scale,
+                      const char* const description) {
     constexpr std::array<double, 8> bt2020{0.708, 0.292, 0.170,  0.797,
                                            0.131, 0.046, 0.3127, 0.3290};
     constexpr std::array<double, 8> bt709{0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290};
     auto toReference = OCIO::GroupTransform::Create();
-    // The HLG built-in style is only valid in configs of version 2.4 or later, and the pinned
-    // configs are 2.0 and 2.1. OCIO's own implementation of the style is therefore taken from a
-    // processor in a minimal raw 2.4 config (it is one 65,536-entry half-domain 1D LUT) and
+    // The HLG and PQ built-in styles are only valid in configs of version 2.4 or later, and the
+    // pinned configs are 2.0 and 2.1. OCIO's own implementation of the style is therefore taken
+    // from a processor in a minimal raw 2.4 config (one 65,536-entry half-domain 1D LUT) and
     // embedded here, so the pinned configs keep their version and validate unchanged. It is the
     // exact op the built-in runs: identical CPU output and GPU processor cache id.
     auto raw = OCIO::Config::CreateRaw()->createEditableCopy();
     raw->setMajorVersion(2);
     raw->setMinorVersion(4);
     auto curve = OCIO::BuiltinTransform::Create();
-    curve->setStyle("CURVE - HLG-OETF-INVERSE");
+    curve->setStyle(curveStyle);
     toReference->appendTransform(raw->getProcessor(curve)->createGroupTransform());
+    // The scale folds into the BT.2020 to XYZ matrix: one matrix op either way.
     auto toXyz = OCIO::MatrixTransform::Create();
-    const auto bt2020ToXyz = matrix44(rgbToXyz(bt2020));
+    auto bt2020ToXyz = matrix44(rgbToXyz(bt2020));
+    for (std::size_t row = 0; row < 3; ++row)
+        for (std::size_t column = 0; column < 3; ++column)
+            bt2020ToXyz[row * 4 + column] *= scale;
     toXyz->setMatrix(bt2020ToXyz.data());
     toReference->appendTransform(toXyz);
     if (isNeutral) {
@@ -174,15 +186,62 @@ struct InputColorSpaceMappings final {
         toReference->appendTransform(toAp0);
     }
     auto space = OCIO::ColorSpace::Create(OCIO::REFERENCE_SPACE_SCENE);
-    space->setName(std::string(bloom::color::kBloomRec2100HlgColorSpaceId).c_str());
+    space->setName(std::string(name).c_str());
     space->setFamily("Input");
-    space->setDescription("Bloom-synthesized Rec.2100 HLG scene-light input (no OOTF)");
+    space->setDescription(description);
     space->setTransform(toReference, OCIO::COLORSPACE_DIR_TO_REFERENCE);
     // The pinned config keeps its version; the copy with the added space is validated.
     auto editable = config->createEditableCopy();
     editable->addColorSpace(space);
     editable->validate();
     return editable;
+}
+
+// True when the config already declares a non-data Rec.2100 space whose name names `curve`.
+[[nodiscard]] bool hasRec2100Space(const OCIO::ConstConfigRcPtr& config,
+                                   const std::string_view curve) {
+    for (int index = 0;
+         index < config->getNumColorSpaces(OCIO::SEARCH_REFERENCE_SPACE_ALL, OCIO::COLORSPACE_ALL);
+         ++index) {
+        const char* const name = config->getColorSpaceNameByIndex(OCIO::SEARCH_REFERENCE_SPACE_ALL,
+                                                                  OCIO::COLORSPACE_ALL, index);
+        if (isNonDataColorSpace(config, name) && containsInsensitive(name, "2100") &&
+            containsInsensitive(name, curve))
+            return true;
+    }
+    return false;
+}
+
+// Synthesizes kBloomRec2100HlgColorSpaceId into a pinned config that has no HLG input space. HLG is
+// scene-referred (BT.2100): OCIO's built-in "CURVE - HLG-OETF-INVERSE" (signal to scene light,
+// 3 x the normalized E) scaled so the 75% reference-white signal is 1.0, then BT.2020 to the
+// reference primaries. No HLG OOTF / system gamma is applied: that is a display adaptation, and
+// compositing works in scene light.
+[[nodiscard]] OCIO::ConstConfigRcPtr withBloomHlgInput(const OCIO::ConstConfigRcPtr& config,
+                                                       const bool isNeutral) {
+    if (config->getColorSpace(std::string(bloom::color::kBloomRec2100HlgColorSpaceId).c_str()) !=
+        nullptr)
+        return config;
+    return withBloomRec2100Input(
+        config, isNeutral, bloom::color::kBloomRec2100HlgColorSpaceId, "CURVE - HLG-OETF-INVERSE",
+        1.0 / (3.0 * hlgReferenceWhiteScene()),
+        "Bloom-synthesized Rec.2100 HLG scene-light input (no OOTF; 75% signal = 1.0)");
+}
+
+// Synthesizes kBloomRec2100PqColorSpaceId into a pinned config that has no Rec.2100 PQ space (Bloom
+// Neutral v1; the ACES config's own PQ space is kept and stays the Auto choice there). OCIO's
+// built-in "CURVE - ST-2084_to_LINEAR" gives absolute luminance in units of 100 cd/m2; it is scaled
+// so 203 cd/m2 (reference white) is 1.0, then BT.2020 to the reference.
+[[nodiscard]] OCIO::ConstConfigRcPtr withBloomPqInput(const OCIO::ConstConfigRcPtr& config,
+                                                      const bool isNeutral) {
+    if (config->getColorSpace(std::string(bloom::color::kBloomRec2100PqColorSpaceId).c_str()) !=
+            nullptr ||
+        hasRec2100Space(config, "pq"))
+        return config;
+    return withBloomRec2100Input(
+        config, isNeutral, bloom::color::kBloomRec2100PqColorSpaceId, "CURVE - ST-2084_to_LINEAR",
+        100.0 / kHdrReferenceWhiteNits,
+        "Bloom-synthesized Rec.2100 PQ input (203 cd/m2 reference white = 1.0)");
 }
 
 // Synthesizes kBloomRec709CameraColorSpaceId into a pinned config that has no Rec.709 camera
@@ -481,8 +540,11 @@ std::string_view displayViewLabel(const std::string_view ocioName) noexcept {
 }
 
 std::string synthesizedColorSpaceIdentity(const std::string_view colorSpaceId) {
+    // v2: reference white (75% signal) is 1.0; v1 used OCIO's scale (75% signal = 0.795).
     if (colorSpaceId == kBloomRec2100HlgColorSpaceId)
-        return std::string("bloom-hlg-scene-v1;ocio=") + OCIO::GetVersion();
+        return std::string("bloom-hlg-scene-v2;ocio=") + OCIO::GetVersion();
+    if (colorSpaceId == kBloomRec2100PqColorSpaceId)
+        return std::string("bloom-pq-scene-v1;ocio=") + OCIO::GetVersion();
     if (colorSpaceId == kBloomRec709CameraColorSpaceId)
         return std::string("bloom-rec709-camera-v1;ocio=") + OCIO::GetVersion();
     return {};
@@ -693,6 +755,7 @@ resolveOcioBuiltIn(const OcioConfigLocatorKind locatorKind, const std::string_vi
 
     try {
         config = withBloomHlgInput(config, isNeutral);
+        config = withBloomPqInput(config, isNeutral);
         config = withBloomRec709CameraInput(config, isNeutral);
     } catch (const OCIO::Exception&) {
         auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);

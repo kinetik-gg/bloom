@@ -1742,10 +1742,15 @@ Issue #365 interpretation rules:
 - PQ and HLG streams resolve automatically to the config's Rec.2100 PQ or HLG colour space,
   searched among active and inactive spaces because configs usually hide these display-referred
   spaces from pickers. The pinned ACES 1.3 CG config provides `Rec.2100-PQ - Display`; Bloom
-  Neutral has no PQ space, so PQ there is refused with a diagnostic that names the space. Neither
-  pinned config defines HLG, so HLG resolves to the synthesized scene-light `Rec.2100-HLG (Bloom)`
-  space ([colour management](color-management.md#synthesized-rec2100-hlg-input-space)). Other
-  Rec.2020 streams need an explicit space.
+  Neutral has no PQ space, so PQ there resolves to the synthesized `Rec.2100-PQ (Bloom)` space
+  ([colour management](color-management.md#synthesized-rec2100-pq-input-space)). Neither pinned
+  config defines HLG, so HLG resolves to the synthesized scene-light `Rec.2100-HLG (Bloom)` space
+  ([colour management](color-management.md#synthesized-rec2100-hlg-input-space)). Both put HDR
+  reference white (203 cd/m2, HLG 75%) at 1.0 ([HDR reference
+  white](color-management.md#hdr-reference-white)). Other Rec.2020 streams need an explicit space.
+- The YUV matrix is independent of the primaries: Rec.709 primaries coded with the Rec.601 matrix
+  (SMPTE 170M or BT.470BG), as some encoders and cameras write, are ordinary SDR video and resolve
+  like Rec.709.
 - On the unmanaged legacy path (no config space), Rec.2020, PQ and HLG stay typed `Unavailable`,
   including under a legacy transfer override. Raw and linear compatibility overrides keep their
   transfer-only behaviour.
