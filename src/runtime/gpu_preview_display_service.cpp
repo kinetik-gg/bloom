@@ -349,6 +349,14 @@ void PreviewDisplayServiceCore::finishRootAdmission(const TaskId id, const bool 
     }
 }
 
+bool PreviewDisplayServiceCore::hasOutstandingRoots() noexcept {
+    std::lock_guard lock(rootsMutex);
+    if (scheduler != nullptr) {
+        pruneTerminalRootsLocked(acceptedRoots, *scheduler);
+    }
+    return !acceptedRoots.empty();
+}
+
 void PreviewDisplayServiceCore::abandonRootAdmission() noexcept {
     std::lock_guard lock(rootsMutex);
     if (pendingAdmissions > 0) {
@@ -751,10 +759,13 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
             core->finishRootAdmission({}, false);
             return submission;
         }
-        if (fillWork && submission.status == TaskSubmissionStatus::QueueFull) {
-            // RAM-preview and background fill wait as back-pressure: the caller resubmits when
-            // its own work lands. Rendering the frame on the CPU instead would be silent
-            // whole-frame CPU work on a GPU route.
+        if (fillWork && submission.status == TaskSubmissionStatus::QueueFull &&
+            core->hasOutstandingRoots()) {
+            // RAM-preview and background fill wait as back-pressure while this service's own
+            // frames are in flight: the caller resubmits when one lands. Rendering the frame on
+            // the CPU instead would be silent whole-frame CPU work on a GPU route. With nothing
+            // of ours in flight the refusal is the scheduler's bound itself, not a busy queue,
+            // and the counted, labelled CPU path below is the honest answer.
             core->finishRootAdmission({}, false);
             return submission;
         }

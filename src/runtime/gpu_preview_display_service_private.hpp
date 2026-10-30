@@ -343,6 +343,8 @@ struct PreviewDisplayServiceCore final {
     [[nodiscard]] bool beginRootAdmission() noexcept;
     void finishRootAdmission(TaskId id, bool accepted) noexcept;
     void abandonRootAdmission() noexcept;
+    // True while a root this service accepted is still live: its completion frees scheduler room.
+    [[nodiscard]] bool hasOutstandingRoots() noexcept;
     void trackRoot(TaskId id) noexcept;
     void beginShutdownRoots(std::vector<TaskId>& out) noexcept;
 
