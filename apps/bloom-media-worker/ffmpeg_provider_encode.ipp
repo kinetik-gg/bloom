@@ -238,7 +238,8 @@ struct Encoder::State {
             require(av_hwframe_get_buffer(track.hardwareFrames, track.hardwareFrame, 0) >= 0 &&
                         av_hwframe_transfer_data(track.hardwareFrame, frame, 0) >= 0,
                     "VA-API frame upload failed", Error::Unavailable);
-            track.hardwareFrame->pts = frame->pts;
+            require(av_frame_copy_props(track.hardwareFrame, frame) >= 0,
+                    "VA-API frame metadata copy failed", Error::Unavailable);
             submitted = track.hardwareFrame;
         }
         require(avcodec_send_frame(track.codec, submitted) >= 0, "Encoder rejected input");
@@ -376,6 +377,14 @@ struct Encoder::State {
                     : c.pix_fmt;
             track.frame->width = c.width;
             track.frame->height = c.height;
+            // Encoders that write colour into the bitstream (ProRes's frame header) read it from
+            // each frame, not the codec context; an untagged frame made FFmpeg-based players
+            // decode Bloom's BT.709 ProRes with the BT.601 matrix.
+            track.frame->color_primaries = c.color_primaries;
+            track.frame->color_trc = c.color_trc;
+            track.frame->colorspace = c.colorspace;
+            track.frame->color_range = c.color_range;
+            track.frame->chroma_location = c.chroma_sample_location;
             require(av_frame_get_buffer(track.frame, 32) >= 0, "Encode frame allocation",
                     Error::Oversized);
             // The conversion is exactly what the stream declares: its matrix, range and siting.
@@ -666,6 +675,12 @@ struct Encoder::State {
             if (qc.frames == 0 || qc.frames + 1 == settings.frames)
                 compare(*input.frame, qc.frames == 0 ? firstReference : lastReference, qc,
                         declared);
+            // ProRes also carries the matrix in each frame header, which FFmpeg-based players
+            // decode with; it must match what the container declares.
+            if (settings.videoCodec == "prores_ks" &&
+                videoTrack.codec->colorspace != AVCOL_SPC_UNSPECIFIED)
+                require(input.frame->colorspace == videoTrack.codec->colorspace,
+                        "Reopened ProRes frame matrix differs from the container");
             ++qc.frames;
             av_frame_unref(input.frame);
         }
