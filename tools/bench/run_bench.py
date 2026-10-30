@@ -553,6 +553,41 @@ def report_comparison(comparison):
           f"{len(comparison['improvements'])} improvement(s)")
 
 
+def prepare_binaries(args):
+    build_dir = Path(args.build_dir).resolve()
+    args.bloom_cli = build_dir / "apps/bloom-cli/bloom-cli"
+    args.harness = build_dir / "src/ui/tests/bloom_ui_gpu_packed_viewer_test"
+    args.loader = find_loader(build_dir, args.loader)
+    args.lock = GpuLock(args.gpu_lock_file)
+    return build_dir
+
+
+def command_chart(args):
+    import chart_check
+    build_dir = prepare_binaries(args)
+    if not args.bloom_cli.is_file():
+        raise SystemExit(f"missing {args.bloom_cli}")
+    root = bench_media.media_root(args.media_root).resolve()
+    work = Path(args.work_dir).resolve()
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    name = f"{stamp}-chart" + (f"-{args.label}" if args.label else "")
+    tiers = args.tier or ["1080p", "2160p", "4320p"]
+    results, table = chart_check.run_chart(args, root, work, tiers)
+    document = {"schema": "bloom-chart-results/1", "startedAt": stamp, "label": args.label,
+                "machine": machine_info(), "bloom": bloom_revision(build_dir),
+                "media": {"root": str(root)}, "tolerances": chart_check.TOLERANCE,
+                **results}
+    results_dir = work / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    (results_dir / f"{name}.json").write_text(json.dumps(document, indent=1) + "\n")
+    (results_dir / f"{name}.md").write_text(f"# Bloom chart check {name}\n\n{table}\n")
+    print(table)
+    print(f"results: {results_dir / (name + '.json')}")
+    failed = [key for key, row in results["imports"].items()
+              if "error" in row or row["failedPatches"] or not row["siting"]["pass"]]
+    return 1 if failed else 0
+
+
 def command_compare(args):
     comparison = compare(json.loads(Path(args.current).read_text()),
                          json.loads(Path(args.baseline).read_text()), args.threshold)
@@ -589,12 +624,21 @@ def main():
     run.add_argument("--rebuild-projects", action="store_true")
     run.add_argument("--baseline", help="compare against this results JSON")
     run.add_argument("--threshold", type=float, default=10.0, help="regression threshold, %%")
+    chk = sub.add_parser("chart", help="colour/format accuracy checks with the chart")
+    chk.add_argument("--media-root")
+    chk.add_argument("--build-dir", default="build/pw-desktop")
+    chk.add_argument("--work-dir", default="bench-work")
+    chk.add_argument("--loader")
+    chk.add_argument("--gpu-lock-file")
+    chk.add_argument("--label")
+    chk.add_argument("--tier", action="append", choices=("1080p", "2160p", "4320p"))
     cmp = sub.add_parser("compare", help="compare two results files")
     cmp.add_argument("current")
     cmp.add_argument("baseline")
     cmp.add_argument("--threshold", type=float, default=10.0)
     args = parser.parse_args()
-    sys.exit({"run": command_run, "compare": command_compare}[args.command](args))
+    sys.exit({"run": command_run, "chart": command_chart,
+              "compare": command_compare}[args.command](args))
 
 
 if __name__ == "__main__":

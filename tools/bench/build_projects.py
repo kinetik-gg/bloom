@@ -7,7 +7,7 @@ $BLOOM_BENCH_BUILD (run_bench.py writes it):
       "media": "/abs/media/720p/png16" (sequence folder) or "/abs/.../file.mov",
       "label": "720p png16", "width": 1280, "height": 720}, ...]
 
-Variant A is the footage alone (decode-bound). Variant B is a typical shot (compute-bound): a
+Variant A is the footage alone (decode-bound); a job may also list its own "exports". Variant B is a typical shot (compute-bound): a
 background solid, the footage blurred and scaled behind, two transformed footage layers, one of
 them through a track matte (an alpha matte solid), and an animated text layer. Both carry three
 export jobs: ProRes 422 HQ MOV, H.264 MP4 and an OpenEXR sequence, written below
@@ -19,6 +19,11 @@ import os
 import _bloom
 import bloom
 from bloom import _state
+
+
+DEFAULT_EXPORTS = (("prores422hq", "prores-mov", "hq", "{name}.mov"),
+                   ("h264", "h264-mp4", "high", "{name}.mp4"),
+                   ("exr", "exr", "", "exr/{name}.exr"))
 
 
 def outputs(result, name):
@@ -144,10 +149,10 @@ def build(job):
                              output(created, "imageNode"), job["label"])
         exports = f"exports/{name}"
         jobs = {}
-        for key, fmt, profile, path, compression in (
-                ("prores422hq", "prores-mov", "hq", f"{exports}/{name}.mov", ""),
-                ("h264", "h264-mp4", "high", f"{exports}/{name}.mp4", ""),
-                ("exr", "exr", "", f"{exports}/exr/{name}.exr", "")):
+        # A job may name its own exports: [[key, format, codec profile, file name], ...].
+        for key, fmt, profile, file_name in job.get("exports") or DEFAULT_EXPORTS:
+            path = f"{exports}/{file_name.format(name=name)}"
+            compression = ""
             added = bloom.ops.export.add_job(composition=composition, name=key,
                                              range="composition",
                                              outputs=(export_output(fmt, profile, path,

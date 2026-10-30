@@ -22,6 +22,7 @@ Encoding conventions (also recorded in the truth file):
   without an alpha plane, which shows the straight colour.
 """
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -243,12 +244,42 @@ class Chart:
             cursor += 6 * scale
 
 
+TITLE = "BLOOM COLOUR AND FORMAT CHART V{version}   {width}X{height}   "
+
+
 def build_chart(width, height, frame):
+    chart, extra = build_static(width, height)
+    extra["motion"] = draw_dynamic(chart, frame)
+    return chart, extra
+
+
+def frame_chart(base, frame):
+    """A frame from the static chart: only the title counter and the motion strip change."""
+    chart = copy.copy(base)
+    chart.signal = base.signal.copy()
+    chart.linear = base.linear.copy()
+    draw_dynamic(chart, frame)
+    return chart
+
+
+def draw_dynamic(c, frame):
+    s = c.s
+    title = TITLE.format(version=CHART_VERSION, width=c.width, height=c.height)
+    c.text((40 + 12 * len(title)) * s, 6 * s, f"FRAME {frame + 1:02d}/{FRAMES}")
+    travel = (1600 - 40) * s
+    mx = 40 * s + (travel * frame) // (FRAMES - 1)
+    my = 990 * s
+    c.fill_signal((mx, my, 48 * s, 48 * s), (0.95, 0.95, 0.95))
+    c.fill_signal((mx + 12 * s, my + 12 * s, 24 * s, 24 * s), (0.9, 0.05, 0.05))
+    c.text(1700 * s, 1010 * s, f"FRAME {frame + 1:02d}")
+    return {"square": [mx, my, 48 * s, 48 * s], "signal": [0.95] * 3}
+
+
+def build_static(width, height):
     c = Chart(width, height)
     s = c.s
     label = lambda x, y, t: c.text(x * s, y * s, t)  # noqa: E731
-    label(40, 6, f"BLOOM COLOUR AND FORMAT CHART V{CHART_VERSION}   {width}X{height}   "
-                 f"FRAME {frame + 1:02d}/{FRAMES}")
+    label(40, 6, TITLE.format(version=CHART_VERSION, width=width, height=height))
     # 75% bars with 40% side pillars, then 100% primaries and secondaries.
     label(40, 25, "75% COLOUR BARS, 40% GREY PILLARS (BT.709 R'G'B' SIGNAL)")
     c.patch("bars", "pillar left 40%", c.r(0, 40, 240, 160), signal=(.4, .4, .4))
@@ -312,15 +343,9 @@ def build_chart(width, height, frame):
     for index, value in enumerate(ALPHA_STEPS):
         c.patch("alpha", f"alpha {value}", c.r(800 + index * 216, 906, 208, 52),
                 linear=(1.0, 1.0, 1.0), alpha=value)
-    # Motion strip: one square moving one step per frame, frame counter at the right.
+    # Motion strip: one square moving one step per frame (draw_dynamic), counter at the right.
     label(40, 966, "MOTION")
-    travel = (1600 - 40) * s
-    mx = 40 * s + (travel * frame) // (FRAMES - 1)
-    my = 990 * s
-    c.fill_signal((40 * s, my - 4 * s, 1640 * s, 64 * s), (0.1, 0.1, 0.1))
-    c.fill_signal((mx, my, 48 * s, 48 * s), (0.95, 0.95, 0.95))
-    c.fill_signal((mx + 12 * s, my + 12 * s, 24 * s, 24 * s), (0.9, 0.05, 0.05))
-    label(1700, 1010, f"FRAME {frame + 1:02d}")
+    c.fill_signal((40 * s, 986 * s, 1640 * s, 64 * s), (0.1, 0.1, 0.1))
     label(40, 1062, "ORIGINAL PROCEDURAL DESIGN - EXPECTED VALUES IN CHART_TRUTH.JSON")
     return c, {"ramps": ramp_truth, "pixel": pixel_truth,
                "alphaRamps": [{"rect": [ax0, 798 * s, ax1 - ax0, 50 * s],
@@ -328,8 +353,7 @@ def build_chart(width, height, frame):
                                "definition": "alpha = column / (width - 1)"},
                               {"rect": [ax0, 852 * s, ax1 - ax0, 50 * s],
                                "linearStraight": [1.0, 1.0, 1.0],
-                               "definition": "alpha = column / (width - 1)"}],
-               "motion": {"square": [mx, my, 48 * s, 48 * s], "signal": [0.95] * 3}}
+                               "definition": "alpha = column / (width - 1)"}]}
 
 
 def pixel_structures(c, label):
@@ -502,9 +526,9 @@ def write_frames(out_root, tier, frames, formats, videos):
     base = Path(out_root) / "chart" / tier
     for name in formats:
         (base / name).mkdir(parents=True, exist_ok=True)
-    video_frames = {variant: [] for variant in videos}
+    static, _ = build_static(width, height)
     for frame in range(frames):
-        chart, _ = build_chart(width, height, frame)
+        chart = frame_chart(static, frame)
         stem = f"chart_{tier}"
         number = f"{frame + 1:04d}"
         if "png8" in formats:
@@ -514,15 +538,16 @@ def write_frames(out_root, tier, frames, formats, videos):
         if "exr_float_zip" in formats:
             write_exr(base / "exr_float_zip" / f"{stem}_exr_float_zip.{number}.exr",
                       exr_channels(chart))
-        for variant in videos:
-            video_frames[variant].append(video_frame(chart, variant))
+        del chart
         print(f"chart {tier} frame {frame + 1}/{frames}", flush=True)
     if videos:
         (base / "video").mkdir(parents=True, exist_ok=True)
     for variant in videos:
         container = VIDEO_VARIANTS[variant][6]
-        encode_video(base / "video" / f"chart_{tier}_{variant}.{container}", video_frames[variant],
-                     width, height, variant)
+        # Frames are regenerated per variant and streamed: 8K frames do not fit in memory x24.
+        encode_video(base / "video" / f"chart_{tier}_{variant}.{container}",
+                     (video_frame(frame_chart(static, frame), variant)
+                      for frame in range(frames)), width, height, variant)
         print(f"chart {tier} video {variant}", flush=True)
 
 

@@ -147,3 +147,69 @@ def read_exr_header(path):
             "compression": EXR_COMPRESSION.get(attributes["compression"][1][0], "?"),
             "channels": channels, "multipart": bool(version & 0x1000),
             "tiled": bool(version & 0x200)}
+
+
+def _zip_decode(payload, expected):
+    data = np.frombuffer(zlib.decompress(payload), dtype=np.uint8)
+    # Undo the delta predictor: each byte is the running sum of (stored - 128), modulo 256.
+    predicted = np.cumsum(np.concatenate([[data[0]], data[1:].astype(np.int64) - 128])) % 256
+    half = (expected + 1) // 2
+    out = np.empty(expected, dtype=np.uint8)
+    out[0::2] = predicted[:half]
+    out[1::2] = predicted[half:]
+    return out.tobytes()
+
+
+def read_exr(path):
+    """Read a single-part scanline EXR with NONE, ZIPS or ZIP compression into float32 planes.
+
+    Falls back to the OpenEXR Python module for anything else when it is installed.
+    """
+    header = read_exr_header(path)
+    compression = header["compression"]
+    if compression not in ("NONE", "ZIPS", "ZIP") or header["tiled"] or header["multipart"]:
+        import OpenEXR  # optional dependency for other compressions
+        with OpenEXR.File(str(path)) as exr:
+            channels = exr.channels()
+            planes = {}
+            for name, channel in channels.items():
+                pixels = np.asarray(channel.pixels, dtype=np.float32)
+                if pixels.ndim == 3:
+                    for index, suffix in enumerate(name):
+                        planes[suffix] = pixels[..., index]
+                else:
+                    planes[name] = pixels
+            return planes
+    width, height = header["width"], header["height"]
+    names = [name for name, _ in sorted(header["channels"])]
+    types = dict(header["channels"])
+    sizes = {name: 2 if types[name] == "HALF" else 4 for name in names}
+    lines = {"NONE": 1, "ZIPS": 1, "ZIP": 16}[compression]
+    blocks = (height + lines - 1) // lines
+    with open(path, "rb") as handle:
+        data = handle.read()
+    # The header ends at the first empty attribute name after the version field.
+    position = 8
+    while data[position] != 0:
+        end = data.index(b"\0", position)
+        kind_end = data.index(b"\0", end + 1)
+        size = struct.unpack("<i", data[kind_end + 1:kind_end + 5])[0]
+        position = kind_end + 5 + size
+    position += 1
+    offsets = struct.unpack(f"<{blocks}Q", data[position:position + 8 * blocks])
+    planes = {name: np.empty((height, width), dtype=np.float32) for name in names}
+    row_bytes = sum(sizes.values()) * width
+    for offset in offsets:
+        y, size = struct.unpack("<ii", data[offset:offset + 8])
+        count = min(lines, height - y)
+        expected = row_bytes * count
+        payload = data[offset + 8:offset + 8 + size]
+        raw = payload if size >= expected else _zip_decode(payload, expected)
+        cursor = 0
+        for line in range(count):
+            for name in names:
+                n = sizes[name] * width
+                planes[name][y + line] = np.frombuffer(
+                    raw[cursor:cursor + n], dtype="<f2" if sizes[name] == 2 else "<f4")
+                cursor += n
+    return planes
