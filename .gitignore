@@ -13,3 +13,5 @@ Desktop.ini
 *.autosave
 aqtinstall.log
 compile_commands.json
+/bench-media/
+__pycache__/

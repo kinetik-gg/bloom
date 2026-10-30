@@ -393,6 +393,17 @@ def png_codes(chart, bits):
     return np.concatenate([rgb, alpha], axis=2).astype(np.uint16)
 
 
+def viewing_codes(chart, square=16):
+    """Opaque 8-bit viewing copy: composited in linear light over a grey checkerboard."""
+    yy, xx = np.mgrid[0:chart.height, 0:chart.width]
+    board = np.where(((xx // square) + (yy // square)) % 2 == 0, 0.6, 0.4)
+    under = srgb_decode(board)[..., None]
+    alpha = chart.alpha[..., None]
+    signal = srgb_encode(chart.linear * alpha + under * (1 - alpha))
+    rgb = np.round(signal * 255)
+    return np.concatenate([rgb, np.full_like(rgb[..., :1], 255)], axis=2).astype(np.uint16)
+
+
 def exr_channels(chart):
     premultiplied = chart.linear * chart.alpha[..., None]
     return {"R": premultiplied[..., 0], "G": premultiplied[..., 1], "B": premultiplied[..., 2],
@@ -430,8 +441,10 @@ def encode_video(path, frames, width, height, variant, ffmpeg="ffmpeg"):
             "-color_range", rng, "-chroma_sample_location", "left"]
     command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo",
                "-pix_fmt", raw_fmt, "-s", f"{width}x{height}", "-r", str(FPS), *tags, "-i", "-",
+               "-vf", (f"setparams=color_primaries={primaries}:color_trc={transfer}:"
+                       f"colorspace={matrix}:range={rng}:chroma_location=left"),
                *args, "-pix_fmt", raw_fmt, *tags, "-an", str(path)]
-    process = subprocess.Popen(command, stdin=subprocess.PIPE)
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, env={**os.environ, "SVT_LOG": "1"})
     for frame in frames:
         process.stdin.write(frame)
     process.stdin.close()
@@ -532,7 +545,7 @@ def main():
         out = Path(args.out)
         out.mkdir(parents=True, exist_ok=True)
         chart, _ = build_chart(1920, 1080, 0)
-        write_png(out / "chart_1080p_preview_srgb8.png", png_codes(chart, 8), 8)
+        write_png(out / "chart_1080p_preview_srgb8.png", viewing_codes(chart), 8)
         write_png(out / "chart_1080p_png16.0001.png", png_codes(chart, 16), 16)
         write_exr(out / "chart_1080p_exr_float_zip.0001.exr", exr_channels(chart))
         print(f"preview written to {out}")
