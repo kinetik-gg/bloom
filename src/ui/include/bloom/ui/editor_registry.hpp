@@ -13,6 +13,10 @@ namespace bloom::host {
 class GpuExportProvider;
 }
 
+namespace bloom::scripting {
+class LiveSessionHost;
+}
+
 namespace bloom::runtime {
 class GpuPresentationClient;
 class TaskScheduler;
@@ -63,10 +67,16 @@ class EditorRegistry final {
 // dependency context's current presentation client. Null leaves every editor on its unchanged CPU
 // path, exactly as before this parameter existed. The pointee must outlive every editor the
 // registry creates.
+//
+// `liveSession` is the application-lifetime live session the Script editor reads and commits
+// through (ADR 0034), already fed by an application-lifetime LiveSessionAdapter; the composition
+// root passes the same host to the in-app MCP server so both share one commit queue. Null makes
+// the registry own a host and its adapter for the Script editor alone.
 [[nodiscard]] bool registerFoundationEditors(
     EditorRegistry& registry, CompositionSession& session,
     CompositionPreviewController& previewController, RamPreviewController* ramPreview = nullptr,
     ProjectHost* projectHost = nullptr, const ViewerGpuDependencies* gpuDependencies = nullptr,
-    std::shared_ptr<host::GpuExportProvider> gpuExportProvider = {});
+    std::shared_ptr<host::GpuExportProvider> gpuExportProvider = {},
+    scripting::LiveSessionHost* liveSession = nullptr);
 
 } // namespace bloom::ui

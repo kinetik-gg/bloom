@@ -341,7 +341,11 @@ nb::dict NativeHost::transact(const nb::list& operations, const std::string& lab
         return session_->execute(std::move(transaction));
     }();
     if (!result.command) {
-        return failure({"bloom.scripting.session-unavailable", "", "", "Session cannot edit"});
+        // A live commit the marshal withdrew names why (bloom.live.*, ADR 0034).
+        return failure(result.diagnostic
+                           ? *result.diagnostic
+                           : OperationDiagnostic{"bloom.scripting.session-unavailable", "", "",
+                                                 "Session cannot edit"});
     }
     return commandResult(*result.command);
 }
@@ -356,7 +360,11 @@ nb::dict NativeHost::history(const bool redo) {
         return redo ? session_->redo() : session_->undo();
     }();
     if (!result.command) {
-        return failure({"bloom.scripting.session-unavailable", "", "", "Session cannot edit"});
+        // A live commit the marshal withdrew names why (bloom.live.*, ADR 0034).
+        return failure(result.diagnostic
+                           ? *result.diagnostic
+                           : OperationDiagnostic{"bloom.scripting.session-unavailable", "", "",
+                                                 "Session cannot edit"});
     }
     return commandResult(*result.command);
 }

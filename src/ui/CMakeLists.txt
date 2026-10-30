@@ -448,6 +448,7 @@ target_sources(
         editor_area.cpp
         editor_chrome.cpp
         editor_registry.cpp
+        live_session_adapter.cpp
         script_panel.cpp
         script_panel.hpp
         frame_export_controller.cpp
@@ -646,6 +647,7 @@ target_sources(
             include/bloom/ui/preferences_aware.hpp
             include/bloom/ui/preview_frame_cache.hpp
             include/bloom/ui/project_host.hpp
+            include/bloom/ui/live_session_adapter.hpp
             include/bloom/ui/ram_preview_controller.hpp
             include/bloom/ui/properties_editor.hpp
             include/bloom/ui/memory_budget_controller.hpp
@@ -698,6 +700,8 @@ target_link_libraries(
         Qt6::Widgets
 )
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache)
+# ADR 0034: the live session adapter feeds scripting::LiveSessionHost.
+target_link_libraries(bloom_ui PUBLIC bloom_scripting)
 bloom_enable_warnings(bloom_ui)
 
 # macOS notifications go through UNUserNotificationCenter (system_notifier_macos.mm); every other

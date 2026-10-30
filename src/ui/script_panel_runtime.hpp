@@ -8,16 +8,21 @@
 namespace bloom::host {
 class GpuExportProvider;
 }
+namespace bloom::scripting {
+class LiveSessionHost;
+}
 
 namespace bloom::ui {
-class CompositionSession;
-class ProjectHost;
 
 // One console per editor registry. Python and native render work never run in a Qt callback.
+// The console reads and commits through the shared scripting::LiveSessionHost (ADR 0034): one
+// mirror, one 16-commit queue, one generation counter and one revocation rule for the Script editor
+// and the in-app MCP server. The application-lifetime LiveSessionAdapter feeds the host and drains
+// its commits on the UI thread.
 class ScriptPanelRuntime final : public QObject {
     Q_OBJECT
   public:
-    ScriptPanelRuntime(CompositionSession& session, ProjectHost& host,
+    ScriptPanelRuntime(scripting::LiveSessionHost& live,
                        std::shared_ptr<host::GpuExportProvider> provider);
     ~ScriptPanelRuntime() override;
     [[nodiscard]] bool submit(const QString& source);
@@ -31,12 +36,8 @@ class ScriptPanelRuntime final : public QObject {
 
   private:
     struct State;
-    void refresh();
-    void replaceSession();
     void poll();
     static void work(const std::shared_ptr<State>& state);
-    CompositionSession& session_;
-    ProjectHost& host_;
     std::shared_ptr<State> state_;
     std::jthread worker_;
 };
