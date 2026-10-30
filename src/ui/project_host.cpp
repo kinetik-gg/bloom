@@ -7,12 +7,15 @@
 #include <bloom/project/save_archive.hpp>
 #include <bloom/runtime/input_color_context.hpp>
 
+#include <QCoreApplication>
 #include <QStandardPaths>
+#include <QThread>
 #include <QUuid>
 #include <bloom/ui/kit/dialog_prompts.hpp>
 #include <bloom/ui/kit/file_chooser.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <atomic>
 #include <cstddef>
 #include <memory>
@@ -186,6 +189,61 @@ ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
     // untouched new project. No one is connected to sessionReplaced()/dirtyStateChanged() yet, so
     // this emission is inert.
     replaceWithNewProject();
+}
+
+void ProjectHost::configureExportQueue(ExportQueueHostDependencies dependencies) {
+    exportDependencies_ = std::move(dependencies);
+    createExportQueue();
+    emit exportQueueReplaced();
+}
+
+void ProjectHost::createExportQueue() {
+    if (!exportDependencies_.has_value() || !session_.has_value() || exportDependencies_->compiler == nullptr)
+        return;
+    const auto& deps = *exportDependencies_;
+    exportQueue_ = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
+        .session = *session_,
+        .scheduler = scheduler_,
+        .compiler = *deps.compiler,
+        .publications = *publicationCoordinator_,
+        .artifacts = *artifactCoordinator_,
+        .ledger = deps.ledger,
+        .gpu = deps.gpu,
+        .retirement = deps.retirement,
+        .presets = deps.presets,
+        .limits = deps.limits,
+        .displayProcessor = deps.displayProcessor,
+        .scratchDirectory = deps.scratchDirectory,
+        .backend = deps.backend});
+}
+
+void ProjectHost::retireExportQueue(const host::ExportStopCause cause) {
+    if (!exportQueue_)
+        return;
+    // From here until the replacement exists exportQueue() is null: readers never see a service
+    // that is shutting down. The old one stops its jobs (MCP transient jobs included) first.
+    auto retiring = std::move(exportQueue_);
+    retiring->beginShutdown(cause);
+    // The service runs on this thread's pump: drive it until every job has stopped.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    do {
+        retiring->pump();
+        // Events run here too, so the UI stays alive while jobs stop (exportQueue() is null).
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        QThread::msleep(2);
+    } while (!retiring->quiescent() && std::chrono::steady_clock::now() < deadline);
+}
+
+void ProjectHost::beginExportShutdown(const host::ExportStopCause cause) {
+    if (exportQueue_)
+        exportQueue_->beginShutdown(cause);
+}
+
+bool ProjectHost::pumpExportShutdown() {
+    if (!exportQueue_)
+        return true;
+    exportQueue_->pump();
+    return exportQueue_->quiescent();
 }
 
 ProjectHost::~ProjectHost() {
@@ -665,6 +723,41 @@ kit::KDialog* ProjectHost::buildRecoveryPrompt(QWidget& owner,
 void ProjectHost::confirmUnsavedChanges(std::function<void()> onProceed,
                                         const bool retireRecoveryOnProceed,
                                         const UnsavedChangeAction action) {
+    // Running or waiting exports are stopped by New, Open and Close: ask once first.
+    if (exportQueue_ && exportQueue_->activeJobCount() > 0 && !confirmingExports_) {
+        if (!dialogOwner_)
+            return;
+        confirmingExports_ = true;
+        kit::KConfirmSpec spec;
+        spec.title = tr("Exports Are Running");
+        spec.objectName = QStringLiteral("runningExportsConfirm");
+        spec.tone = kit::KPromptTone::Warning;
+        spec.heading = tr("Stop the running exports?");
+        spec.detail = tr("%n export job(s) are running or waiting. Continuing stops them; "
+                         "files already published stay.",
+                         nullptr, static_cast<int>(exportQueue_->activeJobCount()));
+        spec.destructiveText = tr("Stop and Continue");
+        spec.rejectText = tr("Cancel");
+        spec.defaultRole = kit::KDialog::Role::Reject;
+        const QPointer<ProjectHost> guard(this);
+        kit::confirm(*dialogOwner_, spec,
+                     [guard, onProceed = std::move(onProceed), retireRecoveryOnProceed,
+                      action](const kit::KDialog::Role role) mutable {
+                         if (!guard)
+                             return;
+                         if (role != kit::KDialog::Role::Destructive) {
+                             guard->confirmingExports_ = false;
+                             return;
+                         }
+                         if (guard->exportQueue_)
+                             (void)guard->exportQueue_->stopAll();
+                         // The prompt is answered; the rest of the flow proceeds unprompted.
+                         guard->confirmUnsavedChanges(std::move(onProceed), retireRecoveryOnProceed,
+                                                      action);
+                         guard->confirmingExports_ = false;
+                     });
+        return;
+    }
     if (activity_ == ProjectHostActivity::ResolvingUnsavedChanges) {
         // "Only one destructive continuation is active. Duplicate close/quit requests are
         // idempotent." (docs/architecture/project-session.md, "Unsaved-Change State Machine").
@@ -991,7 +1084,11 @@ void ProjectHost::replaceWithNewProject() {
     if (session_.has_value()) {
         retireRecoveryPath(currentRecoveryPath());
     }
+    // The queue service borrows the session: stop it and let it go before the session does.
+    retireExportQueue(host::ExportStopCause::ProjectClosing);
     session_.emplace(std::move(created).takeSession());
+    createExportQueue();
+    emit exportQueueReplaced();
     recoveryOwnerToken_.swap(nextRecoveryOwnerToken);
     // A new project is always decoded, editable content -- never preserved-read-only -- so any
     // previously retained original archive bytes no longer describe the installed content.

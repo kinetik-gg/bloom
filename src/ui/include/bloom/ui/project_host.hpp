@@ -3,6 +3,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/host/copy_async_io.hpp>
+#include <bloom/host/export_queue.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/session_async_io.hpp>
@@ -118,12 +119,42 @@ enum class ProjectHostActivity : std::uint8_t {
 // Dialogs are behind small injectable seams (UnsavedChangeDecisionProvider/ProjectPathProvider)
 // defaulting to kit prompts and kit::chooseFile() over the dialog owner, so offscreen tests can
 // drive New, Open, and Save entirely without a real dialog appearing.
+// What the export queue service needs besides the session: the application-wide collaborators the
+// composition root already owns (ADR 0033, section 11). ProjectHost adds its own scheduler and
+// publication and artifact coordinators.
+struct ExportQueueHostDependencies final {
+    const runtime::SnapshotCompiler* compiler = nullptr;
+    std::shared_ptr<output::ExportResourceLedgerV1> ledger;
+    std::shared_ptr<host::GpuExportProvider> gpu;
+    std::shared_ptr<host::SequenceExportRetirementOwnerV1> retirement;
+    std::shared_ptr<host::ExportPresetCatalogue> presets;
+    host::ExportQueueServiceLimits limits;
+    runtime::QualifiedDisplayProcessorProvider* displayProcessor = nullptr;
+    std::filesystem::path scratchDirectory;
+    // Null uses the production backend; tests pass the deterministic fake.
+    std::shared_ptr<host::ExportRunBackend> backend;
+};
+
 class ProjectHost final : public QObject {
     Q_OBJECT
 
   public:
     explicit ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent = nullptr);
     ~ProjectHost() override;
+
+    // Creates the export queue service for the live session. ProjectHost owns it for the
+    // application's life and replaces it whenever it replaces the session (File > New): the old
+    // service is shut down and pumped until quiescent first. Call once, before the first window.
+    void configureExportQueue(ExportQueueHostDependencies dependencies);
+    // The current service, or null before configureExportQueue(). Never cache the pointer across
+    // exportQueueReplaced().
+    [[nodiscard]] host::ExportQueueService* exportQueue() const noexcept {
+        return exportQueue_.get();
+    }
+    // Asks the service to stop every job and refuse new starts (application quit).
+    void beginExportShutdown(host::ExportStopCause cause);
+    // Pumps a service that is shutting down; true once it is quiescent (or there is none).
+    [[nodiscard]] bool pumpExportShutdown();
 
     [[nodiscard]] host::ProjectSessionStateSnapshot stateSnapshot() const;
     // Editable decoded content, not busy -- matches decision 3 exactly ("Save disabled for
@@ -258,6 +289,8 @@ class ProjectHost final : public QObject {
     void offerRecoveryOnStartup();
 
   signals:
+    // The export queue service was replaced (with the session); readers rebind.
+    void exportQueueReplaced();
     // Fires exactly once per successful New replace or successful Open install.
     void sessionReplaced();
     void colorSettingsChanged();
@@ -304,6 +337,12 @@ class ProjectHost final : public QObject {
     std::shared_ptr<platform::StagedArtifactCoordinator> artifactCoordinator_;
     std::optional<project::ProjectIoMemoryCoordinator> memoryCoordinator_;
     std::optional<host::ProjectSession> session_;
+    // Destroyed before session_, which it borrows.
+    std::optional<ExportQueueHostDependencies> exportDependencies_;
+    std::unique_ptr<host::ExportQueueService> exportQueue_;
+    bool confirmingExports_ = false;
+    void createExportQueue();
+    void retireExportQueue(host::ExportStopCause cause);
 
     // The application-owned bounded original archive for the currently installed preserved-read-
     // only content (task SC1, issue #77): beginOpen() already owns the bytes it read for the

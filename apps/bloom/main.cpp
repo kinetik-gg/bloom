@@ -4,6 +4,9 @@
 #include "sequence_export_process_teardown.hpp"
 
 #include <algorithm>
+#include <bloom/host/export_presets.hpp>
+#include <bloom/output/output_export_resource_ledger.hpp>
+#include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
@@ -37,7 +40,9 @@
 #include <bloom/ui/composition_thumbnail_controller.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/editor_registry.hpp>
-#include <bloom/ui/frame_export_controller.hpp>
+#include <bloom/ui/export_queue_adapter.hpp>
+#include <bloom/ui/export_queue_edits.hpp>
+#include <bloom/ui/export_queue_service_port.hpp>
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
 #include <bloom/ui/h264_encoder_service.hpp>
 #include <bloom/ui/interaction_sounds.hpp>
@@ -73,6 +78,7 @@
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QScreen>
+#include <QStandardPaths>
 #include <QSettings>
 #include <QTimer>
 
@@ -482,12 +488,16 @@ int main(int argc, char* argv[]) try {
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &memoryBudgetController, &bloom::ui::MemoryBudgetController::beginShutdown);
     shutdownCoordinator.setGpuExportRetirement(
-        [&gpuExportProvider, &sequenceExportRetirement] {
+        [&gpuExportProvider, &sequenceExportRetirement, &projectHost] {
+            // Active export jobs stop first; the queue is quiescent before the GPU provider and the
+            // encoder retirement owner it uses are retired.
+            projectHost.beginExportShutdown(bloom::host::ExportStopCause::ApplicationQuit);
             sequenceExportRetirement->beginShutdown();
             gpuExportProvider->beginShutdown();
         },
-        [&gpuExportProvider, &sequenceExportRetirement] {
-            if (!sequenceExportRetirement->retirementComplete() ||
+        [&gpuExportProvider, &sequenceExportRetirement, &projectHost] {
+            if (!projectHost.pumpExportShutdown() ||
+                !sequenceExportRetirement->retirementComplete() ||
                 !gpuExportProvider->retirementComplete()) {
                 return false;
             }
@@ -522,25 +532,63 @@ int main(int argc, char* argv[]) try {
     // it would change what happens to task-bridge state, which item F6 does not ask for.
     bloom::ui::TaskMonitorModel taskMonitor(taskUiBridge);
 
-    // "File -> Export Frame..." (task F3, issue #103): binds to the SAME application-wide
-    // PublicationCoordinator/StagedArtifactCoordinator ProjectHost already owns (docs/architecture/
-    // frame-output.md, "Capability Boundary": saves and exports share one coordinator pair for
-    // correct same-target ordering/supersession), and to the SAME SnapshotCompiler/TaskScheduler/
-    // TaskUiBridge the preview pipeline above already uses.
-    bloom::ui::FrameExportController frameExportController(
-        compositionSession, taskScheduler, taskUiBridge, snapshotCompiler,
-        projectHost.publicationCoordinator(), projectHost.artifactCoordinator(), {},
-        &qualifiedDisplayProcessorProvider, gpuExportProvider);
-    frameExportController.setSequenceExportRetirementOwner(sequenceExportRetirement);
-    // Which H.264 encoder this platform uses, and whether OpenH264 is verified, checked on a
-    // worker for the Export dialog (never hashed on the UI thread).
+    // The export queue (ADR 0033). The H.264 encoder service checks which encoder this platform has
+    // on a worker; the preset catalogue probes the same and reads the user's saved presets.
     bloom::ui::H264EncoderService h264Encoder(taskScheduler, taskUiBridge);
-    frameExportController.setH264EncoderService(&h264Encoder);
-    frameExportController.setProjectPathProvider(
-        [&projectHost] { return projectHost.displayPath(); });
-    QObject::connect(&shutdownCoordinator,
-                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
-                     &frameExportController, &bloom::ui::FrameExportController::retireForShutdown);
+    bloom::host::ExportEncoderStatus initialEncoders;
+#if defined(__linux__)
+    initialEncoders.exportPlatform = true;
+#endif
+    const auto presetDirectory = std::filesystem::path(
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation).toStdString()) /
+                                 "export-presets";
+    auto exportPresets = bloom::host::ExportPresetCatalogue::create(
+        {.userDataDirectory = presetDirectory, .initialEncoders = initialEncoders});
+    exportPresets->refreshEncoders(taskScheduler);
+    exportPresets->loadUserPresets(taskScheduler);
+    QObject::connect(&h264Encoder, &bloom::ui::H264EncoderService::locateFinished, &h264Encoder,
+                     [&](const bool installed, const QString&) {
+                         if (installed)
+                             exportPresets->refreshEncoders(taskScheduler);
+                     });
+    const auto exportScratch = std::filesystem::path(
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation).toStdString()) /
+                               "export-scratch";
+    std::error_code exportScratchError;
+    std::filesystem::create_directories(exportScratch, exportScratchError);
+    projectHost.configureExportQueue(
+        {.compiler = &snapshotCompiler,
+         .ledger = std::make_shared<bloom::output::ExportResourceLedgerV1>(),
+         .gpu = gpuExportProvider,
+         .retirement = sequenceExportRetirement,
+         .presets = exportPresets,
+         .limits = {},
+         .displayProcessor = &qualifiedDisplayProcessorProvider,
+         .scratchDirectory = exportScratch,
+         .backend = nullptr});
+    const auto choiceFor = [&exportPresets](const std::string& id)
+        -> std::optional<bloom::ui::ExportPresetChoice> {
+        const auto catalogue = exportPresets->snapshot();
+        for (const auto& preset : catalogue->presets)
+            if (preset.id == id)
+                return bloom::ui::ExportPresetChoice{preset.id, preset.settings};
+        return std::nullopt;
+    };
+    bloom::ui::ExportQueueEdits exportEdits(
+        compositionSession,
+        [&exportPresets] { return exportPresets->defaultPreset(); },
+        choiceFor);
+    exportEdits.setProjectFolder([&projectHost]() -> std::optional<std::filesystem::path> {
+        const auto path = projectHost.displayPath();
+        return path ? std::optional(path->parent_path()) : std::nullopt;
+    });
+    bloom::ui::ServiceExportQueuePort exportPort(
+        [&projectHost] { return projectHost.exportQueue(); }, exportEdits);
+    bloom::ui::ExportQueueAdapter exportQueueAdapter(exportPort);
+    exportQueueAdapter.attach(taskUiBridge);
+    QObject::connect(&projectHost, &bloom::ui::ProjectHost::exportQueueReplaced,
+                     &exportQueueAdapter, &bloom::ui::ExportQueueAdapter::rebind);
+    taskMonitor.setExportQueue(&exportQueueAdapter);
 
     // The typed viewer GPU dependency context. Its presentation-client getter reads the cached
     // service capability, so an editor created before the async startup qualification finishes is
@@ -580,9 +628,9 @@ int main(int argc, char* argv[]) try {
     const auto mcpCacheDirectory = bloom::platform::userCacheDirectory();
     bloom::mcp::McpServerServiceDependencies mcpDependencies{
         .live = liveSessionHost,
-        // TODO(export-lane): bind to ProjectHost::exportQueue() once it lands; a null provider
-        // answers bloom.mcp.export-unavailable.
-        .exportQueue = {},
+        // The export queue the project host currently owns; null while it is being replaced
+        // (the service then answers bloom.mcp.export-unavailable).
+        .exportQueue = [&projectHost] { return projectHost.exportQueue(); },
         .scheduler = taskScheduler,
         .tokenFile = mcpDataDirectory ? *mcpDataDirectory / "mcp" / "token"
                                       : std::filesystem::path{},
@@ -597,9 +645,12 @@ int main(int argc, char* argv[]) try {
     bloom::ui::McpServerAdapter mcpAdapter(mcpPort);
     mcpAdapter.attach(taskUiBridge);
     mcpAdapter.startWaiter();
+    QObject::connect(&projectHost, &bloom::ui::ProjectHost::exportQueueReplaced, &mcpAdapter,
+                     [&mcpService] { mcpService.exportQueueReplaced(); });
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
         editorRegistry, compositionSession, previewController, &ramPreviewController, &projectHost,
-        &viewerGpuDependencies, gpuExportProvider, &liveSessionHost, &mcpAdapter);
+        &viewerGpuDependencies, gpuExportProvider, &exportQueueAdapter, &liveSessionHost,
+        &mcpAdapter);
     if (!editorsRegistered) {
         QEventLoop shutdownLoop;
         QObject::connect(&shutdownCoordinator,
@@ -672,9 +723,8 @@ int main(int argc, char* argv[]) try {
         taskScheduler, taskUiBridge, mediaDiskCache.get(), cpuEvaluator.operationCache().get(),
         gpuPreparedUploadCache.get(), gpuSceneCoverageCache.get(),
         [&cpuEvaluator] { cpuEvaluator.clearDecodedVideoCache(); },
-        [&previewController, &assetController, &frameExportController](const bool gated) {
+        [&previewController, &assetController](const bool gated) {
             assetController.setCachePurgeGate(gated);
-            frameExportController.setCachePurgeGate(gated);
             previewController.setCachePurgeGate(gated);
         },
         [&gpuPreviewDisplayService](const std::chrono::milliseconds timeout) {
@@ -683,7 +733,7 @@ int main(int argc, char* argv[]) try {
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,
-                                 frameExportController, &ramPreviewController, &previewController,
+                                 &ramPreviewController, &previewController,
                                  nullptr, &playback, cpuEvaluator.operationCache().get(),
                                  mediaDiskCache.get(), &accelerationStatus, &cachePurgeController);
     // Every default dialog of the project host and the export controller opens over the window.
@@ -697,7 +747,8 @@ int main(int argc, char* argv[]) try {
                          mcpAdapter.drain();
                      });
     projectHost.setDialogOwner(&window);
-    frameExportController.setDialogOwner(&window);
+    window.setExportQueue(&exportQueueAdapter);
+    window.setH264EncoderService(&h264Encoder);
     // UI sound feedback and render notifications (docs/architecture/ui-feedback.md). The sound
     // engine decodes and opens its own output device on a worker thread; nothing here blocks.
     auto uiSoundEngine = std::make_unique<bloom::ui::UiSoundEngine>(
@@ -714,6 +765,7 @@ int main(int argc, char* argv[]) try {
             bloom::ui::loadApplicationPreferences(feedbackSettings)));
     };
     applyFeedbackPreferences();
+    exportQueueAdapter.setFeedback(&uiFeedback);
     uiFeedback.setNotificationActivationHandler([&window] {
         window.setWindowState(window.windowState() & ~Qt::WindowMinimized);
         window.show();
@@ -741,11 +793,6 @@ int main(int argc, char* argv[]) try {
                      [&uiFeedback](const bloom::ui::ApplicationPreferences& draft) {
                          uiFeedback.playTest(bloom::ui::feedbackSettingsFrom(draft));
                      });
-    QObject::connect(
-        &frameExportController, &bloom::ui::FrameExportController::exportFinished, &window,
-        [&uiFeedback](const bloom::ui::FrameExportOutcome outcome, const QString& message) {
-            uiFeedback.announceExport(outcome, message);
-        });
     QObject::connect(&assetController, &bloom::ui::AssetController::importFinished, &window,
                      [&uiFeedback](const bloom::ui::AssetController::ImportReport& report) {
                          if (const auto event = bloom::ui::importFeedbackEvent(
@@ -757,6 +804,14 @@ int main(int argc, char* argv[]) try {
     QObject::connect(
         &compositionSession, &bloom::ui::CompositionSession::commandRejected, &window,
         [&uiFeedback](const QString&) { uiFeedback.play(bloom::ui::FeedbackEvent::Refused); });
+    QObject::connect(&playback, &bloom::ui::PlaybackController::stateChanged, &window,
+                     [&projectHost](const bloom::ui::PlaybackState state) {
+                         // The Viewer has strict priority: export takes only spare GPU time
+                         // while the artist plays back.
+                         if (auto* queue = projectHost.exportQueue())
+                             queue->setInteractiveGestureActive(
+                                 state == bloom::ui::PlaybackState::Playing);
+                     });
     QObject::connect(&playback, &bloom::ui::PlaybackController::stateChanged, &window,
                      [&uiFeedback](const bloom::ui::PlaybackState state) {
                          uiFeedback.setInteractionSuppressed(
