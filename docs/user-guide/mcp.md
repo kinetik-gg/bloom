@@ -203,7 +203,7 @@ composition's frame rate, later frame counts in it use the new rate.
 **Parameter values.** `bloom.parameter.set-source` takes `value` in the parameter's own kind: a
 number, `true`/`false` for a Boolean, text for a String, `[x, y]`, `[x, y, z]` or `[r, g, b, a]`,
 and for an Integer or enumeration a whole number or the member's name (`"screen"`, `"Ping-pong"`;
-case, spaces and hyphens do not matter). Reading an enumeration parameter back
+case, spaces, hyphens and underscores do not matter, so `"ping_pong"` names Ping-pong). Reading an enumeration parameter back
 (`query` `kind` `parameter`) returns both its stored `value` and its `label`. A value out of range is refused with what the parameter
 accepts, for example "Parameter 31 (points of node 7, bloom.shape) cannot take 2; it takes a whole
 number in 3..64." A Boolean parameter such as a shape's `fillEnabled` or `strokeEnabled` can be
