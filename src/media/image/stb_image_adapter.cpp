@@ -1,10 +1,13 @@
 #include "stb_image_adapter.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <optional>
+#include <zlib.h>
 
 namespace {
 // Thread-local so concurrent decodes with distinct request budgets cannot interfere. A default
@@ -177,6 +180,171 @@ static std::vector<std::uint16_t> decodeSamples(const stbi_io_callbacks& callbac
         throw;
     }
 }
+namespace {
+[[nodiscard]] std::uint32_t pngWord(const std::byte* bytes) noexcept {
+    return (std::to_integer<std::uint32_t>(bytes[0]) << 24U) |
+           (std::to_integer<std::uint32_t>(bytes[1]) << 16U) |
+           (std::to_integer<std::uint32_t>(bytes[2]) << 8U) |
+           std::to_integer<std::uint32_t>(bytes[3]);
+}
+[[nodiscard]] std::uint8_t paeth(const int a, const int b, const int c) noexcept {
+    const int p = a + b - c;
+    const int pa = std::abs(p - a);
+    const int pb = std::abs(p - b);
+    const int pc = std::abs(p - c);
+    if (pa <= pb && pa <= pc)
+        return static_cast<std::uint8_t>(a);
+    return static_cast<std::uint8_t>(pb <= pc ? b : c);
+}
+// Reverses the five PNG row filters in place over `raw` (filter byte + row bytes per row).
+[[nodiscard]] bool unfilterRows(std::vector<std::uint8_t>& raw, const std::size_t rowBytes,
+                                const std::size_t height, const std::size_t pixelBytes) noexcept {
+    std::uint8_t* previous = nullptr;
+    for (std::size_t row = 0; row < height; ++row) {
+        auto* line = raw.data() + row * (rowBytes + 1);
+        const auto filter = line[0];
+        auto* current = line + 1;
+        switch (filter) {
+        case 0:
+            break;
+        case 1:
+            for (std::size_t i = pixelBytes; i < rowBytes; ++i)
+                current[i] = static_cast<std::uint8_t>(current[i] + current[i - pixelBytes]);
+            break;
+        case 2:
+            if (previous != nullptr)
+                for (std::size_t i = 0; i < rowBytes; ++i)
+                    current[i] = static_cast<std::uint8_t>(current[i] + previous[i]);
+            break;
+        case 3:
+            for (std::size_t i = 0; i < rowBytes; ++i) {
+                const unsigned left = i >= pixelBytes ? current[i - pixelBytes] : 0U;
+                const unsigned up = previous != nullptr ? previous[i] : 0U;
+                current[i] = static_cast<std::uint8_t>(current[i] + ((left + up) >> 1U));
+            }
+            break;
+        case 4:
+            for (std::size_t i = 0; i < rowBytes; ++i) {
+                const int left = i >= pixelBytes ? current[i - pixelBytes] : 0;
+                const int up = previous != nullptr ? previous[i] : 0;
+                const int corner =
+                    i >= pixelBytes && previous != nullptr ? previous[i - pixelBytes] : 0;
+                current[i] = static_cast<std::uint8_t>(current[i] + paeth(left, up, corner));
+            }
+            break;
+        default:
+            return false;
+        }
+        previous = current;
+    }
+    return true;
+}
+} // namespace
+
+// The common PNG subset decoded through zlib's inflate: non-interlaced 8/16-bit grey, grey+alpha,
+// RGB and RGBA without tRNS. The samples equal stbi_load_16(..., 4) exactly: big-endian 16-bit
+// samples, 8-bit samples widened as v * 257, grey replicated, opaque alpha at the maximum.
+// Anything else, or any inconsistency, returns nullopt and the caller keeps the stb decoder.
+std::optional<std::vector<std::uint16_t>> fastPngSamples(const std::span<const std::byte> bytes,
+                                                         const ImageInfo& info,
+                                                         const std::size_t pixelBudget) {
+    constexpr std::array<unsigned char, 8> signature{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    if (bytes.size() < 33 || info.width <= 0 || info.height <= 0)
+        return std::nullopt;
+    for (std::size_t i = 0; i < signature.size(); ++i)
+        if (std::to_integer<unsigned char>(bytes[i]) != signature[i])
+            return std::nullopt;
+    if (pngWord(bytes.data() + 8) != 13 || std::memcmp(bytes.data() + 12, "IHDR", 4) != 0)
+        return std::nullopt;
+    const auto width = static_cast<std::size_t>(pngWord(bytes.data() + 16));
+    const auto height = static_cast<std::size_t>(pngWord(bytes.data() + 20));
+    const auto depth = std::to_integer<unsigned>(bytes[24]);
+    const auto colourType = std::to_integer<unsigned>(bytes[25]);
+    if (width != static_cast<std::size_t>(info.width) ||
+        height != static_cast<std::size_t>(info.height) || (depth != 8 && depth != 16) ||
+        (colourType != 0 && colourType != 2 && colourType != 4 && colourType != 6) ||
+        std::to_integer<unsigned>(bytes[26]) != 0 || std::to_integer<unsigned>(bytes[27]) != 0 ||
+        std::to_integer<unsigned>(bytes[28]) != 0)
+        return std::nullopt;
+    const std::size_t channels = colourType == 0   ? 1
+                                 : colourType == 2 ? 3
+                                 : colourType == 4 ? 2
+                                                   : 4;
+    const std::size_t sampleBytes = depth / 8;
+    const std::size_t pixelBytes = channels * sampleBytes;
+    const auto pixels = static_cast<std::uint64_t>(width) * height;
+    if (width > std::numeric_limits<std::uint32_t>::max() / pixelBytes ||
+        pixels > std::numeric_limits<std::uint64_t>::max() / 40U)
+        return std::nullopt;
+    const std::size_t rowBytes = width * pixelBytes;
+    const auto inflatedBytes = static_cast<std::uint64_t>(rowBytes + 1) * height;
+    // Peak: final RGBA32F + RGBA16 output + the inflated rows, within the caller's admission.
+    if (pixels * 24U + inflatedBytes > pixelBudget)
+        return std::nullopt;
+    std::vector<std::uint8_t> raw(static_cast<std::size_t>(inflatedBytes));
+    z_stream stream{};
+    if (inflateInit(&stream) != Z_OK)
+        return std::nullopt;
+    struct End {
+        z_stream& stream;
+        ~End() { inflateEnd(&stream); }
+    } end{stream};
+    stream.next_out = raw.data();
+    stream.avail_out = static_cast<uInt>(raw.size());
+    if (raw.size() > std::numeric_limits<uInt>::max())
+        return std::nullopt;
+    bool finished = false;
+    for (std::size_t position = 8; position + 12 <= bytes.size() && !finished;) {
+        const auto length = static_cast<std::size_t>(pngWord(bytes.data() + position));
+        const auto* type = bytes.data() + position + 4;
+        if (length > bytes.size() - position - 12)
+            return std::nullopt;
+        if (std::memcmp(type, "tRNS", 4) == 0 || std::memcmp(type, "CgBI", 4) == 0)
+            return std::nullopt;
+        if (std::memcmp(type, "IEND", 4) == 0)
+            break;
+        if (std::memcmp(type, "IDAT", 4) == 0 && length != 0) {
+            stream.next_in =
+                reinterpret_cast<Bytef*>(const_cast<std::byte*>(bytes.data()) + position + 8);
+            stream.avail_in = static_cast<uInt>(length);
+            while (stream.avail_in != 0) {
+                const auto status = inflate(&stream, Z_NO_FLUSH);
+                if (status == Z_STREAM_END) {
+                    finished = true;
+                    break;
+                }
+                if (status != Z_OK || stream.avail_out == 0)
+                    return std::nullopt;
+            }
+        }
+        position += 12 + length;
+    }
+    if (!finished || stream.avail_out != 0 || !unfilterRows(raw, rowBytes, height, pixelBytes))
+        return std::nullopt;
+    std::vector<std::uint16_t> samples(static_cast<std::size_t>(pixels) * 4U);
+    for (std::size_t row = 0; row < height; ++row) {
+        const auto* line = raw.data() + row * (rowBytes + 1) + 1;
+        auto* out = samples.data() + row * width * 4U;
+        for (std::size_t x = 0; x < width; ++x) {
+            std::array<std::uint16_t, 4> value{0, 0, 0, 0xFFFF};
+            for (std::size_t c = 0; c < channels; ++c) {
+                const auto* sample = line + (x * channels + c) * sampleBytes;
+                value[c] = sampleBytes == 2
+                               ? static_cast<std::uint16_t>((sample[0] << 8U) | sample[1])
+                               : static_cast<std::uint16_t>(sample[0] * 257U);
+            }
+            if (channels <= 2) {
+                const auto alpha = channels == 2 ? value[1] : std::uint16_t{0xFFFF};
+                value = {value[0], value[0], value[0], alpha};
+            } else if (channels == 3) {
+                value[3] = 0xFFFF;
+            }
+            std::copy(value.begin(), value.end(), out + x * 4U);
+        }
+    }
+    return samples;
+}
+
 std::vector<std::uint16_t> imageSamples(const std::filesystem::path& path, const ImageInfo& info,
                                         const std::size_t pixelBudget) {
     std::ifstream stream(path, std::ios::binary);
@@ -184,9 +352,15 @@ std::vector<std::uint16_t> imageSamples(const std::filesystem::path& path, const
         return {};
     return decodeSamples(kFileCallbacks, &stream, info, pixelBudget);
 }
-std::vector<std::uint16_t> imageSamples(const std::span<const std::byte> bytes,
-                                        const ImageInfo& info, const std::size_t pixelBudget) {
+std::vector<std::uint16_t> stbImageSamples(const std::span<const std::byte> bytes,
+                                           const ImageInfo& info, const std::size_t pixelBudget) {
     ByteStream stream{bytes};
     return decodeSamples(kByteCallbacks, &stream, info, pixelBudget);
+}
+std::vector<std::uint16_t> imageSamples(const std::span<const std::byte> bytes,
+                                        const ImageInfo& info, const std::size_t pixelBudget) {
+    if (auto fast = fastPngSamples(bytes, info, pixelBudget))
+        return std::move(*fast);
+    return stbImageSamples(bytes, info, pixelBudget);
 }
 } // namespace bloom::media::detail

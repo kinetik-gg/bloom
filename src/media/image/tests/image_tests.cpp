@@ -1,5 +1,6 @@
 #include "generated_jpeg.hpp"
 #include "png_test_support.hpp"
+#include "stb_image_adapter.hpp"
 #include <Imath/half.h>
 #include <ImfChannelList.h>
 #include <ImfChromaticitiesAttribute.h>
@@ -202,12 +203,124 @@ void acesAp0Read(const std::filesystem::path& path, Expectations& check) {
                      pixel.value()->alpha() == 0.5F,
                  "AP0 EXR reads to ACEScg within the OCIO oracle tolerance");
 }
+// In-memory PNG with every row filter (rows cycle None, Sub, Up, Average, Paeth), so the zlib fast
+// path is compared against the stb decoder over every filter and colour type.
+void appendWord(std::vector<std::byte>& out, const std::uint32_t value) {
+    for (const auto shift : {24U, 16U, 8U, 0U})
+        out.push_back(static_cast<std::byte>((value >> shift) & 255U));
+}
+void appendChunk(std::vector<std::byte>& out, const char* type,
+                 const std::vector<unsigned char>& data) {
+    appendWord(out, static_cast<std::uint32_t>(data.size()));
+    const auto start = out.size();
+    for (int i = 0; i < 4; ++i)
+        out.push_back(static_cast<std::byte>(type[i]));
+    for (const auto value : data)
+        out.push_back(static_cast<std::byte>(value));
+    const auto crc = crc32(0L, reinterpret_cast<const Bytef*>(out.data() + start),
+                           static_cast<uInt>(out.size() - start));
+    appendWord(out, static_cast<std::uint32_t>(crc));
+}
+std::vector<std::byte> filteredPng(const unsigned width, const unsigned height,
+                                   const unsigned depth, const unsigned colourType,
+                                   const bool interlaced = false, const bool transparency = false) {
+    const unsigned channels = colourType == 0 ? 1 : colourType == 2 ? 3 : colourType == 4 ? 2 : 4;
+    const unsigned pixelBytes = channels * depth / 8;
+    const unsigned rowBytes = width * pixelBytes;
+    std::vector<unsigned char> image(static_cast<std::size_t>(rowBytes) * height);
+    std::uint32_t seed = 0x2545F491U ^ (depth * 31U + colourType);
+    for (auto& value : image) {
+        seed = seed * 1103515245U + 12345U;
+        value = static_cast<unsigned char>(seed >> 23U);
+    }
+    std::vector<unsigned char> raw;
+    for (unsigned row = 0; row < height; ++row) {
+        const unsigned filter = row % 5;
+        raw.push_back(static_cast<unsigned char>(filter));
+        const auto* current = image.data() + static_cast<std::size_t>(row) * rowBytes;
+        const auto* previous = row == 0 ? nullptr : current - rowBytes;
+        for (unsigned i = 0; i < rowBytes; ++i) {
+            const int left = i >= pixelBytes ? current[i - pixelBytes] : 0;
+            const int up = previous ? previous[i] : 0;
+            const int corner = i >= pixelBytes && previous ? previous[i - pixelBytes] : 0;
+            int predictor = 0;
+            if (filter == 1)
+                predictor = left;
+            else if (filter == 2)
+                predictor = up;
+            else if (filter == 3)
+                predictor = (left + up) / 2;
+            else if (filter == 4) {
+                const int p = left + up - corner;
+                const int pa = std::abs(p - left), pb = std::abs(p - up), pc = std::abs(p - corner);
+                predictor = pa <= pb && pa <= pc ? left : (pb <= pc ? up : corner);
+            }
+            raw.push_back(static_cast<unsigned char>(current[i] - predictor));
+        }
+    }
+    auto size = compressBound(static_cast<uLong>(raw.size()));
+    std::vector<unsigned char> compressed(size);
+    if (compress2(compressed.data(), &size, raw.data(), static_cast<uLong>(raw.size()), 6) != Z_OK)
+        std::abort();
+    compressed.resize(size);
+    std::vector<std::byte> out;
+    for (const int value : {137, 80, 78, 71, 13, 10, 26, 10})
+        out.push_back(static_cast<std::byte>(value));
+    std::vector<unsigned char> header;
+    for (const auto value : {width, height})
+        for (const auto shift : {24U, 16U, 8U, 0U})
+            header.push_back(static_cast<unsigned char>((value >> shift) & 255U));
+    header.insert(header.end(),
+                  {static_cast<unsigned char>(depth), static_cast<unsigned char>(colourType), 0, 0,
+                   static_cast<unsigned char>(interlaced ? 1 : 0)});
+    appendChunk(out, "IHDR", header);
+    if (transparency)
+        appendChunk(out, "tRNS", {0, 0, 0, 0, 0, 0});
+    // Split IDAT so the fast path streams more than one chunk into inflate.
+    const auto half = compressed.size() / 2;
+    appendChunk(out, "IDAT", {compressed.begin(), compressed.begin() + static_cast<long>(half)});
+    appendChunk(out, "IDAT", {compressed.begin() + static_cast<long>(half), compressed.end()});
+    appendChunk(out, "IEND", {});
+    return out;
+}
+
+void testFastPngMatchesStb(Expectations& check) {
+    namespace detail = bloom::media::detail;
+    constexpr std::size_t budget = std::size_t{64} * 1024U * 1024U;
+    for (const unsigned depth : {8U, 16U}) {
+        for (const unsigned colourType : {0U, 2U, 4U, 6U}) {
+            const auto bytes = filteredPng(37, 11, depth, colourType);
+            detail::ImageInfo info;
+            check.expect(detail::imageInfo(bytes, info), "generated PNG header reads");
+            const auto fast = detail::fastPngSamples(bytes, info, budget);
+            const auto reference = detail::stbImageSamples(bytes, info, budget);
+            check.expect(fast.has_value() && !reference.empty() && *fast == reference,
+                         "zlib PNG samples equal the stb decoder for every filter and type");
+        }
+    }
+    const auto transparent = filteredPng(5, 3, 8, 2, false, true);
+    const auto interlaced = filteredPng(5, 3, 8, 6, true);
+    detail::ImageInfo info;
+    check.expect(detail::imageInfo(transparent, info) &&
+                     !detail::fastPngSamples(transparent, info, budget).has_value(),
+                 "tRNS stays on the stb decoder");
+    check.expect(detail::imageInfo(interlaced, info) &&
+                     !detail::fastPngSamples(interlaced, info, budget).has_value(),
+                 "interlaced PNG stays on the stb decoder");
+    const auto small = filteredPng(37, 11, 16, 6);
+    check.expect(detail::imageInfo(small, info) &&
+                     !detail::fastPngSamples(small, info, 37 * 11 * 24).has_value(),
+                 "the fast path never exceeds the caller's peak admission");
+}
+
 } // namespace
+
 int main() {
     using namespace bloom_output_png_test_support;
     namespace media = bloom::media;
     ScratchDirectory scratch("media-image");
     Expectations check;
+    testFastPngMatchesStb(check);
     // Every codec reads a frozen revision after its original pathname disappears. Comparing
     // independent path decode pixels also qualifies the custom EXR/stb stream adapters.
     for (const auto* extension : {"png", "jpg", "exr", "tiled.exr"}) {

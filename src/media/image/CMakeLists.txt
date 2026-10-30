@@ -7,6 +7,9 @@ else()
     target_compile_options(bloom_media_stb_image PRIVATE -w)
 endif()
 bloom_enable_strict_floating_point(bloom_media_stb_image)
+# The PNG fast path inflates through zlib, already a direct dependency of bloom_output.
+bloom_find_dependency(ZLIB)
+target_link_libraries(bloom_media_stb_image PRIVATE ZLIB::ZLIBSTATIC)
 
 add_library(bloom_media_image STATIC exr_backend.cpp exr_backend.hpp image.cpp image_budget.hpp
     sequence.cpp)
@@ -16,7 +19,7 @@ target_compile_features(bloom_media_image PUBLIC cxx_std_20)
 target_link_libraries(bloom_media_image PUBLIC bloom_core bloom_render bloom_color_ocio
     bloom_platform_process PRIVATE bloom_media_stb_image)
 bloom_find_dependency(OpenEXR)
-target_link_libraries(bloom_media_image PRIVATE OpenEXR::OpenEXR)
+target_link_libraries(bloom_media_image PRIVATE OpenEXR::OpenEXR ZLIB::ZLIBSTATIC)
 bloom_enable_warnings(bloom_media_image)
 bloom_enable_strict_floating_point(bloom_media_image)
 
@@ -26,7 +29,8 @@ if(BUILD_TESTING)
     add_executable(bloom_media_image_test tests/image_tests.cpp)
     target_link_libraries(bloom_media_image_test PRIVATE bloom_media_image bloom_output ZLIB::ZLIBSTATIC
         OpenEXR::OpenEXR)
-    target_include_directories(bloom_media_image_test PRIVATE ${PROJECT_SOURCE_DIR}/src/output/tests)
+    target_include_directories(bloom_media_image_test PRIVATE ${PROJECT_SOURCE_DIR}/src/output/tests
+        ${CMAKE_CURRENT_SOURCE_DIR})
     bloom_enable_warnings(bloom_media_image_test)
     bloom_add_test(NAME bloom.media.image COMMAND bloom_media_image_test LABELS unit media)
 

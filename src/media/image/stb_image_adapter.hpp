@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -45,4 +46,11 @@ class ImageAllocationBudgetScope final {
 imageSamples(const std::filesystem::path& path, const ImageInfo& info, std::size_t pixelBudget);
 [[nodiscard]] std::vector<std::uint16_t>
 imageSamples(std::span<const std::byte> bytes, const ImageInfo& info, std::size_t pixelBudget);
+// The zlib-inflate PNG path imageSamples(bytes) tries first; nullopt outside its subset, where the
+// stb decoder runs instead. Exposed so tests can compare both decoders sample for sample.
+[[nodiscard]] std::optional<std::vector<std::uint16_t>>
+fastPngSamples(std::span<const std::byte> bytes, const ImageInfo& info, std::size_t pixelBudget);
+// The stb decoder alone (the reference the fast path is tested against).
+[[nodiscard]] std::vector<std::uint16_t>
+stbImageSamples(std::span<const std::byte> bytes, const ImageInfo& info, std::size_t pixelBudget);
 } // namespace bloom::media::detail
