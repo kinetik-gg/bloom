@@ -55,21 +55,8 @@ std::optional<OutputPresetIdentityV1> outputPresetIdentityV1(const OutputPresetV
 OutputPresetAvailabilityV1 outputPresetAvailabilityV1(const OutputPresetV1 preset) noexcept {
     if (!outputPresetIdentityV1(preset))
         return {};
-    if (preset == OutputPresetV1::PngRgba8SrgbV1 ||
-        preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1)
-        return {.available = true, .reason = {}};
-#if defined(__linux__)
+    // Every platform ships the FFmpeg media worker, the last provider of its chain (ADR 0035).
     return {.available = true, .reason = {}};
-#elif defined(__APPLE__)
-    if (preset == OutputPresetV1::ProResMovV1 || preset == OutputPresetV1::H264MovV1)
-        return {.available = true, .reason = {}};
-    return {.available = false,
-            .reason = "The VideoToolbox provider writes MOV/MP4 video; this preset needs the "
-                      "FFmpeg worker"};
-#else
-    return {.available = false,
-            .reason = "The supervised FFmpeg worker is unavailable on this platform"};
-#endif
 }
 
 std::optional<OutputFacetDescriptorSchemasV1>

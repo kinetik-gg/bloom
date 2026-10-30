@@ -21,6 +21,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/host/export_queue.hpp>
 
+#include <QDateTime>
 #include <QObject>
 #include <QString>
 
@@ -28,6 +29,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -64,6 +66,10 @@ struct ExportJobEdit final {
 
 // A change to one output. Absent members are left alone.
 struct ExportOutputEdit final {
+    // The catalogue preset the output now comes from. With `settings` the output takes those
+    // settings under that preset (the Output Module dialog's format change and its edits, one undo
+    // entry); without them it takes the preset's own settings.
+    std::optional<std::string> presetId;
     std::optional<document::ExportOutputSettings> settings;
     std::optional<document::ExportDestination> destination;
     // A path the artist typed or chose (absolute), turned into a destination record by the edit
@@ -171,6 +177,10 @@ class ExportQueueAdapter final : public QObject {
     [[nodiscard]] std::optional<document::ExportJobId>
     jobForTaskOwner(runtime::TaskOwnerId owner) const;
     [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
+    // When the job's newest run started, as this adapter first saw it (its elapsed time taken off
+    // the moment it was seen). Session state for the Export panel's Started column: it lives as
+    // long as the application, so a panel opened later still shows it, and is never saved.
+    [[nodiscard]] std::optional<QDateTime> startedAt(document::ExportJobId job) const;
     [[nodiscard]] std::string jobScript(const document::ExportJob& job,
                                         host::ExportScriptFormat format) const {
         return port_.jobScript(job, format);
@@ -247,6 +257,11 @@ class ExportQueueAdapter final : public QObject {
     std::uint64_t revision_ = 0;
     std::uint64_t lastEventSequence_ = 0;
     std::optional<document::ExportJobId> pendingSelection_;
+    struct Started final {
+        std::uint64_t run = 0;
+        QDateTime at;
+    };
+    std::map<std::uint64_t, Started> started_;
 };
 
 } // namespace bloom::ui

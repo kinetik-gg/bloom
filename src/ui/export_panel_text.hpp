@@ -8,6 +8,7 @@
 #include <bloom/host/export_queue.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <QDateTime>
 #include <QString>
 
 #include <chrono>
@@ -52,6 +53,18 @@ struct StatusText final {
 // "Elapsed 0:07" and, when the host gave one, "about 0:42 left". Empty remaining when absent.
 [[nodiscard]] QString elapsedText(const host::ExportJobProgress& progress);
 [[nodiscard]] QString remainingText(const host::ExportJobProgress& progress);
+// "about 40 s left", "about 2 min left", "about 1 h 5 min left".
+[[nodiscard]] QString leftText(std::chrono::milliseconds remaining);
+// The Current Render strip's line: "Rendering SC020 · frame 404 of 2156 · 0:28 elapsed · about 2
+// min left", or "Idle" when nothing runs (`job` null or not active).
+[[nodiscard]] QString currentRenderText(const host::ExportJobView* job);
+// The Started column: the time today, the date and time before today.
+[[nodiscard]] QString startedText(const QDateTime& started);
+// The Render Time column: the run's elapsed time once the job has run, empty before.
+[[nodiscard]] QString renderTimeText(const host::ExportJobView& job);
+// "0:00:00:00 to 0:00:09:23 · 240 frames" at `rate`; empty when the range does not resolve.
+[[nodiscard]] QString spanText(const std::optional<host::ExportResolvedRange>& range,
+                               document::FrameRate rate);
 
 // "Work area", "Composition", "Frames 12 to 48", "Frame 12" with the resolved span in the
 // parenthesis when it is known.

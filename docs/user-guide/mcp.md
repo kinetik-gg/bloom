@@ -138,9 +138,8 @@ composition unable to render also appears in the MCP Server editor's activity li
 verification and Viewer priority as the Export editor; they are never saved. Nothing replaces an
 existing file silently: pass `"overwrite":"replace"` or confirm with `export.confirm-replace`.
 Stopping the server or quitting stops the jobs an agent started this way, never jobs started with
-`export.start`, which belong to the Export editor. On macOS and Windows render, export, capture and
-`export.start*` answer `bloom.mcp.export-unavailable` with `PlatformNotSupported`, as the Export
-editor does; every other tool works on all three systems.
+`export.start`, which belong to the Export editor. Every tool, including render, export and
+capture, works on Linux, macOS and Windows.
 
 ### Streamable HTTP
 

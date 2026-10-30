@@ -1186,9 +1186,6 @@ ExportTransientSubmitResult ExportQueueService::submitTransient(ExportTransientJ
         return result;
     };
     const auto catalogue = s.dependencies.presets->snapshot();
-    if (!catalogue->encoders.exportPlatform)
-        return refuse(ExportUnavailableCode::PlatformNotSupported,
-                      "Export runs on Linux in this version");
     if (s.runner == ExportRunnerState::ShuttingDown)
         return refuse(ExportUnavailableCode::ShuttingDown, "Bloom is shutting down");
     if (!s.snapshot)
@@ -1215,10 +1212,7 @@ ExportTransientSubmitResult ExportQueueService::submitTransient(ExportTransientJ
     if (availability && s.colorSettings)
         availability = exportProjectAvailability(output.settings, *s.colorSettings);
     if (!availability)
-        return refuse(availability.code == ExportAvailabilityCode::PlatformNotSupported
-                          ? ExportUnavailableCode::PlatformNotSupported
-                          : ExportUnavailableCode::PreflightBlocked,
-                      availability.reason);
+        return refuse(ExportUnavailableCode::PreflightBlocked, availability.reason);
     const auto resolved =
         resolveDestination(job, output, detail::destinationContext(s, job, nullptr));
     if (!resolved.issues.empty())

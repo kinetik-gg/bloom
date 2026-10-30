@@ -319,11 +319,15 @@ class FakeExportPort final : public ExportQueuePort {
                                 const ExportOutputEdit& change) override {
         std::string what =
             "editOutput " + std::to_string(job.value()) + " " + std::to_string(output.value());
+        if (change.presetId)
+            what += " preset=" + *change.presetId;
         if (change.settings)
             what += " settings";
         if (change.destination)
             what += " destination=" + change.destination->path + " policy=" +
                     std::to_string(static_cast<int>(change.destination->overwrite));
+        if (change.chosenPath)
+            what += " chosen=" + change.chosenPath->first.generic_string();
         if (change.enabled)
             what += std::string(" enabled=") + (*change.enabled ? "1" : "0");
         if (change.importIntoAssets)

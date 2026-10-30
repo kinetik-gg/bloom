@@ -42,7 +42,7 @@ void expect(const bool condition, const std::string& message) {
 
 host::ExportEncoderStatus encoders(const bool platform) {
     host::ExportEncoderStatus status;
-    status.exportPlatform = platform;
+    (void)platform; // ADR 0035: exportPlatform is ignored; every platform exports.
     status.probed = true;
     status.mediaWorker = true;
     status.h264Software = output::H264EncoderV1::OpenH264;
@@ -425,10 +425,9 @@ void testTransientAndPlatform() {
     Fixture f(false);
     const auto job = f.addJob();
     f.settle();
-    expect(f.service->canStart(job).code == ExportUnavailableCode::PlatformNotSupported &&
+    expect(f.service->canStart(job).code != ExportUnavailableCode::PlatformNotSupported &&
                f.service->availability(job, ExportCommand::EditJob).available,
-           "off Linux Start is PlatformNotSupported and editing stays available");
-    expect(f.fake->runsStarted() == 0, "nothing runs off Linux");
+           "the exportPlatform flag is ignored: Start is never PlatformNotSupported (ADR 0035)");
 }
 
 } // namespace

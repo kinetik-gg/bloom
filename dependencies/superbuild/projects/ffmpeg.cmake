@@ -1,15 +1,26 @@
-# FFmpeg 8.1.2 — the Linux worker-only media provider intake. The 8.1 maintenance branch is the
-# current stable point-release line selected for this intake; the application never links these
-# libraries. LGPL-only, shared-library, library-only build: the exact allow-list lives in the
-# adjacent argument file and is also copied into the generated lock by the reviewed intake input.
+# FFmpeg 8.1.2 — the bundled media worker provider on Linux, macOS and Windows (ADR 0035). The 8.1
+# maintenance branch is the current stable point-release line selected for this intake; the
+# application never links these libraries, only bloom-media-worker does. LGPL-only, shared-library,
+# library-only build: the exact allow-list lives in the adjacent argument file and is also copied
+# into the generated lock by the reviewed intake input. The platform adjustments below change the
+# toolchain, loader naming and Linux-only features, never the LGPL boundary.
 set(BLOOM_FFMPEG_VERSION 8.1.2)
 set(BLOOM_FFMPEG_URL
     "https://ffmpeg.org/releases/ffmpeg-${BLOOM_FFMPEG_VERSION}.tar.xz")
 set(BLOOM_FFMPEG_SHA256 464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c)
 
+# VA-API is a Linux interface; macOS and Windows builds never enable it.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(BLOOM_FFMPEG_VAAPI_DEFAULT ON)
+else()
+    set(BLOOM_FFMPEG_VAAPI_DEFAULT OFF)
+endif()
 option(BLOOM_FFMPEG_ENABLE_VAAPI
     "Enable FFmpeg VA-API hardware acceleration; turn off when libva development files are absent"
-    ON)
+    ${BLOOM_FFMPEG_VAAPI_DEFAULT})
+if(BLOOM_FFMPEG_ENABLE_VAAPI AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "BLOOM_FFMPEG_ENABLE_VAAPI is Linux-only")
+endif()
 
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/ffmpeg.configure-arguments"
     BLOOM_FFMPEG_CONFIGURE_ARGUMENTS)
@@ -38,12 +49,55 @@ else()
     endif()
 endif()
 
+# OpenH264: the link-time stub and Cisco's runtime fetch are the Linux x86-64 profile
+# (openh264.cmake builds a GNU ld import script; the lock records only linux64 runtime digests). The
+# macOS and Windows FFmpeg builds therefore omit the libopenh264 wrapper; H.264 encode there comes
+# from the platform media framework.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(BLOOM_FFMPEG_DEPENDS bloom_dependency_openh264)
+else()
+    set(BLOOM_FFMPEG_DEPENDS)
+    list(REMOVE_ITEM BLOOM_FFMPEG_CONFIGURE_ARGUMENTS
+        --enable-libopenh264
+        --enable-encoder=libopenh264)
+endif()
+
 # x86 SIMD: FFmpeg's x86 assembly is built with the superbuild-private NASM (nasm.cmake). Other
 # targets use FFmpeg's inline/NEON assembly and need neither the tool nor the argument.
-set(BLOOM_FFMPEG_DEPENDS bloom_dependency_openh264)
 if(BLOOM_NASM_REQUIRED)
     list(APPEND BLOOM_FFMPEG_DEPENDS bloom_dependency_nasm)
     list(APPEND BLOOM_FFMPEG_CONFIGURE_ARGUMENTS --x86asmexe=${BLOOM_NASM_EXECUTABLE})
+endif()
+
+# Platform toolchain and loader naming. FFmpeg's configure is a POSIX shell script on every
+# platform; Windows builds run it from an MSYS2 shell with the MSVC toolchain (FFmpeg's documented
+# MSVC route), producing avcodec-NN.dll beside import libraries.
+set(BLOOM_FFMPEG_SHELL)
+set(BLOOM_FFMPEG_MAKE make)
+set(BLOOM_FFMPEG_COMPILER_ARGUMENTS --cc=${CMAKE_C_COMPILER} --cxx=${CMAKE_CXX_COMPILER})
+if(APPLE)
+    # Shared libraries carry @rpath install names, so the worker's @loader_path/lib rpath resolves
+    # the copies bundled inside Bloom.app unmodified (no install_name_tool, signatures intact).
+    list(APPEND BLOOM_FFMPEG_CONFIGURE_ARGUMENTS --install-name-dir=@rpath)
+    if(CMAKE_OSX_DEPLOYMENT_TARGET)
+        list(APPEND BLOOM_FFMPEG_CONFIGURE_ARGUMENTS
+            "--extra-cflags=-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+            "--extra-ldflags=-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    endif()
+elseif(WIN32)
+    find_program(BLOOM_FFMPEG_SHELL NAMES sh bash
+        HINTS "$ENV{MSYS2_ROOT}/usr/bin" "C:/msys64/usr/bin" REQUIRED)
+    find_program(BLOOM_FFMPEG_MAKE_PROGRAM NAMES make
+        HINTS "$ENV{MSYS2_ROOT}/usr/bin" "C:/msys64/usr/bin" REQUIRED)
+    set(BLOOM_FFMPEG_MAKE "${BLOOM_FFMPEG_MAKE_PROGRAM}")
+    # --toolchain=msvc selects cl/link from the Visual Studio developer environment.
+    set(BLOOM_FFMPEG_COMPILER_ARGUMENTS)
+    list(APPEND BLOOM_FFMPEG_CONFIGURE_ARGUMENTS --toolchain=msvc --target-os=win64)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$")
+        list(APPEND BLOOM_FFMPEG_CONFIGURE_ARGUMENTS --arch=aarch64)
+    else()
+        list(APPEND BLOOM_FFMPEG_CONFIGURE_ARGUMENTS --arch=x86_64)
+    endif()
 endif()
 
 ExternalProject_Add(bloom_dependency_ffmpeg
@@ -59,13 +113,13 @@ ExternalProject_Add(bloom_dependency_ffmpeg
         CC=${CMAKE_C_COMPILER}
         CXX=${CMAKE_CXX_COMPILER}
         PKG_CONFIG_PATH=${BLOOM_DEPENDENCY_PREFIX}/lib/pkgconfig
+        ${BLOOM_FFMPEG_SHELL}
         <SOURCE_DIR>/configure
-        --cc=${CMAKE_C_COMPILER}
-        --cxx=${CMAKE_CXX_COMPILER}
+        ${BLOOM_FFMPEG_COMPILER_ARGUMENTS}
         --prefix=<INSTALL_DIR>
         ${BLOOM_FFMPEG_CONFIGURE_ARGUMENTS}
-    BUILD_COMMAND make -j3
-    INSTALL_COMMAND make install
+    BUILD_COMMAND ${BLOOM_FFMPEG_MAKE} -j3
+    INSTALL_COMMAND ${BLOOM_FFMPEG_MAKE} install
     ${BLOOM_DEPENDENCY_OFFLINE_ARGS}
     BUILD_ALWAYS OFF
     INSTALL_DIR "${BLOOM_DEPENDENCY_PREFIX}"

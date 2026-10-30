@@ -1,30 +1,38 @@
+#include <algorithm>
 #include <array>
 #include <bloom/media/provider/encode_session.hpp>
 #include <bloom/media/provider/ffmpeg_launch.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/media/provider/media_workers.hpp>
 #include <bloom/media/provider/openh264_runtime.hpp>
-#if defined(__APPLE__)
-#include <bloom/media/provider/videotoolbox_manifest.hpp>
-#include <mach-o/dyld.h>
-#endif
 #include <filesystem>
 #include <random>
 
 namespace bloom::media::provider {
 namespace {
-// The encode provider is chosen by platform: VideoToolbox/AVAssetWriter on macOS, FFmpeg
-// elsewhere. The macOS provider owns H.264 internally, so no OpenH264 install is required.
-Handshake providerHandshake(const bool vaapi, const bool h264Software,
-                            const std::string& openh264Version, const std::string& openh264Digest) {
-#if defined(__APPLE__)
-    (void)vaapi;
-    (void)h264Software;
-    (void)openh264Version;
-    (void)openh264Digest;
-    return videoToolboxHandshake();
-#else
-    return ffmpegHandshake(vaapi, h264Software, openh264Version, openh264Digest);
-#endif
+// One provider route of the encode chain (ADR 0035): a worker generation, its launch arguments
+// and the handshake the host expects from it.
+struct EncodeRoute final {
+    std::string id;
+    bool native = false;
+    std::string executable;
+    std::vector<std::string> arguments;
+    Handshake hello;
+    std::string openh264;
+};
+// The provider's own spelling of the requested codec family ("prores" for VideoToolbox,
+// "prores_ks" for FFmpeg). Settings for a codec the provider does not declare stay unchanged.
+EncodeSettingsV1 providerSettings(EncodeSettingsV1 settings, const Handshake& hello) {
+    if (settings.videoCodec.empty())
+        return settings;
+    const auto family = mediaCodecFamilyV1(settings.videoCodec);
+    for (const auto& declaration : hello.declarations)
+        if (declaration.capability.role == Role::VideoEncode &&
+            mediaCodecFamilyV1(declaration.capability.codec) == family) {
+            settings.videoCodec = declaration.capability.codec;
+            break;
+        }
+    return settings;
 }
 Unavailable processFailure(const platform::ProcessFailure& e) {
     switch (e.code) {
@@ -60,7 +68,8 @@ template <typename T> Result<T> take(Payload payload) {
 struct EncodeSessionV1::State {
     EncodeSessionOptionsV1 options;
     platform::ProcessCancellation cancel;
-    Handshake hello = providerHandshake(false, false, {}, {});
+    Handshake hello;
+    MediaProviderProvenanceV1 provenance;
     std::unique_ptr<platform::ProcessSupervisor> process;
     std::unique_ptr<HostProtocol> protocol;
     std::uint64_t session = 1, sequence = 0;
@@ -149,6 +158,48 @@ struct EncodeSessionV1::State {
             return *error;
         return receive(kind, expected);
     }
+    // One complete attempt on one provider route: launch, handshake and EncodeBegin. A refusal
+    // reaps the worker and leaves the session ready for the next route; nothing was produced.
+    std::optional<Unavailable> start(const EncodeRoute& route, const EncodeSettingsV1& settings) {
+        process.reset();
+        protocol.reset();
+        terminal.reset();
+        sequence = 0;
+        unacknowledged = 0;
+        hello = route.hello;
+        platform::ProcessOptions launch;
+        launch.executable = route.executable;
+        // Issue #352: the export worker gets the address space its frame extent needs.
+        launch.addressSpaceBytes = workerAddressSpaceBytes(settings.width, settings.height);
+        if (options.stagedOutput) {
+            // Streaming into the staged artifact is an FFmpeg worker protocol (ADR 0033 section
+            // 16); the caller expects the bytes there, so a platform route cannot serve it.
+            if (route.native)
+                return Unavailable{Error::Unavailable, "Streamed staged output needs FFmpeg"};
+            launch.stagedOutput = options.stagedOutput;
+            launch.arguments.push_back("--staged-output");
+        }
+        launch.arguments.insert(launch.arguments.end(), route.arguments.begin(),
+                                route.arguments.end());
+        if (!route.native)
+            configureFfmpegWorkerEnvironment(launch, launch.executable,
+                                             std::filesystem::path(route.openh264));
+        auto launched = platform::ProcessSupervisor::launch(launch);
+        if (const auto* e = std::get_if<platform::ProcessFailure>(&launched))
+            return processFailure(*e);
+        process = std::get<std::unique_ptr<platform::ProcessSupervisor>>(std::move(launched));
+        if (options.launched)
+            options.launched(process->processId());
+        std::random_device random;
+        session = (static_cast<std::uint64_t>(random()) << 32U) | random();
+        if (session == 0)
+            session = 1;
+        protocol = std::make_unique<HostProtocol>(session, hello);
+        if (const auto error =
+                failure(exchange(MessageKind::Handshake, hello, MessageKind::Handshake)))
+            return error;
+        return failure(exchange(MessageKind::EncodeBegin, settings, MessageKind::Ack));
+    }
 };
 EncodeSessionV1::EncodeSessionV1(EncodeSessionOptionsV1 options,
                                  platform::ProcessCancellation cancel)
@@ -156,71 +207,97 @@ EncodeSessionV1::EncodeSessionV1(EncodeSessionOptionsV1 options,
 EncodeSessionV1::~EncodeSessionV1() = default;
 std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settings) {
     auto& s = *state_;
-    if (!valid(settings) || s.sequence != 0 || s.options.timeout <= std::chrono::milliseconds(0) ||
+    if (!valid(settings) || s.sequence != 0 || s.process ||
+        s.options.timeout <= std::chrono::milliseconds(0) ||
         s.options.timeout > std::chrono::minutes(5))
         return Unavailable{Error::InvalidValue, "Invalid encode session request"};
     if (s.cancel && s.cancel())
         return Unavailable{Error::Cancelled, "Encode cancelled"};
     const bool h264 = settings.videoCodec == "h264";
-    const bool h264Software = h264 && !s.options.vaapi;
-    OpenH264RuntimeStatus openh264;
-#if defined(__APPLE__)
-    (void)h264Software;
-#else
-    if (h264Software) {
+    // Software H.264 in the FFmpeg worker is Cisco's OpenH264 where Bloom verifies that binary
+    // (Linux x86-64). Elsewhere the FFmpeg route does not declare H.264 and the platform media
+    // framework serves it.
+    bool openh264 = false;
+    if (h264 && OpenH264Runtime::platformSupported()) {
         const auto root = s.options.openh264Directory.empty()
                               ? std::filesystem::path{}
                               : std::filesystem::path(s.options.openh264Directory);
-        openh264 = OpenH264Runtime(root).verify();
-        if (!openh264.installed)
+        const auto status = OpenH264Runtime(root).verify();
+        openh264 = status.installed;
+        if (openh264) {
+            s.options.openh264Directory = status.directory.string();
+            s.options.openh264Version = status.version;
+            s.options.openh264Digest = status.digest;
+        }
+    }
+    std::vector<EncodeRoute> routes;
+    // The platform media framework first (ADR 0035). Windows has a Media Foundation slot with no
+    // provider yet; it reports NotInstalled and FFmpeg serves the encode.
+    if (const auto native = nativeMediaProviderId(); !native.empty()) {
+        EncodeRoute route;
+        route.id = std::string(native);
+        route.native = true;
+        route.executable = nativeWorkerExecutable();
+        route.hello = nativeMediaHandshake();
+        routes.push_back(std::move(route));
+    }
+    const auto ffmpeg =
+        s.options.executable.empty() ? ffmpegWorkerExecutable() : s.options.executable;
+    if (s.options.vaapi) {
+        EncodeRoute route;
+        route.id = std::string(kFfmpegVaapiProviderId);
+        route.executable = ffmpeg;
+        route.arguments = {"--vaapi"};
+        route.hello = ffmpegHandshake(true, false, {}, {});
+        routes.push_back(std::move(route));
+    }
+    {
+        EncodeRoute route;
+        route.id = std::string(kFfmpegProviderId);
+        route.executable = ffmpeg;
+        route.hello =
+            ffmpegHandshake(false, openh264, s.options.openh264Version, s.options.openh264Digest);
+        if (openh264) {
+            route.arguments = {"--openh264-dir", s.options.openh264Directory, "--openh264-sha256",
+                               s.options.openh264Digest};
+            route.openh264 = s.options.openh264Directory;
+        }
+        routes.push_back(std::move(route));
+    }
+    std::vector<MediaProviderCandidateV1> candidates;
+    candidates.reserve(routes.size());
+    for (const auto& route : routes)
+        candidates.push_back({route.id, route.native,
+                              [&route] { return regularFileExists(route.executable); },
+                              [&route](const MediaOperationV1& operation) {
+                                  return declaresMediaOperationV1(route.hello, operation);
+                              }});
+    const MediaOperationV1 operation{
+        MediaDirectionV1::Encode,
+        mediaCodecFamilyV1(settings.videoCodec.empty() ? settings.audioCodec : settings.videoCodec),
+        settings.container};
+    const MediaProviderChainV1 chain(std::move(candidates));
+    const auto result = chain.run<std::monostate>(
+        operation,
+        [&](const MediaProviderCandidateV1& candidate) -> Result<std::monostate> {
+            const auto& route = *std::ranges::find_if(
+                routes, [&](const EncodeRoute& r) { return r.id == candidate.id; });
+            if (const auto error = s.start(route, providerSettings(settings, route.hello)))
+                return *error;
+            return std::monostate{};
+        },
+        s.provenance);
+    if (const auto* error = std::get_if<Unavailable>(&result)) {
+        // Nothing was attempted for software H.264: the consented Cisco install is missing.
+        const bool attempted = std::ranges::any_of(s.provenance.fallbacks, [](const auto& f) {
+            return f.cause == MediaFallbackCauseV1::Failed;
+        });
+        if (!attempted && h264 && !s.options.vaapi && OpenH264Runtime::platformSupported() &&
+            !openh264)
             return Unavailable{Error::Unavailable, "H.264 encoder not installed"};
-        s.options.openh264Directory = openh264.directory.string();
-        s.options.openh264Version = openh264.version;
-        s.options.openh264Digest = openh264.digest;
+        return *error;
     }
-#endif
-    s.hello = providerHandshake(s.options.vaapi, h264Software, s.options.openh264Version,
-                                s.options.openh264Digest);
-    if (s.options.executable.empty())
-        s.options.executable = defaultWorker();
-    platform::ProcessOptions options;
-    options.executable = s.options.executable;
-    // Issue #352: the export worker gets the address space its frame extent needs.
-    options.addressSpaceBytes = workerAddressSpaceBytes(settings.width, settings.height);
-    if (s.options.stagedOutput) {
-        options.stagedOutput = s.options.stagedOutput;
-        options.arguments.push_back("--staged-output");
-    }
-#if !defined(__APPLE__)
-    if (s.options.vaapi)
-        options.arguments.push_back("--vaapi");
-    if (h264Software) {
-        options.arguments.insert(options.arguments.end(),
-                                 {"--openh264-dir", s.options.openh264Directory,
-                                  "--openh264-sha256", s.options.openh264Digest});
-    }
-#else
-    (void)h264;
-#endif
-    configureFfmpegWorkerEnvironment(options, options.executable,
-                                     h264Software
-                                         ? std::filesystem::path(s.options.openh264Directory)
-                                         : std::filesystem::path{});
-    auto launched = platform::ProcessSupervisor::launch(options);
-    if (const auto* e = std::get_if<platform::ProcessFailure>(&launched))
-        return processFailure(*e);
-    s.process = std::get<std::unique_ptr<platform::ProcessSupervisor>>(std::move(launched));
-    if (s.options.launched)
-        s.options.launched(s.process->processId());
-    std::random_device random;
-    s.session = (static_cast<std::uint64_t>(random()) << 32U) | random();
-    if (s.session == 0)
-        s.session = 1;
-    s.protocol = std::make_unique<HostProtocol>(s.session, s.hello);
-    if (const auto error =
-            failure(s.exchange(MessageKind::Handshake, s.hello, MessageKind::Handshake)))
-        return error;
-    return failure(s.exchange(MessageKind::EncodeBegin, settings, MessageKind::Ack));
+    return std::nullopt;
 }
 std::optional<Unavailable> EncodeSessionV1::video(FrameProduct frame) {
     return state_->post(MessageKind::Frame, std::move(frame));
@@ -253,31 +330,7 @@ std::optional<Unavailable> EncodeSessionV1::close() {
     return std::nullopt;
 }
 const ProviderExecutionKeyV1& EncodeSessionV1::execution() const { return state_->hello.execution; }
-std::string EncodeSessionV1::defaultWorker() {
-#if defined(__linux__)
-    std::error_code error;
-    const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
-    if (!error) {
-        const auto installed = executable.parent_path().parent_path() /
-                               "libexec/bloom/media/ffmpeg-v1/bloom-media-worker";
-        if (std::filesystem::is_regular_file(installed, error) && !error)
-            return installed.string();
-    }
-#elif defined(__APPLE__)
-    char path[4096] = {};
-    std::uint32_t size = sizeof(path);
-    if (_NSGetExecutablePath(path, &size) == 0) {
-        std::error_code error;
-        const auto installed = std::filesystem::path(path).parent_path().parent_path() /
-                               "libexec/bloom/media/videotoolbox-v1/bloom-media-worker";
-        if (std::filesystem::is_regular_file(installed, error) && !error)
-            return installed.string();
-    }
-#endif
-#ifdef BLOOM_ENCODE_WORKER
-    return BLOOM_ENCODE_WORKER;
-#else
-    return {};
-#endif
-}
+const Handshake& EncodeSessionV1::handshake() const { return state_->hello; }
+const MediaProviderProvenanceV1& EncodeSessionV1::provenance() const { return state_->provenance; }
+std::string EncodeSessionV1::defaultWorker() { return ffmpegWorkerExecutable(); }
 } // namespace bloom::media::provider

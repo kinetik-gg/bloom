@@ -7,7 +7,14 @@
 #include "ffmpeg_provider.hpp"
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/openh264_runtime.hpp>
+#if !defined(_WIN32)
 #include <fcntl.h>
+#endif
+#endif
+#if defined(_WIN32)
+#include <cstdio>
+#include <fcntl.h>
+#include <io.h>
 #endif
 #include "worker_io.hpp"
 #include <bloom/platform/process_supervisor.hpp>
@@ -24,6 +31,11 @@ int main(int argc, char** argv) {
     using namespace bloom::media;
     if (!bloom::platform::processWorkerBootstrap())
         return 2;
+#if defined(_WIN32)
+    // The protocol is binary: no CRLF translation or Ctrl-Z end-of-file on the pipes.
+    if (_setmode(_fileno(stdin), _O_BINARY) == -1 || _setmode(_fileno(stdout), _O_BINARY) == -1)
+        return 2;
+#endif
 #if defined(__GLIBC__)
     // Decoder threads would otherwise each reserve a 64 MiB malloc arena inside the bounded
     // media-v1 address space.
@@ -70,12 +82,14 @@ int main(int argc, char** argv) {
         openh264 = status.installed && status.digest == openh264Digest;
         if (!openh264)
             openh264Directory.clear();
+#if defined(__linux__)
         else
             setenv("LD_LIBRARY_PATH",
                    (openh264Directory + ":" +
                     (std::filesystem::path(argv[0]).parent_path() / "lib").string())
                        .c_str(),
                    1);
+#endif
     }
     if (hardwareDecode && (hardware || !retainedVideo))
         return 2; // Preview hardware decode is a retained, decode-only worker generation.
@@ -87,8 +101,15 @@ int main(int argc, char** argv) {
             ? provider::ffmpegHardwareDecodeHandshake()
             : provider::ffmpegHandshake(hardware, openh264, provider::OpenH264Runtime::version(),
                                         openh264Digest);
+#if defined(_WIN32)
+    // Streamed staged publication (ADR 0033 section 16) inherits a descriptor; Windows exports
+    // return chunks instead.
+    if (stagedOutput >= 0)
+        return 2;
+#else
     if (stagedOutput >= 0 && (retainedVideo || ::fcntl(stagedOutput, F_GETFD) < 0))
         return 2;
+#endif
     ffmpeg::Encoder encoder(hardware, stagedOutput);
     std::unique_ptr<ffmpeg::DecodeSession> decoder;
     if (retainedVideo)

@@ -547,7 +547,6 @@ int main(int argc, char* argv[]) try {
     bloom::ui::H264EncoderService h264Encoder(taskScheduler, taskUiBridge);
     bloom::host::ExportEncoderStatus initialEncoders;
 #if defined(__linux__)
-    initialEncoders.exportPlatform = true;
 #endif
     const auto presetDirectory = std::filesystem::path(
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation).toStdString()) /

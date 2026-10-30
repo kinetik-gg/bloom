@@ -102,7 +102,6 @@ int main(int argc, char** argv) {
     const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
     auto retirement = host::SequenceExportRetirementOwnerV1::create();
     host::ExportEncoderStatus encoders;
-    encoders.exportPlatform = host::exportPlatformSupported();
     auto presets = host::ExportPresetCatalogue::create(
         {.userDataDirectory = std::nullopt, .initialEncoders = encoders});
     presets->refreshEncoders(scheduler);
