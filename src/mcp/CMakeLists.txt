@@ -78,7 +78,7 @@ if(BUILD_TESTING)
     if(Python3_Interpreter_FOUND)
         bloom_add_test(
             NAME bloom.mcp.http-conformance
-            COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/tests/http_conformance.py"
+            COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/mcp_http_conformance.py"
                 $<TARGET_FILE:bloom_mcp_http_test_host>
             LABELS mcp integration
             TIMEOUT 180
