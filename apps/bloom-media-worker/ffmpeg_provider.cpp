@@ -1117,9 +1117,10 @@ std::unique_ptr<Input> openInput(const CallRequest& request) {
 }
 } // namespace
 namespace {
-// Opens `name` on `node` with a tiny NV12 VA-API frame pool. Success means the driver exposes the
-// encode entry point, not merely the device.
-bool vaapiEncoderOpens(const char* name, const std::string& node) {
+// Opens `name` on `node` with a small NV12 VA-API frame pool of `width` x `height`. Success means
+// the driver exposes the encode entry point, not merely the device.
+bool vaapiEncoderOpensAt(const char* name, const std::string& node, const int width,
+                         const int height) {
     const auto* codec = avcodec_find_encoder_by_name(name);
     if (codec == nullptr)
         return false;
@@ -1133,12 +1134,12 @@ bool vaapiEncoderOpens(const char* name, const std::string& node) {
         auto* framesContext = reinterpret_cast<AVHWFramesContext*>(frames->data);
         framesContext->format = AV_PIX_FMT_VAAPI;
         framesContext->sw_format = AV_PIX_FMT_NV12;
-        framesContext->width = 64;
-        framesContext->height = 64;
+        framesContext->width = width;
+        framesContext->height = height;
         framesContext->initial_pool_size = 2;
         if (av_hwframe_ctx_init(frames) >= 0) {
-            context->width = 64;
-            context->height = 64;
+            context->width = width;
+            context->height = height;
             context->time_base = {1, 24};
             context->framerate = {24, 1};
             context->pix_fmt = AV_PIX_FMT_VAAPI;
@@ -1150,6 +1151,12 @@ bool vaapiEncoderOpens(const char* name, const std::string& node) {
     av_buffer_unref(&frames);
     av_buffer_unref(&device);
     return opened;
+}
+// Issue #394: drivers reject pictures outside their encode limits (AMD's Mesa driver reports
+// 128..4096), so a 64x64 probe called a working encoder unavailable. Probe at sizes every
+// qualified encoder accepts: 256x256 first, then 1280x720 for a driver with a larger minimum.
+bool vaapiEncoderOpens(const char* name, const std::string& node) {
+    return vaapiEncoderOpensAt(name, node, 256, 256) || vaapiEncoderOpensAt(name, node, 1280, 720);
 }
 } // namespace
 bool probeVaapiEncode() {
