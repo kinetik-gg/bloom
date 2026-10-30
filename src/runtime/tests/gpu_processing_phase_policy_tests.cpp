@@ -710,7 +710,8 @@ void liveDeviceReportCreditsOnlyOwnedNativeBacking() {
     policy.applyHostSample(sample(now), 60 * gib, now);
     GpuAllocationBudget report{.source = GpuAllocationBudgetSource::MemoryBudget,
                                .device_local_bytes = 8 * gib,
-                               .available_bytes = gib};
+                               .available_bytes = gib,
+                               .device_uuid = {1, 2, 3, 4}};
     require(policy.reportDevice(91, report), "one native owner reports live free bytes");
     auto phase = policy.reserve(preview(), now);
     require(phase.lease != nullptr, "the native phase has a real reserved envelope");
@@ -734,11 +735,18 @@ void liveDeviceReportCreditsOnlyOwnedNativeBacking() {
     require(policy.reportDevice(92, report) &&
                 policy.snapshot().reservations.deviceCapacityBytes == gib,
             "owners of the same GPU share the one exact ownership credit");
+    // A second identical card has the same heap size; only its device UUID tells it apart.
     auto other = report;
-    other.device_local_bytes = 4 * gib;
+    other.device_uuid = {5, 6, 7, 8};
     require(policy.reportDevice(93, other) &&
                 policy.snapshot().reservations.deviceCapacityBytes == gib - backing,
             "owners on different GPUs never receive unproven cross-device ownership credit");
+    require(policy.retireDeviceReport(93, true), "the other GPU's owner retires");
+    auto unknown = report;
+    unknown.device_uuid = {};
+    require(policy.reportDevice(93, unknown) &&
+                policy.snapshot().reservations.deviceCapacityBytes == gib - backing,
+            "an owner without a device UUID is never assumed to share the GPU");
     require(policy.retireDeviceReport(93, true) && policy.retireDeviceReport(92, true) &&
                 policy.snapshot().reservations.deviceCapacityBytes == gib,
             "retiring the second owner restores exact single-owner accounting");

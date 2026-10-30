@@ -1214,9 +1214,12 @@ bounded unknown-device fallback), while lease, scene, and Viewer retention limit
 retention-only pool. A zero free-space sample at startup therefore does not permanently disable
 those owners. The service samples live device availability on its GPU owner and refreshes the
 shared phase report; measured free bytes already exclude VMA allocations. With one reported owner,
-the phase quota adds back only exact root-owned local native backing that remains in its claim
-ledger, so it is subtracted once. Unallocated phase reservations and other allocations receive
-no credit; multiple reported devices retain a conservative common minimum. Nominal estimates
+or several owners whose reports carry the same driver device UUID
+(`VkPhysicalDeviceIDProperties::deviceUUID`, for example the preview service and the export
+evaluator on one GPU), the phase quota adds back only exact root-owned local native backing that
+remains in its claim ledger, so it is subtracted once. Equal heap sizes are not treated as the same
+device. Unallocated phase reservations and other allocations receive no credit; owners on different
+or unidentified devices retain a conservative common minimum. Nominal estimates
 subtract live and retiring image ownership outside the root's existing claims. Every native
 allocation remains subject to the refreshed phase quota and allocator result. Explicit/unrooted
 additive limits retain their existing capacity plan.

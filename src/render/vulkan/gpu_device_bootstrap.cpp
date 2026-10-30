@@ -1,7 +1,10 @@
 #include "gpu_device_private.hpp"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -161,6 +164,7 @@ struct DeviceSelection final {
     // later with vkGetPhysicalDeviceSurfaceSupportKHR.
     std::uint32_t presentFamily = UINT32_MAX;
     VkPhysicalDeviceProperties properties{};
+    std::array<std::uint8_t, VK_UUID_SIZE> deviceUuid{};
     std::uint64_t deviceMemoryBytes = 0;
     bool memoryBudgetSupported = false;
     bool portabilitySubset = false;
@@ -198,8 +202,11 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
 
     std::optional<DeviceSelection> best;
     for (const VkPhysicalDevice device : devices) {
+        VkPhysicalDeviceIDProperties idProperties{};
+        idProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
         VkPhysicalDeviceProperties2 properties2{};
         properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        properties2.pNext = &idProperties;
         dispatcher->vkGetPhysicalDeviceProperties2(device, &properties2);
         if (properties2.properties.apiVersion < VK_API_VERSION_1_2) {
             continue;
@@ -268,6 +275,8 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
         selection.queueFamily = computeFamily;
         selection.presentFamily = presentFamily;
         selection.properties = properties2.properties;
+        std::copy(std::begin(idProperties.deviceUUID), std::end(idProperties.deviceUUID),
+                  selection.deviceUuid.begin());
         selection.deviceMemoryBytes = deviceLocalBytes;
         selection.memoryBudgetSupported =
             deviceExtensionAvailable(instance, device, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
@@ -606,6 +615,7 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
         selection->properties.limits.maxComputeWorkGroupInvocations;
     control->maxComputeWorkGroupSizeX = selection->properties.limits.maxComputeWorkGroupSize[0];
     control->deviceLocalBytes = selection->deviceMemoryBytes;
+    control->deviceUuid = selection->deviceUuid;
     control->memoryBudgetEnabled = selection->memoryBudgetSupported;
     control->calibratedTimestampsEnabled = calibratedExtension != nullptr;
 
@@ -644,6 +654,7 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     impl->report.identity.api_version_minor =
         VK_API_VERSION_MINOR(selection->properties.apiVersion);
     impl->report.identity.vendor_id = selection->properties.vendorID;
+    impl->report.identity.device_uuid = selection->deviceUuid;
     impl->report.identity.device_type =
         std::string(deviceTypeLabel(selection->properties.deviceType));
     impl->report.compute_queue = true;

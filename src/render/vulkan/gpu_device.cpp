@@ -246,6 +246,7 @@ GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
     }
     auto& control = *impl_->control;
     result.device_local_bytes = control.deviceLocalBytes;
+    result.device_uuid = control.deviceUuid;
 
     if (control.allocator != VK_NULL_HANDLE && control.memoryBudgetEnabled) {
         // vmaGetHeapBudgets normally reuses its last driver sample until enough allocations pass

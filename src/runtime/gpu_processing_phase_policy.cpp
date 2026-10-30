@@ -1,6 +1,7 @@
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <algorithm>
+#include <array>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -356,14 +357,19 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
     // budget subtracts all claims; unallocated phase reservations remain charged. With several
     // devices the aggregate root has no per-device ownership split, so use raw free conservatively.
     std::uint64_t ownedLocalNative = 0;
-    // Every owner sharing this root reports the same physical GPU (one device-local heap size):
-    // the live budget is process-wide there, so it already excludes all of the root's backing.
+    // Every owner sharing this root reports the same physical GPU (one driver device UUID): the
+    // live budget is process-wide there, so it already excludes all of the root's backing. One
+    // owner is its own device; several need a known, identical UUID (equal heap sizes are not
+    // proof: two identical cards report the same size).
+    constexpr std::array<std::uint8_t, 16> unknownDevice{};
     bool sameLiveDevice = deviceCount_ != 0;
-    for (std::size_t slot = 0; slot < deviceCount_; ++slot)
+    for (std::size_t slot = 0; slot < deviceCount_; ++slot) {
+        const auto& budget = devices_[slot].budget;
         sameLiveDevice =
-            sameLiveDevice &&
-            devices_[slot].budget.source == render::GpuAllocationBudgetSource::MemoryBudget &&
-            devices_[slot].budget.device_local_bytes == devices_[0].budget.device_local_bytes;
+            sameLiveDevice && budget.source == render::GpuAllocationBudgetSource::MemoryBudget &&
+            (deviceCount_ == 1 || (budget.device_uuid != unknownDevice &&
+                                   budget.device_uuid == devices_[0].budget.device_uuid));
+    }
     if (sameLiveDevice) {
         const auto claims = budget_.snapshot();
         const auto localImages =

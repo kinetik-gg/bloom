@@ -15,6 +15,7 @@
 #include <bloom/render/native_buffer_storage.hpp>
 #include <bloom/render/native_image_storage.hpp>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -95,6 +96,9 @@ struct GpuDeviceIdentity final {
     std::uint32_t api_version_minor = 0;
     std::uint32_t vendor_id = 0;
     std::string device_type;
+    // The physical device's driver-reported UUID (VkPhysicalDeviceIDProperties::deviceUUID); all
+    // zero when unknown. Two owners of one physical GPU report the same value.
+    std::array<std::uint8_t, 16> device_uuid{};
 
     friend bool operator==(const GpuDeviceIdentity&, const GpuDeviceIdentity&) = default;
 };
@@ -142,6 +146,9 @@ struct GpuAllocationBudget final {
     GpuAllocationBudgetSource source = GpuAllocationBudgetSource::Unavailable;
     std::uint64_t device_local_bytes = 0;
     std::uint64_t available_bytes = 0;
+    // Which physical GPU this live budget describes (all zero when unknown). Owners that share a
+    // GPU share its process-wide budget, so ownership credit is applied once per physical device.
+    std::array<std::uint8_t, 16> device_uuid{};
 
     friend bool operator==(const GpuAllocationBudget&, const GpuAllocationBudget&) = default;
 };

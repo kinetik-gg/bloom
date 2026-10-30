@@ -177,6 +177,8 @@ void testRealDeviceIfAvailable(ExpectationContext& expectations, const TestOptio
                         "the resolved available budget never exceeds DEVICE_LOCAL capacity");
     expectations.expect(allocationBudget.device_local_bytes == report.device_memory_bytes,
                         "the resolved budget carries the same DEVICE_LOCAL diagnostic total");
+    expectations.expect(allocationBudget.device_uuid == report.identity.device_uuid,
+                        "the resolved budget names the same physical device as the report");
     std::cout << "GPU allocation budget: source=" << static_cast<int>(allocationBudget.source)
               << " available_bytes=" << allocationBudget.available_bytes << '\n';
 

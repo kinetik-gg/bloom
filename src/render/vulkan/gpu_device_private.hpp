@@ -32,6 +32,7 @@
 
 #include <vk_mem_alloc.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -127,6 +128,8 @@ struct DeviceAllocatorState final {
     std::uint64_t maxStorageBufferRange = 0;
     // Summed DEVICE_LOCAL heap size, not committed allocator bytes.
     std::uint64_t deviceLocalBytes = 0;
+    // Driver-reported physical device UUID, copied into every live allocation budget.
+    std::array<std::uint8_t, 16> deviceUuid{};
     // Owner-only VMA frame index. Advancing it refreshes VK_EXT_memory_budget even when this
     // allocator has made no allocations while other processes changed device-memory usage.
     std::uint32_t budgetFrameIndex = 0;
