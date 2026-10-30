@@ -350,6 +350,9 @@ void KIconToggle::paintEvent(QPaintEvent*) {
 }
 KLabel::KLabel(QWidget* parent) : KLabel(QString{}, parent) {}
 KLabel::KLabel(const QString& text, QWidget* parent, TypeRole role) : QLabel(text, parent) {
+    // The tone is the WindowText ink. A label inside an item view (a list row's cell or line)
+    // would otherwise inherit the viewport's Text role and lose its tone.
+    setForegroundRole(QPalette::WindowText);
     setTypeRole(role);
     applyHeightRule();
 }

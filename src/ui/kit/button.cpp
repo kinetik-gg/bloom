@@ -35,6 +35,8 @@ ButtonKind KButton::buttonKind() const noexcept {
         return dangerOnHover_ ? ButtonKind::GhostDanger : ButtonKind::Ghost;
     case Variant::Danger:
         return ButtonKind::Danger;
+    case Variant::Link:
+        return ButtonKind::Link;
     }
     return ButtonKind::Secondary;
 }
@@ -150,7 +152,9 @@ QSize KButton::sizeHint() const {
         return {controlExtent(), controlExtent()};
     }
 
-    int width = px(Spacing::M) * 2 + px(Spacing::ControlInset) * 2;
+    // A link has no plate to pad: its text sits one XS inside its focus border.
+    int width = (variant_ == Variant::Link ? px(Spacing::XS) * 2 : px(Spacing::M) * 2) +
+                px(Spacing::ControlInset) * 2;
     if (icon_.has_value()) {
         width += px(iconBox());
         if (!text().isEmpty()) {
@@ -201,7 +205,9 @@ void KButton::paintEvent(QPaintEvent* event) {
     fillRoundedSurface(painter, bounds, colors.fill, colors.border, Radius::Small);
 
     const QColor ink = colors.ink;
-    QRectF content = bounds.adjusted(px(Spacing::M), 0.0, -px(Spacing::M), 0.0);
+    const bool link = variant_ == Variant::Link;
+    const qreal inset = px(link ? Spacing::XS : Spacing::M);
+    QRectF content = bounds.adjusted(inset, 0.0, -inset, 0.0);
     if (icon_.has_value()) {
         // The icon takes exactly the ink the label does, so a button reads as one object in every
         // state rather than a glyph and a word fading at different rates.
@@ -221,11 +227,15 @@ void KButton::paintEvent(QPaintEvent* event) {
 
     if (!text().isEmpty()) {
         painter.setPen(ink);
-        painter.setFont(font());
-        const QFontMetrics metrics(font());
-        const QString visible =
-            metrics.elidedText(text(), Qt::ElideRight, static_cast<int>(content.width()));
-        painter.drawText(content, Qt::AlignVCenter | Qt::AlignHCenter, visible);
+        QFont face = font();
+        // A link says it is one under the pointer.
+        face.setUnderline(link && state == State::Hover);
+        painter.setFont(face);
+        const QFontMetrics metrics(face);
+        const QString visible = metrics.elidedText(text(), link ? Qt::ElideMiddle : Qt::ElideRight,
+                                                   static_cast<int>(content.width()));
+        const Qt::Alignment align = Qt::AlignVCenter | (link ? Qt::AlignLeft : Qt::AlignHCenter);
+        painter.drawText(content, static_cast<int>(align.toInt()), visible);
     }
 }
 
