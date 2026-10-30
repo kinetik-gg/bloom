@@ -207,5 +207,6 @@ class GpuProcessingPhasePolicy final {
 reserveHostEvaluationPhase(GpuProcessingPhasePolicy&, std::uint64_t pixels,
                            std::uint64_t requestedPixelBytes, GpuProcessingPhaseOutput output,
                            bool encodedOutput = false,
-                           GpuAdmissionClass admissionClass = GpuAdmissionClass::Viewer) noexcept;
+                           GpuAdmissionClass admissionClass = GpuAdmissionClass::Viewer,
+                           std::uint64_t minimumPixelBytes = 0) noexcept;
 } // namespace bloom::runtime

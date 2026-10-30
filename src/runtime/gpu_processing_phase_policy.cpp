@@ -644,17 +644,23 @@ render::GpuProcessingPhaseGrant
 reserveHostEvaluationPhase(GpuProcessingPhasePolicy& policy, const std::uint64_t pixels,
                            const std::uint64_t requestedPixelBytes,
                            const GpuProcessingPhaseOutput output, const bool encodedOutput,
-                           const GpuAdmissionClass admissionClass) noexcept {
+                           const GpuAdmissionClass admissionClass,
+                           const std::uint64_t minimumPixelBytes) noexcept {
     if (pixels == 0 || pixels > std::numeric_limits<std::uint64_t>::max() / 16) {
         return {};
     }
+    // The need is the evaluation's preflight live-image peak when the caller planned one, at
+    // least one float frame; the requested size stays an unclaimed ceiling above it.
+    const auto minimum = std::max(pixels * 16, minimumPixelBytes);
     return policy.reserve({.output = output,
                            .pixels = pixels,
                            .encodedBytes = encodedOutput ? pixels * 16 : 0,
                            .metadataBytes = 16ULL * 1024 * 1024,
                            .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
-                           .requestedSourceBytes = requestedPixelBytes,
-                           .minimumSourceBytes = pixels * 16,
+                           .requestedSourceBytes = minimumPixelBytes != 0
+                                                       ? std::max(requestedPixelBytes, minimum)
+                                                       : requestedPixelBytes,
+                           .minimumSourceBytes = minimum,
                            .native = false,
                            .admissionClass = admissionClass});
 }

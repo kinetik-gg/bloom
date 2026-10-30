@@ -286,6 +286,7 @@ struct OutputAnalysisAttemptRunnerState final {
 // forever, so after this bound the evaluation proceeds and the truthful CPU fallback runs.
 constexpr auto kGpuBootstrapDeferralLimit = std::chrono::seconds(5);
 
+
 } // namespace detail
 
 OutputAnalysisAttemptRunnerV1::OutputAnalysisAttemptRunnerV1(
@@ -599,11 +600,30 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                         pixels = static_cast<std::uint64_t>(evaluation.roi->extent().width()) *
                                  evaluation.roi->extent().height();
                     }
+                    const auto evaluatorOwner =
+                        fallbackEvaluator
+                            ? fallbackEvaluator
+                            : std::make_shared<const runtime::CpuCompositionEvaluator>();
+                    const auto& evaluator = *evaluatorOwner;
+                    evaluator.setAssetBaseDirectory(assetBaseDirectory);
+                    // Claim this frame's own preflight live-image peak. A limit taken from the
+                    // room left at that instant shrank as other frames in flight and caches held
+                    // memory, until a heavy frame failed evaluation partway through a long export.
+                    // Admission now waits until the peak fits, and the evaluation gets at least it.
+                    auto planning = evaluation;
+                    planning.pixelStorageByteLimit = std::numeric_limits<std::size_t>::max();
+                    const auto storage =
+                        evaluator.planPreflightPixelStorage(plan, planning, context.cancellation());
+                    if (storage.cancelled || context.isCancellationRequested()) {
+                        return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                    }
+                    const std::uint64_t peak = storage.requiredPreflightBytes.value_or(0);
                     auto grant = runtime::reserveHostEvaluationPhase(
-                        *processingPolicy, pixels, evaluation.pixelStorageByteLimit,
+                        *processingPolicy, pixels,
+                        std::max<std::uint64_t>(evaluation.pixelStorageByteLimit, peak),
                         runtime::GpuProcessingPhaseOutput::FloatFinal,
                         preset == output::OutputPresetV1::PngRgba8SrgbV1,
-                        runtime::GpuAdmissionClass::Export);
+                        runtime::GpuAdmissionClass::Export, peak);
                     if (grant.status != render::GpuProcessingPhaseAdmission::Accepted ||
                         !grant.lease) {
                         return admissionFailure(
@@ -621,12 +641,6 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     cpuEvaluation.pixelStorageByteLimit =
                         static_cast<std::size_t>(hostPhase->sourceByteLimit());
                     cpuEvaluation.finalOutputPhase = hostPhase;
-                    const auto evaluatorOwner =
-                        fallbackEvaluator
-                            ? fallbackEvaluator
-                            : std::make_shared<const runtime::CpuCompositionEvaluator>();
-                    const auto& evaluator = *evaluatorOwner;
-                    evaluator.setAssetBaseDirectory(assetBaseDirectory);
                     auto evalResult =
                         evaluator.evaluate(plan, cpuEvaluation, context.cancellation());
                     if (evalResult.status() == runtime::EvaluationStatus::Cancelled) {

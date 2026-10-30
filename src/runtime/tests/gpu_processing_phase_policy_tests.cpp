@@ -151,6 +151,43 @@ void cgroupPageCacheAdmitsAndAnonWaits() {
     require(tooLarge.status == GpuProcessingPhaseAdmission::BudgetRefused,
             "a need larger than the limit minus headroom is still refused");
 }
+// Export frames in flight each claim their evaluation's preflight peak. A later frame waits until
+// its peak fits instead of being admitted with whatever room was left (which shrank across a long
+// export until a heavy frame failed evaluation with PixelStorageBudgetExceeded).
+void exportFramesClaimTheirPreflightPeak() {
+    const auto now = GpuProcessingPhasePolicy::Clock::now();
+    auto state = sample(now);
+    state.machine.availableBytes = 48 * gib;
+    state.process.domains = {{.path = "/own",
+                              .kind = ProcessMemoryLimitKind::Finite,
+                              .limitBytes = 10 * gib,
+                              .currentBytes = 0}};
+    GpuProcessingPhasePolicy policy;
+    policy.applyHostSample(state, 64 * gib, now);
+    constexpr std::uint64_t pixels = 1920ULL * 1080;
+    std::vector<std::shared_ptr<GpuProcessingPhaseLease>> held;
+    for (;;) {
+        auto grant = reserveHostEvaluationPhase(policy, pixels, 10 * gib,
+                                                GpuProcessingPhaseOutput::FloatFinal, false,
+                                                GpuAdmissionClass::Export, gib);
+        if (grant.status != GpuProcessingPhaseAdmission::Accepted) {
+            require(grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity && !held.empty(),
+                    "the frame whose peak no longer fits waits for a frame in flight");
+            break;
+        }
+        require(grant.lease && grant.lease->sourceByteLimit() >= gib,
+                "every admitted frame may use at least its preflight peak");
+        held.push_back(std::move(grant.lease));
+        require(held.size() < 16, "claims bound the frames in flight");
+    }
+    held.pop_back();
+    auto resumed =
+        reserveHostEvaluationPhase(policy, pixels, 10 * gib, GpuProcessingPhaseOutput::FloatFinal,
+                                   false, GpuAdmissionClass::Export, gib);
+    require(resumed.status == GpuProcessingPhaseAdmission::Accepted && resumed.lease &&
+                resumed.lease->sourceByteLimit() >= gib,
+            "a released frame lets the waiting frame in with its full peak");
+}
 void lowMemoryHostFinalAdmission() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
     constexpr std::size_t mib = std::size_t{1024} * 1024;
@@ -1191,6 +1228,7 @@ int main(int argc, char** argv) {
         headroomPreferenceRoundTrips();
         sourceFreeOutputStage();
         cgroupPageCacheAdmitsAndAnonWaits();
+        exportFramesClaimTheirPreflightPeak();
         lowMemoryHostFinalAdmission();
         liveHeadroomDuringCachePressure();
         rootedBackingReconcilesSampledHostHeadroom();
