@@ -37,8 +37,8 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/gpu_affine.hpp>
 #include <bloom/render/gpu_blend.hpp>
-#include <bloom/render/gpu_solid.hpp>
 #include <bloom/render/gpu_operation_batch.hpp>
+#include <bloom/render/gpu_solid.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/cancellation.hpp>
@@ -72,6 +72,7 @@ namespace bloom::runtime {
 class OperationCache;
 class CpuCompositionEvaluator;
 class GpuPreparedUploadCache;
+class ImageSequenceReadAhead;
 
 namespace detail {
 class VideoSourceContext;
@@ -607,6 +608,8 @@ struct GpuSceneMediaContext final {
     std::filesystem::path assetBaseDirectory;
     std::shared_ptr<media::cache::MediaDiskCache> mediaDiskCache;
     std::shared_ptr<GpuPreparedUploadCache> preparedUploadCache;
+    // Captures upcoming image-sequence files into `operationCache` ahead of need (null disables).
+    std::shared_ptr<ImageSequenceReadAhead> sequenceReadAhead;
 
     [[nodiscard]] static GpuSceneMediaContext
     fromEvaluator(const CpuCompositionEvaluator& evaluator);
