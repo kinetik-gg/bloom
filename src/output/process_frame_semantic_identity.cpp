@@ -40,7 +40,7 @@ constexpr std::string_view kProcessPixelSemanticsProfileId = "bloom.process.rgba
 constexpr std::size_t kPixelStreamFixedBytes =
     sizeof(kPixelStreamDomain) + sizeof(std::uint16_t) + sizeof(std::uint64_t);
 constexpr std::size_t kBytesPerPixel = 4 * sizeof(std::uint32_t);
-constexpr std::size_t kPixelHashChunkPixels = 256;
+constexpr std::size_t kPixelHashChunkPixels = 1024;
 constexpr std::size_t kPixelHashChunkBytes = kPixelHashChunkPixels * kBytesPerPixel;
 constexpr std::size_t kColorIntentRevisionBytes = bloom::core::kSha256DigestBytes;
 constexpr std::size_t kCompositionIdentityBytes =
@@ -54,7 +54,7 @@ constexpr std::size_t kCompositionIdentityBytes =
 static_assert(sizeof(kSemanticIdentityDomain) == 34);
 static_assert(kProcessColorId.size() == 16);
 static_assert(kProcessPixelSemanticsProfileId.size() == 33);
-static_assert(kPixelHashChunkBytes == 4096);
+static_assert(kPixelHashChunkBytes == 16384);
 static_assert(kCompositionIdentityBytes ==
               bloom::output::kCompositionProcessFrameSemanticIdentityV1Bytes);
 static_assert(kCompositionIdentityBytes + 2 * sizeof(std::uint32_t) ==
@@ -361,6 +361,21 @@ hashFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
             .cancelled = false};
 }
 
+[[nodiscard]] constexpr std::uint32_t nonFiniteBit(const std::uint32_t bits) noexcept {
+    return static_cast<std::uint32_t>((bits & 0x7F800000U) == 0x7F800000U);
+}
+
+// The serialized stream is big-endian; storing the swapped word through native memory yields the
+// big-endian bytes on little-endian hosts and the unchanged word on big-endian hosts.
+[[nodiscard]] constexpr std::uint32_t toBigEndianWord(const std::uint32_t value) noexcept {
+    if constexpr (std::endian::native == std::endian::big) {
+        return value;
+    } else {
+        return (value >> 24U) | ((value >> 8U) & 0x0000FF00U) | ((value << 8U) & 0x00FF0000U) |
+               (value << 24U);
+    }
+}
+
 [[nodiscard]] PixelHashOutcome hashProcessPixels(
     const Rgba32fImage& image, const std::uint64_t pixelCount,
     const bloom::runtime::CancellationToken& cancellation,
@@ -389,7 +404,7 @@ hashFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
     const auto width = static_cast<std::size_t>(descriptor->dataWindow().extent().width());
     const auto height = descriptor->dataWindow().extent().height();
     const auto pixels = image.pixels();
-    std::array<std::byte, kPixelHashChunkBytes> encoded{};
+    std::array<std::uint32_t, kPixelHashChunkPixels * 4> encoded{};
     std::uint64_t completed = 0;
     for (std::uint32_t rowIndex = 0; rowIndex < height; ++rowIndex) {
         const auto rowOffset = static_cast<std::size_t>(rowIndex) * width;
@@ -401,28 +416,33 @@ hashFailure(const ProcessFrameSemanticIdentityErrorCode error) noexcept {
                         .cancelled = true};
             }
             const auto chunkPixelCount = std::min(kPixelHashChunkPixels, row.size() - offset);
-            std::size_t encodedOffset = 0;
-            for (const auto pixel : row.subspan(offset, chunkPixelCount)) {
+            const auto chunk = row.subspan(offset, chunkPixelCount);
+            // Validate and serialize the chunk branch-free so the compiler vectorizes it; any
+            // invalid pixel fails the whole frame exactly as a per-pixel early return would.
+            std::uint32_t invalid = 0;
+            for (std::size_t index = 0; index < chunk.size(); ++index) {
+                const auto& pixel = chunk[index];
+                const auto red = std::bit_cast<std::uint32_t>(pixel.red());
+                const auto green = std::bit_cast<std::uint32_t>(pixel.green());
+                const auto blue = std::bit_cast<std::uint32_t>(pixel.blue());
+                const auto alphaBits = std::bit_cast<std::uint32_t>(pixel.alpha());
                 const auto alpha = pixel.alpha();
-                const auto hasNoncanonicalTransparentBits =
-                    alpha == 0.0F &&
-                    std::ranges::any_of(pixel.components(), [](const float component) {
-                        return std::bit_cast<std::uint32_t>(component) != 0U;
-                    });
-                if (!std::isfinite(pixel.red()) || !std::isfinite(pixel.green()) ||
-                    !std::isfinite(pixel.blue()) || !std::isfinite(alpha) || alpha < 0.0F ||
-                    alpha > 1.0F || hasNoncanonicalTransparentBits) {
-                    return hashFailure(ProcessFrameSemanticIdentityErrorCode::InvalidPixel);
-                }
-                for (const auto component : pixel.components()) {
-                    const auto componentBytes =
-                        bigEndianBytes(std::bit_cast<std::uint32_t>(component));
-                    std::ranges::copy(componentBytes,
-                                      encoded.begin() + static_cast<std::ptrdiff_t>(encodedOffset));
-                    encodedOffset += componentBytes.size();
-                }
+                invalid |= nonFiniteBit(red) | nonFiniteBit(green) | nonFiniteBit(blue) |
+                           nonFiniteBit(alphaBits);
+                // Alpha outside [0, 1] (NaN included), or a transparent pixel with any set bit.
+                invalid |= static_cast<std::uint32_t>(!(alpha >= 0.0F && alpha <= 1.0F));
+                invalid |= static_cast<std::uint32_t>(alpha == 0.0F) &
+                           static_cast<std::uint32_t>((red | green | blue | alphaBits) != 0U);
+                encoded[index * 4] = toBigEndianWord(red);
+                encoded[index * 4 + 1] = toBigEndianWord(green);
+                encoded[index * 4 + 2] = toBigEndianWord(blue);
+                encoded[index * 4 + 3] = toBigEndianWord(alphaBits);
             }
-            if (!update(hasher, std::span(encoded).first(encodedOffset))) {
+            if (invalid != 0U) {
+                return hashFailure(ProcessFrameSemanticIdentityErrorCode::InvalidPixel);
+            }
+            const auto encodedOffset = chunkPixelCount * kBytesPerPixel;
+            if (!update(hasher, std::as_bytes(std::span(encoded)).first(encodedOffset))) {
                 return hashFailure(ProcessFrameSemanticIdentityErrorCode::HashInputTooLarge);
             }
             completed += static_cast<std::uint64_t>(chunkPixelCount);
