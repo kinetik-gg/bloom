@@ -55,7 +55,9 @@ Inside the composition frame the Viewer shows the composition's **Background Col
 Settings) behind transparent pixels, as a display colour: what you pick in the chip is what the
 frame shows. Switch on **Transparency Grid** (the footer toggle or **View > Transparency Grid**) to
 see a checkerboard there instead. **View > Background** only changes the canvas around the frame.
-None of these reach export: exported alpha stays transparent.
+None of these reach export: exported alpha stays transparent. The Background Colour is a Viewer
+display setting only; renders, exports and captures keep transparency, as in After Effects. Its
+field says so in a tooltip.
 
 Move the pointer over the Viewer to read the probe in the window status bar. **W** reports the
 un-premultiplied working-space RGBA authored by the process frame; **D** reports the display value

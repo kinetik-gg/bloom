@@ -23,6 +23,10 @@ can estimate; nothing is shown when it cannot. A failure reads as a sentence tha
 
 ## Jobs and outputs
 
+Output keeps alpha: a composition's Background Colour is only shown in the Viewer behind the
+composition, so exports and renders of a format that can carry transparency keep it, like After
+Effects.
+
 A new job renders the composition's work area (or the whole composition when it has none) to one
 **H.264 MP4** output at `Exports/{name}.mp4` beside the project. If H.264 cannot run on this
 computer, the output starts as **ProRes 422 HQ MOV** and the panel says why H.264 was not used. The

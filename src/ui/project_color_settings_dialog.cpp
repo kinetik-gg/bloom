@@ -45,7 +45,15 @@ struct Resolved final {
                             ? host::ProjectColorConfig::AcesCg
                             : host::ProjectColorConfig::BloomNeutral;
     auto resolved = host::resolveProjectColorSettings(original, config, workingId);
-    return {std::move(resolved.settings), QString::fromStdString(resolved.reason)};
+    if (resolved.settings)
+        return {std::move(resolved.settings), {}};
+    // The host's reason is English for every client; the dialog says it in the interface language.
+    if (resolved.reason.find("ACES configuration is unavailable") != std::string::npos)
+        return {std::nullopt, QObject::tr("The built-in ACES configuration is unavailable in this "
+                                          "build, so it cannot be selected.")};
+    return {std::nullopt, QObject::tr("The working colour space \u201c%1\u201d is not offered by "
+                                      "that configuration.")
+                              .arg(QString::fromStdString(workingId))};
 }
 
 } // namespace

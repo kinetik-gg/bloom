@@ -668,9 +668,15 @@ void CompositionSettingsDialog::buildBasic(kit::KForm& form, kit::KForm& advance
     background_ = new kit::KColorChip(body);
     background_->setObjectName(QStringLiteral("newCompositionBackgroundColor"));
     background_->setAccessibleName(tr("Background Colour"));
+    // The same words on the chip and its hex: a pointer over either gets the render rule.
+    const QString backgroundTip =
+        tr("Shown in the Viewer behind the composition. Renders keep transparency, like After "
+           "Effects.");
+    background_->setToolTip(backgroundTip);
     backgroundHex_ = new kit::KLabel(QString{}, body, kit::TypeRole::Value);
     backgroundHex_->setObjectName(QStringLiteral("compositionSettingsBackgroundHex"));
     backgroundHex_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    backgroundHex_->setToolTip(backgroundTip);
     form.addRow(tr("Background Colour"), row(body, {background_, backgroundHex_}));
     connect(background_, &kit::KColorChip::colorChanged, this, [this](const kit::KColor& color) {
         backgroundHex_->setText(color.toHex(false).toUpper());
