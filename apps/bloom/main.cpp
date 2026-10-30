@@ -9,9 +9,12 @@
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
+#include <bloom/mcp/server_service.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/cache/media_disk_cache.hpp>
 #include <bloom/media/video/session.hpp>
+#include <bloom/platform/cache_directory.hpp>
+#include <bloom/platform/user_data_directory.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
@@ -24,6 +27,7 @@
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/scripting/live_session_host.hpp>
 #include <bloom/ui/acceleration_status.hpp>
 #include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/application_shutdown_coordinator.hpp>
@@ -48,10 +52,6 @@
 #include <bloom/ui/interaction_sounds.hpp>
 #include <bloom/ui/jobs_editor.hpp>
 #include <bloom/ui/kit/theme.hpp>
-#include <bloom/mcp/server_service.hpp>
-#include <bloom/platform/cache_directory.hpp>
-#include <bloom/platform/user_data_directory.hpp>
-#include <bloom/scripting/live_session_host.hpp>
 #include <bloom/ui/live_session_adapter.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/mcp_server_adapter.hpp>
@@ -443,6 +443,15 @@ int main(int argc, char* argv[]) try {
     // and VRAM minus the headroom preferences), up to one per hardware thread for
     // decode/preparation.
     ramPreviewController.setFillWidthProvider(
+        [processingPhasePolicy,
+         deviceWorkingBytes =
+             512ULL * 1024 * 1024 + gpuPreviewDisplayOptions.packedTransferByteAllowance](
+            const std::uint64_t framePixels) {
+            return bloom::runtime::previewFramesThatFit(*processingPhasePolicy, framePixels,
+                                                        deviceWorkingBytes);
+        });
+    // Playback read-ahead keeps the same capacity-sized number of frames in flight.
+    backgroundPreviewController.setReadAheadWidthProvider(
         [processingPhasePolicy,
          deviceWorkingBytes =
              512ULL * 1024 * 1024 + gpuPreviewDisplayOptions.packedTransferByteAllowance](

@@ -534,6 +534,58 @@ void testBackgroundFillsAheadWhilePlaying(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+// Read-ahead width comes from measured capacity: with room for three frames, three frames ahead of
+// the playhead are in flight at once, none is submitted twice, and every one lands exactly once.
+void testReadAheadKeepsCapacitySizedFramesInFlight(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Read ahead width", time(8, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    fixture.frameCache->clear();
+    std::mutex mutex;
+    std::condition_variable released;
+    std::size_t prepared = 0;
+    bool open = false;
+    auto prepare = [&](const document::Snapshot& snapshot,
+                       const runtime::PreviewRequestIdentity& identity, std::size_t limit,
+                       const std::vector<runtime::SnapshotParameterOverride>& override,
+                       runtime::TaskContext& context) {
+        {
+            std::unique_lock lock(mutex);
+            ++prepared;
+            released.wait_for(lock, std::chrono::seconds(5), [&] { return open; });
+        }
+        return fixture.pipelineFixture.pipeline(snapshot, identity, limit, override, context);
+    };
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge, prepare);
+    std::size_t widthAsks = 0;
+    background.setReadAheadWidthProvider([&](std::uint64_t) {
+        ++widthAsks;
+        return std::size_t{3};
+    });
+    fixture.controller.setPlaybackActive(true);
+    background.fillNextFrame();
+    expectations.expect(waitUntil([&] { return background.inFlightCount() == 3; }),
+                        "three read-ahead frames are in flight while the first prepares");
+    background.fillNextFrame();
+    expectations.expect(background.inFlightCount() == 3,
+                        "a full read-ahead set does not grow while its frames are in flight");
+    {
+        std::lock_guard lock(mutex);
+        open = true;
+    }
+    released.notify_all();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 8; }),
+                        "every read-ahead frame lands in the cache");
+    {
+        std::lock_guard lock(mutex);
+        expectations.expect(prepared == 8, "no frame is prepared twice while in flight");
+    }
+    expectations.expect(widthAsks >= 1, "the width comes from the capacity provider");
+    background.beginShutdown();
+    fixture.controller.setPlaybackActive(false);
+    finishFixture(fixture, expectations);
+}
+
 // LAYOUT-2: a layout-only edit does not restart the background pass, and it keeps filling under
 // the retained evaluation revision, so the key it fills and the snapshot it captured cannot
 // disagree. (Deliberate foreground priority still yields through the existing event filter.)
@@ -678,6 +730,7 @@ int main(int argc, char** argv) {
         testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(expectations);
         testVisibleAdmissionAndSupersession(expectations);
         testBackgroundFillsAheadWhilePlaying(expectations);
+        testReadAheadKeepsCapacitySizedFramesInFlight(expectations);
         testWorkAreaBoundsBackground(expectations);
         testBackgroundFillHonoursRegionOfInterest(expectations);
         testOutwardOrderBudgetAndRestart(expectations);
