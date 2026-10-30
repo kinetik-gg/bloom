@@ -285,8 +285,12 @@ void RamPreviewController::requestFrames() {
         if (const auto* composition = session_.composition()) {
             const auto pixels = static_cast<std::uint64_t>(composition->format().width()) *
                                 composition->format().height();
-            // Everything already in flight holds its own claim; add what still fits on top.
-            pipeline_.setWidth(pipeline_.inFlightCount() + fillWidthProvider_(pixels));
+            // The width is chosen from the free capacity only when the pipeline is empty. Frames
+            // in flight have not all claimed their phases yet, so adding what still fits on top
+            // of them counts the same room twice (it grew to 70 frames). Admission itself makes a
+            // frame that does not fit wait, so the width is a target, never a safety bound.
+            if (pipeline_.empty())
+                pipeline_.setWidth(fillWidthProvider_(pixels));
         }
     }
     while (caching_ && serial == runSerial_ && pipeline_.hasCapacity()) {
