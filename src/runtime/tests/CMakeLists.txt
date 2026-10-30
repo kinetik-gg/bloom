@@ -1837,6 +1837,12 @@ bloom_enable_warnings(bloom_runtime_memory_headroom_test)
 bloom_add_test(NAME bloom.runtime.memory_headroom
     COMMAND bloom_runtime_memory_headroom_test LABELS unit memory)
 
+add_executable(bloom_runtime_composite_frame_cache_test composite_frame_cache_tests.cpp)
+target_link_libraries(bloom_runtime_composite_frame_cache_test PRIVATE bloom_runtime_evaluator OpenEXR::OpenEXR)
+bloom_enable_warnings(bloom_runtime_composite_frame_cache_test)
+bloom_add_test(NAME bloom.runtime.composite_frame_cache
+    COMMAND bloom_runtime_composite_frame_cache_test LABELS unit memory runtime)
+
 add_executable(bloom_runtime_gpu_admission_pressure_test gpu_admission_pressure_tests.cpp)
 target_link_libraries(bloom_runtime_gpu_admission_pressure_test PRIVATE bloom_runtime_evaluator)
 bloom_enable_warnings(bloom_runtime_gpu_admission_pressure_test)

@@ -85,6 +85,7 @@ target_sources(
         operation_cache.cpp
         cpu_layer_time_resolution.cpp
         video_source.cpp
+        composite_frame_cache.cpp
         video_source.hpp
         image_source.cpp
         channel_resolution.cpp
