@@ -43,7 +43,7 @@ using DurableObjectId =
                  document::LayerSlotId, document::ParameterId, document::AnimationCurveId,
                  document::KeyframeId, document::DriverBindingId, document::NodeGroupId,
                  document::AssetId, document::AssetFolderId, document::DataBlockRecordId,
-                 document::LayerMaskId>;
+                 document::LayerMaskId, document::ExportJobId, document::ExportOutputId>;
 
 struct OperationOutput {
     std::string name;

@@ -112,3 +112,9 @@ target_link_libraries(bloom_commands_layer_alignment_test PRIVATE bloom_commands
 bloom_enable_warnings(bloom_commands_layer_alignment_test)
 bloom_add_test(NAME bloom.commands.layer-alignment COMMAND bloom_commands_layer_alignment_test
                LABELS commands unit TIMEOUT 30)
+
+add_executable(bloom_commands_export_queue_test export_queue_operations_tests.cpp)
+target_link_libraries(bloom_commands_export_queue_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_export_queue_test)
+bloom_add_test(NAME bloom.commands.export-queue COMMAND bloom_commands_export_queue_test
+               LABELS commands unit)
