@@ -71,7 +71,18 @@ static_assert(mcp::toolName(mcp::McpTool::Events) == "events");
 static_assert(mcp::toolName(mcp::McpTool::Capture) == "capture");
 static_assert(mcp::toolName(mcp::McpTool::ExportConfirmReplace) == "export.confirm-replace");
 static_assert(mcp::toolName(mcp::McpTool::ExportScript) == "export.script");
-static_assert(static_cast<std::size_t>(mcp::McpTool::ExportScript) + 1 == mcp::kMcpToolCount);
+static_assert(mcp::toolName(mcp::McpTool::ProjectSaveAs) == "project.save-as");
+static_assert(mcp::toolName(mcp::McpTool::EditorReveal) == "editor.reveal");
+static_assert(mcp::toolName(mcp::McpTool::ViewerSet) == "viewer.set");
+static_assert(mcp::toolUsesLiveUi(mcp::McpTool::ProjectOpen));
+static_assert(!mcp::toolUsesLiveUi(mcp::McpTool::ExportScript));
+static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProjectOpen));
+static_assert(mcp::uiRefusalCode(mcp::McpUiRefusal::UnsavedChanges) == "bloom.mcp.unsaved-changes");
+static_assert(mcp::toolName(mcp::McpTool::ProjectSetColorSettings) == "project.set-color-settings");
+static_assert(static_cast<std::size_t>(mcp::McpTool::ProjectSetColorSettings) + 1 ==
+              mcp::kMcpToolCount);
+// Project colour settings are project session state, not a document command.
+static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProjectSetColorSettings));
 static_assert(mcp::toolExecution(mcp::McpTool::Render) == mcp::McpToolExecution::Task);
 static_assert(mcp::toolExecution(mcp::McpTool::Capture) == mcp::McpToolExecution::Task);
 static_assert(mcp::toolExecution(mcp::McpTool::ExportWait) == mcp::McpToolExecution::Task);
@@ -187,9 +198,9 @@ int main() {
 
     std::set<std::string_view> codes;
     for (std::uint8_t code = 0;
-         code <= static_cast<std::uint8_t>(mcp::McpToolErrorCode::OperationRejected); ++code)
+         code <= static_cast<std::uint8_t>(mcp::McpToolErrorCode::PreflightBlocked); ++code)
         codes.insert(mcp::toolErrorCode(static_cast<mcp::McpToolErrorCode>(code)));
-    failures += expect(codes.size() == 12, "every tool error has a distinct stable code");
+    failures += expect(codes.size() == 13, "every tool error has a distinct stable code");
 
     failures +=
         expect(scripting::liveCommitDiagnosticCode(scripting::LiveCommitStatus::Completed).empty(),

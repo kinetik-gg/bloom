@@ -225,6 +225,59 @@ class Conformance(unittest.TestCase):
             self.assertTrue(pathlib.Path(destination).exists())
         client.request('DELETE')
 
+    def test_failed_transient_render_carries_its_log(self):
+        # #388: a failed render, export or capture answers with its transient job id and the run's
+        # log, because the job is retired as soon as the call returns.
+        if not sys.platform.startswith('linux'):
+            self.skipTest('export runs on Linux in this version')
+        client = Client(self.host)
+        client.initialize()
+
+        def result(body):
+            message = json.loads(body)
+            return message['result']['structuredContent']
+
+        with tempfile.TemporaryDirectory(prefix='bloom-mcp-failing-') as directory:
+            source = pathlib.Path(directory) / 'source.png'
+            _, _, body = client.call(30, 'render', {'composition': 1, 'frame': 0,
+                                                    'preset': 'PngRgba8SrgbV1',
+                                                    'destination': str(source)})
+            rendered = result(body)
+            self.assertIn('job', rendered)
+            self.assertIsInstance(rendered['log'], list)
+            _, _, body = client.call(31, 'query', {'kind': 'project'})
+            revision = result(body)['revision']
+            _, _, body = client.call(32, 'transact', {'expectedRevision': revision, 'operations': [
+                {'op': 'bloom.asset.import', 'args': {'paths': [str(source)],
+                                                      'projectDirectory': directory}}]})
+            imported = result(body)
+            self.assertTrue(imported['succeeded'], imported)
+            asset = [o['id'] for o in imported['outputs'] if o['name'] == 'asset'][0]
+            # A composition of its own, so the broken layer never reaches other tests' renders.
+            _, _, body = client.call(33, 'transact', {
+                'expectedRevision': imported['revision'],
+                'operations': [{'op': 'bloom.composition.add', 'args': {'name': 'Broken'}}]})
+            added = result(body)
+            self.assertTrue(added['succeeded'], added)
+            composition = [o['id'] for o in added['outputs'] if o['name'] == 'composition'][0]
+            _, _, body = client.call(35, 'transact', {
+                'expectedRevision': added['revision'],
+                'operations': [{'op': 'bloom.layer.add-image',
+                                'args': {'composition': composition, 'asset': asset}}]})
+            self.assertTrue(result(body)['succeeded'])
+            source.unlink()
+            _, _, body = client.call(34, 'render', {'composition': composition, 'frame': 0,
+                                                    'preset': 'PngRgba8SrgbV1',
+                                                    'destination': directory})
+            failed = json.loads(body)['result']
+            self.assertTrue(failed['isError'], failed)
+            content = failed['structuredContent']
+            self.assertIsInstance(content.get('job'), int, content)
+            self.assertTrue(content['log'], content)
+            self.assertTrue(all({'severity', 'code', 'message'} <= set(row)
+                                for row in content['log']))
+        client.request('DELETE')
+
     def test_admission(self):
         port = self.host.port
         good = Client(self.host)

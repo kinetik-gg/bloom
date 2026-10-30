@@ -392,6 +392,7 @@ McpServerService::McpServerService(McpServerServiceDependencies dependencies)
         .scheduler = s.dependencies.scheduler,
         .gpuProvider = nullptr,
         .captureDirectory = s.dependencies.captureDirectory,
+        .ui = s.dependencies.liveUi,
         .serverVersion = s.dependencies.serverVersion,
         .limits = kMcpMessageLimits});
     // The token loads on the blocking-I/O executor; pump() publishes it.

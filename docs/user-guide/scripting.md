@@ -26,6 +26,15 @@ folder, which contributes the media files below it, exactly as a folder dropped 
 scripted imports never show the import progress dialog. The run starts from a new in-memory session; use `new` or the facade's
 Save As operation when a durable project is required.
 
+Times follow one contract in `run` scripts, Python and MCP: an integer is a whole frame of the
+composition the operation edits, at its frame rate, and `[numerator, denominator]` is an exact time
+in seconds. `{"op": "bloom.composition.set-duration", "args": {"duration": 48}}` makes a 24 fps
+composition two seconds long. `bloom.parameter.set-source` reads `value` in the parameter's own
+kind -- a whole number or a member name such as `"screen"` for an enumeration, `true`/`false` for a
+Boolean -- and refuses a value out of range with what the parameter accepts. A refused step names
+the operation's index in its transaction and the reason; see
+[Using Bloom from an agent](mcp.md#edits-and-diagnostics).
+
 `bloom.layer.align-layers` and `bloom.layer.distribute-layers` work in `run` scripts as well. A
 headless session has no selection, so name the `layers`:
 
@@ -45,6 +54,36 @@ Example scripts live in [`examples/scripting`](../../examples/scripting/).
 
 Python scripts and the interactive interpreter are described in [Scripting Bloom with Python](python.md).
 For stdio clients, see [Using Bloom from an agent (MCP)](mcp.md).
+
+## Layer and node edits from the UI
+
+Every layer and node edit of the Timeline, Viewer and Node editor menus and drops has an operation,
+built on the same command as the UI action, so it validates, labels and undoes the same way:
+
+- `bloom.layer.delete` and `bloom.layer.duplicate` take `layers` (layer ids, not node ids) and
+  default to the selected layers. Delete removes each layer's Layer Output node, as Delete in the
+  Timeline does; duplicate copies it in place directly below the original and outputs one `layer`
+  per copy.
+- `bloom.layer.add-from-assets` is an asset drop on the Timeline or Viewer
+  ([ADR 0030](../decisions/0030-layer-drops.md)): `assets` (image, image sequence, video or audio)
+  and `compositions` (nested-composition layers) become layers in one step, first item uppermost,
+  starting at `time` (default the playhead), with `placement` `"top"`, `"bottom"` or `"before"` a
+  layer, and `sequence` for end-to-end layers. It does not import: run `bloom.asset.import` first.
+- `bloom.node.add-asset-source` and `bloom.node.add-composition-source` are drops on the Node
+  canvas: an unwired source node. `bloom.node.add-feeding` and `bloom.node.add-fed-by` add a node
+  connected to an existing input or output, as dragging a wire to empty canvas does, and
+  `bloom.node.insert-reroute` inserts a Reroute into the link that feeds an input.
+
+Project Settings > Colour is not a document edit, so it is not an operation: MCP's
+`project.set-color-settings` tool and Python's `Host.set_color_settings(config, working_space=None)`
+choose the OCIO configuration (`"neutral"`, `"aces"` or `"current"`) and working colour space
+exactly as the dialog does. Like the dialog, the change is not undoable, marks the project dirty
+and changes how every composition renders. In the desktop application's Script editor,
+`Host.set_color_settings` answers `unavailable`: use Project Settings > Colour there (agents use
+the MCP tool, which the window applies).
+
+`query kind=operations` (MCP) and `Host.schemas()` (Python) carry each operation's `description`:
+its purpose, side effects, outputs, errors with remedies, undo step and an MCP example.
 
 ## Export queue
 

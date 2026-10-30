@@ -1098,34 +1098,6 @@ OperationResult SetCompositionSafeAreas::apply(document::Draft& draft) const {
     return OperationResult::applied();
 }
 
-std::string_view SetParameterSource::typeId() const noexcept {
-    return "bloom.parameter.set-source";
-}
-
-OperationResult SetParameterSource::apply(document::Draft& draft) const {
-    auto* composition = draft.project().findComposition(compositionId_);
-    if (composition == nullptr) {
-        return invalidComposition(compositionId_);
-    }
-
-    const auto* parameter = composition->parameters().find(parameterId_);
-    if (parameter == nullptr) {
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Parameter " + std::to_string(parameterId_.value()) +
-                                             " does not exist");
-    }
-    if (composition->parameterLocked(parameterId_))
-        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
-    if (parameter->source == source_) {
-        return OperationResult::noChange();
-    }
-    if (!composition->parameters().setSource(parameterId_, source_)) {
-        return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Parameter source is invalid");
-    }
-    return OperationResult::applied();
-}
-
 std::string_view MoveLayerBefore::typeId() const noexcept { return "bloom.layer.move-before"; }
 
 OperationResult MoveLayerBefore::apply(document::Draft& draft) const {

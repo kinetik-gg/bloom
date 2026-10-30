@@ -196,6 +196,15 @@ struct GpuSceneExecutorCounters final {
     std::uint64_t aliasedImagePinBytes = 0;
 };
 
+// A monotonic step count: it moves whenever a poll started, completed or served a step. An owner
+// that compares it across one poll re-polls at once after progress and waits only on a fence.
+[[nodiscard]] inline std::uint64_t
+gpuSceneExecutorStepProgress(const GpuSceneExecutorCounters& counters) noexcept {
+    return counters.dispatches + counters.uploads + counters.nativeSubmissions +
+           counters.commandsExecuted + counters.commandsServedFromCache +
+           counters.completedStepContinuations + counters.nativeJobsCompleted;
+}
+
 struct GpuSceneExecutorProgress final {
     std::uint32_t completedSteps = 0;
     std::uint32_t totalSteps = 0;

@@ -92,7 +92,13 @@ complete argument schema and a working factory, so everything you can discover y
 
 Calls take positional arguments in schema order, keywords, or both. IDs may be integers or live
 proxies; vectors and colours may be tuples or lists; a time may be a whole frame, a `Fraction`, a
-float or an exact `(numerator, denominator)` pair.
+float or an exact `(numerator, denominator)` pair. An `int` is a whole frame of the composition the
+operation edits, at its frame rate; a `Fraction`, a float and a pair are seconds. At 24 fps,
+`set_duration(48)` and `set_duration(Fraction(2))` both make a two-second composition.
+`bloom.ops.parameter.set_source` takes `value` in the parameter's own kind: a number, `True` or
+`False`, text, a tuple, or for an enumeration a whole number or the member's name (`"Screen"`). A
+refused call raises `bloom.OperationError`, whose `diagnostics` carry `operation_index` (the
+operation's place in its transaction group) and a message naming the cause.
 
 ```python
 bloom.ops.layer.add_solid("Red", (1, 0, 0, 1))

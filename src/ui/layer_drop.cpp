@@ -1,8 +1,6 @@
 #include "layer_drop.hpp"
 #include "asset_drop.hpp"
 #include "network_share_paths.hpp"
-#include "node_editor_add.hpp"
-#include "timeline_layer_timing_gesture.hpp"
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QMimeData>
@@ -20,40 +18,6 @@
 #include <set>
 
 namespace bloom::ui {
-namespace {
-using commands::OperationIssueCode;
-using commands::OperationResult;
-using commands::OperationStatus;
-
-std::optional<document::LayerId> outputLayer(const OperationResult& result) {
-    for (const auto& output : result.outputs)
-        if (output.name == "layer")
-            if (const auto* id = std::get_if<document::LayerId>(&output.id))
-                return *id;
-    return std::nullopt;
-}
-
-// The frame start at or before `time`, inside the composition.
-core::RationalTime frameStart(const document::Composition& composition,
-                              const core::RationalTime time) {
-    const auto rate = composition.format().frameRate();
-    const auto index = nearestFrameIndexForTime(rate, composition.duration(), time);
-    const auto snapped =
-        index ? frameTimeForIndex(rate, composition.duration(), *index) : std::nullopt;
-    return snapped.value_or(core::RationalTime{});
-}
-} // namespace
-
-bool droppableAsLayer(const document::Project& project, const document::CompositionId target,
-                      const LayerDropItem& item) {
-    if (const auto* composition = std::get_if<document::CompositionId>(&item))
-        return *composition != target && project.findComposition(*composition) != nullptr;
-    const auto* asset = project.findAsset(std::get<document::AssetId>(item));
-    return asset != nullptr &&
-           (asset->kind == document::AssetKind::Image ||
-            asset->kind == document::AssetKind::Sequence ||
-            asset->kind == document::AssetKind::Video || asset->kind == document::AssetKind::Audio);
-}
 
 std::string layerDropLabel(const std::vector<LayerDropItem>& items) {
     if (items.size() > 1)
@@ -61,90 +25,6 @@ std::string layerDropLabel(const std::vector<LayerDropItem>& items) {
     if (!items.empty() && std::holds_alternative<document::CompositionId>(items.front()))
         return QObject::tr("Add Composition Layer").toStdString();
     return QObject::tr("Add Layer").toStdString();
-}
-
-OperationResult AddDroppedLayers::apply(document::Draft& draft) const {
-    const auto* composition = draft.project().findComposition(composition_);
-    if (composition == nullptr)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "The composition does not exist");
-    if (items_.empty())
-        return OperationResult::rejected(OperationIssueCode::InvalidValue, "Nothing to add");
-    for (const auto& item : items_)
-        if (!droppableAsLayer(draft.project(), composition_, item))
-            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                             "This item cannot be a layer here");
-    // The new layers go directly above `anchor` (nullopt: below every layer), in item order.
-    const auto entries = composition->graph().layerStack().entries();
-    std::optional<document::LayerSlotId> anchor;
-    switch (placement_.stack) {
-    case LayerDropPlacement::Stack::Top:
-        if (!entries.empty())
-            anchor = entries.front().slotId;
-        break;
-    case LayerDropPlacement::Stack::Before:
-        if (composition->graph().layerStack().find(placement_.before) == nullptr)
-            return OperationResult::rejected(OperationIssueCode::MissingReference,
-                                             "The layer to insert above no longer exists");
-        anchor = placement_.before;
-        break;
-    case LayerDropPlacement::Stack::Bottom:
-        break;
-    }
-    auto start = frameStart(*composition, placement_.start);
-    std::vector<commands::OperationOutput> outputs;
-    for (const auto& item : items_) {
-        OperationResult added;
-        if (const auto* nested = std::get_if<document::CompositionId>(&item))
-            added = node_editor::AddCompositionSource(composition_, *nested, {}, true).apply(draft);
-        else if (const auto id = std::get<document::AssetId>(item);
-                 draft.project().findAsset(id)->kind == document::AssetKind::Audio)
-            added = commands::AddAudioLayer(composition_, id).apply(draft);
-        else
-            added = commands::AddImageLayer(composition_, id).apply(draft);
-        if (added.status == OperationStatus::Rejected)
-            return added;
-        const auto layerId = outputLayer(added);
-        composition = draft.project().findComposition(composition_);
-        const auto* layer = layerId ? composition->graph().findLayer(*layerId) : nullptr;
-        const auto stack = composition->graph().layerStack().entries();
-        const auto slot = std::ranges::find(stack, *layerId, &document::LayerStackEntry::layerId);
-        if (layer == nullptr || slot == stack.end())
-            return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                             "The new layer is not in the layer stack");
-        auto moved = commands::MoveLayerBefore(composition_, slot->slotId, anchor).apply(draft);
-        if (moved.status == OperationStatus::Rejected)
-            return moved;
-        // Move the layer to its start the way a Timeline body drag does: start, in and out
-        // together, on frames, keeping at least one frame inside the composition.
-        composition = draft.project().findComposition(composition_);
-        layer = composition->graph().findLayer(*layerId);
-        const auto duration = composition->duration();
-        const auto proposal =
-            proposeLayerTiming({.start = layer->timing.startTime,
-                                .in = layer->inPoint,
-                                .out = layer->endPoint(duration),
-                                .speed = layer->timing.speed,
-                                .rate = composition->format().frameRate(),
-                                .duration = duration,
-                                .extentStart = std::nullopt,
-                                .extentEnd = std::nullopt,
-                                .handle = 0,
-                                .alt = false,
-                                .deltaSeconds = start.toSeconds() - layer->inPoint.toSeconds()});
-        if (!proposal)
-            return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "The layer cannot start there");
-        auto timed = commands::SetLayerTiming(composition_, *layerId, proposal->start, proposal->in,
-                                              proposal->out, proposal->speed)
-                         .apply(draft);
-        if (timed.status == OperationStatus::Rejected)
-            return timed;
-        if (placement_.sequence)
-            start = proposal->out;
-        outputs.push_back({"layer", *layerId});
-    }
-    return OperationResult::applied(std::move(outputs));
 }
 
 std::vector<LayerDropItem> layerDropItems(const QMimeData& mime,
@@ -299,8 +179,8 @@ std::function<QString(const std::vector<document::AssetId>&)>
 importedLayersFollowUp(CompositionSession& session, const document::CompositionId composition,
                        const LayerDropPlacement placement) {
     auto* target = &session;
-    return [target, composition, placement](
-               const std::vector<document::AssetId>& imported) -> QString {
+    return [target, composition,
+            placement](const std::vector<document::AssetId>& imported) -> QString {
         if (target->compositionId() != composition || target->composition() == nullptr)
             return {};
         std::vector<LayerDropItem> items;

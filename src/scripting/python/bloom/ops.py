@@ -15,7 +15,7 @@ _TYPES = {"bool": bool, "int": int, "float": float, "str": str, "id": int,
           "vec2": tuple[float, float], "vec3": tuple[float, float, float],
           "color4": tuple[float, float, float, float], "array": tuple,
           "time": int | tuple[int, int] | Fraction | float,
-          "value": float | tuple[float, ...], "path": Mapping}
+          "value": float | bool | str | tuple[float, ...], "path": Mapping}
 
 _EXPECTED = {
     "bool": "true or false",
@@ -28,7 +28,7 @@ _EXPECTED = {
     "color4": "four numbers as (r, g, b, a) with alpha in 0..1",
     "array": "a list or tuple",
     "time": "a whole frame, a Fraction, or an exact (numerator, denominator) time",
-    "value": "a number, (x, y), (x, y, z) or (r, g, b, a)",
+    "value": "a number, True/False, text, (x, y), (x, y, z) or (r, g, b, a)",
     "path": "a path {'closed': bool, 'anchors': [{'point': (x, y), 'in_handle': (x, y) or None, "
             "'out_handle': (x, y) or None, 'mode': 'corner' | 'mirrored' | 'aligned' | 'free' | "
             "'auto'}, ...]} (mode optional)",
@@ -87,7 +87,8 @@ def _valid(value, kind):
                 or (isinstance(value, tuple) and len(value) == 2
                     and all(type(item) is int for item in value)))
     if kind == "value":
-        return _finite(value) or any(_sequence(value, size) for size in (2, 3, 4))
+        return (_finite(value) or type(value) in (bool, str)
+                or any(_sequence(value, size) for size in (2, 3, 4)))
     if kind == "path":
         return (isinstance(value, dict) and set(value) == {"closed", "anchors"}
                 and type(value["closed"]) is bool and isinstance(value["anchors"], tuple)

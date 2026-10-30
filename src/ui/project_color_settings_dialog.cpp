@@ -2,6 +2,7 @@
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/host/project_color_choice.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/dialog_prompts.hpp>
@@ -38,31 +39,13 @@ struct Resolved final {
 
 [[nodiscard]] Resolved resolve(const document::ColorSettings& original, const QString& currentKey,
                                const QString& selected, const std::string& workingId) {
-    if (selected == currentKey) {
-        auto settings = original;
-        settings.processColorSpaceId = workingId;
-        return {settings, {}};
-    }
-    if (selected == QStringLiteral("aces")) {
-        const auto revision = color::ocioBuiltInContentRevision(
-            color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
-        if (!revision.has_value())
-            return {std::nullopt, QObject::tr("The built-in ACES configuration is unavailable "
-                                              "in this build, so it cannot be selected.")};
-        return {document::ColorSettings{
-                    .schemaVersion = document::kColorSettingsSchemaVersionV1,
-                    .processColorSpaceId = workingId,
-                    .ocioConfig = {.schemaVersion = document::kOcioConfigReferenceSchemaVersionV1,
-                                   .locator = document::BuiltInOcioConfigLocator{std::string(
-                                       color::kAcesCgV1ConfigUri)},
-                                   .expectedRevision = {.algorithm =
-                                                            document::OcioRevisionAlgorithm::Sha256,
-                                                        .digest = *revision},
-                                   .portability = document::OcioConfigPortability::BuiltIn,
-                                   .contextVariables = {}}},
-                {}};
-    }
-    return {document::makeBloomNeutralColorSettingsV1(color::kBloomNeutralV1ConfigDigest), {}};
+    // Shared with Python's Host.set_color_settings and MCP's project.set-color-settings.
+    const auto config = selected == currentKey ? host::ProjectColorConfig::Current
+                        : selected == QStringLiteral("aces")
+                            ? host::ProjectColorConfig::AcesCg
+                            : host::ProjectColorConfig::BloomNeutral;
+    auto resolved = host::resolveProjectColorSettings(original, config, workingId);
+    return {std::move(resolved.settings), QString::fromStdString(resolved.reason)};
 }
 
 } // namespace

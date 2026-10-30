@@ -8,6 +8,45 @@
 // completion is proven. beginShutdown() must return without blocking, and the UI-simulated pump
 // must observe completion; only then is the evaluator released. The provider is destroyed before
 // the scheduler (the ordering every route guarantees).
+// Captures and exports each create a provider that samples for itself. Their operation-cache
+// pools join the one process-wide ledger: with a RAM headroom, N providers together grow by at
+// most the free memory beyond it, instead of each sizing its own pool as if it were the only cache
+// on the machine (N private pools of about 30% of physical memory each).
+void testProviderPoolsShareTheProcessBudget(Expectations& expectations) {
+    auto& ledger = runtime::processMemoryBudgetLedger();
+    std::vector<std::shared_ptr<host::GpuExportProvider>> providers;
+    std::vector<std::shared_ptr<runtime::OperationCache>> pools;
+    for (int index = 0; index < 4; ++index) {
+        runtime::GpuProcessFrameEvaluatorOptions options;
+        options.enabled = false;
+        auto provider = host::GpuExportProvider::create(std::move(options));
+        provider->refreshProcessingCapacity();
+        const auto context = host::detail::GpuExportProviderTestAccess::mediaContext(*provider);
+        expectations.expect(context.operationCache != nullptr,
+                            "shared-pools: each sampling provider owns a reusable pool");
+        if (context.operationCache)
+            pools.push_back(context.operationCache);
+        providers.push_back(std::move(provider));
+    }
+    constexpr std::size_t gib = std::size_t{1} << 30U;
+    ledger.setRamHeadroom(2 * gib);
+    static_cast<void>(ledger.poll({.availableBytes = 34 * gib}, std::chrono::steady_clock::now()));
+    std::size_t total = 0;
+    bool everyPoolParticipates = !pools.empty();
+    for (const auto& pool : pools) {
+        const auto budget = ledger.cacheByteBudget(pool.get());
+        everyPoolParticipates = everyPoolParticipates && budget != 0;
+        total += budget;
+    }
+    expectations.expect(everyPoolParticipates,
+                        "shared-pools: every provider pool is a participant of the process ledger");
+    expectations.expect(total <= 32 * gib,
+                        "shared-pools: four provider pools together stay within the one free pool");
+    for (auto& provider : providers)
+        expectations.expect(provider->shutdownAndWait(std::chrono::seconds(15)),
+                            "shared-pools: providers shut down");
+}
+
 void testGpuExportProviderAsyncRetirement(Expectations& expectations, const bool requireDevice) {
     const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
     if (loader == nullptr || *loader == '\0') {

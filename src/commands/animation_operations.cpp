@@ -941,13 +941,38 @@ OperationResult SetKeyframeAtTimeForParameter::apply(document::Draft& draft) con
         return invalidParameter(parameterId_);
     }
     // Resolved from the DRAFT, so an earlier CreateAnimationForParameter in the same transaction is
-    // already visible here. A parameter that is still constant (or is driven) has no curve to key.
+    // already visible here. A constant parameter is made animated first, in this same operation
+    // (one undo step): its constant becomes the first key, then this key is set.
+    std::vector<OperationOutput> created;
+    if (std::holds_alternative<document::ConstantValueSource>(parameter->source)) {
+        auto animated =
+            CreateAnimationForParameter(compositionId_, parameterId_, time_).apply(draft);
+        if (animated.status == OperationStatus::Rejected) {
+            auto issue = animated.issues.empty()
+                             ? OperationIssue{OperationIssueCode::InvalidValue, ""}
+                             : animated.issues.front();
+            issue.message = "Parameter " + std::to_string(parameterId_.value()) +
+                            " cannot be animated: " +
+                            (issue.message.empty() ? std::string("its schema has no animation")
+                                                   : issue.message);
+            return OperationResult::rejected(issue.code, issue.message);
+        }
+        created = std::move(animated.outputs);
+        composition = draft.project().findComposition(compositionId_);
+        parameter = composition->parameters().find(parameterId_);
+    }
     const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source);
     if (source == nullptr) {
-        return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Parameter does not have an animation source");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidValue,
+            "Parameter " + std::to_string(parameterId_.value()) +
+                " is driven by a value node and has no keys; give it a constant value with "
+                "bloom.parameter.set-source first");
     }
-    return setValueAtTime(draft, *composition, source->curveId, time_, value_);
+    auto result = setValueAtTime(draft, *composition, source->curveId, time_, value_);
+    if (result.status != OperationStatus::Rejected)
+        result.outputs.insert(result.outputs.begin(), created.begin(), created.end());
+    return result;
 }
 
 std::string_view SetKeyframeAtTimeForParameterComponent::typeId() const noexcept {

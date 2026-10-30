@@ -4,6 +4,8 @@
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/operation_cache.hpp>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -15,10 +17,10 @@
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/platform/staged_artifact.hpp>
-#include <bloom/runtime/packed_host_retirement.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
+#include <bloom/runtime/packed_host_retirement.hpp>
 
 #include <algorithm>
 #include <array>
@@ -93,6 +95,8 @@ int main(const int argc, char** argv) {
     testGpuDisplayConcurrentSetterPrepare(expectations);
     testGpuExportProviderFactoryDisplayPreparation(expectations);
     testGpuEvaluatorHostPath(expectations, requireDevice);
+    // Last: it sets the process ledger's RAM headroom for the rest of this process.
+    testProviderPoolsShareTheProcessBudget(expectations);
     expectations.expect(collectFixtureRetirement(),
                         "fixture retirement worker exits and is collected before main returns");
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

@@ -53,6 +53,59 @@ enum class ParameterValueKind {
     Path,
 };
 
+// The lower-case names scripting clients and diagnostics use for the two kinds ("scalar",
+// "integer", "vector2", ...). Stable wire spellings: MCP's node-types query publishes them.
+[[nodiscard]] constexpr std::string_view socketValueKindName(const SocketValueKind kind) noexcept {
+    switch (kind) {
+    case SocketValueKind::Image:
+        return "image";
+    case SocketValueKind::Audio:
+        return "audio";
+    case SocketValueKind::Color:
+        return "color";
+    case SocketValueKind::Scalar:
+        return "scalar";
+    case SocketValueKind::Vector2:
+        return "vector2";
+    case SocketValueKind::String:
+        return "string";
+    case SocketValueKind::Integer:
+        return "integer";
+    case SocketValueKind::Boolean:
+        return "boolean";
+    case SocketValueKind::Vector3:
+        return "vector3";
+    case SocketValueKind::Mask:
+        return "mask";
+    case SocketValueKind::ChannelSet:
+        return "channel-set";
+    }
+    return "image";
+}
+
+[[nodiscard]] constexpr std::string_view
+parameterValueKindName(const ParameterValueKind kind) noexcept {
+    switch (kind) {
+    case ParameterValueKind::Color4d:
+        return "color";
+    case ParameterValueKind::Vec2d:
+        return "vector2";
+    case ParameterValueKind::Float64:
+        return "scalar";
+    case ParameterValueKind::String:
+        return "string";
+    case ParameterValueKind::Integer:
+        return "integer";
+    case ParameterValueKind::Boolean:
+        return "boolean";
+    case ParameterValueKind::Vec3d:
+        return "vector3";
+    case ParameterValueKind::Path:
+        return "path";
+    }
+    return "scalar";
+}
+
 // The one correspondence between an authored value's kind and the socket kind that carries it.
 // Every value-graph node definition is checked against this rather than restating the pairing, so a
 // parameter and the socket that can drive it cannot disagree about what they hold.

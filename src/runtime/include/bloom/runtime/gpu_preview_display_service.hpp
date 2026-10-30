@@ -235,8 +235,9 @@ struct GpuPreviewDisplayServiceStatus final {
 // workspace or build path. `previewByteAllowance` is the full per-request byte allowance reserved
 // as GPU request-owned admission (capacity-aware by default via gpuPreviewRequestByteAllowance();
 // a 1 GiB scheduler request-owned capacity admits two). `nativeBudgets` bounds the native
-// pipeline's persistent buffers separately (160 MiB default). `readyStageQueueCapacity` bounds
-// stages waiting for the one native job.
+// pipeline's persistent buffers separately (160 MiB default). Prepared stages waiting for the
+// native job are bounded by the scheduler's GPU admission and their admitted processing phases; a
+// long wait is back-pressure and never turns an eligible GPU stage into a CPU render.
 enum class GpuPreviewDisplayProductMode : std::uint8_t { NativeResident, GpuPreparedPacked };
 
 struct GpuPreviewDisplayServiceOptions final {
@@ -279,7 +280,6 @@ struct GpuPreviewDisplayServiceOptions final {
     // Bounded per-native-dispatch deadline. Expiry drains/quarantines the native pipeline on
     // the owner thread, disables GPU, and takes the same-frame CPU fallback (or cancels).
     std::chrono::milliseconds nativeDispatchDeadline{10000};
-    std::size_t readyStageQueueCapacity = 8;
 };
 
 class GpuPreviewDisplayService final {

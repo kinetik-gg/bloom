@@ -1,4 +1,6 @@
 #include "native.hpp"
+#include <bloom/host/project_color_choice.hpp>
+#include <nanobind/stl/optional.h>
 
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
@@ -105,6 +107,7 @@ OperationContext NativeHost::operationContext() const {
                 selectedLayers(facade_->query.snapshot(), *context.composition, context.selection);
         }
         context.layerGeometry = session_->layerGeometryProvider();
+        context.compositionFrameRate = session_->compositionFrameRateLookup();
     } else {
         context = session_->operationContext();
     }
@@ -157,6 +160,7 @@ nb::list NativeHost::schemas() const {
     for (const auto& descriptor : facade_->operations.descriptors()) {
         nb::dict row;
         row["id"] = descriptor.schema.typeId;
+        row["description"] = descriptor.schema.description;
         nb::list arguments;
         for (const auto& argument : descriptor.schema.arguments) {
             nb::dict value;
@@ -379,6 +383,30 @@ void NativeHost::save(const std::string& path) {
     if (!result.succeeded()) {
         throw std::runtime_error(result.message);
     }
+}
+
+nb::dict NativeHost::setColorSettings(const std::string& config,
+                                      std::optional<std::string> workingSpace) {
+    if (std::this_thread::get_id() != owner_) {
+        throw std::runtime_error("Colour settings change on the host authoring thread");
+    }
+    const auto access = lockSession();
+    SessionColorSettingsResult result;
+    {
+        const nb::gil_scoped_release release;
+        result = session_->setColorSettings(config, std::move(workingSpace));
+    }
+    if (!result.succeeded()) {
+        throw std::runtime_error(result.code + ": " + result.message);
+    }
+    nb::dict row;
+    row["code"] = result.code;
+    if (result.settings) {
+        row["config"] =
+            std::string(host::projectColorConfigName(host::projectColorConfigOf(*result.settings)));
+        row["working_space"] = result.settings->processColorSpaceId;
+    }
+    return row;
 }
 
 nb::list NativeHost::events() {

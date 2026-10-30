@@ -164,6 +164,8 @@ class GpuProcessingPhasePolicy final {
     ProcessMemoryStatus processStatus_ = ProcessMemoryStatus::Pending;
     std::uint64_t sampleSerial_ = 0;
     std::optional<std::uint64_t> finiteProcessCeiling_;
+    // The tightest finite process limit or physical memory, before headroom.
+    std::optional<std::uint64_t> hostCeiling_;
     ProcessMemoryConstraintHistory processConstraintHistory_;
     std::optional<Clock::time_point> hostSampleAt_;
     struct HostSampleBackingCredit final {
@@ -205,5 +207,6 @@ class GpuProcessingPhasePolicy final {
 reserveHostEvaluationPhase(GpuProcessingPhasePolicy&, std::uint64_t pixels,
                            std::uint64_t requestedPixelBytes, GpuProcessingPhaseOutput output,
                            bool encodedOutput = false,
-                           GpuAdmissionClass admissionClass = GpuAdmissionClass::Viewer) noexcept;
+                           GpuAdmissionClass admissionClass = GpuAdmissionClass::Viewer,
+                           std::uint64_t minimumPixelBytes = 0) noexcept;
 } // namespace bloom::runtime

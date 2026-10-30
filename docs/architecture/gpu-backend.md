@@ -725,9 +725,12 @@ synchronous fence wait hidden inside a task function is not a valid interim impl
 
 ### Bounded Native Command Batches
 
-The production scene executor records two to eight consecutive eligible Solid, translation,
-affine and source-over kernels into one command buffer with explicit dependencies and one fence.
-Other kernels delimit those runs and retain their existing native paths. Inputs may reference
+The production scene executor records two to sixty-four consecutive eligible Solid, gradient,
+translation, affine and source-over kernels into one command buffer with explicit dependencies and
+one fence. Other kernels (upload, blur and OCIO programs, blend, coverage, point resample) delimit
+those runs and keep one submission and fence each. Between steps neither owner waits on a clock:
+the preview service and the export evaluator start the next step as soon as a poll made progress
+and wait 50 microseconds only while a fence is pending. Inputs may reference
 earlier batch outputs or Ready images from the exact device generation; every GPU status word is
 validated before outputs leave the native batch owner.
 
@@ -1116,7 +1119,11 @@ access to another native owner, device generation or cache.
 
 **Usable capacity.** Usable RAM is the measured available system memory (within an observed
 process/cgroup limit, sampled off the UI thread and captured once per delivered sample) minus the
-RAM headroom preference. Usable VRAM is the driver's live device budget (`VK_EXT_memory_budget`
+RAM headroom preference. Inside a cgroup v2 limit the domain's usage is `memory.current` minus its
+reclaimable memory from `memory.stat` (`active_file + inactive_file + slab_reclaimable`, less
+`file_dirty` and `file_writeback`, never more than `memory.current`), as the kernel's own
+MemAvailable credits page cache: a limit filled by file cache from builds, tests or media reads is
+not a full limit. An unreadable `memory.stat` grants no credit. Usable VRAM is the driver's live device budget (`VK_EXT_memory_budget`
 heap budget minus heap usage, through VMA) with the root's own allocated native backing credited
 back once, minus the VRAM headroom preference. Without a live budget the documented fallback is the
 device-local heap size minus the headroom. The two headroom values (`memory/ramHeadroomBytes`,
@@ -1139,7 +1146,10 @@ they live.
 now returns `AwaitingCapacity` with its domain (Host, Device or RequestCount). Before answering, the
 policy asks registered retention owners to evict reusable cache entries. Waiters resume on a phase
 release, a capacity change or a fresh sample (`waitForAdmissionChange`). Only a need larger than the
-whole usable capacity of an otherwise empty root is `BudgetRefused`. Each wait or refusal is logged
+whole usable capacity of an otherwise empty root is `BudgetRefused`. On the host that is the
+ceiling (the tightest finite memory limit, or physical memory, minus headroom), so a host need that
+fits the ceiling waits even while measured free memory is zero, for example while anonymous memory
+of other processes fills the same cgroup. Each wait or refusal is logged
 once per second per root with the status and domain names and the capacity, claim, retention and
 admitted-phase counters (`describeAdmission`). The final-export attempt runner waits in place,
 cancellably, and reports `Waiting for capacity`; a refused frame names the counters.
@@ -1214,9 +1224,12 @@ bounded unknown-device fallback), while lease, scene, and Viewer retention limit
 retention-only pool. A zero free-space sample at startup therefore does not permanently disable
 those owners. The service samples live device availability on its GPU owner and refreshes the
 shared phase report; measured free bytes already exclude VMA allocations. With one reported owner,
-the phase quota adds back only exact root-owned local native backing that remains in its claim
-ledger, so it is subtracted once. Unallocated phase reservations and other allocations receive
-no credit; multiple reported devices retain a conservative common minimum. Nominal estimates
+or several owners whose reports carry the same driver device UUID
+(`VkPhysicalDeviceIDProperties::deviceUUID`, for example the preview service and the export
+evaluator on one GPU), the phase quota adds back only exact root-owned local native backing that
+remains in its claim ledger, so it is subtracted once. Equal heap sizes are not treated as the same
+device. Unallocated phase reservations and other allocations receive no credit; owners on different
+or unidentified devices retain a conservative common minimum. Nominal estimates
 subtract live and retiring image ownership outside the root's existing claims. Every native
 allocation remains subject to the refreshed phase quota and allocator result. Explicit/unrooted
 additive limits retain their existing capacity plan.

@@ -213,7 +213,11 @@ class Protocol(unittest.TestCase):
                           'capture', 'export.start', 'export.start-all', 'export.pause',
                           'export.resume', 'export.stop', 'export.stop-all', 'export.retry',
                           'export.confirm-replace', 'export.status', 'export.events',
-                          'export.log', 'export.wait', 'export.presets', 'export.script'})
+                          'export.log', 'export.wait', 'export.presets', 'export.script',
+                          'project.save', 'project.save-as', 'project.open', 'project.new',
+                          'project.close', 'editor.reveal', 'selection.set',
+                          'composition.activate', 'transport', 'viewer.set',
+                          'project.set-color-settings'})
         self.assertTrue(responses[2]['result']['structuredContent']['succeeded'])
         self.assertEqual(responses[3]['result']['structuredContent']['project']['name'], 'MCP')
         self.assertFalse(responses[4]['result']['structuredContent']['succeeded'])
@@ -231,6 +235,7 @@ class Protocol(unittest.TestCase):
         for record in records:
             self.assertTrue(record['arguments'], record['id'])
             self.assertTrue(record['example'].startswith('bloom.ops.'), record['id'])
+            self.assertIsInstance(record['description'], str, record['id'])
             for argument in record['arguments']:
                 self.assertTrue(argument['summary'], f"{record['id']}.{argument['name']}")
                 self.assertEqual(argument['contextual'], argument['context'] != '')

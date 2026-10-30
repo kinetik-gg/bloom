@@ -23,6 +23,19 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
             "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/mcp_protocol.py"
             $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli>
         LABELS scripting mcp integration)
+    # Defects an agent found live-testing the MCP server, each pinned at the protocol level.
+    bloom_add_test(NAME bloom.mcp.agent-feedback
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/mcp_agent_feedback.py"
+            $<TARGET_FILE:bloom-mcp>
+        LABELS mcp integration
+        TIMEOUT 180)
+    # MCP parity operations (layer delete/duplicate, layers from assets, node compound adds).
+    bloom_add_test(NAME bloom.scripting.mcp-parity-ops
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/mcp_parity_ops.py"
+            $<TARGET_FILE:bloom-mcp>
+        LABELS scripting mcp integration)
     if(BLOOM_GPU_SHADER_TOOLS_AVAILABLE)
         bloom_add_test(
             NAME bloom.gpu.shader-tools-verify-mcp

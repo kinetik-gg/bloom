@@ -66,22 +66,64 @@ enum class McpTool : std::uint8_t {
     ExportWait = 18,
     ExportPresets = 19,
     ExportScript = 20,
+    // Project lifecycle (ADR 0034, owner decision item 9 as amended 2026-10-30): the File menu's
+    // Save, Save As, Open, New and Close. Never part of the undo history.
+    ProjectSave = 21,
+    ProjectSaveAs = 22,
+    ProjectOpen = 23,
+    ProjectNew = 24,
+    ProjectClose = 25,
+    // Live-only session and UI state (live_ui_port.hpp); never dirties the project.
+    EditorReveal = 26,
+    SelectionSet = 27,
+    CompositionActivate = 28,
+    Transport = 29,
+    ViewerSet = 30,
+    // Project Settings > Colour (not undoable; marks the project dirty).
+    ProjectSetColorSettings = 31,
 };
 
-inline constexpr std::size_t kMcpToolCount = 21;
+inline constexpr std::size_t kMcpToolCount = 32;
 
 // The wire name. MCP tool names allow [A-Za-z0-9_.-]; the export.* names are ADR 0033's session
 // call names verbatim.
 [[nodiscard]] constexpr std::string_view toolName(const McpTool tool) {
+    // clang-format off
     constexpr std::array<std::string_view, kMcpToolCount> names{
-        "query",           "transact",       "history",
-        "events",          "render",         "export",
-        "capture",         "export.start",   "export.start-all",
-        "export.pause",    "export.resume",  "export.stop",
-        "export.stop-all", "export.retry",   "export.confirm-replace",
-        "export.status",   "export.events",  "export.log",
-        "export.wait",     "export.presets", "export.script",
+        "query",
+        "transact",
+        "history",
+        "events",
+        "render",
+        "export",
+        "capture",
+        "export.start",
+        "export.start-all",
+        "export.pause",
+        "export.resume",
+        "export.stop",
+        "export.stop-all",
+        "export.retry",
+        "export.confirm-replace",
+        "export.status",
+        "export.events",
+        "export.log",
+        "export.wait",
+        "export.presets",
+        "export.script",
+        "project.save",
+        "project.save-as",
+        "project.open",
+        "project.new",
+        "project.close",
+        "editor.reveal",
+        "selection.set",
+        "composition.activate",
+        "transport",
+        "viewer.set",
+        "project.set-color-settings",
     };
+    // clang-format on
     return names[static_cast<std::size_t>(tool)];
 }
 
@@ -107,6 +149,13 @@ enum class McpToolExecution : std::uint8_t { Inline = 0, Task = 1 };
 // these tools ever reach the commit marshal.
 [[nodiscard]] constexpr bool toolMutatesDocument(const McpTool tool) {
     return tool == McpTool::Transact || tool == McpTool::History;
+}
+
+// Whether a tool works on the application window rather than the project: it runs on the owner
+// thread through McpLiveUiPort without a session lease, so it works while a project opens.
+[[nodiscard]] constexpr bool toolUsesLiveUi(const McpTool tool) {
+    return static_cast<std::uint8_t>(tool) >= static_cast<std::uint8_t>(McpTool::ProjectSave) &&
+           static_cast<std::uint8_t>(tool) <= static_cast<std::uint8_t>(McpTool::ViewerSet);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -151,16 +200,20 @@ enum class McpToolErrorCode : std::uint8_t {
     ReadOnly = 10,
     // Operation validation or adapter diagnostics (the registry's own codes are attached).
     OperationRejected = 11,
+    // The render or export request itself cannot run as given (a destination the format cannot
+    // write, an existing file without overwrite); the message says what to change.
+    PreflightBlocked = 12,
 };
 
 [[nodiscard]] constexpr std::string_view toolErrorCode(const McpToolErrorCode code) {
-    constexpr std::array<std::string_view, 12> names{
+    constexpr std::array<std::string_view, 13> names{
         "bloom.mcp.project-unavailable", "bloom.mcp.project-replaced",
         "bloom.mcp.revision-conflict",   "bloom.mcp.commit-queue-full",
         "bloom.mcp.gesture-open",        "bloom.mcp.cancelled",
         "bloom.mcp.deadline-exceeded",   "bloom.mcp.export-unavailable",
         "bloom.mcp.export-failed",       "bloom.mcp.capture-too-large-for-inline",
         "bloom.mcp.read-only",           "bloom.mcp.operation-rejected",
+        "bloom.mcp.preflight-blocked",
     };
     return names[static_cast<std::size_t>(code)];
 }

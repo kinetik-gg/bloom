@@ -1,20 +1,23 @@
-#include <bloom/ui/node_layout_arrange.hpp>
+#include <bloom/commands/node_layout_arrange.hpp>
 
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <optional>
 #include <set>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-namespace bloom::ui {
+namespace bloom::commands {
 namespace {
 using document::NodeId;
 
@@ -456,4 +459,47 @@ NodePositions arrangeNodes(const document::Composition& composition, const NodeC
                            composition.nodeGroups(), &composition.parameters());
 }
 
-} // namespace bloom::ui
+OperationResult ArrangeNodes::apply(document::Draft& draft) const {
+    const auto* composition = draft.project().findComposition(composition_);
+    if (composition == nullptr)
+        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
+                                         "The composition does not exist");
+    for (const auto id : selection_)
+        if (composition->graph().findNode(id) == nullptr)
+            return OperationResult::rejected(OperationIssueCode::MissingReference,
+                                             "Node " + std::to_string(id.value()) +
+                                                 " is not in the composition");
+    if (selection_.empty()) {
+        auto positions = arrangeNodes(*composition, sizes_);
+        if (positions.empty())
+            return OperationResult::noChange();
+        return MoveNodes(composition_, std::move(positions)).apply(draft);
+    }
+    const auto relative = arrangeNodes(*composition, sizes_, selection_);
+    if (relative.empty())
+        return OperationResult::noChange();
+    // The arrangement is local to the selection. Shift it back to the selected cards' current
+    // bounding-box top-left, so arranging never drags the selection across the canvas.
+    double oldLeft = std::numeric_limits<double>::infinity();
+    double oldTop = std::numeric_limits<double>::infinity();
+    double newLeft = std::numeric_limits<double>::infinity();
+    double newTop = std::numeric_limits<double>::infinity();
+    const auto defaults = document::defaultNodeLayout(composition->graph().nodes());
+    for (const auto id : selection_) {
+        const auto current = composition->nodeLayout().find(id);
+        const auto& record =
+            current == composition->nodeLayout().end() ? defaults.at(id) : current->second;
+        oldLeft = std::min(oldLeft, record.position.x);
+        oldTop = std::min(oldTop, record.position.y);
+        const auto arranged = relative.at(id);
+        newLeft = std::min(newLeft, arranged.x);
+        newTop = std::min(newTop, arranged.y);
+    }
+    const document::Vec2d offset{oldLeft - newLeft, oldTop - newTop};
+    std::map<document::NodeId, document::Vec2d> positions;
+    for (const auto& [id, position] : relative)
+        positions.emplace(id, document::Vec2d{position.x + offset.x, position.y + offset.y});
+    return MoveNodes(composition_, std::move(positions)).apply(draft);
+}
+
+} // namespace bloom::commands

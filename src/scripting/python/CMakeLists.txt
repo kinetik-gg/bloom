@@ -81,6 +81,17 @@ if(BUILD_TESTING)
         LABELS scripting python integration device
         # bloom-cli export probes the encoders and renders a saved queue end to end.
         TIMEOUT 180)
+    # Agent feedback: one time contract (an integer is a frame) and parameter value kinds.
+    bloom_add_test(NAME bloom.scripting.python-agent-feedback
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_agent_feedback.py"
+            "${CMAKE_BINARY_DIR}/python"
+        LABELS scripting python integration)
+    bloom_add_test(NAME bloom.scripting.python-parity-ops
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_parity_ops.py"
+            "${CMAKE_BINARY_DIR}/python"
+        LABELS scripting python integration)
     # #357: several Hosts rendering through one interpreter device must exit promptly.
     bloom_add_test(NAME bloom.scripting.python-shared-device
         COMMAND "${Python3_EXECUTABLE}" -I

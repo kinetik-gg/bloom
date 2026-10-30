@@ -446,6 +446,16 @@ void GpuProcessingPhaseBudget::setHostCapacity(
     }
     state_->changed.notify_all();
 }
+void GpuProcessingPhaseBudget::setHostCeiling(const std::optional<std::uint64_t> bytes) noexcept {
+    {
+        const std::lock_guard lock(state_->mutex);
+        if (state_->counters.hostCeilingBytes == bytes)
+            return;
+        state_->counters.hostCeilingBytes = bytes;
+        incrementSaturating(state_->counters.admissionRevision);
+    }
+    state_->changed.notify_all();
+}
 void GpuProcessingPhaseBudget::setSampledHostCapacity(
     const std::optional<std::uint64_t> bytes, const bool ready,
     const std::chrono::steady_clock::time_point validUntil, const std::uint64_t creditBytes,
@@ -568,7 +578,10 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
                                        .lease = {},
                                        .admissionRevision = counters.admissionRevision};
     };
-    if (counters.hostReady && counters.hostCapacityBytes && *counters.hostCapacityBytes == 0) {
+    // Free capacity measured at zero is exhaustion only when nothing more could ever be given;
+    // memory other work holds (live allocations of other processes in the same limit) can return.
+    if (counters.hostReady && counters.hostCapacityBytes && *counters.hostCapacityBytes == 0 &&
+        counters.hostCeilingBytes.value_or(0) == 0) {
         return refused(GpuProcessingPhaseDomain::Host);
     }
     if (request.native && counters.deviceReady && counters.deviceCapacityBytes &&
@@ -607,7 +620,9 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
         return refused(GpuProcessingPhaseDomain::Host);
     }
     const std::uint64_t hostNeed = request.fixedHostBytes + 3 * sourceNeed;
-    if (hostNeed > *counters.hostCapacityBytes) {
+    const std::uint64_t hostLimit =
+        std::max(*counters.hostCapacityBytes, counters.hostCeilingBytes.value_or(0));
+    if (hostNeed > hostLimit) {
         return refused(GpuProcessingPhaseDomain::Host);
     }
     const std::uint64_t hostRemaining =
@@ -622,8 +637,8 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
                                                            hostRemaining - hostNeed + sourceNeed));
     // A phase that asks for sources needs at least one byte of room for them.
     if (!request.sourceFree && request.requestedSourceBytes != 0 && sourceCeiling == 0) {
-        return hostNeed >= *counters.hostCapacityBytes ? refused(GpuProcessingPhaseDomain::Host)
-                                                       : waiting(GpuProcessingPhaseDomain::Host);
+        return hostNeed >= hostLimit ? refused(GpuProcessingPhaseDomain::Host)
+                                     : waiting(GpuProcessingPhaseDomain::Host);
     }
     std::uint64_t executorBytes = 0;
     std::uint64_t deviceNeed = 0;

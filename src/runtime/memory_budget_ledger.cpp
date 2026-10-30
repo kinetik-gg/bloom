@@ -319,10 +319,33 @@ std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) 
     if (state_.awaitingProcessSample)
         return 0;
     if (ramHeadroom_ && state_.machine.availableBytes) {
-        // Usable-capacity retention: what this pool holds plus the free memory beyond headroom.
+        // Usable-capacity retention. The free memory beyond headroom is ONE pool shared by every
+        // reusable cache: each may grow by its share, so together they never grow past it before
+        // the next sample (giving each pool the whole free memory let N pools take N times it and
+        // push the machine into swap). When the rest of the machine needs memory and available
+        // falls below the headroom, every pool shrinks by its share of the deficit, below what it
+        // holds now; the caches evict to their new budgets.
+        const auto own = participant.retained ? participant.retained() : 0;
+        std::size_t pools = 0;
+        long double retainedTotal = 0;
+        for (const auto& [owner, cache] : caches_) {
+            if (cache.kind != MemoryBudgetOwnerKind::ReusableRetention)
+                continue;
+            ++pools;
+            retainedTotal += static_cast<long double>(cache.retained ? cache.retained() : 0);
+        }
         const auto available = *state_.machine.availableBytes;
-        const auto free = available > *ramHeadroom_ ? available - *ramHeadroom_ : 0;
-        auto bytes = saturatedAdd(participant.retained ? participant.retained() : 0, free);
+        std::size_t bytes = own;
+        if (available >= *ramHeadroom_) {
+            bytes =
+                saturatedAdd(own, (available - *ramHeadroom_) / std::max<std::size_t>(1, pools));
+        } else if (retainedTotal > 0) {
+            const auto deficit = static_cast<long double>(*ramHeadroom_ - available);
+            const auto cut = static_cast<std::size_t>(
+                std::min(static_cast<long double>(own),
+                         deficit * static_cast<long double>(own) / retainedTotal));
+            bytes = own - cut;
+        }
         if (state_.processCacheCeilingBytes)
             bytes = std::min(bytes, *state_.processCacheCeilingBytes);
         return bytes;

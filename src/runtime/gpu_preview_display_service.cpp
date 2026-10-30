@@ -16,7 +16,7 @@
 namespace bloom::runtime {
 namespace {
 
-[[nodiscard]] std::chrono::milliseconds
+[[nodiscard]] std::chrono::microseconds
 serviceWaitInterval(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) {
     // Any preview stage, queued native job, or in-flight native submission needs the short poll.
     const bool previewActive = !core->stages.empty() || core->nativeInFlight ||
@@ -26,7 +26,10 @@ serviceWaitInterval(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
         return std::chrono::milliseconds(50);
     }
     if (previewActive) {
-        return std::chrono::milliseconds(2);
+        // Only a pending fence reaches this wait (native progress re-iterates at once), and GPU
+        // steps retire in microseconds. A millisecond tick here was a fixed per-frame cost of
+        // steps x 2 ms that made Full and Quarter previews equally slow.
+        return std::chrono::microseconds(detail::kGpuPreviewActivePollMicros);
     }
     // A live presentation generation keeps the short interval only while a target still needs the
     // owner to drive it (attach/resize/retire progress or an extracted/un-ingested request). A
@@ -40,6 +43,37 @@ serviceWaitInterval(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
     // Bounded idle wait: notifications still interrupt it immediately, so this only caps how long
     // an otherwise idle owner sleeps before re-checking.
     return std::chrono::milliseconds(50);
+}
+
+// What one owner iteration can advance on the native side: the resident executor's steps, the
+// active stage's phase, and the ready/in-flight queues. A change means the next step can start
+// now, so the owner iterates again instead of waiting.
+struct NativeProgress final {
+    std::uint64_t executorSteps = 0;
+    const void* activeStage = nullptr;
+    int activePhase = 0;
+    std::size_t residentReady = 0;
+    std::size_t ready = 0;
+    std::size_t stages = 0;
+    bool nativeInFlight = false;
+    bool residentInFlight = false;
+
+    bool operator==(const NativeProgress&) const = default;
+};
+
+[[nodiscard]] NativeProgress
+nativeProgress(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) noexcept {
+    const auto& active = core->residentNativeActive;
+    return {.executorSteps = core->residentExecutor != nullptr
+                                 ? gpuSceneExecutorStepProgress(core->residentExecutor->counters())
+                                 : 0,
+            .activeStage = active.get(),
+            .activePhase = active != nullptr ? static_cast<int>(active->residentPhase) : 0,
+            .residentReady = core->residentNativeReady.size(),
+            .ready = core->nativeReady.size(),
+            .stages = core->stages.size(),
+            .nativeInFlight = core->nativeInFlight,
+            .residentInFlight = core->residentNativeInFlight};
 }
 
 // Samples no state; the caller captures the wake generation BEFORE doing work, so a notification
@@ -142,7 +176,9 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
                 }
                 observed = core->wakeGeneration;
             }
+            bool progressed = false;
             try {
+                const auto before = nativeProgress(core);
                 static_cast<void>(core->lease->dispatchOne());
                 detail::processPreviewStages(core);
                 detail::processNativeDisplay(core);
@@ -157,11 +193,15 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
                 // foreground allowance from actual owner-visible device space after native/cache
                 // progress; the next request may borrow every byte not held by real ownership.
                 detail::refreshResidentForegroundCapacity(core);
+                progressed = nativeProgress(core) != before;
             } catch (...) { // NOLINT(bugprone-empty-catch)
                 // A single iteration fault must not terminate the service thread; there is no
                 // reporting channel on this owner loop, so the fault is deliberately contained.
             }
-            waitForWake(core, observed, /*wakeOnStopping=*/true);
+            // A step that started, completed or changed phase lets the next one start at once;
+            // only a pending fence or an idle owner waits.
+            if (!progressed)
+                waitForWake(core, observed, /*wakeOnStopping=*/true);
         }
         drainService(core);
     } catch (...) {
@@ -307,6 +347,14 @@ void PreviewDisplayServiceCore::finishRootAdmission(const TaskId id, const bool 
     if (cancelNow && scheduler != nullptr) {
         static_cast<void>(scheduler->cancel(id));
     }
+}
+
+bool PreviewDisplayServiceCore::hasOutstandingRoots() noexcept {
+    std::lock_guard lock(rootsMutex);
+    if (scheduler != nullptr) {
+        pruneTerminalRootsLocked(acceptedRoots, *scheduler);
+    }
+    return !acceptedRoots.empty();
 }
 
 void PreviewDisplayServiceCore::abandonRootAdmission() noexcept {
@@ -678,6 +726,8 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         snapshot, identity, pixelStorageByteLimit, gpuAllowance, overrides, request.priority,
         request.owner, request.groupId, request.sourceVersion, request.coalescingKey);
     TaskRequest cpuRequest = request;
+    const bool fillWork = request.priority == TaskPriority::Foreground ||
+                          request.priority == TaskPriority::Background;
     try {
         // Rooted resident requests have not allocated pixels at queue admission. Their shared
         // processing phase admits host preparation and native backing before allocation. Charging
@@ -706,6 +756,16 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         }
         if (submission.status == TaskSubmissionStatus::ShuttingDown ||
             (submission.diagnostic && submission.diagnostic->defaultBudgetRetry)) {
+            core->finishRootAdmission({}, false);
+            return submission;
+        }
+        if (fillWork && submission.status == TaskSubmissionStatus::QueueFull &&
+            core->hasOutstandingRoots()) {
+            // RAM-preview and background fill wait as back-pressure while this service's own
+            // frames are in flight: the caller resubmits when one lands. Rendering the frame on
+            // the CPU instead would be silent whole-frame CPU work on a GPU route. With nothing
+            // of ours in flight the refusal is the scheduler's bound itself, not a busy queue,
+            // and the counted, labelled CPU path below is the honest answer.
             core->finishRootAdmission({}, false);
             return submission;
         }

@@ -49,10 +49,15 @@ effect immediately.
 **Usable RAM** is the available system memory Bloom measures (within any real OS or container limit)
 minus the RAM headroom. **Usable VRAM** is the graphics driver's live memory budget minus the VRAM
 headroom. The Viewer, RAM preview, playback and exports run as many frames at once as fit usable
-memory. The operation cache and the RAM preview fill what is left and are evicted when active work
-needs the room. When work needs more than is free at that moment, it waits and resumes as soon as
-other work releases memory; it is refused only when one frame cannot fit even with nothing else
-running, and the refusal names the measured numbers.
+memory. The reusable caches (operation results, RAM preview, decoded video and media, proxies and
+audio) share what is left: together they grow by at most the free memory beyond the headroom, and
+when other programs need memory and free memory falls below the headroom, every cache shrinks by
+its share, so caches never push the computer into swap. Active work evicts them when it needs the
+room. Inside a container or memory-limited session, clean file cache counts as available, as the
+kernel reclaims it on demand. When work needs more than is free at that moment, it waits and
+resumes as soon as memory is released; it is refused only when one frame cannot fit within the
+computer's (or the container's) memory minus the headroom, and the refusal names the measured
+numbers.
 
 The earlier per-cache targets `playback/operation-cache-bytes` and
 `playback/ram-preview-memory-bytes` are retired. Bloom ignores saved values for them and does not

@@ -13,12 +13,13 @@
 // processing root's counters; never reserves or changes admission.
 namespace bloom::host {
 
-// ADR 0033 section 9: during an export a capacity refusal means wait, not fail. AwaitingCapacity
-// (capacity not sampled yet) always waits. BudgetRefused waits while other work holds admitted
-// processing phases in the shared root (the Viewer, a RAM preview): they finish and release.
-// `ownPhases` are the caller's own admitted phases (the movie frame queue's reservation), which
-// never count as other work. With no other phase admitted the frame cannot fit now, and nothing
-// in flight will change that, so it is NeverFits.
+// ADR 0033 section 9: during an export a capacity refusal means wait, not fail. A refusal waits
+// while other work holds admitted processing phases in the shared root (the Viewer, a RAM
+// preview): they finish and release. AwaitingCapacity also waits while the capacity has not been
+// measured yet. `ownPhases` are the caller's own admitted phases (the movie frame queue's
+// reservation), which never count as other work. With measured capacity and no other phase
+// admitted the frame cannot fit now, and nothing in flight will change that, so it is NeverFits:
+// the export must not wait on its own reservations.
 enum class OutputAnalysisCapacityRefusalV1 : std::uint8_t {
     // Not a capacity refusal.
     None,

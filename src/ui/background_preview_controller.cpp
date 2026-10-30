@@ -78,9 +78,9 @@ bool BackgroundPreviewController::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void BackgroundPreviewController::cancelActive() {
-    if (active_.has_value()) {
-        active_->cancel();
-        discardActive_ = true;
+    for (auto& slot : inFlight_) {
+        slot.handle.cancel();
+        slot.discard = true;
     }
 }
 
@@ -92,9 +92,10 @@ void BackgroundPreviewController::restart() {
 }
 
 void BackgroundPreviewController::suspendForCachePurge() {
-    // cancelActive() flags the in-flight result to be discarded when it lands (consumeReadyResult
-    // checks discardActive_) and exhausted_ parks the pass so the idle timer does not refill what
-    // the artist just purged. Any real restart trigger clears exhausted_ through restart().
+    // cancelActive() flags each in-flight result to be discarded when it lands (consumeReadyResult
+    // checks the slot's discard flag) and exhausted_ parks the pass so the idle timer does not
+    // refill what the artist just purged. Any real restart trigger clears exhausted_ through
+    // restart().
     cancelActive();
     cursor_ = 0;
     considered_ = 0;
@@ -124,7 +125,7 @@ void BackgroundPreviewController::fillNextFrame() {
         restart();
         return;
     }
-    if (active_.has_value() || exhausted_ || !preparation_) {
+    if (exhausted_ || !preparation_) {
         return;
     }
     const auto* composition = session_.composition();
@@ -132,6 +133,17 @@ void BackgroundPreviewController::fillNextFrame() {
         return;
     }
     const auto format = composition->format();
+    // The read-ahead width is chosen from free capacity only when nothing is in flight: frames in
+    // flight have not all claimed their phases yet, so growing from a partly filled set would
+    // count the same room twice. Admission makes a frame that does not fit wait.
+    if (widthProvider_ && inFlight_.empty()) {
+        readAheadWidth_ = std::max<std::size_t>(
+            1, widthProvider_(static_cast<std::uint64_t>(format.width()) * format.height()));
+    }
+    const std::size_t width = widthProvider_ ? readAheadWidth_ : 1;
+    if (inFlight_.size() >= width) {
+        return;
+    }
     const auto rate = format.frameRate();
     const auto mapping = core::FrameTimeMapping::create(composition->duration(), rate.numerator(),
                                                         rate.denominator());
@@ -213,6 +225,12 @@ void BackgroundPreviewController::fillNextFrame() {
             (void)cache.take(identity);
             continue;
         }
+        // A frame already preparing ahead of the playhead is not submitted twice.
+        if (std::ranges::any_of(inFlight_, [&](const InFlight& slot) {
+                return !slot.discard && PreviewFrameCacheKey::forIdentity(slot.identity) == *key;
+            })) {
+            continue;
+        }
         runtime::TaskRequest request(
             "Cache background preview frame",
             {.kind = runtime::TaskOwnerKind::Composition,
@@ -221,7 +239,7 @@ void BackgroundPreviewController::fillNextFrame() {
         request.sourceVersion = {.documentRevision = key->sourceRevision.value(),
                                  .requestGeneration = identity.requestGeneration};
         request.usesPurgeableCaches = true;
-        submittedAt_ = std::chrono::steady_clock::now();
+        const auto submittedAt = std::chrono::steady_clock::now();
         // TEMPORAL-2B: the snapshot is resolved for THIS frame's time, matching the identity's
         // sourceRevision from cacheKeyForTime above.
         const auto snapshot = session_.evaluationSnapshotForTime(key->time);
@@ -241,53 +259,72 @@ void BackgroundPreviewController::fillNextFrame() {
                 });
         }
         if (!submission.accepted()) {
+            // Back-pressure: revisit this frame on the next idle tick or completion.
             --cursor_;
             --considered_;
             return;
         }
-        discardActive_ = false;
-        activeIdentity_ = identity;
-        active_.emplace(std::move(submission.handle));
+        inFlight_.push_back({.handle = std::move(submission.handle),
+                             .identity = identity,
+                             .submittedAt = submittedAt});
         bridge_.wake();
-        return;
+        if (inFlight_.size() >= width) {
+            return;
+        }
     }
 }
 
 void BackgroundPreviewController::consumeReadyResult() {
-    if (!active_.has_value()) {
-        return;
+    bool landed = false;
+    for (auto slot = inFlight_.begin(); slot != inFlight_.end();) {
+        auto result = slot->handle.tryTakeResult();
+        if (!result.has_value()) {
+            ++slot;
+            continue;
+        }
+        const auto identity = slot->identity;
+        const auto submittedAt = slot->submittedAt;
+        const bool discard = slot->discard;
+        slot = inFlight_.erase(slot);
+        landed = true;
+        if (discard || shuttingDown_ || previewController_.isShuttingDown()) {
+            continue;
+        }
+        const auto key = previewController_.cacheKeyForTime(identity.time);
+        if (!key.has_value() || *key != PreviewFrameCacheKey::forIdentity(identity)) {
+            continue;
+        }
+        if (result->state() == runtime::TaskState::Failed &&
+            std::ranges::any_of(result->diagnostics(), [](const auto& diagnostic) {
+                return diagnostic.code == "bloom.preview.gpu-scene.awaiting-capacity";
+            })) {
+            // Other work holds the capacity this frame needs: a wait, not a failure. Rescan
+            // from the playhead; cached frames are skipped and this one is asked again.
+            cursor_ = 0;
+            considered_ = 0;
+            continue;
+        }
+        const auto& value = result->value();
+        if (result->state() != runtime::TaskState::Succeeded || !value.has_value() ||
+            *value == nullptr || (*value)->frame() == nullptr ||
+            (*value)->frame()->desiredIdentity() != identity || !result->diagnostics().empty()) {
+            // Unsupported/failed work is not retried indefinitely while the app is idle. Its task
+            // retains the pipeline's diagnostics; the next revision/resolution/playhead restarts.
+            exhausted_ = true;
+            continue;
+        }
+        previewController_.recordPreparationDuration(identity, std::chrono::steady_clock::now() -
+                                                                   submittedAt);
+        if (!(*value)->cacheFrame()) {
+            exhausted_ = true;
+            continue;
+        }
+        previewController_.frameCache().insert((*value)->cacheFrame());
     }
-    auto result = active_->tryTakeResult();
-    if (!result.has_value()) {
-        return;
+    // A landed frame frees its slot: refill read-ahead at once rather than on the idle tick.
+    if (landed) {
+        fillNextFrame();
     }
-    active_.reset();
-    if (discardActive_ || shuttingDown_ || previewController_.isShuttingDown() ||
-        !activeIdentity_.has_value()) {
-        return;
-    }
-    const auto key = previewController_.cacheKeyForTime(activeIdentity_->time);
-    if (!key.has_value() || *key != PreviewFrameCacheKey::forIdentity(*activeIdentity_)) {
-        return;
-    }
-    const auto& value = result->value();
-    if (result->state() != runtime::TaskState::Succeeded || !value.has_value() ||
-        *value == nullptr || (*value)->frame() == nullptr ||
-        (*value)->frame()->desiredIdentity() != *activeIdentity_ ||
-        !result->diagnostics().empty()) {
-        // Unsupported/failed work is not retried indefinitely while the app is idle. Its task
-        // retains the pipeline's diagnostics; the next revision/resolution/playhead restarts.
-        exhausted_ = true;
-        return;
-    }
-    previewController_.recordPreparationDuration(*activeIdentity_,
-                                                 std::chrono::steady_clock::now() - submittedAt_);
-    if (!(*value)->cacheFrame()) {
-        exhausted_ = true;
-        return;
-    }
-    previewController_.frameCache().insert((*value)->cacheFrame());
-    fillNextFrame();
 }
 
 } // namespace bloom::ui

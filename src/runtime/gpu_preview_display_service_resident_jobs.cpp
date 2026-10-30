@@ -466,12 +466,10 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
 
     std::string reason;
     const bool eligible = residentStageIsEligible(core, *stage, reason);
-    if (!eligible || core->residentNativeReady.size() >= core->options.readyStageQueueCapacity) {
+    if (!eligible) {
         core->counterCpuFallbacks.fetch_add(1, std::memory_order_relaxed);
         const std::string detail =
-            eligible
-                ? std::string("the resident ready-stage queue is full")
-                : (reason.empty() ? std::string("the resident stage was not eligible") : reason);
+            reason.empty() ? std::string("the resident stage was not eligible") : reason;
         {
             std::lock_guard lock(core->stateMutex);
             core->publishedResidentDetail = "resident stage ineligible: " + detail;
@@ -484,6 +482,8 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
         stage->phase = StagePhase::AwaitingCpuFallbackDispatch;
         return;
     }
+    // Prepared work waiting for the native owner is back-pressure: its phase is already admitted,
+    // so it queues here however many frames are in flight and is never re-rendered on the CPU.
     stage->phase = StagePhase::AwaitingNative;
     core->residentNativeReady.push_back(stage);
 }

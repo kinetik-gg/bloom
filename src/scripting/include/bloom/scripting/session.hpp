@@ -19,6 +19,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace bloom::scripting {
@@ -106,6 +107,19 @@ struct SessionBinding final {
     std::function<SessionRenderSourceSnapshot()> renderSourceSnapshot{};
 };
 
+// What Session::setColorSettings did. `code` is "updated", "no-change", "invalid-config",
+// "invalid-settings", "read-only" or "unavailable"; `settings` is the project's colour settings
+// afterwards when they are readable.
+struct SessionColorSettingsResult final {
+    std::string code;
+    std::string message;
+    std::optional<document::ColorSettings> settings;
+
+    [[nodiscard]] bool succeeded() const noexcept {
+        return code == "updated" || code == "no-change";
+    }
+};
+
 class Session final {
   public:
     [[nodiscard]] static SessionCreateResult
@@ -150,11 +164,27 @@ class Session final {
     // render source snapshot, for align and distribute. Valid while this session is; it evaluates
     // synchronously on the calling client thread.
     [[nodiscard]] LayerGeometryProvider layerGeometryProvider() const;
+    // A composition's current frame rate {numerator, denominator} (OperationContext).
+    [[nodiscard]] std::function<
+        std::optional<std::pair<std::uint32_t, std::uint32_t>>(std::uint64_t)>
+    compositionFrameRateLookup() const;
+
+    // Takes over `other`'s project in place, so a host that keeps references to this Session (the
+    // stdio MCP server's core) follows project.open and project.new. Everything that borrowed
+    // this session's host session or coordinators must be released first; `other`'s old contents
+    // are destroyed with it.
+    void adopt(std::unique_ptr<Session> other) noexcept;
 
     [[nodiscard]] SessionSaveResult save();
     [[nodiscard]] SessionSaveResult saveAs(const std::filesystem::path& path);
     [[nodiscard]] const std::filesystem::path& displayPath() const noexcept { return displayPath_; }
     [[nodiscard]] SessionRenderSourceSnapshot renderSourceSnapshot() const;
+    // Project Settings > Colour, exactly as the dialog applies it (host/project_color_choice.hpp):
+    // `config` is "neutral", "aces" or "current"; an omitted working space keeps the project's when
+    // the configuration stays, else takes the configuration's default. Not undoable; it marks the
+    // project dirty and changes how every composition renders.
+    [[nodiscard]] SessionColorSettingsResult
+    setColorSettings(std::string_view config, std::optional<std::string> workingColorSpaceId);
 
     [[nodiscard]] commands::CommandStack* commandStack() noexcept;
     [[nodiscard]] document::Document* document() noexcept;
@@ -184,7 +214,9 @@ class Session final {
 
     Session() : registry_(OperationRegistry::builtIn()) {}
 
-    host::ProjectSessionIdentitySource identitySource_;
+    // Heap-held so adopt() can move a host session together with the identity source it borrows.
+    std::unique_ptr<host::ProjectSessionIdentitySource> identitySource_ =
+        std::make_unique<host::ProjectSessionIdentitySource>();
     std::unique_ptr<host::ProjectSession> session_;
     std::unique_ptr<host::PublicationCoordinator> publicationCoordinator_;
     std::unique_ptr<platform::StagedArtifactCoordinator> artifactCoordinator_;

@@ -527,11 +527,9 @@ target_sources(
         network_share_paths.hpp
         media_disk_cache_settings.cpp
         node_editor.cpp
-        node_layout_arrange.cpp
         node_editor_canvas.cpp
         node_editor_items.cpp
         node_editor_interactions.cpp
-        node_editor_add.cpp
         node_editor_menus.cpp
         playback_controller.cpp
         preview_frame_cache.cpp
@@ -561,7 +559,6 @@ target_sources(
         project_color_settings_dialog.hpp
         h264_encoder_service.cpp
         h264_encoder_flow.cpp
-        timeline_layer_timing_gesture.cpp
         timeline_key_time.cpp
         timeline_key_time.hpp
         timeline_layer_timing_gesture.hpp

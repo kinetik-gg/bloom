@@ -343,6 +343,8 @@ struct PreviewDisplayServiceCore final {
     [[nodiscard]] bool beginRootAdmission() noexcept;
     void finishRootAdmission(TaskId id, bool accepted) noexcept;
     void abandonRootAdmission() noexcept;
+    // True while a root this service accepted is still live: its completion frees scheduler room.
+    [[nodiscard]] bool hasOutstandingRoots() noexcept;
     void trackRoot(TaskId id) noexcept;
     void beginShutdownRoots(std::vector<TaskId>& out) noexcept;
 
@@ -401,8 +403,8 @@ void runGpuStartup(const std::shared_ptr<PreviewDisplayServiceCore>& core, TaskC
 // plan for the UI status poll. Must run after the device exists and BEFORE the presentation
 // registry and resident scene cache are created. Skipped for the packed-only service.
 void resolveResidentCapacity(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
-void refreshResidentForegroundCapacity(const std::shared_ptr<PreviewDisplayServiceCore>& core)
-    noexcept;
+void refreshResidentForegroundCapacity(
+    const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 
 // GPU parent starter payload (runs on the service thread): submit the CPU stage child, retain the
 // final completion, and return immediately.
@@ -472,8 +474,9 @@ void copyLifecycleCounters(const PreviewDisplayServiceCore& core,
 
 // Conservative native selection. The service's active poll adds two handoff intervals the
 // qualification timings do not include (stage child completion -> service, native fence ->
-// service), so a raw "native faster" reading can still be a loss for sub-millisecond wins.
-inline constexpr std::uint64_t kGpuPreviewActivePollMicros = 2000;
+// service), so a raw "native faster" reading can still be a loss for sub-millisecond wins. The
+// owner re-iterates at once after native progress and waits this long only on a pending fence.
+inline constexpr std::uint64_t kGpuPreviewActivePollMicros = 50;
 
 [[nodiscard]] bool
 gpuPreviewDisplayRequestIsNeutral(const PreviewRequestIdentity& identity) noexcept;

@@ -39,6 +39,96 @@ std::string digestFile(const std::filesystem::path& path) {
 
 namespace {
 
+// The render and export destination contract (#388): a file path with the preset's extension, a
+// folder (the file is then frame.<ext>, or render.<ext> for media), or a sequence pattern with
+// one #### or {frame} where the frame number goes. A path without an extension gets the preset's.
+struct RenderDestination final {
+    std::filesystem::path path;
+    // A range's file name pattern for the export queue's naming (#### or {frame}); absent means
+    // the default <base>.NNNN.<ext>.
+    std::optional<std::string> pattern;
+};
+
+std::string_view presetExtension(const std::string_view preset) {
+    if (preset == "PngRgba8SrgbV1")
+        return "png";
+    if (preset == "FlatExrRgba32fLinRec709SceneV1")
+        return "exr";
+    if (preset == "TiffRgba16SrgbV1")
+        return "tiff";
+    if (preset == "ProResMovV1")
+        return "mov";
+    if (preset == "DnxhrMxfV1")
+        return "mxf";
+    return "wav";
+}
+
+std::string lowered(std::string text) {
+    for (auto& c : text)
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c - 'A' + 'a');
+    return text;
+}
+
+RenderDestination renderDestination(const std::string& text, const std::string_view preset,
+                                    const bool range, const std::uint64_t frame, const bool still,
+                                    const bool patternsSupported) {
+    const auto extension = std::string(presetExtension(preset));
+    std::filesystem::path path(text);
+    std::error_code error;
+    const bool folder =
+        text.ends_with('/') || text.ends_with('\\') || std::filesystem::is_directory(path, error);
+    if (folder)
+        return {path / ((still ? "frame." : "render.") + extension), std::nullopt};
+    auto name = path.filename().string();
+    if (path.extension().empty() && name.find("####") == std::string::npos &&
+        name.find("{frame}") == std::string::npos) {
+        name += "." + extension;
+        path.replace_filename(name);
+    }
+    const auto actual = lowered(path.extension().string());
+    if (actual != "." + extension && !(extension == "tiff" && actual == ".tif"))
+        throw InvalidInput("destination must end in ." + extension + " for " + std::string(preset) +
+                           ", or name an existing folder");
+    const auto hashes = name.find("####");
+    const auto braces = name.find("{frame}");
+    const auto tokens =
+        (hashes != std::string::npos ? 1 : 0) + (braces != std::string::npos ? 1 : 0) +
+        (hashes != std::string::npos && name.find("####", hashes + 4) != std::string::npos ? 1 : 0);
+    if (name.find('#') != std::string::npos && hashes == std::string::npos)
+        throw InvalidInput("a frame number pattern is exactly four # characters (####) or {frame}");
+    if (tokens == 0)
+        return {path, std::nullopt};
+    if (tokens > 1 || !still)
+        throw InvalidInput(still ? "a destination has at most one #### or {frame}"
+                                 : "media destinations are single files; remove #### or {frame}");
+    const auto at = hashes != std::string::npos ? hashes : braces;
+    const auto width = hashes != std::string::npos ? std::size_t{4} : std::size_t{7};
+    if (!range) {
+        auto number = std::to_string(frame);
+        if (number.size() < 4)
+            number.insert(0, 4 - number.size(), '0');
+        name.replace(at, width, number);
+        path.replace_filename(name);
+        return {path, std::nullopt};
+    }
+    // "seq.####.png" is the default naming of "seq.png"; anything else is a naming pattern.
+    const auto before = name.substr(0, at);
+    const auto after = name.substr(at + width);
+    if (before.ends_with('.') && before.size() > 1 && after == path.extension().string()) {
+        path.replace_filename(before.substr(0, before.size() - 1) + after);
+        return {path, std::nullopt};
+    }
+    if (!patternsSupported)
+        throw InvalidInput("bloom-mcp names range files <base>.####.<ext>; use a destination "
+                           "such as seq.####." +
+                           extension);
+    path.replace_filename("frame" + path.extension().string());
+    auto pattern = name;
+    pattern.replace(at, width, "####");
+    return {path, pattern};
+}
+
 yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& call,
                                yyjson_val* arguments, const bool compositionExport) {
     auto& scheduler = core.dependencies.scheduler;
@@ -51,16 +141,20 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
             {"composition", "preset", "destination"});
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = string(member(arguments, "preset"), 128);
-    const std::filesystem::path destination = string(member(arguments, "destination"));
+    const auto requested = string(member(arguments, "destination"));
     const bool range = member(arguments, "frame") == nullptr;
-    if (destination.empty() ||
-        (!range && (member(arguments, "first") || member(arguments, "last"))))
+    if (requested.empty() || (!range && (member(arguments, "first") || member(arguments, "last"))))
         throw InvalidInput(
             "Specify exactly a frame or inclusive first/last range and a destination");
     const auto first = integer(member(arguments, range ? "first" : "frame"));
     const auto last = range ? integer(member(arguments, "last")) : first;
     if (first > last || last - first >= 10000)
         throw InvalidInput("Range must contain 1..10000 frames");
+    const bool stillPreset = presetName == "PngRgba8SrgbV1" ||
+                             presetName == "FlatExrRgba32fLinRec709SceneV1" ||
+                             presetName == "TiffRgba16SrgbV1";
+    const auto destination =
+        renderDestination(requested, presetName, range, first, stillPreset, false).path;
     std::optional<output::OutputPresetV1> preset;
     constexpr std::array presets{output::OutputPresetV1::PngRgba8SrgbV1,
                                  output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1,
@@ -85,7 +179,7 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         overwrite != nullptr && string(overwrite, 16) != "replace") {
         std::error_code error;
         if (std::filesystem::exists(destination, error))
-            throw ToolFailure(McpToolErrorCode::ExportUnavailable,
+            throw ToolFailure(McpToolErrorCode::PreflightBlocked,
                               "The destination exists. Pass overwrite=replace to replace it.");
     }
     const auto source = session.renderSourceSnapshot();
@@ -214,10 +308,9 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
             {"composition", "preset", "destination"});
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = string(member(arguments, "preset"), 128);
-    const auto destination = string(member(arguments, "destination"));
+    const auto requested = string(member(arguments, "destination"));
     const bool range = member(arguments, "frame") == nullptr;
-    if (destination.empty() ||
-        (!range && (member(arguments, "first") || member(arguments, "last"))))
+    if (requested.empty() || (!range && (member(arguments, "first") || member(arguments, "last"))))
         throw InvalidInput(
             "Specify exactly a frame or inclusive first/last range and a destination");
     const auto first = integer(member(arguments, range ? "first" : "frame"));
@@ -269,11 +362,18 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
             throw InvalidInput("Audio sample rate is outside 8000..192000");
         request.settings.audioSampleRate = static_cast<std::uint32_t>(value);
     }
-    request.destination = transientDestination(destination, member(arguments, "overwrite"));
+    const auto destination =
+        renderDestination(requested, presetName, range, first, found->still, true);
+    if (destination.pattern)
+        request.settings.naming.pattern = *destination.pattern;
+    request.destination =
+        transientDestination(destination.path.string(), member(arguments, "overwrite"));
     const auto result = runTransientJob(core, call, std::move(request));
     auto* value = out.object();
     out.set(value, "publishedFrames", out.number(result.frames));
     out.set(value, "preservationReport", out.text(result.report));
+    out.set(value, "job", out.number(result.job));
+    out.set(value, "log", logEntries(out, result.log));
     auto* files = out.array();
     for (const auto& path : result.files) {
         auto* file = out.object();

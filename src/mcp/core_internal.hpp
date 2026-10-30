@@ -21,6 +21,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace bloom::mcp {
@@ -36,6 +37,10 @@ struct ToolFailure final : std::runtime_error {
     // The refusing collaborator's own code, e.g. the export queue's "PlatformNotSupported";
     // published as diagnostic.detail when present.
     std::string detail;
+    // A failed transient render, export or capture: its job id and the run's log (bounded),
+    // published as structuredContent.job and structuredContent.log.
+    std::optional<std::uint64_t> job;
+    std::shared_ptr<const std::vector<host::ExportLogEntry>> log;
 };
 
 // What one tools/call works against.
@@ -57,6 +62,21 @@ struct McpCall final {
     // A tool diagnostic that did not make the call an error (capture linked instead of inline).
     std::optional<McpToolErrorCode> notice;
 };
+
+// A non-command fact the events tool reports beside command events: a project lifecycle step
+// (project.saved, project.opened, project.created, project.closed) or a composition that no longer
+// compiles after an edit (composition.compile-failed).
+struct McpNotice final {
+    std::string kind;
+    std::string message;
+    std::uint64_t revision = 0;
+    std::optional<std::uint64_t> composition;
+    std::optional<std::uint64_t> node;
+    std::optional<std::uint64_t> parameter;
+    std::string path;
+    std::string projectName;
+};
+using McpEventEntry = std::variant<commands::CommandEvent, McpNotice>;
 
 struct McpProtocolSession::State {
     mutable std::mutex mutex;
@@ -80,7 +100,7 @@ struct McpServerCore::State {
     scripting::Subscription subscription;
     std::optional<std::uint64_t> eventGeneration;
     mutable std::mutex eventsMutex;
-    std::deque<std::pair<std::uint64_t, commands::CommandEvent>> events;
+    std::deque<std::pair<std::uint64_t, McpEventEntry>> events;
     std::uint64_t sequence = 0;
     // The sequence when the live project was last replaced; an older cursor must reset.
     std::uint64_t resetSequence = 0;
@@ -96,18 +116,27 @@ struct McpServerCore::State {
     // Follows the live session's current generation's command events (no-op for stdio).
     void syncEvents();
     void record(const commands::CommandEvent& event);
+    void notice(McpNotice notice);
 };
 
 // ---- Projections (projections.cpp, tools_document.cpp)
 [[nodiscard]] yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result);
 [[nodiscard]] yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& value);
 [[nodiscard]] yyjson_mut_val* parameterSummary(Json& out, const document::ParameterRecord& value);
+// An events-tool record for a notice: {kind, revision, message, composition?, subject?, path?,
+// projectName?}.
+[[nodiscard]] yyjson_mut_val* noticeValue(Json& out, const McpNotice& notice);
 [[nodiscard]] std::string digestFile(const std::filesystem::path& path);
 // Standard padded base64 (RFC 4648 section 4), for MCP image content.
 [[nodiscard]] std::string base64(std::span<const std::byte> bytes);
 
 // ---- Transient export queue jobs (tools_export.cpp)
+// At most this many of a transient run's newest log entries are returned with its result.
+inline constexpr std::size_t kTransientLogEntries = 64;
+
 struct TransientResult final {
+    std::uint64_t job = 0;
+    std::vector<host::ExportLogEntry> log;
     std::uint64_t frames = 0;
     std::vector<std::filesystem::path> files;
     std::string report;
@@ -115,6 +144,9 @@ struct TransientResult final {
 // Submits a transient job on the export queue's owner thread, waits on the request worker
 // (reporting progress), stops the job when the request is cancelled, and acknowledges the result.
 // Throws ToolFailure on refusal, failure or cancellation.
+// export.log's entry rows; render, export and capture results reuse them.
+[[nodiscard]] yyjson_mut_val* logEntries(Json& out,
+                                         const std::vector<host::ExportLogEntry>& entries);
 [[nodiscard]] TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                                               host::ExportTransientJobRequest request);
 // `path` as an export destination: absolute paths become external file URIs, relative paths stay
@@ -138,6 +170,18 @@ struct TransientResult final {
                                           yyjson_val* arguments);
 [[nodiscard]] yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out,
                                                 McpCall& call, McpTool tool, yyjson_val* arguments);
+// project.*, editor.reveal, selection.set, composition.activate, transport and viewer.set
+// (tools_session.cpp). They hold no session lease.
+[[nodiscard]] yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, McpTool tool,
+                                          yyjson_val* arguments, const McpRequestControl& control,
+                                          std::string& summary);
+// An integer is a whole frame of the composition at its frame rate; [numerator, denominator] is
+// exact seconds.
+[[nodiscard]] core::RationalTime frameOrSecondsArgument(yyjson_val* value,
+                                                        const document::Snapshot& snapshot,
+                                                        std::uint64_t composition);
+[[nodiscard]] yyjson_mut_val* colorSettingsTool(McpServerCore::State& core, Json& out,
+                                                McpCall& call, yyjson_val* arguments);
 [[nodiscard]] yyjson_mut_val* toolList(Json& out);
 
 } // namespace bloom::mcp

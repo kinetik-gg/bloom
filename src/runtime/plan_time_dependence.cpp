@@ -59,7 +59,8 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                     return parameter(step.colorA) || parameter(step.colorB);
                 else if constexpr (std::is_same_v<Step, CompiledShape>)
                     return parameter(step.size) || parameter(step.fillColor) ||
-                           parameter(step.strokeColor) || parameter(step.strokeWidth);
+                           parameter(step.strokeColor) || parameter(step.strokeWidth) ||
+                           driven(step.drivenFillEnabled) || driven(step.drivenStrokeEnabled);
                 else if constexpr (std::is_same_v<Step, CompiledCompositionSource> ||
                                    std::is_same_v<Step, CompiledVideoSource>)
                     return true;

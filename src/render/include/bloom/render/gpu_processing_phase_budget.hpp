@@ -61,6 +61,10 @@ struct NativePresentationStorageRefusal final {
 
 struct GpuProcessingPhaseSnapshot final {
     std::optional<std::uint64_t> hostCapacityBytes;
+    // The most host memory this root could ever be given (the tightest finite memory limit or the
+    // physical memory, minus headroom). With it, a host need above the measured free capacity but
+    // within the ceiling waits for memory to be released; only a need above it is refused.
+    std::optional<std::uint64_t> hostCeilingBytes;
     std::optional<std::uint64_t> deviceCapacityBytes;
     bool hostReady = false;
     bool deviceReady = false;
@@ -304,6 +308,8 @@ class GpuProcessingPhaseBudget final {
     void tightenHostCapacity(std::optional<std::uint64_t> upperBound, bool closeReadiness,
                              std::chrono::steady_clock::time_point validUntil) noexcept;
     void setDeviceCapacity(std::optional<std::uint64_t> bytes, bool ready) noexcept;
+    // The host ceiling described on GpuProcessingPhaseSnapshot::hostCeilingBytes.
+    void setHostCeiling(std::optional<std::uint64_t> bytes) noexcept;
     // Moves a known host capacity by a preference change (headroom), keeping readiness/expiry.
     void shiftHostCapacity(std::uint64_t add, std::uint64_t subtract) noexcept;
     // Blocks until the admission revision differs from `seen` (a release, a capacity change) or

@@ -99,7 +99,8 @@ void testProcessingAdmissionBeforeCpuFallback(Expectations& expectations) {
     disabledOptions.processingPhasePolicy = zero;
     auto disabled = host::GpuExportProvider::create(disabledOptions);
     disabled->prepare(scheduler);
-    refused(run(nullptr, disabled), runtime::GpuProcessFrameDiagnosticCode::BudgetRefused);
+    // A measured zero within the 8 GiB limit is a wait, not exhaustion; it still admits nothing.
+    refused(run(nullptr, disabled), runtime::GpuProcessFrameDiagnosticCode::AwaitingCapacity);
     expectations.expect(zero->snapshot().reservations.admittedPhases == 0,
                         "measured zero cannot escape through disabled-provider CPU fallback");
     const auto shared = fixturePhasePolicy(1);

@@ -101,10 +101,12 @@ class AddSolidLayer final : public Operation {
         : compositionId_(compositionId), name_(std::move(name)), color_(color),
           useCompositionCentre_(true) {}
 
+    // An absent position is the composition centre.
     AddSolidLayer(document::CompositionId compositionId, std::string name, core::Color4d color,
-                  document::Vec2d position, double opacity = 1.0)
-        : compositionId_(compositionId), name_(std::move(name)), color_(color), position_(position),
-          opacity_(opacity) {}
+                  std::optional<document::Vec2d> position, double opacity = 1.0)
+        : compositionId_(compositionId), name_(std::move(name)), color_(color),
+          position_(position.value_or(document::Vec2d{})),
+          useCompositionCentre_(!position.has_value()), opacity_(opacity) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -140,14 +142,16 @@ class AddTextLayer final : public Operation {
         : compositionId_(compositionId), name_(std::move(name)), text_(std::move(text)),
           useCompositionCentre_(true) {}
 
+    // An absent position places the layer at the composition centre, as the three-argument form
+    // does, so a caller that sets only the size or colour keeps the documented default.
     AddTextLayer(document::CompositionId compositionId, std::string name, std::string text,
-                 document::Vec2d position, double opacity = 1.0,
+                 std::optional<document::Vec2d> position, double opacity = 1.0,
                  double size = document::kDefaultTextSizePixels,
-                 core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0},
-                 TextLayerStyle style = {})
+                 core::Color4d color = core::Color4d{1.0, 1.0, 1.0, 1.0}, TextLayerStyle style = {})
         : compositionId_(compositionId), name_(std::move(name)), text_(std::move(text)),
-          position_(position), opacity_(opacity), size_(size), color_(color),
-          style_(std::move(style)) {}
+          position_(position.value_or(document::Vec2d{})),
+          useCompositionCentre_(!position.has_value()), opacity_(opacity), size_(size),
+          color_(color), style_(std::move(style)) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;

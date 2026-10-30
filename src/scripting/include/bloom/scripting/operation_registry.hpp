@@ -27,7 +27,8 @@ enum class ValueKind : std::uint8_t {
     Color4,
     Id,
     Array,
-    // An exact rational time: a whole frame count, or a [numerator, denominator] pair.
+    // A time: an integer is a whole frame of the operation's composition (at its frame rate),
+    // and a [numerator, denominator] pair is an exact time in seconds.
     Time,
     // One authoring value whose width the operation itself decides: a number, a vec2, a vec3 or a
     // colour. Parameter-keyed animation operations take the parameter's own width, which the
@@ -74,6 +75,10 @@ struct ArgumentSchema final {
 struct OperationSchema final {
     std::string typeId;
     std::vector<ArgumentSchema> arguments;
+    // What the operation does, for agents and artists reading `query operations` or
+    // `Host.schemas()`: its purpose, side effects, outputs, errors with their remedies, and the
+    // undo step it makes. Empty when an operation has not been described yet.
+    std::string description{};
 };
 
 // ADR 0031. Measures every layer of a composition at a time for align and distribute: the CPU
@@ -95,6 +100,11 @@ struct OperationContext final {
     // Absent when the client cannot evaluate. Operations that need evaluated geometry are then
     // created without it and rejected when they apply, naming what was missing.
     LayerGeometryProvider layerGeometry{};
+    // A composition's frame rate as {numerator, denominator}, for operations that must turn a
+    // whole-frame time into seconds when they are created (align and distribute measure then).
+    // Absent, such an operation asks for the time in seconds instead.
+    std::function<std::optional<std::pair<std::uint32_t, std::uint32_t>>(std::uint64_t)>
+        compositionFrameRate{};
 };
 
 // Fills every omitted contextual argument the context can answer and returns their names in schema

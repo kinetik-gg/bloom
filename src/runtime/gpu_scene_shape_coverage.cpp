@@ -86,13 +86,15 @@ resolveShapeLeafWindow(const CompiledShape& shape, const CompiledCompositionPlan
     const auto fill = resolveParameter(shape.fillColor, plan, resolved);
     const auto strokeColor = resolveParameter(shape.strokeColor, plan, resolved);
     const auto width = resolveParameter(shape.strokeWidth, plan, resolved);
-    if (!size || !fill || !strokeColor || !width || !std::isfinite(size->value.x) ||
-        !std::isfinite(size->value.y) || size->value.x < 0.0 || size->value.y < 0.0 ||
-        !std::isfinite(width->value) || width->value < 0.0) {
+    const auto fillSwitch = detail::resolvedFillEnabled(shape, resolved);
+    const auto strokeSwitch = detail::resolvedStrokeEnabled(shape, resolved);
+    if (!size || !fill || !strokeColor || !width || !fillSwitch || !strokeSwitch ||
+        !std::isfinite(size->value.x) || !std::isfinite(size->value.y) || size->value.x < 0.0 ||
+        size->value.y < 0.0 || !std::isfinite(width->value) || width->value < 0.0) {
         return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan, "Shape parameters are invalid");
     }
-    const bool fillEnabled = shape.fillEnabled && shape.kind != document::ShapeKind::Line;
-    const bool strokeEnabled = shape.strokeEnabled && width->value > 0.0;
+    const bool fillEnabled = *fillSwitch && shape.kind != document::ShapeKind::Line;
+    const bool strokeEnabled = *strokeSwitch && width->value > 0.0;
     if (!fillEnabled && !strokeEnabled) {
         window = std::nullopt;
         return std::nullopt;
@@ -156,12 +158,14 @@ std::optional<GpuSceneLeafFailure> buildShapeCoverage(
     const auto fillColor = resolveParameter(shape.fillColor, plan, resolved);
     const auto strokeColor = resolveParameter(shape.strokeColor, plan, resolved);
     const auto strokeWidth = resolveParameter(shape.strokeWidth, plan, resolved);
-    if (!size || !fillColor || !strokeColor || !strokeWidth) {
+    const auto fillSwitch = detail::resolvedFillEnabled(shape, resolved);
+    const auto strokeSwitch = detail::resolvedStrokeEnabled(shape, resolved);
+    if (!size || !fillColor || !strokeColor || !strokeWidth || !fillSwitch || !strokeSwitch) {
         return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                     "Shape parameters are not evaluable");
     }
-    const bool fillEnabled = shape.fillEnabled && shape.kind != document::ShapeKind::Line;
-    const bool strokeEnabled = shape.strokeEnabled && strokeWidth->value > 0.0;
+    const bool fillEnabled = *fillSwitch && shape.kind != document::ShapeKind::Line;
+    const bool strokeEnabled = *strokeSwitch && strokeWidth->value > 0.0;
     out.opacity = static_cast<float>(opacity);
     out.needsPostOpacity = false;
     if (!fillEnabled && !strokeEnabled) {

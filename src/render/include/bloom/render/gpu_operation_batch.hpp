@@ -4,8 +4,8 @@
 #include <bloom/render/gpu_composite.hpp>
 #include <bloom/render/gpu_solid.hpp>
 
-#include <cstdint>
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
@@ -14,7 +14,9 @@
 #include <vector>
 
 namespace bloom::render {
-inline constexpr std::uint32_t kGpuOperationBatchCapacity = 8;
+// One command buffer and one fence per run of eligible operations; the run ends at the first
+// ineligible kind or at this many operations, whichever comes first.
+inline constexpr std::uint32_t kGpuOperationBatchCapacity = 64;
 inline constexpr std::uint32_t kGpuBatchExternalImage = UINT32_MAX;
 // Exactly one source: an already-retired external image, or an earlier operation's output.
 // Pending internal outputs never escape the batch before its single completion fence proves all

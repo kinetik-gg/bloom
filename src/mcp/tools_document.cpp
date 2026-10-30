@@ -2,6 +2,9 @@
 // apps/bloom-mcp/tools.cpp and server.cpp).
 #include "core_internal.hpp"
 
+#include <bloom/document/node_definition_registry.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
+#include <bloom/scripting/command_diagnostics.hpp>
 #include <bloom/scripting/operation_registry.hpp>
 
 #include <algorithm>
@@ -166,7 +169,9 @@ bool matches(yyjson_val* value, const scripting::ValueKind kind) {
         return yyjson_is_int(value) || (yyjson_is_arr(value) && yyjson_arr_size(value) == 2 &&
                                         yyjson_is_int(yyjson_arr_get_first(value)));
     case Kind::Value:
-        return yyjson_is_num(value) ||
+        // A number, a vector or colour, true/false for a Boolean parameter, or text for a String
+        // parameter or an enumeration member named by its label ("screen").
+        return yyjson_is_num(value) || yyjson_is_bool(value) || yyjson_is_str(value) ||
                (yyjson_is_arr(value) && yyjson_arr_size(value) >= 2 && yyjson_arr_size(value) <= 4);
     case Kind::Vec2:
     case Kind::Vec3:
@@ -191,28 +196,18 @@ yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result) 
     out.set(value, "succeeded", out.boolean(result.succeeded()));
     out.set(value, "revision", out.number(result.afterRevision.value()));
     auto* diagnostics = out.array();
-    for (const auto& failure : result.operationFailures) {
+    for (const auto& diagnostic : scripting::commandDiagnostics(result)) {
         auto* detail = out.object();
-        out.set(detail, "code", out.text("bloom.scripting.command-rejected"));
-        out.set(detail, "operation", out.text(failure.operationType));
-        out.set(detail, "message", out.text(failure.issue.message));
-        out.append(diagnostics, detail);
-    }
-    for (const auto& warning : result.warnings) {
-        auto* detail = out.object();
-        out.set(detail, "code", out.text("bloom.scripting.operation-warning"));
-        out.set(detail, "severity", out.text("warning"));
-        out.set(detail, "operation", out.text(warning.operationType));
-        out.set(detail, "message", out.text(warning.issue.message));
-        out.append(diagnostics, detail);
-    }
-    if (!result.succeeded() && result.operationFailures.empty()) {
-        auto* detail = out.object();
-        out.set(detail, "code",
-                out.text(result.status == commands::CommandStatus::StaleRevision
-                             ? "bloom.scripting.stale-revision"
-                             : "bloom.scripting.command-rejected"));
-        out.set(detail, "message", out.text("The host refused the transaction"));
+        out.set(detail, "code", out.text(diagnostic.code));
+        if (diagnostic.severity != "error")
+            out.set(detail, "severity", out.text(diagnostic.severity));
+        out.set(detail, "operationIndex",
+                diagnostic.operationIndex ? out.number(*diagnostic.operationIndex) : out.null());
+        if (!diagnostic.operation.empty())
+            out.set(detail, "operation", out.text(diagnostic.operation));
+        if (!diagnostic.path.empty())
+            out.set(detail, "path", out.text(diagnostic.path));
+        out.set(detail, "message", out.text(diagnostic.message));
         out.append(diagnostics, detail);
     }
     out.set(value, "diagnostics", diagnostics);
@@ -269,9 +264,59 @@ void throwUnavailable(const McpCall& call, const scripting::SessionCommandResult
     throw std::runtime_error("The session cannot edit");
 }
 
+// After a successful edit, every edited composition is compiled once (never rendered) so an edit
+// that leaves one uncompilable is reported with the edit instead of surfacing later as a failed
+// preview or export: compileFailures in the result, and a composition.compile-failed event.
+yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, const McpCall& call,
+                                const commands::CommandResult& command) {
+    auto* failures = out.array();
+    const auto snapshot = call.session.snapshot();
+    std::vector<document::CompositionId> edited;
+    if (command.affectedComposition) {
+        edited.push_back(*command.affectedComposition);
+    } else {
+        for (const auto& composition : snapshot.project().compositions())
+            edited.push_back(composition.id());
+    }
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    for (const auto composition : edited) {
+        if (call.control.stop.stop_requested() ||
+            snapshot.project().findComposition(composition) == nullptr)
+            continue;
+        const auto compiled =
+            compiler.compile({.snapshot = snapshot, .compositionId = composition}, {});
+        const auto failure = runtime::compileFailureSummary(compiled, composition);
+        if (!failure)
+            continue;
+        auto* record = out.object();
+        out.set(record, "composition", out.number(composition.value()));
+        out.set(record, "code", out.text(failure->code));
+        out.set(record, "detail", out.text(failure->detail));
+        auto* subject = out.object();
+        out.set(subject, "composition", out.number(failure->compositionId.value()));
+        out.set(subject, "node",
+                failure->nodeId ? out.number(failure->nodeId->value()) : out.null());
+        out.set(subject, "parameter",
+                failure->parameterId ? out.number(failure->parameterId->value()) : out.null());
+        out.set(record, "subject", subject);
+        out.append(failures, record);
+        core.notice(
+            {.kind = "composition.compile-failed",
+             .message = failure->detail,
+             .revision = command.afterRevision.value(),
+             .composition = failure->compositionId.value(),
+             .node = failure->nodeId ? std::optional(failure->nodeId->value()) : std::nullopt,
+             .parameter =
+                 failure->parameterId ? std::optional(failure->parameterId->value()) : std::nullopt,
+             .path = {},
+             .projectName = {}});
+    }
+    return failures;
+}
+
 } // namespace
 
-yyjson_mut_val* transactTool(McpServerCore::State&, Json& out, McpCall& call,
+yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& call,
                              yyjson_val* arguments) {
     members(arguments, {"expectedRevision", "operations", "label"},
             {"expectedRevision", "operations"});
@@ -286,18 +331,26 @@ yyjson_mut_val* transactTool(McpServerCore::State&, Json& out, McpCall& call,
     const auto& context = call.context;
     const auto& registry = call.session.operations();
     std::string operationIds;
+    std::size_t operationIndex = 0;
     yyjson_arr_iter iterator = yyjson_arr_iter_with(operations);
-    while (auto* operation = yyjson_arr_iter_next(&iterator)) {
+    for (auto* operation = yyjson_arr_iter_next(&iterator); operation != nullptr;
+         operation = yyjson_arr_iter_next(&iterator), ++operationIndex) {
+        // Every argument refusal names the operation's place in the list, so an agent knows which
+        // entry to fix.
+        const auto at = "operations[" + std::to_string(operationIndex) + "]";
+        if (!yyjson_is_obj(operation) || !member(operation, "op") || !member(operation, "args"))
+            throw InvalidInput(at + ": each operation is {\"op\": <id>, \"args\": {...}}");
         members(operation, {"op", "args"}, {"op", "args"});
         const auto id = string(member(operation, "op"), 128);
         const auto* descriptor = registry.find(id);
         if (operationIds.size() < 200)
             operationIds += (operationIds.empty() ? "" : ",") + id;
         if (!descriptor)
-            throw InvalidInput("Unknown operation ID");
+            throw InvalidInput(at + ": unknown operation \"" + id +
+                               "\"; query {\"kind\":\"operations\"} lists them");
         auto* args = member(operation, "args");
         if (!yyjson_is_obj(args))
-            throw InvalidInput("Expected an argument object");
+            throw InvalidInput(at + " (" + id + "): args must be an object");
         scripting::Arguments values;
         yyjson_obj_iter argumentsIterator = yyjson_obj_iter_with(args);
         while (auto* key = yyjson_obj_iter_next(&argumentsIterator)) {
@@ -305,14 +358,22 @@ yyjson_mut_val* transactTool(McpServerCore::State&, Json& out, McpCall& call,
             const auto schema = std::ranges::find(descriptor->schema.arguments, name,
                                                   &scripting::ArgumentSchema::name);
             auto* item = yyjson_obj_iter_get_val(key);
-            if (schema == descriptor->schema.arguments.end() || !matches(item, schema->kind))
-                throw InvalidInput("Unknown argument or wrong type: " + name);
+            if (schema == descriptor->schema.arguments.end())
+                throw InvalidInput(at + " (" + id + "): unknown argument \"" + name +
+                                   "\"; the example is " +
+                                   scripting::exampleCall(descriptor->schema));
+            if (!matches(item, schema->kind))
+                throw InvalidInput(at + " (" + id + "): argument \"" + name + "\" expects " +
+                                   std::string(scripting::valueKindName(schema->kind)) +
+                                   "; the example is " +
+                                   scripting::exampleCall(descriptor->schema));
             // SCRIPT-0 converts these optional fields to uint32_t in its factory.
             if (id == "bloom.composition.add" &&
                 (name == "frameRateNumerator" || name == "frameRateDenominator") &&
                 (!yyjson_is_uint(item) || yyjson_get_uint(item) == 0 ||
                  yyjson_get_uint(item) > std::numeric_limits<std::uint32_t>::max()))
-                throw InvalidInput("Frame-rate components must be in 1..4294967295");
+                throw InvalidInput(at + " (" + id +
+                                   "): frame-rate components must be in 1..4294967295");
             values.emplace(name, schema->kind == scripting::ValueKind::Id
                                      ? scripting::Value(scripting::StableId{integer(item)})
                                      : value(item));
@@ -324,6 +385,7 @@ yyjson_mut_val* transactTool(McpServerCore::State&, Json& out, McpCall& call,
             auto* diagnostics = out.array();
             auto* diagnostic = out.object();
             out.set(diagnostic, "code", out.text(created.diagnostic()->code));
+            out.set(diagnostic, "operationIndex", out.number(operationIndex));
             out.set(diagnostic, "operation", out.text(created.diagnostic()->operationId));
             out.set(diagnostic, "argument", out.text(created.diagnostic()->argument));
             out.set(diagnostic, "message", out.text(created.diagnostic()->message));
@@ -332,7 +394,7 @@ yyjson_mut_val* transactTool(McpServerCore::State&, Json& out, McpCall& call,
             return result;
         }
         if (!transaction.add(std::move(created).takeOperation()))
-            throw InvalidInput("Invalid operation");
+            throw InvalidInput(at + " (" + id + "): the operation could not be added");
     }
     call.summary = operationIds + " \"" + std::string(label.substr(0, 64)) + "\"";
     if (call.control.stop.stop_requested())
@@ -340,7 +402,12 @@ yyjson_mut_val* transactTool(McpServerCore::State&, Json& out, McpCall& call,
     const auto result = call.session.execute(std::move(transaction));
     if (!result.command)
         throwUnavailable(call, result);
-    return commandResult(out, *result.command);
+    auto* value = commandResult(out, *result.command);
+    out.set(value, "compileFailures",
+            result.command->changed() && result.command->renderAffecting
+                ? compileFailures(core, out, call, *result.command)
+                : out.array());
+    return value;
 }
 
 yyjson_mut_val* historyTool(McpServerCore::State&, Json& out, McpCall& call,
@@ -388,19 +455,29 @@ yyjson_mut_val* eventsTool(McpServerCore::State& core, Json& out, McpCall& call,
     out.set(result, "revision", out.number(revision));
     out.set(result, "sequence", out.number(core.sequence));
     const auto& events = core.events;
+    const auto revisionOf = [](const McpEventEntry& entry) {
+        if (const auto* command = std::get_if<commands::CommandEvent>(&entry))
+            return command->result.afterRevision.value();
+        return std::get<McpNotice>(entry).revision;
+    };
     out.set(result, "resetRequired",
             out.boolean(replaced || (!events.empty() && events.front().first > 1 &&
                                      after < events.front().first - 1 &&
-                                     since <= events.front().second.result.afterRevision.value())));
+                                     since <= revisionOf(events.front().second))));
     auto* list = out.array();
     constexpr std::array<std::string_view, 3> names{"revision", "history", "rejected"};
-    for (const auto& [sequence, event] : events) {
-        if ((!replaced && sequence <= after) ||
-            (!replaced && event.result.afterRevision.value() < since))
+    for (const auto& [sequence, entry] : events) {
+        if ((!replaced && sequence <= after) || (!replaced && revisionOf(entry) < since))
             continue;
-        auto* value = commandResult(out, event.result);
+        yyjson_mut_val* value = nullptr;
+        if (const auto* event = std::get_if<commands::CommandEvent>(&entry)) {
+            value = commandResult(out, event->result);
+            out.set(value, "kind", out.text(names.at(static_cast<std::size_t>(event->kind))));
+        } else {
+            const auto& notice = std::get<McpNotice>(entry);
+            value = noticeValue(out, notice);
+        }
         out.set(value, "sequence", out.number(sequence));
-        out.set(value, "kind", out.text(names.at(static_cast<std::size_t>(event.kind))));
         out.append(list, value);
     }
     out.set(result, "events", list);
@@ -539,6 +616,7 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
         for (const auto& descriptor : call.session.operations().descriptors()) {
             auto* record = out.object();
             out.set(record, "id", out.text(descriptor.schema.typeId));
+            out.set(record, "description", out.text(descriptor.schema.description));
             auto* schema = out.array();
             for (const auto& argument : descriptor.schema.arguments) {
                 auto* item = out.object();

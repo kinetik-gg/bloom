@@ -102,6 +102,25 @@ struct SnapshotCompileResult {
     std::vector<CompileDiagnostic> diagnostics;
 };
 
+// A composition that does not compile, as the preview controller, the status bar and scripting
+// clients present it: one plain sentence and what it is about. The full diagnostics stay on the
+// result for panels that list them all.
+struct CompileFailureSummary final {
+    // compileDiagnosticCodeId() of the first error.
+    std::string code;
+    // "Layer Output could not be lowered: ..." -- a sentence, ending in a full stop.
+    std::string detail;
+    document::CompositionId compositionId;
+    std::optional<document::NodeId> nodeId;
+    std::optional<document::ParameterId> parameterId;
+
+    friend bool operator==(const CompileFailureSummary&, const CompileFailureSummary&) = default;
+};
+
+// The first error of a Failed or Unsupported result; std::nullopt for Compiled and Cancelled.
+[[nodiscard]] std::optional<CompileFailureSummary>
+compileFailureSummary(const SnapshotCompileResult& result, document::CompositionId composition);
+
 class SnapshotCompiler final {
   public:
     explicit SnapshotCompiler(const NodeDefinitionRegistry& registry) noexcept

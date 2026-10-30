@@ -18,6 +18,7 @@ add_library(bloom_scripting STATIC)
 target_sources(
     bloom_scripting
     PRIVATE
+        command_diagnostics.cpp
         export.cpp
         export_headless.cpp
         json_script.cpp
@@ -25,6 +26,9 @@ target_sources(
         operation_registry.cpp
         operation_registry_alignment.cpp
         operation_registry_export.cpp
+        operation_frame_times.cpp
+        operation_registry_parity_layers.cpp
+        operation_registry_parity_project.cpp
         operation_values.hpp
         render.cpp
         session.cpp
@@ -32,6 +36,7 @@ target_sources(
         FILE_SET HEADERS
         BASE_DIRS include
         FILES
+            include/bloom/scripting/command_diagnostics.hpp
             include/bloom/scripting/events.hpp
             include/bloom/scripting/export.hpp
             include/bloom/scripting/facade.hpp
@@ -72,6 +77,16 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.scripting.operation-schemas
         COMMAND bloom_scripting_operation_schema_test
+        LABELS unit scripting commands document
+    )
+    # MCP parity operations: every UI edit that had no op runs through the registry, makes one
+    # undo step and undoes/redoes.
+    add_executable(bloom_scripting_parity_operations_test tests/parity_operations_tests.cpp)
+    target_link_libraries(bloom_scripting_parity_operations_test PRIVATE bloom_scripting)
+    bloom_enable_warnings(bloom_scripting_parity_operations_test)
+    bloom_add_test(
+        NAME bloom.scripting.parity-operations
+        COMMAND bloom_scripting_parity_operations_test
         LABELS unit scripting commands document
     )
     add_executable(bloom_scripting_layer_alignment_test tests/layer_alignment_tests.cpp)

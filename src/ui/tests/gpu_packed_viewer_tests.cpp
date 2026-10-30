@@ -50,9 +50,15 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
 #include <iostream>
 #include <memory>
 #include <string>
+
+#if defined(__linux__)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 using namespace bloom;
 using namespace bloom::ui::verticalproof;
@@ -183,6 +189,11 @@ void observe(const char* name, ui::ViewerEditor& viewer, QSplitter& splitter, QW
 // 2048x858 composition with 2048x858 footage and three transformed solid layers.
 namespace {
 bool gFootage2k = false;
+// Measurement variants of the cache100 RAM fill: Quarter resolution, footage dropped from the page
+// cache before the fill, and the application's scheduler instead of the 2-worker test scheduler.
+bool gQuarter = false;
+bool gColdFootage = false;
+bool gAppScheduler = false;
 } // namespace
 // Cache qualification reuses the explicit retirement teardown guard above.
 #include "gpu_packed_cache100_proof.ipp"
@@ -213,6 +224,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             preparationWidth = 0;
         } else if (argument == "--footage-2k") {
             gFootage2k = true;
+        } else if (argument == "--quarter") {
+            gQuarter = true;
+        } else if (argument == "--cold-footage") {
+            gColdFootage = true;
+        } else if (argument == "--app-scheduler") {
+            gAppScheduler = true;
         } else if (argument == "--cache100-half") {
             cache100 = true;
             half = true;
@@ -242,7 +259,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     QCoreApplication::setOrganizationName("BloomProof");
     QCoreApplication::setApplicationName("PackedViewer");
     QSettings().setValue("viewer/resolution", "Full");
-    if (options.loader_path.empty() || !QApplication::platformName().startsWith("wayland")) {
+    // The cache100 RAM-fill harness uses no presentation surface and also runs offscreen.
+    const bool offscreenCache = cache100 && QApplication::platformName() == "offscreen";
+    if (options.loader_path.empty() ||
+        (!offscreenCache && !QApplication::platformName().startsWith("wayland"))) {
         std::cout << "Unsupported: private Wayland and genuine Vulkan device are required\n";
         return options.require_device ? 1 : 77;
     }

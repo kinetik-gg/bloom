@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/mcp/live_ui_port.hpp>
 #include <bloom/mcp/protocol.hpp>
 
 #include <cstdint>
@@ -86,6 +87,10 @@ struct McpCoreDependencies final {
     // with the reason "Bloom can't find a folder for captures." At most kMcpRetainedCaptures files
     // are kept.
     std::filesystem::path captureDirectory;
+    // Session and UI seams, called through `exports.run` on the owner thread. The live host
+    // passes the application's bindings; the stdio host binds only projectLifecycle (over its
+    // headless session) and every other live-only tool answers bloom.mcp.not-live.
+    McpLiveUiPort ui{};
     // serverInfo.version in initialize.
     std::string serverVersion;
     McpMessageLimits limits = kMcpMessageLimits;
@@ -225,6 +230,12 @@ class McpServerCore final {
     // The live host: follow the live session's current generation's command events (the service
     // calls it from pump() so events after a replacement are kept from the start). Any thread.
     void followLiveSession();
+
+    // The stdio host: replaces the headless session's project in place (project.open, project.new
+    // and project.close through scripting::Session::adopt inside `replace`). The core lets go of
+    // the old project's event stream before `replace` runs and follows the new one after it; older
+    // events cursors report resetRequired. Call it from the thread that owns the session.
+    void replaceHeadlessProject(const std::function<void()>& replace);
 
     struct State;
 

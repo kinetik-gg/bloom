@@ -1,4 +1,5 @@
 #include "native.hpp"
+#include <bloom/scripting/command_diagnostics.hpp>
 
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
@@ -219,29 +220,18 @@ nb::dict commandResult(const commands::CommandResult& result) {
     row["revision"] = result.afterRevision.value();
     row["status"] = static_cast<int>(result.status);
     nb::list diagnostics;
-    for (const auto& failure : result.operationFailures) {
+    for (const auto& item : commandDiagnostics(result)) {
         nb::dict diagnostic;
-        diagnostic["code"] = "bloom.scripting.command-rejected";
-        diagnostic["operation_id"] = failure.operationType;
+        diagnostic["code"] = item.code;
+        if (item.severity != "error")
+            diagnostic["severity"] = item.severity;
+        diagnostic["operation_id"] = item.operation;
+        diagnostic["operation_index"] =
+            item.operationIndex ? nb::cast(*item.operationIndex) : nb::none();
         diagnostic["argument"] = "";
-        diagnostic["message"] = failure.issue.message;
-        diagnostics.append(diagnostic);
-    }
-    for (const auto& warning : result.warnings) {
-        nb::dict diagnostic;
-        diagnostic["code"] = "bloom.scripting.operation-warning";
-        diagnostic["severity"] = "warning";
-        diagnostic["operation_id"] = warning.operationType;
-        diagnostic["argument"] = "";
-        diagnostic["message"] = warning.issue.message;
-        diagnostics.append(diagnostic);
-    }
-    if (!result.succeeded() && result.operationFailures.empty()) {
-        nb::dict diagnostic;
-        diagnostic["code"] = result.status == commands::CommandStatus::StaleRevision
-                                 ? "bloom.scripting.stale-revision"
-                                 : "bloom.scripting.command-rejected";
-        diagnostic["message"] = "The host refused the transaction";
+        if (!item.path.empty())
+            diagnostic["path"] = item.path;
+        diagnostic["message"] = item.message;
         diagnostics.append(diagnostic);
     }
     row["diagnostics"] = diagnostics;

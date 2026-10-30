@@ -1,6 +1,7 @@
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <algorithm>
+#include <array>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -69,10 +70,12 @@ const char* domainName(const render::GpuProcessingPhaseDomain domain) noexcept {
 }
 std::optional<std::uint64_t> processHeadroom(const ProcessMemorySample& sample) noexcept {
     std::optional<std::uint64_t> result;
-    for (const auto& domain : sample.domains) {
+    for (std::size_t index = 0; index < sample.domains.size(); ++index) {
+        const auto& domain = sample.domains[index];
         if (domain.kind != ProcessMemoryLimitKind::Finite)
             continue;
-        const auto current = domain.currentBytes.value_or(0);
+        // Clean page cache in the domain is reclaimable on demand and is not in use.
+        const auto current = processMemoryDomainUnreclaimableBytes(sample, index);
         const auto remaining = domain.limitBytes > current ? domain.limitBytes - current : 0;
         result = result ? std::min<std::uint64_t>(*result, remaining) : remaining;
     }
@@ -264,6 +267,19 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
                 ? std::optional{std::min(*allowance, addSaturating(*current, headroom_.ramBytes))}
                 : std::nullopt;
     }
+    // The ceiling decides refusal versus waiting: a need within it waits for memory that other
+    // work in the same limit releases; only a need above it can never be given.
+    if (fresh) {
+        std::optional<std::uint64_t> ceiling;
+        if (physicalBytes != 0)
+            ceiling = physicalBytes;
+        for (const auto& domain : sample.process.domains)
+            if (domain.kind == ProcessMemoryLimitKind::Finite)
+                ceiling = ceiling ? std::min<std::uint64_t>(*ceiling, domain.limitBytes)
+                                  : domain.limitBytes;
+        hostCeiling_ = ceiling;
+        budget_.setHostCeiling(minusHeadroom(hostCeiling_, headroom_.ramBytes));
+    }
     // The RAM headroom preference is the only margin kept free of Bloom's work and caches.
     allowance = minusHeadroom(allowance, headroom_.ramBytes);
     const bool ready =
@@ -356,14 +372,19 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
     // budget subtracts all claims; unallocated phase reservations remain charged. With several
     // devices the aggregate root has no per-device ownership split, so use raw free conservatively.
     std::uint64_t ownedLocalNative = 0;
-    // Every owner sharing this root reports the same physical GPU (one device-local heap size):
-    // the live budget is process-wide there, so it already excludes all of the root's backing.
+    // Every owner sharing this root reports the same physical GPU (one driver device UUID): the
+    // live budget is process-wide there, so it already excludes all of the root's backing. One
+    // owner is its own device; several need a known, identical UUID (equal heap sizes are not
+    // proof: two identical cards report the same size).
+    constexpr std::array<std::uint8_t, 16> unknownDevice{};
     bool sameLiveDevice = deviceCount_ != 0;
-    for (std::size_t slot = 0; slot < deviceCount_; ++slot)
+    for (std::size_t slot = 0; slot < deviceCount_; ++slot) {
+        const auto& budget = devices_[slot].budget;
         sameLiveDevice =
-            sameLiveDevice &&
-            devices_[slot].budget.source == render::GpuAllocationBudgetSource::MemoryBudget &&
-            devices_[slot].budget.device_local_bytes == devices_[0].budget.device_local_bytes;
+            sameLiveDevice && budget.source == render::GpuAllocationBudgetSource::MemoryBudget &&
+            (deviceCount_ == 1 || (budget.device_uuid != unknownDevice &&
+                                   budget.device_uuid == devices_[0].budget.device_uuid));
+    }
     if (sameLiveDevice) {
         const auto claims = budget_.snapshot();
         const auto localImages =
@@ -502,6 +523,7 @@ void GpuProcessingPhasePolicy::setHeadroom(const MemoryHeadroom headroom) noexce
     const auto previous = headroom_;
     headroom_ = headroom;
     budget_.shiftHostCapacity(previous.ramBytes, headroom.ramBytes);
+    budget_.setHostCeiling(minusHeadroom(hostCeiling_, headroom_.ramBytes));
     if (deviceCount_ != 0)
         applyDeviceReportsLocked();
 }
@@ -622,17 +644,23 @@ render::GpuProcessingPhaseGrant
 reserveHostEvaluationPhase(GpuProcessingPhasePolicy& policy, const std::uint64_t pixels,
                            const std::uint64_t requestedPixelBytes,
                            const GpuProcessingPhaseOutput output, const bool encodedOutput,
-                           const GpuAdmissionClass admissionClass) noexcept {
+                           const GpuAdmissionClass admissionClass,
+                           const std::uint64_t minimumPixelBytes) noexcept {
     if (pixels == 0 || pixels > std::numeric_limits<std::uint64_t>::max() / 16) {
         return {};
     }
+    // The need is the evaluation's preflight live-image peak when the caller planned one, at
+    // least one float frame; the requested size stays an unclaimed ceiling above it.
+    const auto minimum = std::max(pixels * 16, minimumPixelBytes);
     return policy.reserve({.output = output,
                            .pixels = pixels,
                            .encodedBytes = encodedOutput ? pixels * 16 : 0,
                            .metadataBytes = 16ULL * 1024 * 1024,
                            .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
-                           .requestedSourceBytes = requestedPixelBytes,
-                           .minimumSourceBytes = pixels * 16,
+                           .requestedSourceBytes = minimumPixelBytes != 0
+                                                       ? std::max(requestedPixelBytes, minimum)
+                                                       : requestedPixelBytes,
+                           .minimumSourceBytes = minimum,
                            .native = false,
                            .admissionClass = admissionClass});
 }

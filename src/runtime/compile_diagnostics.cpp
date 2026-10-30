@@ -1,5 +1,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 
+#include <algorithm>
+
 namespace bloom::runtime {
 
 std::string_view compileDiagnosticCodeId(const CompileDiagnosticCode code) noexcept {
@@ -50,6 +52,37 @@ std::string_view compileDiagnosticCodeId(const CompileDiagnosticCode code) noexc
         return "bloom.runtime.compile.layer-extent-unresolved";
     }
     return "bloom.runtime.compile.unknown-diagnostic";
+}
+
+std::optional<CompileFailureSummary>
+compileFailureSummary(const SnapshotCompileResult& result,
+                      const document::CompositionId composition) {
+    if (result.status == SnapshotCompileStatus::Compiled ||
+        result.status == SnapshotCompileStatus::Cancelled)
+        return std::nullopt;
+    const auto error = std::ranges::find(result.diagnostics, DiagnosticSeverity::Error,
+                                         &CompileDiagnostic::severity);
+    CompileFailureSummary summary{.code = {},
+                                  .detail = "The composition cannot be rendered.",
+                                  .compositionId = composition,
+                                  .nodeId = std::nullopt,
+                                  .parameterId = std::nullopt};
+    if (error == result.diagnostics.end())
+        return summary;
+    summary.code = std::string(compileDiagnosticCodeId(error->code));
+    auto text = error->summary;
+    if (!error->detail.empty())
+        text += (text.empty() ? "" : ": ") + error->detail;
+    if (text.empty())
+        text = "The composition cannot be rendered";
+    if (text.back() != '.')
+        text.push_back('.');
+    summary.detail = std::move(text);
+    if (error->subject.compositionId.isValid())
+        summary.compositionId = error->subject.compositionId;
+    summary.nodeId = error->subject.nodeId;
+    summary.parameterId = error->subject.parameterId;
+    return summary;
 }
 
 } // namespace bloom::runtime

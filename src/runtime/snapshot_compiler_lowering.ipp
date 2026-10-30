@@ -1459,6 +1459,30 @@ lowerVideoSource(const document::NodeRecord& node) {
         *space,  inputSpace == nullptr ? std::string{} : *inputSpace};
 }
 
+// A driven parameter whose driver this composition cannot read (an output port the driving node
+// does not have, or a kind no promotion reaches). Reported against the parameter, in words, instead
+// of as a topology failure; true when it reported one. Commands refuse such a binding at commit,
+// so only an older document or another client's edit reaches it.
+[[nodiscard]] bool unreadableDriver(const document::NodeRecord& node,
+                                    const document::ParameterBinding* binding,
+                                    const runtime::SocketValueKind kind,
+                                    const std::optional<runtime::ValueOutputIndex>& resolved) {
+    const auto* parameter = binding == nullptr ? nullptr : findParameter(binding->parameterId);
+    const auto* driver =
+        parameter == nullptr ? nullptr : std::get_if<document::DriverBindingSource>(&parameter->source);
+    if (driver == nullptr || resolved.has_value())
+        return false;
+    auto diagnosticSubject = subject(node.id, "parameter." + binding->role);
+    diagnosticSubject.parameterId = parameter->id;
+    addFailure(runtime::CompileDiagnosticCode::UnknownPort, std::move(diagnosticSubject),
+               "Parameter " + std::to_string(parameter->id.value()) + " (" + binding->role +
+                   ") cannot read its driver",
+               "Node " + std::to_string(driver->sourceNodeId.value()) + " has no " +
+                   std::string(document::socketValueKindName(kind)) + " output \"" +
+                   driver->outputPort + "\" that reaches it; drive it from an existing output");
+    return true;
+}
+
 [[nodiscard]] std::optional<runtime::CompiledOperation>
 lowerShape(const document::NodeRecord& node) {
     const auto size = compiledVec2Parameter(findParameterBinding(node, "size"));
@@ -1472,9 +1496,22 @@ lowerShape(const document::NodeRecord& node) {
     const auto* start = parameterConstant<document::Vec2d>(findParameterBinding(node, "lineStart"));
     const auto* end = parameterConstant<document::Vec2d>(findParameterBinding(node, "lineEnd"));
     const auto* path = parameterConstant<document::PathValue>(findParameterBinding(node, "path"));
-    const auto* fillEnabled = parameterConstant<bool>(findParameterBinding(node, "fillEnabled"));
+    // The switches lower like a Layer Output's blend mode: a constant, or a Boolean driver with
+    // the registry default carried beside it.
+    const auto* fillBinding = findParameterBinding(node, "fillEnabled");
+    const auto* strokeBinding = findParameterBinding(node, "strokeEnabled");
+    const auto drivenFill = drivenOutput(fillBinding, runtime::SocketValueKind::Boolean);
+    const auto drivenStroke = drivenOutput(strokeBinding, runtime::SocketValueKind::Boolean);
+    const auto* storedFill = parameterConstant<bool>(fillBinding);
+    const auto* storedStroke = parameterConstant<bool>(strokeBinding);
+    const bool fillDefault = true;
+    const bool strokeDefault = false;
+    if (unreadableDriver(node, fillBinding, runtime::SocketValueKind::Boolean, drivenFill) ||
+        unreadableDriver(node, strokeBinding, runtime::SocketValueKind::Boolean, drivenStroke))
+        return std::nullopt;
+    const auto* fillEnabled = storedFill != nullptr ? storedFill : drivenFill ? &fillDefault : nullptr;
     const auto* strokeEnabled =
-        parameterConstant<bool>(findParameterBinding(node, "strokeEnabled"));
+        storedStroke != nullptr ? storedStroke : drivenStroke ? &strokeDefault : nullptr;
     const auto* align = parameterConstant<std::int64_t>(findParameterBinding(node, "strokeAlign"));
     const auto* join = parameterConstant<std::int64_t>(findParameterBinding(node, "strokeJoin"));
     const auto* cap = parameterConstant<std::int64_t>(findParameterBinding(node, "strokeCap"));
@@ -1484,7 +1521,7 @@ lowerShape(const document::NodeRecord& node) {
         addTopologyFailure(node.id, "Shape parameters could not be lowered.");
         return std::nullopt;
     }
-    return runtime::CompiledShape{node.id,
+    auto shape = runtime::CompiledShape{node.id,
                                   static_cast<document::ShapeKind>(*kind),
                                   *size,
                                   *radius,
@@ -1502,6 +1539,11 @@ lowerShape(const document::NodeRecord& node) {
                                   static_cast<document::ShapeStrokeJoin>(*join),
                                   static_cast<document::ShapeStrokeCap>(*cap),
                                   static_cast<document::ShapeFillRule>(*rule)};
+    shape.fillEnabledParameterId = fillBinding->parameterId;
+    shape.drivenFillEnabled = drivenFill;
+    shape.strokeEnabledParameterId = strokeBinding->parameterId;
+    shape.drivenStrokeEnabled = drivenStroke;
+    return shape;
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -1715,6 +1757,9 @@ lowerLayerOutput(const document::NodeRecord& node,
     // default beside the driver and the evaluator reads the driver. A mode is a jump between two
     // named modes rather than a value with a midpoint, which is exactly what a driver expresses.
     const auto drivenBlendMode = drivenOutput(blendModeBinding, runtime::SocketValueKind::Integer);
+    if (unreadableDriver(node, blendModeBinding, runtime::SocketValueKind::Integer,
+                         drivenBlendMode))
+        return std::nullopt;
     const auto position = compiledVec2Parameter(positionBinding);
     const auto anchor = compiledVec2Parameter(anchorBinding);
     const auto scale = compiledVec2Parameter(scaleBinding);

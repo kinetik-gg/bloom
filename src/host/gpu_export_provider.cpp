@@ -4,6 +4,7 @@
 
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_prepared_upload_cache.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
 
 #include <chrono>
@@ -80,9 +81,13 @@ struct GpuExportProvider::State final {
             const auto ledger = std::make_shared<runtime::MemoryBudgetLedger>(
                 sample.physicalBytes, sample.machine.availableBytes.value_or(0));
             ledger->beginProcessSampling();
-            auto pool = std::shared_ptr<runtime::OperationCache>(
-                new runtime::OperationCache(ledger->allocate().operationCacheByteBudget, *ledger),
-                [ledger](runtime::OperationCache* cache) { delete cache; });
+            // The reusable pool joins the process-wide ledger, where every cache shares one
+            // budget and shrinks when the machine needs memory. A pool on this private sampling
+            // ledger was invisible to the others and sized as if it were the only cache: every
+            // export or capture provider could retain its own share of physical memory.
+            auto& processLedger = runtime::processMemoryBudgetLedger();
+            auto pool = std::make_shared<runtime::OperationCache>(
+                processLedger.allocate().operationCacheByteBudget, processLedger);
             const auto originalProvider = options.mediaContextProvider;
             const auto originalContext = options.mediaContext;
             const auto initial = originalProvider ? originalProvider() : originalContext;

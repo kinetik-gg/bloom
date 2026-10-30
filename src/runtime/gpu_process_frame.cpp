@@ -262,9 +262,16 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
             executor->cancel();
         }
         phase.touched = true;
+        const auto progressBefore = gpuSceneExecutorStepProgress(executor->counters());
         poll = executor->poll();
         if (poll != GpuSceneExecutorPollResult::Pending) {
             break;
+        }
+        // A poll that started or completed a step is followed at once by the next one; only a
+        // poll waiting on a fence yields the thread briefly.
+        if (gpuSceneExecutorStepProgress(executor->counters()) != progressBefore &&
+            std::chrono::steady_clock::now() - startedAt < options.nativeDeadline) {
+            continue;
         }
         if (std::chrono::steady_clock::now() - startedAt >= options.nativeDeadline) {
             deadlineExceeded = true;
@@ -280,7 +287,8 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
             }
             break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // Waiting on a fence: GPU steps retire in microseconds, so the wait is as short.
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
 
     // An image ceiling can refuse a later scene step after every earlier native submission has

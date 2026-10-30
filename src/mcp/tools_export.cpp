@@ -109,7 +109,7 @@ void onOwner(McpServerCore::State& core, const McpExportAccess::Work& work,
 
 [[noreturn]] void noQueue() {
     throw ToolFailure(McpToolErrorCode::ExportUnavailable,
-                      "The export queue is not available while a project is opening.");
+                      "Export isn't available in this window yet.");
 }
 
 yyjson_mut_val* availabilityValue(Json& out, const host::ExportCommandAvailability& value) {
@@ -279,6 +279,26 @@ void waitForQueue(McpServerCore::State& core, std::optional<host::ExportQueueSub
 
 } // namespace
 
+yyjson_mut_val* logEntries(Json& out, const std::vector<host::ExportLogEntry>& entries) {
+    auto* rows = out.array();
+    constexpr std::array<std::string_view, 4> severities{"information", "warning", "error",
+                                                         "fatal"};
+    for (const auto& entry : entries) {
+        auto* row = out.object();
+        out.set(row, "sequence", out.number(entry.sequence));
+        out.set(row, "sinceStartMs",
+                out.number(static_cast<std::uint64_t>(entry.sinceStart.count())));
+        const auto severity = static_cast<std::size_t>(entry.severity);
+        out.set(row, "severity",
+                out.text(severity < severities.size() ? severities[severity] : "information"));
+        out.set(row, "code", out.text(entry.code));
+        out.set(row, "frame", entry.frame ? out.number(*entry.frame) : out.null());
+        out.set(row, "message", out.text(entry.message));
+        out.append(rows, row);
+    }
+    return rows;
+}
+
 document::ExportDestination transientDestination(const std::string& path, yyjson_val* overwrite) {
     document::ExportDestination destination;
     const std::filesystem::path file(path);
@@ -330,7 +350,11 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
     if (missing)
         noQueue();
     if (!submitted.accepted || !submitted.job)
-        throw ToolFailure(McpToolErrorCode::ExportUnavailable, submitted.availability.reason,
+        throw ToolFailure(submitted.availability.code ==
+                                  host::ExportUnavailableCode::PreflightBlocked
+                              ? McpToolErrorCode::PreflightBlocked
+                              : McpToolErrorCode::ExportUnavailable,
+                          submitted.availability.reason,
                           std::string(unavailableName(submitted.availability.code)));
     const auto job = *submitted.job;
     std::uint64_t observed = sub ? sub->serial() : 0;
@@ -363,20 +387,41 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
         if (call.control.progress && !host::isTerminal(view->state))
             call.control.progress(progressOf(*view));
         if (host::isTerminal(view->state)) {
+            // The run's log is read before the result is acknowledged (which retires the job), so
+            // the call's result carries the detail the job's log had -- success or failure.
+            std::vector<host::ExportLogEntry> log;
             core.dependencies.exports.run(
                 [&](host::ExportQueueService* queue, const std::uint64_t current) {
-                    if (queue != nullptr && current == generation)
-                        static_cast<void>(queue->acknowledgeTransient(job));
+                    if (queue == nullptr || current != generation)
+                        return;
+                    auto batch = queue->log(job, 0);
+                    log = std::move(batch.entries);
+                    if (log.size() > kTransientLogEntries)
+                        log.erase(log.begin(),
+                                  log.end() - static_cast<std::ptrdiff_t>(kTransientLogEntries));
+                    for (auto& entry : log)
+                        if (entry.message.size() > 1024)
+                            entry.message.resize(1024);
+                    static_cast<void>(queue->acknowledgeTransient(job));
                 },
                 {});
+            const auto fail = [&](const McpToolErrorCode code, std::string message,
+                                  std::string detail) {
+                ToolFailure failure(code, message, std::move(detail));
+                failure.job = job.value();
+                failure.log = std::make_shared<std::vector<host::ExportLogEntry>>(log);
+                return failure;
+            };
             if (view->state == host::ExportJobState::Stopped || stopping)
-                throw ToolFailure(McpToolErrorCode::Cancelled,
-                                  "The request was cancelled; the job stopped.");
+                throw fail(McpToolErrorCode::Cancelled,
+                           "The request was cancelled; the job stopped.", {});
             if (view->state == host::ExportJobState::Failed)
-                throw ToolFailure(McpToolErrorCode::ExportFailed,
-                                  view->failure ? view->failure->reason : "The export failed.",
-                                  view->failure ? view->failure->diagnosticCode : std::string{});
+                throw fail(McpToolErrorCode::ExportFailed,
+                           view->failure ? view->failure->reason : "The export failed.",
+                           view->failure ? view->failure->diagnosticCode : std::string{});
             TransientResult result;
+            result.job = job.value();
+            result.log = std::move(log);
             for (const auto& output : view->outputs) {
                 if (!output.verification)
                     continue;
@@ -591,23 +636,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                     const auto batch = queue->log(jobArgument(), after);
                     out.set(result, "gap", out.boolean(batch.gap));
                     out.set(result, "lastSequence", out.number(batch.lastSequence));
-                    auto* entries = out.array();
-                    constexpr std::array<std::string_view, 4> severities{"information", "warning",
-                                                                         "error", "fatal"};
-                    for (const auto& entry : batch.entries) {
-                        auto* row = out.object();
-                        out.set(row, "sequence", out.number(entry.sequence));
-                        out.set(row, "sinceStartMs",
-                                out.number(static_cast<std::uint64_t>(entry.sinceStart.count())));
-                        const auto severity = static_cast<std::size_t>(entry.severity);
-                        out.set(row, "severity",
-                                out.text(severity < severities.size() ? severities[severity]
-                                                                      : "information"));
-                        out.set(row, "code", out.text(entry.code));
-                        out.set(row, "frame", entry.frame ? out.number(*entry.frame) : out.null());
-                        out.set(row, "message", out.text(entry.message));
-                        out.append(entries, row);
-                    }
+                    auto* entries = logEntries(out, batch.entries);
                     out.set(result, "entries", entries);
                     break;
                 }

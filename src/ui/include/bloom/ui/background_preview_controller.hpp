@@ -5,8 +5,11 @@
 #include <QObject>
 #include <QTimer>
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <vector>
 
 namespace bloom::ui {
 
@@ -24,6 +27,14 @@ class BackgroundPreviewController final : public QObject {
     ~BackgroundPreviewController() override;
 
     void setPlaying(bool playing);
+    // Frames in flight ahead of the playhead come from measured capacity: the provider answers
+    // how many more frames of `framePixels` fit the processing root now. Without one, a single
+    // frame is in flight.
+    using ReadAheadWidthProvider = std::function<std::size_t(std::uint64_t framePixels)>;
+    void setReadAheadWidthProvider(ReadAheadWidthProvider provider) {
+        widthProvider_ = std::move(provider);
+    }
+    [[nodiscard]] std::size_t inFlightCount() const noexcept { return inFlight_.size(); }
 
   public slots:
     void restart();
@@ -49,13 +60,19 @@ class BackgroundPreviewController final : public QObject {
     PreviewPreparationFunction preparation_;
     PreviewPreparationSubmitter submitter_;
     QTimer idleTimer_;
-    std::optional<runtime::TaskHandle<PreviewPreparationResultHandle>> active_;
-    std::optional<runtime::PreviewRequestIdentity> activeIdentity_;
-    std::chrono::steady_clock::time_point submittedAt_;
+    struct InFlight final {
+        runtime::TaskHandle<PreviewPreparationResultHandle> handle;
+        runtime::PreviewRequestIdentity identity;
+        std::chrono::steady_clock::time_point submittedAt;
+        // A cancelled frame stays a slot until terminal; its result is discarded.
+        bool discard = false;
+    };
+    std::vector<InFlight> inFlight_;
+    ReadAheadWidthProvider widthProvider_;
+    std::size_t readAheadWidth_ = 1;
     std::uint64_t generation_ = 0;
     std::uint64_t cursor_ = 0;
     std::uint64_t considered_ = 0;
-    bool discardActive_ = false;
     bool playing_ = false;
     bool exhausted_ = false;
     bool shuttingDown_ = false;
