@@ -443,8 +443,8 @@ snapshots are installed but before the ordinary refresh signals. The foreground 
 detaches its active handle, clears any pending request and the frame cache, and resets its displayed
 and request state there, so an old document's queued completion can never publish or cache pixels
 under a colliding numeric key; the normal evaluation/composition signals then build the new
-document's request. RAM preview and background caching already cancel on those signals and discard
-their old completions the same way.
+document's request. Background caching cancels on those signals; a RAM preview run ends on the
+composition switch that accompanies a rebind. Both discard their old completions the same way.
 
 ### Sequence Export
 
@@ -491,8 +491,9 @@ frame status. Proxy painting uses the existing smooth image transform into the c
 Policy and resolved resolution are preview request/cache identity inputs, not process semantics.
 The existing proxy extent reaches evaluation and display preparation unchanged; identity goldens
 and export resolution remain unchanged. RAM preview uses the same controller-resolved factor and
-policy for every request and cache lookup. A policy or Auto factor change cancels an active RAM
-preview run, keeping completed cached frames and requiring a new run at the new resolution. Single
+policy for every request and cache lookup. A policy or Auto factor change (for example a Viewer
+resize) rescans an active RAM preview run at the new factor: the run continues and fills the range
+at the new resolution; the old factor's frames never count toward it. Single
 frame and frame-range exports always evaluate at Full, independently of the Viewer preference.
 
 ### RAM Preview
@@ -719,8 +720,9 @@ own button) prepares the composition's work-area frame range with at most two re
 reporting "Caching 42/240" in the window status bar and cancellable with Escape. The numerator is
 currently retained exact frame-grid samples, including valid preexisting entries, rather than
 insertion attempts. Its tooltip separately reports successful preparations this run and the longest
-contiguous cached span. Only a still-current fully retained range autoplays, from its beginning;
-a budget-limited partial range stops and leaves ordinary manual work-area playback available. Frames already cached are counted without being rendered again, so a
+contiguous cached span. A still-current fully retained range autoplays from its beginning; a range
+that outgrew memory ends PartialBudget and plays too, Play rendering the missing frames ahead of
+the playhead. Frames already cached are counted without being rendered again, so a
 second RAM preview of an unedited range is immediate. The range is the persisted half-open work
 area when set, otherwise `[0, duration)`, read through `CompositionSession::workArea()`. Playback
 starts inside and loops over those same frame indices. The start frame is included and the end
@@ -740,6 +742,16 @@ untouched. A frame outside the work area can still be displayed; it is simply no
 active RAM run adapts rather than cancels: the in-flight frame is allowed to land (retained only if
 still in range), the run rebases onto the new range, and only missing frames are submitted, so an
 expansion or shift fills just the entering interval and a fully cached shrink evaluates nothing.
+
+A run ends only on an explicit cancel (Escape, RAM Preview or Numpad 0 again, Stop, Purge) or a
+composition switch (owner decision, 2026-10-31). Everything else adapts: a render-affecting edit
+(`evaluationChanged`, or `documentEvaluationChanged` over the whole range) rescans and prepares only
+the frames it changed, keeping every still-valid frame; a late result from a revision the session
+has left, or a stale insert, rescans; a frame that fails or is cancelled by other work is retried up
+to three times and then skipped; retained frames lost for a non-memory reason (an expired resident
+lease, a cleared cache) are prepared again (at most eight rescans a run); memory never ends a run.
+Playhead moves, selection, panel focus, timeline scroll or zoom and `foregroundWorkRequested` do not
+touch a run. A run that could not keep every frame ends PartialBudget and still plays.
 Background fill follows the same rule through `workAreaChanged()`; the automatic pass, its budget,
 priority and yielding behavior are otherwise unchanged, and a range edit never turns itself into an
 explicit RAM command.

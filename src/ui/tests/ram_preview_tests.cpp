@@ -201,6 +201,8 @@ struct SessionFixture final {
     // When set, the preparation whose ordinal (counting from zero) equals this one blocks in
     // `gate`.
     std::optional<int> gateAtCall;
+    // When set, the preparation whose ordinal equals this one fails once (a transient failure).
+    std::optional<int> failAtCall;
     WorkerGate gate;
     // Declared last, and constructed in the initializer list, so the counting preparation function
     // it holds can capture `this` after every member it reads is already alive.
@@ -218,6 +220,13 @@ struct SessionFixture final {
             const auto ordinal = preparationCount.fetch_add(1);
             if (gateAtCall.has_value() && ordinal == *gateAtCall) {
                 gate.enterAndWait();
+            }
+            if (failAtCall.has_value() && ordinal == *failAtCall) {
+                runtime::TaskDiagnostic transient;
+                transient.code = "test.transient-failure";
+                transient.summary = "A transient preparation failure";
+                return runtime::TaskResult<ui::PreviewPreparationResultHandle>::failed(
+                    std::move(transient));
             }
             auto result = pipelineFixture.pipeline(snapshot, desiredIdentity, pixelStorageByteLimit,
                                                    interactionOverride, context);
@@ -900,6 +909,9 @@ void testRamPreviewSharesResolutionAndCachesByPolicy(Expectations& expectations)
     finishFixture(fixture, expectations);
 }
 
+// A resolution change mid-run (Auto following a Viewer resize, or an explicit factor) rescans the
+// range at the new factor instead of ending the run (owner, 2026-10-31: only an explicit cancel or
+// a composition switch ends RAM Preview).
 void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Resolution change during RAM preview", time(3, 25)));
     fixture.controller.setDisplayedCompositionScale(0.25);
@@ -911,30 +923,131 @@ void testResolutionChangeCancelsAnActiveRamPreview(Expectations& expectations) {
     ramPreview.start();
     expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
                         "a RAM preview proxy is in flight");
-    const auto cancelledAutoKey = fixture.controller.cacheKeyForTime(time(1, 25));
-    bool cancelled = false;
+    std::optional<ui::RamPreviewController::Completion> finished;
     QObject::connect(&ramPreview, &ui::RamPreviewController::cachingFinished, &fixture.bridge,
-                     [&cancelled](const ui::RamPreviewController::Completion outcome) {
-                         cancelled = outcome == ui::RamPreviewController::Completion::Cancelled;
+                     [&finished](const ui::RamPreviewController::Completion outcome) {
+                         finished = outcome;
                      });
     fixture.controller.setDisplayedCompositionScale(0.5);
-    expectations.expect(!ramPreview.isCaching() && cancelled &&
-                            !fixture.controller.ramPreviewProgress().has_value(),
-                        "an Auto factor change cancels the old range without starting playback");
+    expectations.expect(ramPreview.isCaching() && !finished,
+                        "an Auto factor change (a Viewer resize) does not end the run");
     fixture.gate.release();
+    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
+                            finished == ui::RamPreviewController::Completion::Complete,
+                        "the run rescans at the new factor and completes");
+    for (const auto frame : {0, 1, 2}) {
+        const auto halfKey = fixture.controller.cacheKeyForTime(time(frame, 25));
+        expectations.expect(halfKey && fixture.controller.frameCache().contains(*halfKey),
+                            "every frame of the range is cached at the new Half factor");
+    }
+    expectations.expect(ramPreview.cachedFrameCount() == 3,
+                        "the run counts only frames of the current factor");
+    finishFixture(fixture, expectations);
+}
+
+// A composition switch ends a run (the Viewer shows another composition), but every frame it
+// already filled stays cached for when the artist comes back; nothing fills the old composition
+// in the background meanwhile.
+void testCompositionSwitchEndsTheRunAndKeepsItsFrames(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM composition switch", time(6, 25)));
+    const auto original = fixture.session.compositionId();
+    commands::Transaction add("Add another composition", fixture.session.snapshot().revision());
+    add.emplace<commands::AddComposition>("Other", document::CompositionFormat{},
+                                          core::RationalTime::fromInteger(1));
+    const auto added = fixture.session.executeTransaction(std::move(add));
+    const auto other = added.succeeded()
+                           ? added.outputId<document::CompositionId>(commands::kAddCompositionOutput)
+                           : std::nullopt;
+    expectations.expect(other.has_value(), "a second composition exists");
+    if (!other) {
+        finishFixture(fixture, expectations);
+        return;
+    }
+    (void)fixture.session.setComposition(original);
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
-                        "the new Half preview reaches ready");
-    const auto halfKey = fixture.controller.cacheKeyForTime(time(0));
-    expectations.expect(cancelledAutoKey && halfKey &&
-                            !fixture.controller.frameCache().contains(*cancelledAutoKey) &&
-                            fixture.controller.frameCache().contains(*halfKey) &&
-                            ramPreview.cachedFrameCount() == 1,
-                        "the cancelled old factor does not publish its in-flight frame; the new "
-                        "foreground Half frame alone counts");
+                        "the original composition renders its first frame");
+    fixture.gateAtCall = fixture.preparationCount.load() + 2;
+    ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
+                                        fixture.bridge, fixture.countingPipeline());
+    std::optional<ui::RamPreviewController::Completion> finished;
+    QObject::connect(&ramPreview, &ui::RamPreviewController::cachingFinished, &fixture.bridge,
+                     [&finished](const ui::RamPreviewController::Completion outcome) {
+                         finished = outcome;
+                     });
+    ramPreview.start();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }), "the run is filling");
+    std::vector<ui::PreviewFrameCacheKey> filled;
+    for (const auto frame : {0, 1, 2})
+        if (const auto key = fixture.controller.cacheKeyForTime(time(frame, 25));
+            key && fixture.controller.frameCache().contains(*key))
+            filled.push_back(*key);
+    expectations.expect(filled.size() >= 2, "the run has filled frames before the switch");
+    (void)fixture.session.setComposition(*other);
+    expectations.expect(!ramPreview.isCaching() &&
+                            finished == ui::RamPreviewController::Completion::Cancelled,
+                        "a composition switch ends the run");
+    fixture.gate.release();
+    const auto calls = fixture.preparationCount.load();
+    (void)fixture.session.setComposition(original);
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "coming back renders the original composition");
+    for (const auto& key : filled)
+        expectations.expect(fixture.controller.frameCache().contains(key),
+                            "the frames the run filled are still cached after the round trip");
+    expectations.expect(fixture.preparationCount.load() <= calls + 1,
+                        "nothing filled the old composition in the background meanwhile");
+    finishFixture(fixture, expectations);
+}
+
+// A transient frame failure is retried, not a reason to end the run on its own.
+void testRamPreviewRetriesATransientFrameFailure(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM transient failure", time(6, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the failure fixture renders its first frame");
+    fixture.failAtCall = fixture.preparationCount.load() + 1;
+    ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
+                                        fixture.bridge, fixture.countingPipeline());
+    std::optional<ui::RamPreviewController::Completion> finished;
+    QObject::connect(&ramPreview, &ui::RamPreviewController::cachingFinished, &fixture.bridge,
+                     [&finished](const ui::RamPreviewController::Completion outcome) {
+                         finished = outcome;
+                     });
     ramPreview.start();
     expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
-                            ramPreview.cachedFrameCount() == 3,
-                        "a fresh RAM preview uses Half throughout");
+                            finished == ui::RamPreviewController::Completion::Complete &&
+                            ramPreview.cachedFrameCount() == 6,
+                        "a frame that failed once is prepared again and the run completes");
+    finishFixture(fixture, expectations);
+}
+
+// Session-only activity never touches a run: the playhead moving inside the range, foreground
+// work requests (a scrub, a playback tick) and a retained frame being dropped and re-filled.
+void testRamPreviewIgnoresSessionOnlyActivity(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM session activity", time(12, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the session fixture renders its first frame");
+    fixture.gateAtCall = fixture.preparationCount.load() + 2;
+    ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
+                                        fixture.bridge, fixture.countingPipeline());
+    std::optional<ui::RamPreviewController::Completion> finished;
+    QObject::connect(&ramPreview, &ui::RamPreviewController::cachingFinished, &fixture.bridge,
+                     [&finished](const ui::RamPreviewController::Completion outcome) {
+                         finished = outcome;
+                     });
+    ramPreview.start();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }), "a frame is in flight");
+    (void)fixture.session.setCurrentTime(time(7, 25));
+    emit fixture.controller.foregroundWorkRequested();
+    // The run's retained frames vanish for a non-memory reason (here the whole cache is cleared,
+    // as a document rebind does; an expired resident lease drops one frame the same way).
+    fixture.controller.frameCache().clear();
+    expectations.expect(ramPreview.isCaching() && !finished,
+                        "playhead moves, foreground requests and a lost frame do not end the run");
+    fixture.gate.release();
+    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }) &&
+                            finished == ui::RamPreviewController::Completion::Complete &&
+                            ramPreview.cachedFrameCount() == 12,
+                        "the run re-fills the lost frame and completes");
     finishFixture(fixture, expectations);
 }
 
@@ -1057,6 +1170,8 @@ void testLayoutEditRetainsTheRamRun(Expectations& expectations) {
 
 // LAYOUT-2: a pixel edit advances the evaluation snapshot, which cancels a RAM run in flight
 // because its cached frames would belong to an evaluation the artist has left behind.
+// A pixel-changing edit mid-run keeps every still-valid frame and continues: the run rescans and
+// prepares only what the edit changed, then completes under the new revision.
 void testPixelEditCancelsTheRamRun(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Pixel Cancel", time(24, 25)));
     expectations.expect(animateSolidLayer(fixture.session),
@@ -1068,6 +1183,11 @@ void testPixelEditCancelsTheRamRun(Expectations& expectations) {
     fixture.gateAtCall = fixture.preparationCount.load();
     ui::RamPreviewController ram(fixture.session, fixture.controller, fixture.scheduler,
                                  fixture.bridge, fixture.countingPipeline());
+    std::optional<ui::RamPreviewController::Completion> finished;
+    QObject::connect(&ram, &ui::RamPreviewController::cachingFinished, &fixture.bridge,
+                     [&finished](const ui::RamPreviewController::Completion outcome) {
+                         finished = outcome;
+                     });
     ram.start();
     expectations.expect(waitUntil([&] { return fixture.gate.entered(); }) && ram.isCaching(),
                         "the RAM run is in flight on the worker");
@@ -1075,13 +1195,20 @@ void testPixelEditCancelsTheRamRun(Expectations& expectations) {
     commands::Transaction mute("Mute Node", fixture.session.snapshot().revision());
     mute.emplace<commands::SetNodeMuted>(fixture.session.compositionId(), nodeId, true);
     expectations.expect(fixture.session.executeNodeTransaction(std::move(mute)).changed() &&
-                            !ram.isCaching() &&
+                            ram.isCaching() &&
                             fixture.session.evaluationSnapshot().revision() ==
                                 fixture.session.snapshot().revision(),
-                        "a pixel edit advances evaluation and cancels the run");
+                        "a pixel edit advances evaluation and the run keeps going");
 
     fixture.gate.release();
-    ram.beginShutdown();
+    expectations.expect(waitUntil([&] { return !ram.isCaching(); }) &&
+                            finished == ui::RamPreviewController::Completion::Complete &&
+                            ram.cachedFrameCount() == 24,
+                        "the run rescans and completes under the new revision");
+    const auto key = fixture.controller.cacheKeyForTime(time(12, 25));
+    expectations.expect(key && key->sourceRevision == fixture.session.snapshot().revision() &&
+                            fixture.controller.frameCache().contains(*key),
+                        "the cached frames belong to the edited revision");
     finishFixture(fixture, expectations);
 }
 
@@ -1547,6 +1674,9 @@ int main(int argc, char** argv) {
         testOperationCacheUnderRamPreview(expectations);
         testRamPreviewSharesResolutionAndCachesByPolicy(expectations);
         testResolutionChangeCancelsAnActiveRamPreview(expectations);
+        testRamPreviewRetriesATransientFrameFailure(expectations);
+        testRamPreviewIgnoresSessionOnlyActivity(expectations);
+        testCompositionSwitchEndsTheRunAndKeepsItsFrames(expectations);
         testCompiledPlanCacheCompilesOncePerRevision(expectations);
         testCompiledPlanCacheBindsSnapshotIdentity(expectations);
         testCacheHitPublishesWithoutEvaluating(expectations);

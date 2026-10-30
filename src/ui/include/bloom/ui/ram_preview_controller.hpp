@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 namespace bloom::ui {
@@ -246,6 +247,14 @@ class RamPreviewController final : public QObject {
     // Memory evicted or refused some of this run's frames. A RAM preview never stops for memory:
     // it keeps filling (the cache evicts its least recently used frames) and ends PartialBudget.
     bool partialForMemory_ = false;
+    // A frame that fails is retried this many times, then skipped; a run rescans after losing
+    // retained frames for non-memory reasons at most kLossRescans times.
+    static constexpr int kFrameRetries = 3;
+    static constexpr int kLossRescans = 8;
+    std::unordered_map<std::uint64_t, int> frameFailures_;
+    int lossRescans_ = 0;
+    void retryFrame(std::uint64_t frameIndex, std::uint64_t serial);
+    void rescanAfterLoss();
     // A cache insert can remove an expired entry and retain its exact replacement before it
     // returns. Judge removals after that transaction, when the final coverage is known.
     std::map<std::uint64_t, Completion> pendingRetentionLoss_;
