@@ -1912,7 +1912,8 @@ class NodeItem final : public QGraphicsObject {
         qreal labelColumn = kit::px(kit::Size::PropertiesLabelWidth);
         // The longest label of this node sets the column, up to twice the Properties label width,
         // so a row label does not elide at the card's default width.
-        const qreal labelColumnCap = 2.0 * kit::px(kit::Size::PropertiesLabelWidth);
+        const qreal labelColumnCap =
+            kit::px(kit::Size::PropertiesLabelWidth) + kit::px(kit::Size::PropertiesLabelWidth);
         qreal controlColumn = 0.0;
         qreal rowHeight = 0.0;
         const qreal diamondSpan =

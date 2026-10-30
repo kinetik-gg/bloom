@@ -178,7 +178,7 @@ void testConnectionsCutAndInsertion() {
            "one cut undo restores all crossed links");
     history = f.stack.size();
     const auto addRevision = f.session.snapshot().revision();
-    f.drag(f.socket(source, false)->scenePos(), {950, 650});
+    f.drag(f.socket(source, false)->scenePos(), {1400, 1200});
     auto* popup = f.editor.findChild<kit::KSearchPopup*>();
     expect(popup && popup->isVisible() && f.stack.size() == history,
            "output released on empty canvas arms Add search without a premature command");
