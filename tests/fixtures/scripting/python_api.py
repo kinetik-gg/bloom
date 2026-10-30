@@ -302,6 +302,37 @@ class PythonApi(unittest.TestCase):
             self.assertEqual(command.returncode, 0, command.stderr.decode())
             self.assertIn(b'executed 2 transaction(s)', command.stdout)
 
+    def test_cli_export_renders_the_saved_queue(self):
+        """ADR 0033: bloom-cli export renders a saved queue headlessly and reports the result."""
+        if sys.platform != 'linux':
+            self.skipTest('export runs on Linux in this version')
+        composition = bloom.context.composition
+        self.assertTrue(bloom.ops.layer.add_solid('Red', (1, 0, 0, 1))['succeeded'])
+        settings = {'format': 'png', 'codecProfile': '', 'compression': '',
+                    'outputColorSpace': '', 'display': '', 'view': '', 'bakeLook': True,
+                    'includeAudio': False, 'audioSampleRate': 48000, 'encoder': 'automatic',
+                    'naming': {'framePadding': 4, 'pattern': '<base>.####.<ext>'}}
+        output = {'preset': 'builtin:png-sequence', 'settings': settings,
+                  'destination': {'portability': 'project-relative',
+                                  'path': 'Exports/{name}.png', 'overwrite': 'replace'},
+                  'enabled': True, 'importIntoAssets': False}
+        added = bloom.ops.export.add_job(composition, range='frame', first=3,
+                                         outputs=(json.dumps(output),))
+        self.assertTrue(added['succeeded'])
+        with tempfile.TemporaryDirectory(prefix='bloom-cli-export-') as directory:
+            project = pathlib.Path(directory) / 'shot.bloom'
+            self.host.save(str(project))
+            command = subprocess.run([CLI, 'export', '--project', str(project), '--all'],
+                                     capture_output=True, timeout=180)
+            self.assertEqual(command.returncode, 0, command.stderr.decode())
+            stills = list((pathlib.Path(directory) / 'Exports').glob('*.png'))
+            self.assertEqual(len(stills), 1, command.stdout.decode())
+            self.assertEqual(stills[0].read_bytes()[:8], b'\x89PNG\r\n\x1a\n')
+            self.assertIn(b'succeeded', command.stdout)
+            unknown = subprocess.run([CLI, 'export', '--project', str(project), '--job', '999'],
+                                     capture_output=True, timeout=180)
+            self.assertNotEqual(unknown.returncode, 0)
+
     def test_layer_masks_take_path_values(self):
         """ADR 0028: a path is a value kind; masks are added, edited and keyed from Python and the CLI."""
         composition = bloom.context.composition

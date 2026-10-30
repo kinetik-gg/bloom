@@ -19,6 +19,7 @@ target_sources(
     bloom_scripting
     PRIVATE
         export.cpp
+        export_headless.cpp
         json_script.cpp
         live_session_host.cpp
         operation_registry.cpp

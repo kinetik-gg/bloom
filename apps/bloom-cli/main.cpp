@@ -14,12 +14,7 @@
 #include <bloom/scripting/render.hpp>
 #include <bloom/scripting/session.hpp>
 
-#include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
-#include <bloom/host/sequence_export_runner.hpp>
-#include <bloom/output/media_output.hpp>
-#include <bloom/output/output_export_resource_ledger.hpp>
-#include <bloom/platform/user_data_directory.hpp>
 #include <thread>
 
 #include <chrono>
@@ -66,94 +61,6 @@ void printUsage() {
                  "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
                  "<dir> | export --project <file> (--all | --job <id>...) [--replace] [--save]\n";
 }
-
-// ADR 0033: the export queue for a headless session. Owns the scheduler, compiler, GPU export
-// provider and encoder retirement owner the queue borrows, and retires them in order.
-class HeadlessExport final {
-  public:
-    explicit HeadlessExport(scripting::Session& session, const std::filesystem::path& projectFolder)
-        : scheduler_(schedulerConfig()), compiler_(document::builtInNodeDefinitions()) {
-        if (!projectFolder.empty())
-            media_.setAssetBaseDirectory(projectFolder);
-        runtime::GpuProcessFrameEvaluatorOptions gpuOptions;
-        gpuOptions.ocioResolver =
-            bloom::host::makePackagedGpuOcioResolver(bloom::host::currentExecutablePath());
-        gpuOptions.mediaContextProvider = [this] {
-            return runtime::GpuSceneMediaContext::fromEvaluator(media_);
-        };
-        gpu_ = bloom::host::GpuExportProvider::create(std::move(gpuOptions));
-        gpu_->prepare(scheduler_);
-        bloom::host::ExportEncoderStatus encoders;
-        encoders.exportPlatform = bloom::host::exportPlatformSupported();
-        presets_ = bloom::host::ExportPresetCatalogue::create(
-            {.userDataDirectory = bloom::platform::userDataDirectory(),
-             .initialEncoders = encoders});
-        presets_->refreshEncoders(scheduler_);
-        presets_->loadUserPresets(scheduler_);
-        scratch_ = std::filesystem::temp_directory_path() / "bloom-cli-export-scratch";
-        std::error_code error;
-        std::filesystem::create_directories(scratch_, error);
-        service_ = std::make_unique<bloom::host::ExportQueueService>(
-            bloom::host::ExportQueueServiceDependencies{
-                .session = *session.hostSession(),
-                .scheduler = scheduler_,
-                .compiler = compiler_,
-                .publications = *session.publicationCoordinator(),
-                .artifacts = *session.artifactCoordinator(),
-                .ledger = std::make_shared<output::ExportResourceLedgerV1>(),
-                .gpu = gpu_,
-                .retirement = retirement_,
-                .presets = presets_,
-                .limits = {},
-                .displayProcessor = nullptr,
-                .scratchDirectory = scratch_,
-                .backend = nullptr});
-        // The encoder probe answers on a worker before anything can start.
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        while (!presets_->snapshot()->encoders.probed &&
-               std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        calls_.emplace(*service_);
-        service_->pump();
-    }
-    HeadlessExport(const HeadlessExport&) = delete;
-    HeadlessExport& operator=(const HeadlessExport&) = delete;
-    ~HeadlessExport() {
-        service_->beginShutdown(bloom::host::ExportStopCause::ApplicationQuit);
-        while (!service_->quiescent()) {
-            service_->pump();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        service_.reset();
-        while (!gpu_->shutdownAndWait(std::chrono::seconds(10)))
-            std::cerr << "CLI export retirement pending; provider/media/scheduler retained\n";
-        scheduler_.beginShutdown();
-        retirement_->beginShutdown();
-        while (!scheduler_.isQuiescent() || !retirement_->retirementComplete())
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        while (!retirement_->collect())
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    [[nodiscard]] bloom::host::ExportQueueService& service() { return *service_; }
-    [[nodiscard]] scripting::ExportCalls& calls() { return *calls_; }
-
-  private:
-    static runtime::TaskSchedulerConfig schedulerConfig() {
-        auto config = runtime::TaskSchedulerConfig::defaults();
-        config.rowBandWorkerCount = runtime::kSerialRowBandWorkers;
-        return config;
-    }
-    runtime::TaskScheduler scheduler_;
-    runtime::SnapshotCompiler compiler_;
-    runtime::CpuCompositionEvaluator media_;
-    std::shared_ptr<bloom::host::GpuExportProvider> gpu_;
-    std::shared_ptr<bloom::host::SequenceExportRetirementOwnerV1> retirement_ =
-        bloom::host::SequenceExportRetirementOwnerV1::create();
-    std::shared_ptr<bloom::host::ExportPresetCatalogue> presets_;
-    std::filesystem::path scratch_;
-    std::unique_ptr<bloom::host::ExportQueueService> service_;
-    std::optional<scripting::ExportCalls> calls_;
-};
 
 [[nodiscard]] std::optional<std::string> readText(const std::filesystem::path& path) {
     std::ifstream stream(path);
@@ -248,11 +155,11 @@ frameRange(std::string_view value) {
         return 3;
     }
     auto session = std::move(created).takeSession();
-    std::unique_ptr<HeadlessExport> exports;
+    std::unique_ptr<scripting::HeadlessExportQueue> exports;
     for (const auto& transaction : parsed.transactions()) {
         if (scripting::isExportCall(transaction.operation)) {
             if (!exports)
-                exports = std::make_unique<HeadlessExport>(*session, std::filesystem::path{});
+                exports = std::make_unique<scripting::HeadlessExportQueue>(*session);
             const auto answer =
                 exports->calls().call(transaction.operation, transaction.arguments, true);
             if (!answer.ok) {
@@ -280,7 +187,7 @@ frameRange(std::string_view value) {
                       << warning.issue.message << '\n';
         if (const auto job = result.command->outputId<document::ExportJobId>("exportJob")) {
             if (!exports)
-                exports = std::make_unique<HeadlessExport>(*session, std::filesystem::path{});
+                exports = std::make_unique<scripting::HeadlessExportQueue>(*session);
             exports->calls().noteAddedJob(*job);
         }
     }
@@ -335,10 +242,9 @@ frameRange(std::string_view value) {
         return 3;
     }
     auto session = std::move(opened).takeSession();
-    const auto folder = std::filesystem::absolute(*project).parent_path();
     int status = 0;
     {
-        HeadlessExport exports(*session, folder);
+        scripting::HeadlessExportQueue exports(*session);
         auto& service = exports.service();
         if (all)
             for (const auto& job : session->snapshot().project().exportJobs())

@@ -4,6 +4,7 @@
 #include <bloom/scripting/value.hpp>
 
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -42,6 +43,25 @@ class ExportCalls final {
   private:
     host::ExportQueueService& service_;
     std::optional<document::ExportJobId> lastAdded_;
+};
+
+class Session;
+
+// The export queue of a headless session (bloom-cli, bloom-mcp). Construction probes the encoders
+// (waiting up to 30 s on the calling thread) and must happen on a client thread, never a UI
+// thread. Destruction stops every job and retires the GPU provider and encoder workers.
+class HeadlessExportQueue final {
+  public:
+    explicit HeadlessExportQueue(Session& session);
+    ~HeadlessExportQueue();
+    HeadlessExportQueue(const HeadlessExportQueue&) = delete;
+    HeadlessExportQueue& operator=(const HeadlessExportQueue&) = delete;
+    [[nodiscard]] host::ExportQueueService& service();
+    [[nodiscard]] ExportCalls& calls();
+
+  private:
+    struct State;
+    std::unique_ptr<State> state_;
 };
 
 [[nodiscard]] std::string exportSnapshotJson(const host::ExportQueueSnapshot& snapshot);
