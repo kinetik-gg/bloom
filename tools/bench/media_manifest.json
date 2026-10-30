@@ -857,6 +857,714 @@
    "kind": "footage",
    "tier": "1080p",
    "format": "vp9"
+  },
+  "2160p/exr_float_zip": {
+   "type": "sequence",
+   "path": "2160p/exr_float_zip/bench_2160p_exr_float_zip.####.exr",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "exr": {
+    "channels": [
+     [
+      "A",
+      "FLOAT"
+     ],
+     [
+      "B",
+      "FLOAT"
+     ],
+     [
+      "G",
+      "FLOAT"
+     ],
+     [
+      "R",
+      "FLOAT"
+     ]
+    ],
+    "compression": "ZIP"
+   },
+   "height": 2160,
+   "width": 3840,
+   "files": 240,
+   "bytes": 17794145527,
+   "sha256": "4d1629f04e7e3747811fa9f923d37bc0f1dc3e6e8d04df78c7ce534d4ce45965",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "exr_float_zip"
+  },
+  "2160p/exr_half_piz": {
+   "type": "sequence",
+   "path": "2160p/exr_half_piz/bench_2160p_exr_half_piz.####.exr",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "exr": {
+    "channels": [
+     [
+      "A",
+      "HALF"
+     ],
+     [
+      "B",
+      "HALF"
+     ],
+     [
+      "G",
+      "HALF"
+     ],
+     [
+      "R",
+      "HALF"
+     ]
+    ],
+    "compression": "PIZ"
+   },
+   "height": 2160,
+   "width": 3840,
+   "files": 240,
+   "bytes": 5040681510,
+   "sha256": "12c72ead50bae8be4c1bdbfafdaf7b01d76ef3e31eee4b2f0589ca6ccf196032",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "exr_half_piz"
+  },
+  "2160p/exr_multilayer": {
+   "type": "sequence",
+   "path": "2160p/exr_multilayer/bench_2160p_multilayer.####.exr",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "exr": {
+    "channels": [
+     [
+      "Composite.Combined.A",
+      "HALF"
+     ],
+     [
+      "Composite.Combined.B",
+      "HALF"
+     ],
+     [
+      "Composite.Combined.G",
+      "HALF"
+     ],
+     [
+      "Composite.Combined.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.A",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.B",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.G",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.CryptoObject00.a",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject00.b",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject00.g",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject00.r",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.a",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.b",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.g",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.r",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Depth.Z",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Noisy Image.A",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Noisy Image.B",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Noisy Image.G",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Noisy Image.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Normal.X",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Normal.Y",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Normal.Z",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.bench_color.A",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_color.B",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_color.G",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_color.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_id.X",
+      "FLOAT"
+     ]
+    ],
+    "compression": "ZIP"
+   },
+   "height": 2160,
+   "width": 3840,
+   "files": 240,
+   "bytes": 25564778010,
+   "sha256": "ac98cd85b24893def40efda7c361bdf6345dbf43b10e147e9214000bde87daea",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "exr_multilayer"
+  },
+  "2160p/png16": {
+   "type": "sequence",
+   "path": "2160p/png16/bench_2160p_png16.####.png",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "height": 2160,
+   "png": {
+    "bitDepth": 16,
+    "channels": 4
+   },
+   "width": 3840,
+   "files": 240,
+   "bytes": 9656834757,
+   "sha256": "f207b5f2a5556fbfad84744a5f8b5cd660669444ad1e45cb6192f6e7a8aa81ea",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "png16"
+  },
+  "2160p/png8": {
+   "type": "sequence",
+   "path": "2160p/png8/bench_2160p_png8.####.png",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "height": 2160,
+   "png": {
+    "bitDepth": 8,
+    "channels": 4
+   },
+   "width": 3840,
+   "files": 240,
+   "bytes": 3108014680,
+   "sha256": "c1df26d5c38c9b251b6edca84b1401ee8490ae80c1dd118de4f57e0c77bedb96",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "png8"
+  },
+  "2160p/av1": {
+   "type": "video",
+   "path": "2160p/video/bench_2160p_av1.mp4",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 240,
+   "video": {
+    "codec_name": "av1",
+    "profile": "Main",
+    "pix_fmt": "yuv420p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 37787516,
+   "sha256": "d14054cf1be1d34801db1655c657d749e7e1774c715744ef225e7d9b743a4f8f",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "av1"
+  },
+  "2160p/dnxhr_hqx": {
+   "type": "video",
+   "path": "2160p/video/bench_2160p_dnxhr_hqx.mov",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 240,
+   "video": {
+    "codec_name": "dnxhd",
+    "profile": "DNXHR HQX",
+    "pix_fmt": "yuv422p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 873924325,
+   "sha256": "c45f6b73167383c932b5f9ae377bbde8c9aa9377de892ba1c12ae99fcd5a1812",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "dnxhr_hqx"
+  },
+  "2160p/h264": {
+   "type": "video",
+   "path": "2160p/video/bench_2160p_h264.mp4",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 240,
+   "video": {
+    "codec_name": "h264",
+    "profile": "High",
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 59982730,
+   "sha256": "098226d4ec774d0f57fba3d69dbd7ac3d191a3e3abe78d08c7979dacf53db651",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "h264"
+  },
+  "2160p/hevc10": {
+   "type": "video",
+   "path": "2160p/video/bench_2160p_hevc10.mp4",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 240,
+   "video": {
+    "codec_name": "hevc",
+    "profile": "Main 10",
+    "pix_fmt": "yuv420p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 38182257,
+   "sha256": "997045e27f6b1d95e1d257c7d60c7d9b799e7268637db70fa7764a7f1ac35f0f",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "hevc10"
+  },
+  "2160p/prores422hq": {
+   "type": "video",
+   "path": "2160p/video/bench_2160p_prores422hq.mov",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 240,
+   "video": {
+    "codec_name": "prores",
+    "profile": "HQ",
+    "pix_fmt": "yuv422p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 863020559,
+   "sha256": "6847565007e76ca5858214dd87a38dae26b2496cba1fc270b32f66fa5517e9f7",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "prores422hq"
+  },
+  "2160p/prores4444": {
+   "type": "video",
+   "path": "2160p/video/bench_2160p_prores4444.mov",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 240,
+   "video": {
+    "codec_name": "prores",
+    "profile": "4444",
+    "pix_fmt": "yuva444p12le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 2758708038,
+   "sha256": "4e11d16534d0f71ba73b54ab84e1f15cadbd8811c28b04ce4d93a537186cb280",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "prores4444"
+  },
+  "2160p/vp9": {
+   "type": "video",
+   "path": "2160p/video/bench_2160p_vp9.webm",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 240,
+   "video": {
+    "codec_name": "vp9",
+    "profile": "Profile 0",
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 30062575,
+   "sha256": "b49ffeefb6c410668dacddf96499077cac0797c9039b4ef3c024d46708d02f54",
+   "kind": "footage",
+   "tier": "2160p",
+   "format": "vp9"
+  },
+  "chart/2160p/exr_float_zip": {
+   "type": "sequence",
+   "path": "chart/2160p/exr_float_zip/chart_2160p_exr_float_zip.####.exr",
+   "first": 1,
+   "frames": 24,
+   "contiguous": true,
+   "fps": 24,
+   "exr": {
+    "channels": [
+     [
+      "A",
+      "FLOAT"
+     ],
+     [
+      "B",
+      "FLOAT"
+     ],
+     [
+      "G",
+      "FLOAT"
+     ],
+     [
+      "R",
+      "FLOAT"
+     ]
+    ],
+    "compression": "ZIP"
+   },
+   "height": 2160,
+   "width": 3840,
+   "files": 24,
+   "bytes": 41963520,
+   "sha256": "f080923b1b52029ebb65f65be821cc2cc2579f879987147ebf5fb56497add72c",
+   "kind": "chart",
+   "tier": "2160p",
+   "format": "exr_float_zip"
+  },
+  "chart/2160p/png16": {
+   "type": "sequence",
+   "path": "chart/2160p/png16/chart_2160p_png16.####.png",
+   "first": 1,
+   "frames": 24,
+   "contiguous": true,
+   "fps": 24,
+   "height": 2160,
+   "png": {
+    "bitDepth": 16,
+    "channels": 4
+   },
+   "width": 3840,
+   "files": 24,
+   "bytes": 21414491,
+   "sha256": "d11d0c36923ef1b2afbc4758c6f58b305538bc72c0385be9885da67f3433b08e",
+   "kind": "chart",
+   "tier": "2160p",
+   "format": "png16"
+  },
+  "chart/2160p/dnxhr_hqx": {
+   "type": "video",
+   "path": "chart/2160p/video/chart_2160p_dnxhr_hqx.mov",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 24,
+   "video": {
+    "codec_name": "dnxhd",
+    "profile": "DNXHR HQX",
+    "pix_fmt": "yuv422p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "iec61966-2-1",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 87393141,
+   "sha256": "e36f5fb2cc16ef6264d030aa12fc7950ad334c344512ff124b2670697d40d620",
+   "kind": "chart",
+   "tier": "2160p",
+   "format": "dnxhr_hqx"
+  },
+  "chart/2160p/h264_601_limited": {
+   "type": "video",
+   "path": "chart/2160p/video/chart_2160p_h264_601_limited.mp4",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 24,
+   "video": {
+    "codec_name": "h264",
+    "profile": "High",
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "iec61966-2-1",
+    "color_space": "smpte170m",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 240461,
+   "sha256": "b374e53dcbb9d4990edac7cc9c8cfc1f647950fd7501b640e7d27124cfbe1d2a",
+   "kind": "chart",
+   "tier": "2160p",
+   "format": "h264_601_limited"
+  },
+  "chart/2160p/h264_709_full": {
+   "type": "video",
+   "path": "chart/2160p/video/chart_2160p_h264_709_full.mp4",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 24,
+   "video": {
+    "codec_name": "h264",
+    "profile": "High",
+    "pix_fmt": "yuvj420p",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "iec61966-2-1",
+    "color_space": "bt709",
+    "color_range": "pc",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 248899,
+   "sha256": "e517a8ffeada5b52a3198dd329e41e9c02053e3e7c0abfb398c0a8ef4f07289a",
+   "kind": "chart",
+   "tier": "2160p",
+   "format": "h264_709_full"
+  },
+  "chart/2160p/h264_709_limited": {
+   "type": "video",
+   "path": "chart/2160p/video/chart_2160p_h264_709_limited.mp4",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 24,
+   "video": {
+    "codec_name": "h264",
+    "profile": "High",
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "iec61966-2-1",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 240653,
+   "sha256": "797faf4e02616a101315b1172953f974db6ac4f18ebf2ed5fa52eded0928f314",
+   "kind": "chart",
+   "tier": "2160p",
+   "format": "h264_709_limited"
+  },
+  "chart/2160p/hevc10_2020_hlg": {
+   "type": "video",
+   "path": "chart/2160p/video/chart_2160p_hevc10_2020_hlg.mp4",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 24,
+   "video": {
+    "codec_name": "hevc",
+    "profile": "Main 10",
+    "pix_fmt": "yuv420p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt2020",
+    "color_transfer": "arib-std-b67",
+    "color_space": "bt2020nc",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 279776,
+   "sha256": "9de19b64580f25a0a9b177b232592b3df882dac0450ba7b16047b61a9060f6c7",
+   "kind": "chart",
+   "tier": "2160p",
+   "format": "hevc10_2020_hlg"
+  },
+  "chart/2160p/hevc10_2020_pq": {
+   "type": "video",
+   "path": "chart/2160p/video/chart_2160p_hevc10_2020_pq.mp4",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 24,
+   "video": {
+    "codec_name": "hevc",
+    "profile": "Main 10",
+    "pix_fmt": "yuv420p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt2020",
+    "color_transfer": "smpte2084",
+    "color_space": "bt2020nc",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 268220,
+   "sha256": "a124da88fca771cc625112ad78fa51dfa4deba63af815eb90ec55d5e6c39c218",
+   "kind": "chart",
+   "tier": "2160p",
+   "format": "hevc10_2020_pq"
+  },
+  "chart/2160p/hevc10_709_limited": {
+   "type": "video",
+   "path": "chart/2160p/video/chart_2160p_hevc10_709_limited.mp4",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 24,
+   "video": {
+    "codec_name": "hevc",
+    "profile": "Main 10",
+    "pix_fmt": "yuv420p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "iec61966-2-1",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 281792,
+   "sha256": "af88fc0ac8e774cd8f4de5860c2ab3252ee40ad25b7a4502cbf1575d9b67c365",
+   "kind": "chart",
+   "tier": "2160p",
+   "format": "hevc10_709_limited"
+  },
+  "chart/2160p/prores_422hq": {
+   "type": "video",
+   "path": "chart/2160p/video/chart_2160p_prores_422hq.mov",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 24,
+   "video": {
+    "codec_name": "prores",
+    "profile": "HQ",
+    "pix_fmt": "yuv422p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "iec61966-2-1",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 21213792,
+   "sha256": "bf6560d0125a821bc2acf7ac5c1abd55dfcb6d219e4ee51a0cd9b37bf037b9ca",
+   "kind": "chart",
+   "tier": "2160p",
+   "format": "prores_422hq"
+  },
+  "chart/2160p/prores_4444": {
+   "type": "video",
+   "path": "chart/2160p/video/chart_2160p_prores_4444.mov",
+   "fps": 24,
+   "width": 3840,
+   "height": 2160,
+   "frames": 24,
+   "video": {
+    "codec_name": "prores",
+    "profile": "4444",
+    "pix_fmt": "yuva444p12le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "iec61966-2-1",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 31203932,
+   "sha256": "41abca34d7bdc6efa02f5ac395c814049f3ebe8b6175e49776f49873944eac09",
+   "kind": "chart",
+   "tier": "2160p",
+   "format": "prores_4444"
   }
  },
  "generator": {
@@ -1152,7 +1860,7 @@
   "encoder": "ffmpeg version n9.0.2 Copyright (c) 2000-2026 the FFmpeg developers"
  },
  "totals": {
-  "assets": 24,
-  "bytes": 25855666701
+  "assets": 47,
+  "bytes": 91886537862
  }
 }
