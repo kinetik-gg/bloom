@@ -61,6 +61,36 @@ void selectedBudgetLifecycle() {
     expect(ledger.cacheByteBudget(&operation) == 0, "removed participants cannot be called again");
 }
 
+// With a RAM headroom the reusable caches share the free memory beyond it: three pools never
+// take three times the free memory, and when available memory falls below the headroom every
+// pool shrinks below what it holds, in proportion to what it holds.
+void headroomSharesFreeMemoryAndShrinks() {
+    MemoryBudgetLedger ledger(64 * gib, 64 * gib);
+    ledger.setRamHeadroom(2 * gib);
+    std::size_t heldA = 6 * gib, heldB = 2 * gib, heldC = 0, a = 0, b = 0, c = 0, live = 0;
+    ledger.registerCache(&a, gib, [&] { return heldA; }, [&](std::size_t bytes) { a = bytes; });
+    ledger.registerCache(&b, gib, [&] { return heldB; }, [&](std::size_t bytes) { b = bytes; });
+    ledger.registerCache(&c, gib, [&] { return heldC; }, [&](std::size_t bytes) { c = bytes; });
+    ledger.registerCache(
+        &live, gib, [] { return 0; }, [&](std::size_t bytes) { live = bytes; },
+        bloom::runtime::MemoryBudgetOwnerKind::LiveWork);
+    static_cast<void>(ledger.poll({.availableBytes = 32 * gib}, at(0)));
+    expect(a == heldA + 10 * gib && b == heldB + 10 * gib && c == 10 * gib,
+           "three pools split the 30 GiB beyond headroom instead of each taking all of it");
+    expect((a - heldA) + (b - heldB) + (c - heldC) <= 30 * gib,
+           "together the pools never grow past the free memory before the next sample");
+    expect(live == gib, "live work keeps its own ceiling");
+    static_cast<void>(ledger.poll({.availableBytes = 2 * gib}, at(1)));
+    expect(a == heldA && b == heldB && c == 0, "at the headroom the pools hold, never grow");
+    static_cast<void>(ledger.poll({.availableBytes = 0}, at(2)));
+    expect(a == heldA - 3 * gib / 2 && b == heldB - gib / 2 && c == 0,
+           "below the headroom every pool shrinks by its share of the 2 GiB deficit");
+    ledger.unregisterCache(&a);
+    ledger.unregisterCache(&b);
+    ledger.unregisterCache(&c);
+    ledger.unregisterCache(&live);
+}
+
 void swapActivityPolicy() {
     constexpr auto ample = std::size_t{40} * gib;
     const auto swapSample = [ample](const std::size_t used) {
@@ -542,6 +572,7 @@ int main(int argc, char** argv) try {
     if (argc == 2 && std::string_view(argv[1]) == "--live-process-probe")
         return liveProcessProbe();
     selectedBudgetLifecycle();
+    headroomSharesFreeMemoryAndShrinks();
     swapActivityPolicy();
     selectedTotalsAndHardwareDefaults();
     processAdmissionAndFailures();
