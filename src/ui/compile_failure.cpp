@@ -10,7 +10,6 @@
 #include <QClipboard>
 #include <QHBoxLayout>
 #include <QGuiApplication>
-#include <QRegularExpression>
 #include <QVBoxLayout>
 
 #include <string_view>
@@ -51,21 +50,11 @@ QString roleLabel(const std::string& role) {
     return out;
 }
 
-std::optional<std::uint64_t> takeId(QString& text, const QString& label) {
-    const QRegularExpression pattern(QStringLiteral("\\s*\\b%1=(\\d+)\\b").arg(label));
-    const auto match = pattern.match(text);
-    if (!match.hasMatch())
-        return std::nullopt;
-    const auto value = match.captured(1).toULongLong();
-    text.remove(match.capturedStart(0), match.capturedLength(0));
-    return value;
-}
-
 } // namespace
 
-// ENGINE SWAP POINT (see the header). Reads the first compile TaskDiagnostic of a failed preview.
-// Replace this body with the engine's structured diagnostic: headline from its summary, `detail`
-// as is, subject.composition/node/parameter straight from its ids, `raw` from its code and detail.
+// Reads the first compile TaskDiagnostic of a failed preview. The preview stages fill the
+// diagnostic's plain detail and its subject ids from the engine's compile result
+// (runtime::compileFailureSummary picks the failure), so nothing is parsed out of text here.
 std::optional<CompileFailure> compileFailureFromPreview(const CompositionPreviewState& preview) {
     if (preview.activity != PreviewActivity::Failed || preview.diagnostics.empty())
         return std::nullopt;
@@ -75,16 +64,30 @@ std::optional<CompileFailure> compileFailureFromPreview(const CompositionPreview
 
     CompileFailure failure;
     failure.headline = QString::fromStdString(diagnostic.summary);
-    QString detail = QString::fromStdString(diagnostic.detail);
+    failure.detail = QString::fromStdString(diagnostic.detail).trimmed();
     failure.raw = QString::fromStdString(diagnostic.code) + QLatin1Char('\n') + failure.headline;
-    if (!detail.isEmpty())
-        failure.raw += QLatin1Char('\n') + detail;
-    failure.subject.node = takeId(detail, QStringLiteral("node"));
-    failure.subject.parameter = takeId(detail, QStringLiteral("parameter"));
-    // Layer, slot and edge ids are not shown; drop them from the sentence all the same.
-    for (const auto* label : {"edge", "layer", "slot"})
-        takeId(detail, QString::fromLatin1(label));
-    failure.detail = detail.trimmed();
+    if (!failure.detail.isEmpty())
+        failure.raw += QLatin1Char('\n') + failure.detail;
+    if (diagnostic.subject) {
+        const auto& subject = *diagnostic.subject;
+        failure.subject.node = subject.node;
+        failure.subject.parameter = subject.parameter;
+        // Layer, slot and edge ids are not shown in words; Copy details keeps every id.
+        QStringList ids;
+        const auto add = [&ids](const char* label, const std::optional<std::uint64_t>& id) {
+            if (id)
+                ids << QStringLiteral("%1=%2").arg(QLatin1String(label)).arg(*id);
+        };
+        add("node", subject.node);
+        add("edge", subject.edge);
+        add("parameter", subject.parameter);
+        add("layer", subject.layer);
+        add("slot", subject.layerSlot);
+        if (!subject.field.empty())
+            ids << QStringLiteral("field=%1").arg(QString::fromStdString(subject.field));
+        if (!ids.isEmpty())
+            failure.raw += QLatin1Char('\n') + ids.join(QLatin1Char(' '));
+    }
     if (preview.desiredIdentity)
         failure.subject.composition = preview.desiredIdentity->compositionId.value();
     return failure;

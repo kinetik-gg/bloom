@@ -26,21 +26,19 @@ void appendSubjectId(std::string& detail, const char* label, const auto& id) {
     detail += std::to_string(id->value());
 }
 
-std::string compileSubjectDetail(const bloom::runtime::CompileDiagnostic& diagnostic) {
-    std::string detail = diagnostic.detail;
-    appendSubjectId(detail, "node", diagnostic.subject.nodeId);
-    appendSubjectId(detail, "edge", diagnostic.subject.edgeId);
-    appendSubjectId(detail, "parameter", diagnostic.subject.parameterId);
-    appendSubjectId(detail, "layer", diagnostic.subject.layerId);
-    appendSubjectId(detail, "slot", diagnostic.subject.layerSlotId);
-    if (!diagnostic.subject.field.empty()) {
-        if (!detail.empty()) {
-            detail += ' ';
-        }
-        detail += "field=";
-        detail += diagnostic.subject.field;
-    }
-    return detail;
+template <typename Id> std::optional<std::uint64_t> rawId(const std::optional<Id>& id) {
+    return id ? std::optional<std::uint64_t>(id->value()) : std::nullopt;
+}
+
+// The ids a compile diagnostic is about, for the surface that selects them.
+bloom::runtime::TaskDiagnosticSubject
+compileSubject(const bloom::runtime::CompileSubject& subject) {
+    return {.node = rawId(subject.nodeId),
+            .edge = rawId(subject.edgeId),
+            .parameter = rawId(subject.parameterId),
+            .layer = rawId(subject.layerId),
+            .layerSlot = rawId(subject.layerSlotId),
+            .field = subject.field};
 }
 
 std::string evaluationSubjectDetail(const bloom::runtime::EvaluationDiagnostic& diagnostic) {
@@ -130,13 +128,26 @@ std::vector<TaskDiagnostic>
 compileTaskDiagnostics(const bloom::runtime::SnapshotCompileResult& result) {
     std::vector<TaskDiagnostic> diagnostics;
     diagnostics.reserve(result.diagnostics.size());
+    // The engine's own pick of the failure the artist is told about: its node and parameter are the
+    // subject of the first error, the same one an agent's edit result names.
+    const auto failure = bloom::runtime::compileFailureSummary(result, {});
+    bool firstError = true;
     for (const auto& diagnostic : result.diagnostics) {
+        auto subject = compileSubject(diagnostic.subject);
+        if (diagnostic.severity == bloom::runtime::DiagnosticSeverity::Error) {
+            if (firstError && failure) {
+                subject.node = rawId(failure->nodeId);
+                subject.parameter = rawId(failure->parameterId);
+            }
+            firstError = false;
+        }
         diagnostics.push_back(
             {.code = std::string(bloom::runtime::compileDiagnosticCodeId(diagnostic.code)),
              .severity = diagnostic.severity,
              .summary = diagnostic.summary,
-             .detail = compileSubjectDetail(diagnostic),
-             .suggestedAction = "Inspect the referenced composition objects and node schemas."});
+             .detail = diagnostic.detail,
+             .suggestedAction = "Inspect the referenced composition objects and node schemas.",
+             .subject = subject.empty() ? std::nullopt : std::optional(std::move(subject))});
     }
     return diagnostics;
 }

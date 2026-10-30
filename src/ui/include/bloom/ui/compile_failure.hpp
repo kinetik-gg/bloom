@@ -7,11 +7,9 @@
 //
 // CompileFailure is the ONE adapter struct between the engine's compile diagnostic and the UI.
 // Every consumer (status bar, popup, MCP Activity line) reads it and nothing else. Today it is
-// filled from what main provides: the preview state's first compile TaskDiagnostic, whose detail
-// string ends in "node=<id> parameter=<id>" tokens that are parsed out here. When the Engine
-// agent's structured compile diagnostic (plain `detail` plus a subject with composition, node and
-// parameter ids) lands on main, replace the body of compileFailureFromPreview() in
-// compile_failure.cpp -- the single function marked "ENGINE SWAP POINT" -- and nothing else changes.
+// filled from the preview state's first compile TaskDiagnostic: its plain detail and its subject
+// ids, which the preview stages take from the engine's compile result (compileFailureSummary).
+// Nothing is parsed out of text.
 
 #include <QString>
 #include <QWidget>
@@ -41,7 +39,7 @@ struct CompileFailure final {
     QString raw;
 };
 
-// ENGINE SWAP POINT. Nullopt unless `preview` is a failed preview whose diagnostics are compile
+// Nullopt unless `preview` is a failed preview whose diagnostics are compile
 // diagnostics.
 [[nodiscard]] std::optional<CompileFailure> compileFailureFromPreview(const CompositionPreviewState& preview);
 

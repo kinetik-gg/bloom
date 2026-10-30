@@ -57,8 +57,8 @@ struct Fixture {
         expect(nodeId.isValid(), "a layer node with a parameter exists");
     }
 
-    // The preview state a failed compile publishes today: a compile TaskDiagnostic whose detail
-    // ends in the subject's ids.
+    // The preview state a failed compile publishes: a compile TaskDiagnostic with a plain detail
+    // and the subject's ids as data.
     ui::CompositionPreviewState failedState() const {
         ui::CompositionPreviewState state;
         state.activity = ui::PreviewActivity::Failed;
@@ -66,10 +66,10 @@ struct Fixture {
             {.code = "bloom.runtime.compile.topology-invariant",
              .severity = bloom::runtime::DiagnosticSeverity::Error,
              .summary = "Validated graph could not be lowered",
-             .detail = "A reachable node lost its registered definition. node=" +
-                       std::to_string(nodeId.value()) +
-                       " parameter=" + std::to_string(parameterId.value()),
-             .suggestedAction = {}});
+             .detail = "A reachable node lost its registered definition.",
+             .suggestedAction = {},
+             .subject = bloom::runtime::TaskDiagnosticSubject{.node = nodeId.value(),
+                                                              .parameter = parameterId.value()}});
         state.message = QStringLiteral("Validated graph could not be lowered");
         return state;
     }
@@ -111,7 +111,7 @@ void testAdapter() {
     expect(failure->detail == QStringLiteral("A reachable node lost its registered definition."),
            "detail has no ids");
     expect(failure->subject.node == f.nodeId.value() && failure->subject.parameter == f.parameterId.value(),
-           "subject ids parsed");
+           "subject ids carried");
     expect(failure->raw.contains(QStringLiteral("bloom.runtime.compile.topology-invariant")) &&
                failure->raw.contains(QStringLiteral("node=")),
            "raw keeps the code and ids");
@@ -204,7 +204,8 @@ void testStatusBarPopup() {
 void testGoneSubject() {
     Fixture f;
     auto state = f.failedState();
-    state.diagnostics.front().detail = "Gone. node=999999";
+    state.diagnostics.front().detail = "Gone.";
+    state.diagnostics.front().subject = bloom::runtime::TaskDiagnosticSubject{.node = 999999};
     const auto failure = ui::compileFailureFromPreview(state);
     expect(failure.has_value() && ui::compileFailureSubjectText(*failure, f.session).isEmpty(),
            "a vanished node has no subject text");
