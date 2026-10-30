@@ -38,10 +38,13 @@ folder and the reset button beside it returns to the default.
 ## Memory headroom and disk budget
 
 **RAM headroom** and **VRAM headroom** are the memory Bloom leaves free for the rest of your
-computer; Bloom uses everything else for rendering and caching. Each is a size from 0 to 256 GiB and
-defaults to 2 GiB, so a busy render leaves room before the system runs short and crashes. They are
-stored as decimal byte strings under `memory/ramHeadroomBytes` and `memory/vramHeadroomBytes`; a
-missing, non-numeric, overflowing or above-256-GiB value reads as 2 GiB.
+computer; Bloom uses everything else for rendering and caching. Each is a size from 0 to 256 GiB.
+The default is 10% of the memory it protects: RAM headroom is 10% of physical memory (or of a
+tighter process or container limit, about 6 GiB on a 64 GB workstation), VRAM headroom is 10% of
+the graphics card's memory (about 2.4 GiB on a 24 GB card; 2 GiB until the card has been measured).
+They are stored as decimal byte strings under `memory/ramHeadroomBytes` and
+`memory/vramHeadroomBytes` only when they differ from the default; a missing, non-numeric,
+overflowing or above-256-GiB value selects the default, which follows the measured capacity.
 The older `playback/operation-cache-bytes` and `playback/ram-preview-memory-bytes` preferences are
 no longer settings and are ignored.
 

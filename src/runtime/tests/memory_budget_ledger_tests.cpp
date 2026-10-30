@@ -103,7 +103,11 @@ void headroomSharesFreeMemoryAndShrinks() {
     expect(ledger.pressureDeficit({.availableBytes = 3 * gib}) == 0,
            "above the headroom there is no deficit");
     static_cast<void>(ledger.poll({.availableBytes = 32 * gib, .memoryStall = true}, at(5)));
-    expect(a == heldA && b == heldB && c == 0, "pools never grow while the OS reports stalls");
+    expect(a == heldA - 3 * gib / 8 && b == heldB - gib / 8 && c == 0,
+           "under memory pressure (another process swapping) pools never grow and give back one "
+           "margin per sample although available memory looks ample");
+    expect(ledger.pressureDeficit({.availableBytes = 32 * gib, .memoryStall = true}) == gib / 2,
+           "pressure with ample available memory still asks for one margin");
     // A larger headroom applies at once against the last sample and reports what it released.
     static_cast<void>(ledger.takeReleasedBytes());
     static_cast<void>(ledger.poll({.availableBytes = 4 * gib}, at(6)));

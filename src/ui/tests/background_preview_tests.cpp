@@ -252,6 +252,7 @@ void testWorkAreaBoundsBackground(Expectations& expectations) {
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge,
                                                fixture.countingPipeline());
+    background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
     expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 3; }),
                         "only three work-area frames fill");
@@ -280,6 +281,7 @@ void testBackgroundFillHonoursRegionOfInterest(Expectations& expectations) {
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge,
                                                fixture.countingPipeline());
+    background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
     expectations.expect(waitUntil([&] { return fixture.frameCache->size() >= 1; }),
                         "a ROI background frame enters the cache");
@@ -322,6 +324,7 @@ void testOutwardOrderBudgetAndRestart(Expectations& expectations) {
     };
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge, prepare);
+    background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
     expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 7; }),
                         "idle renderer fills the whole bounded composition");
@@ -378,6 +381,7 @@ void testYieldsAndKeepsCancelledHandleUntilTerminal(Expectations& expectations) 
     };
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge, prepare);
+    background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
     expectations.expect(waitUntil([&] { return gate.entered(); }), "background frame in flight");
     const auto snapshots = fixture.scheduler.snapshots();
@@ -435,6 +439,7 @@ void testPointerPressCancelsBeforePreviewChanges(Expectations& expectations) {
     };
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge, prepare);
+    background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
     expectations.expect(waitUntil([&] { return gate.entered(); }), "speculation in flight");
     QWidget panel;
@@ -560,6 +565,7 @@ void testReadAheadKeepsCapacitySizedFramesInFlight(Expectations& expectations) {
     };
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge, prepare);
+    background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     std::size_t widthAsks = 0;
     background.setReadAheadWidthProvider([&](std::uint64_t) {
         ++widthAsks;
@@ -603,8 +609,10 @@ void testLayoutEditKeepsBackgroundOnRetainedRevision(Expectations& expectations)
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge,
                                                fixture.countingPipeline());
+    background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 1; }),
+    // The idle timer may land a second frame before the wait observes the first.
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() >= 1; }),
                         "the background pass fills its first frame");
 
     commands::Transaction move("Move Nodes", fixture.session.snapshot().revision());
@@ -647,6 +655,7 @@ void testBackgroundFillFollowsWorkArea(Expectations& expectations) {
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge,
                                                fixture.countingPipeline());
+    background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     background.fillNextFrame();
     expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 3; }),
                         "the initial range fills");
@@ -694,6 +703,7 @@ void testBackgroundFillFiniteClipRange(Expectations& expectations) {
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
                                                fixture.scheduler, fixture.bridge,
                                                fixture.countingPipeline());
+    background.setIdleFill(true); // Qualifies the idle-fill mechanics.
     const auto fillTo = [&](const std::size_t expected) {
         for (int attempt = 0; attempt < 400 && fixture.frameCache->size() < expected; ++attempt) {
             background.fillNextFrame();
@@ -722,6 +732,41 @@ void testBackgroundFillFiniteClipRange(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+// Owner decision (2026-10-30): no background or idle filling. A stopped playhead, an idle timer
+// and an edit never render; Play renders just ahead of the playhead and stops when playback stops.
+void testIdleCausesNoFillAndPlayDrivesReadAhead(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("No idle fill", time(6, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    fixture.frameCache->clear();
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge,
+                                               fixture.countingPipeline());
+    const auto before = fixture.preparationCount.load();
+    for (int attempt = 0; attempt < 10; ++attempt)
+        background.fillNextFrame();
+    const auto idleEnd = std::chrono::steady_clock::now() + 400ms;
+    while (std::chrono::steady_clock::now() < idleEnd)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(fixture.preparationCount.load() == before,
+                        "an idle composition is never filled in the background");
+    expectations.expect(background.inFlightCount() == 0, "idle submits nothing");
+
+    fixture.controller.setPlaybackActive(true);
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() >= 1; }),
+                        "Play renders and caches frames ahead of the playhead");
+    fixture.controller.setPlaybackActive(false);
+    expectations.expect(waitUntil([&] { return background.inFlightCount() == 0; }),
+                        "stopping playback ends the read-ahead");
+    const auto stopped = fixture.preparationCount.load();
+    const auto stoppedEnd = std::chrono::steady_clock::now() + 300ms;
+    while (std::chrono::steady_clock::now() < stoppedEnd)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(fixture.preparationCount.load() == stopped,
+                        "no frame is submitted after playback stops");
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -729,6 +774,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     Expectations expectations;
     try {
+        testIdleCausesNoFillAndPlayDrivesReadAhead(expectations);
         testPointerPressCancelsBeforePreviewChanges(expectations);
         testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(expectations);
         testVisibleAdmissionAndSupersession(expectations);

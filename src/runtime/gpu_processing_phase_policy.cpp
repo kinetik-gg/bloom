@@ -406,6 +406,8 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
         // Without VK_EXT_memory_budget the device-local heap size is the documented capability
         // fallback; the root's own claims are subtracted by admission, the headroom below covers
         // other processes and driver overhead, and allocation failure stays a typed refusal.
+        // The VRAM headroom default is a share of the largest measured device.
+        recordDeviceLocalMemoryBytes(current.device_local_bytes);
         auto available = current.available_bytes;
         if (ownedLocalNative != 0) {
             const auto physicalRoom =

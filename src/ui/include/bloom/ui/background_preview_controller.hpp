@@ -15,6 +15,10 @@ namespace bloom::ui {
 
 // Session-owned speculative work. Never publishes Viewer pixels or changes session time.
 // A cancelled handle remains the one-in-flight gate until terminal, including across restarts.
+// It runs only on explicit user intent: while playback is active it renders and caches the frames
+// just ahead of the playhead (read-ahead sized from capacity) and stops when playback stops. An
+// idle or edited composition is never filled in the background (owner decision, 2026-10-30); the
+// idle outward fill exists only behind setIdleFill for qualification.
 class BackgroundPreviewController final : public QObject {
     Q_OBJECT
 
@@ -26,7 +30,12 @@ class BackgroundPreviewController final : public QObject {
                                 PreviewPreparationSubmitter submitter = {});
     ~BackgroundPreviewController() override;
 
+    // Playback read-ahead: true while the transport plays. Driven by
+    // CompositionPreviewController::playbackActiveChanged.
     void setPlaying(bool playing);
+    // Idle outward fill around a stopped playhead. Off by default; production never enables it.
+    void setIdleFill(bool enabled);
+    [[nodiscard]] bool active() const noexcept { return playing_ || idleFill_; }
     // Frames in flight ahead of the playhead come from measured capacity: the provider answers
     // how many more frames of `framePixels` fit the processing root now. Without one, a single
     // frame is in flight.
@@ -74,6 +83,7 @@ class BackgroundPreviewController final : public QObject {
     std::uint64_t cursor_ = 0;
     std::uint64_t considered_ = 0;
     bool playing_ = false;
+    bool idleFill_ = false;
     bool exhausted_ = false;
     bool shuttingDown_ = false;
 };

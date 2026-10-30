@@ -98,7 +98,7 @@ void pressureEvictsAndReturnsMemory() {
     MemoryPressureMonitor::Options options;
     options.interval = 20ms;
     options.psiTrigger = false;
-    options.stallSampler = {};
+    options.counterSampler = {};
     options.sampler = [&] {
         return MachineMemorySample{.availableBytes = available.load(),
                                    .processSwappedBytes = swapped.load()};
@@ -153,7 +153,7 @@ void headroomChangeEvictsAtOnce() {
     MemoryPressureMonitor::Options options;
     options.interval = 20ms;
     options.psiTrigger = false;
-    options.stallSampler = {};
+    options.counterSampler = {};
     options.sampler = [] { return MachineMemorySample{.availableBytes = 6 * gib}; };
     MemoryPressureMonitor monitor(
         ledger, [&](const MachineMemorySample& sample) { ledger.applyPressureSample(sample); },
@@ -175,34 +175,63 @@ void headroomChangeEvictsAtOnce() {
     monitor.stop();
 }
 
-void stallStopsGrowth() {
+// Another process grows and is pushed into swap while this process's own memory stays resident
+// and MemAvailable still looks above the headroom: swap traffic (or PSI stall time) is pressure,
+// the caches give memory back one margin per sample until it stops, then hold.
+void otherProcessSwappingEvicts() {
+    configureHostMemoryReturn();
     MemoryBudgetLedger ledger(64 * gib, 64 * gib);
     ledger.setRamHeadroom(2 * gib);
-    std::size_t budget = 0;
-    ledger.registerCache(
-        &budget, 64 * gib, [] { return std::size_t{0}; },
-        [&](const std::size_t bytes) { budget = bytes; });
-    std::atomic<std::uint64_t> stall{0};
-    std::atomic<std::size_t> available{gib};
+    FrameCache cache(ledger);
+    static_cast<void>(ledger.applyPressureSample({.availableBytes = 5 * gib}));
+    cache.fill(48); // 672 MiB
+    std::atomic<bool> swapping{false};
+    std::atomic<bool> stalling{false};
+    std::atomic<std::uint64_t> swapOut{1000};
+    std::atomic<std::uint64_t> someStall{0};
     MemoryPressureMonitor::Options options;
     options.interval = 20ms;
     options.psiTrigger = false;
-    options.sampler = [&] { return MachineMemorySample{.availableBytes = available.load()}; };
-    // Half of every interval spent stalled on memory.
-    options.stallSampler = [&] { return std::optional<std::uint64_t>{stall += 10'000}; };
-    std::atomic<bool> sawStall{false};
+    options.pageBytes = 4096;
+    options.sampler = [] {
+        // Available stays above headroom plus margin and nothing of ours is swapped.
+        return MachineMemorySample{.availableBytes = 5 * gib, .processSwappedBytes = 0};
+    };
+    options.counterSampler = [&] {
+        if (swapping)
+            swapOut += 8192; // 32 MiB per 20 ms sample: the other process is being swapped out.
+        if (stalling)
+            someStall += 10'000; // Half of every 20 ms sample stalled on memory.
+        return MemoryPressureCounters{.someStallMicroseconds = someStall.load(),
+                                      .fullStallMicroseconds = 0,
+                                      .swapInPages = 0,
+                                      .swapOutPages = swapOut.load()};
+    };
     MemoryPressureMonitor monitor(
-        ledger,
-        [&](const MachineMemorySample& sample) {
-            if (sample.memoryStall)
-                sawStall = true;
-            ledger.applyPressureSample(sample);
-        },
+        ledger, [&](const MachineMemorySample& sample) { ledger.applyPressureSample(sample); },
         options);
-    expect(waitUntil([&] { return sawStall.load(); }, 2000ms),
-           "PSI stall time beyond the fraction marks the sample as stalled");
+    std::this_thread::sleep_for(100ms);
+    expect(cache.bytes() == 48 * kFrameBytes && monitor.deliveries() == 0,
+           "quiet swap and no stalls leave the caches alone");
+
+    swapping = true;
+    expect(waitUntil([&] { return cache.bytes() < 48 * kFrameBytes; }, 1000ms),
+           "another process swapping makes the caches give memory back at once");
+    expect(waitUntil([&] { return cache.bytes() == 0; }, 2000ms),
+           "the caches keep shrinking one margin per sample while the swapping lasts");
+    swapping = false;
+    std::this_thread::sleep_for(60ms);
+    cache.fill(8);
+    const auto deliveries = monitor.deliveries();
+    std::this_thread::sleep_for(200ms);
+    expect(cache.bytes() == 8 * kFrameBytes && monitor.deliveries() == deliveries,
+           "once the swapping stops and available is above headroom plus margin, caches hold");
+
+    stalling = true;
+    expect(waitUntil([&] { return cache.bytes() == 0; }, 2000ms),
+           "PSI memory stalls alone also make the caches give memory back");
+    stalling = false;
     monitor.stop();
-    ledger.unregisterCache(&budget);
 }
 
 } // namespace
@@ -210,7 +239,7 @@ void stallStopsGrowth() {
 int main() {
     pressureEvictsAndReturnsMemory();
     headroomChangeEvictsAtOnce();
-    stallStopsGrowth();
+    otherProcessSwappingEvicts();
     if (failures == 0)
         std::cout << "memory pressure monitor: all checks passed\n";
     return failures == 0 ? 0 : 1;

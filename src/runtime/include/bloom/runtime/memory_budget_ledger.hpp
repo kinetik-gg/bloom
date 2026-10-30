@@ -42,9 +42,11 @@ struct MachineMemorySample final {
     // compressed task memory, Windows private bytes outside the working set). A cache page in swap
     // is memory the machine could not leave resident, so it never counts as available.
     std::size_t processSwappedBytes = 0;
-    // The OS reports that tasks are stalling on memory right now (Linux PSI stall time since the
-    // previous pressure sample, the macOS VM pressure level, the Windows low-memory notification).
-    // Reusable caches never grow while it is set.
+    // The machine is under memory pressure right now, whichever process causes it: Linux PSI stall
+    // time or swap traffic since the previous pressure sample (MemoryPressureMonitor), the macOS
+    // VM pressure level, the Windows low-memory notification. While it is set reusable caches never
+    // grow, and every applied sample shrinks them by one hysteresis margin even when available
+    // memory still looks above the headroom (another process may be the one being swapped out).
     bool memoryStall = false;
 };
 [[nodiscard]] MachineMemorySample machineMemorySample() noexcept;
@@ -120,7 +122,8 @@ class MemoryBudgetLedger final {
     MemoryBudgetState applyPressureSample(const MachineMemorySample& sample,
                                           Clock::time_point now = Clock::now());
     // Bytes by which `sample` leaves the machine short of the RAM headroom (available memory minus
-    // this process's swapped memory); zero without a headroom or an availability reading.
+    // this process's swapped memory), at least the hysteresis margin under memory pressure; zero
+    // without a headroom or an availability reading.
     [[nodiscard]] std::size_t pressureDeficit(const MachineMemorySample& sample) const;
     // Reusable bytes the budgets released since the last call (the monitor returns them to the OS).
     [[nodiscard]] std::size_t takeReleasedBytes() noexcept;

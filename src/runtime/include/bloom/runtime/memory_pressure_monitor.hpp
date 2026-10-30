@@ -28,15 +28,24 @@ void configureHostMemoryReturn() noexcept;
 // Returns free heap pages to the OS after a bulk eviction (glibc malloc_trim). Not on the UI
 // thread: it can walk large arenas. A no-op where the allocator has no such call.
 void releaseFreedHostMemory() noexcept;
-// Cumulative microseconds some task stalled on memory (Linux /proc/pressure/memory), if known.
-[[nodiscard]] std::optional<std::uint64_t> memoryStallMicroseconds() noexcept;
+// Cumulative system memory-pressure counters. Linux: PSI stall time from /proc/pressure/memory
+// ("some": at least one task stalled; "full": all non-idle tasks stalled) and swap traffic from
+// /proc/vmstat (pswpin/pswpout pages). Absent where the platform does not report them; macOS and
+// Windows report pressure through MachineMemorySample::memoryStall instead.
+struct MemoryPressureCounters final {
+    std::optional<std::uint64_t> someStallMicroseconds;
+    std::optional<std::uint64_t> fullStallMicroseconds;
+    std::optional<std::uint64_t> swapInPages;
+    std::optional<std::uint64_t> swapOutPages;
+};
+[[nodiscard]] MemoryPressureCounters memoryPressureCounters() noexcept;
 // The process's resident set in bytes, if the platform reports it (diagnostics and tests).
 [[nodiscard]] std::optional<std::size_t> processResidentBytes() noexcept;
 
 class MemoryPressureMonitor final {
   public:
     using Sampler = std::function<MachineMemorySample()>;
-    using StallSampler = std::function<std::optional<std::uint64_t>()>;
+    using CounterSampler = std::function<MemoryPressureCounters()>;
     // Called on the monitor thread with a sample that leaves the machine short of the headroom.
     // The owner applies it with MemoryBudgetLedger::applyPressureSample on the thread that owns
     // the registered caches' callbacks.
@@ -45,9 +54,16 @@ class MemoryPressureMonitor final {
     struct Options final {
         std::chrono::milliseconds interval{250};
         Sampler sampler = machineMemorySample;
-        StallSampler stallSampler = memoryStallMicroseconds;
-        // Stall share of wall time between two samples that counts as a memory stall.
-        double stallFraction = 0.10;
+        CounterSampler counterSampler = memoryPressureCounters;
+        // Between two samples, any of these marks the machine as under memory pressure: "some"
+        // stall time at least this share of wall time, "full" stall time at least this share, or
+        // swap traffic (in plus out) at least this many bytes a second. Another process being
+        // pushed into swap counts, not only this one.
+        double someStallFraction = 0.10;
+        double fullStallFraction = 0.02;
+        std::uint64_t swapBytesPerSecond = std::uint64_t{16} * 1024U * 1024U;
+        // Swap page size; zero uses the system page size.
+        std::uint64_t pageBytes = 0;
         // Bytes released by evictions before the monitor returns free heap to the OS.
         std::size_t trimThresholdBytes = std::size_t{32} * 1024U * 1024U;
         // Use a Linux PSI trigger to wake before the interval elapses.

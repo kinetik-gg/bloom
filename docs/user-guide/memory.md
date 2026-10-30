@@ -40,11 +40,15 @@ values, the memory Bloom leaves free for the rest of the system:
 
 | Setting | Key | Default | Range |
 | --- | --- | --- | --- |
-| RAM headroom | `memory/ramHeadroomBytes` | 2 GiB | 0 to 256 GiB |
-| VRAM headroom | `memory/vramHeadroomBytes` | 2 GiB | 0 to 256 GiB |
+| RAM headroom | `memory/ramHeadroomBytes` | 10% of RAM | 0 to 256 GiB |
+| VRAM headroom | `memory/vramHeadroomBytes` | 10% of VRAM | 0 to 256 GiB |
 
-Values are decimal byte counts. Missing, malformed or out-of-range values select 2 GiB. Apply takes
-effect immediately.
+Values are decimal byte counts. The RAM default is 10% of physical memory, or of the process or
+container memory limit when that is smaller (about 6 GiB on a 64 GB workstation, 2.4 GiB under a
+24 GB limit). The VRAM default is 10% of the largest graphics card's memory (about 2.4 GiB on a
+24 GB card; 2 GiB until a card has been measured). A value equal to the default is not stored, so
+the default follows the measured capacity; missing, malformed or out-of-range values select it.
+Apply takes effect immediately.
 
 **Usable RAM** is the available system memory Bloom measures (within any real OS or container limit)
 minus the RAM headroom. **Usable VRAM** is the graphics driver's live memory budget minus the VRAM
@@ -53,7 +57,21 @@ memory. The reusable caches (operation results, RAM preview, decoded video and m
 audio) share what is left: together they grow by at most the free memory beyond the headroom, and
 when other programs need memory and free memory falls below the headroom, every cache shrinks by
 its share, so caches never push the computer into swap. Active work evicts them when it needs the
-room. Inside a container or memory-limited session, clean file cache counts as available, as the
+room.
+
+Bloom watches memory continuously, not only when it starts work: a monitor samples the machine four
+times a second (and on Linux wakes at once on a kernel memory-pressure (PSI) notification). As soon
+as free memory drops below the headroom, every cache shrinks right away until free memory is back
+above the headroom plus a margin (a quarter of the headroom, at least 512 MiB); between the two the
+caches hold and do not refill what they just released. Bloom's own memory that the system has
+moved to swap (or compressed, on zram and macOS) counts as used, not free, so caches are evicted
+instead of being kept in swap. Free memory alone can look fine while the system is pushing other
+programs into swap, so Bloom also treats the system's memory distress as pressure, whichever program
+causes it: on Linux, swap traffic of 16 MiB/s or more, or programs stalled on memory (PSI) for a
+tenth of the time ("some") or a fiftieth ("full"); on macOS, the warning or critical memory pressure
+level; on Windows, the low-memory notification. Under such pressure the caches stop growing and give
+back one margin four times a second until it stops. Evicted memory is returned to the operating system immediately, so Bloom's
+resident size really drops. A larger RAM headroom applied in Preferences evicts at once. Inside a container or memory-limited session, clean file cache counts as available, as the
 kernel reclaims it on demand. When work needs more than is free at that moment, it waits and
 resumes as soon as memory is released; it is refused only when one frame cannot fit within the
 computer's (or the container's) memory minus the headroom, and the refusal names the measured
@@ -73,7 +91,9 @@ or available RAM. Disk-cache settings still take effect after restart.
 
 ## Actual limits and memory availability
 
-Bloom samples host/process memory on a worker every five seconds. Reusable retention begins at
+Bloom samples host/process memory on a worker every five seconds, and the machine's available
+memory, its own swapped memory and memory stalls four times a second on a dedicated monitor thread
+(see the headroom section). Reusable retention begins at
 zero until the first complete sample establishes process-limit readiness. Status and Preferences
 read the cached result without probing the OS on the interface thread.
 
@@ -136,6 +156,18 @@ stay present even when the relevant cache is unavailable (the disk cache is disa
 pipeline exists); the command then reports that clearly instead of silently doing nothing. Purging
 the preview cache leaves decoded media and verified source revisions available. Purging media also
 drops completed preview frames so they cannot hide a changed or unavailable source after refresh.
+
+## When Bloom renders ahead
+
+Bloom renders frames you have not looked at only when you ask for playback:
+
+- **Play** renders and caches the frames just ahead of the playhead while it plays, as many at once
+  as usable memory allows, and stops when playback stops.
+- **RAM Preview** (the Viewer button, **Composition → RAM Preview**, Ctrl+Shift+Space or Numpad 0)
+  fills the work area (the whole composition when there is no work area) and plays it once the
+  range is cached. Pressing it again, or Esc, cancels.
+- An idle composition is never filled in the background. An edit invalidates the cached frames it
+  affects but does not start re-rendering them; only the frame on screen is rendered again.
 
 RAM Preview counts frames that are currently retained, including frames already cached before the
 run. Its tooltip separates frames prepared this run from retained frames and the longest cached

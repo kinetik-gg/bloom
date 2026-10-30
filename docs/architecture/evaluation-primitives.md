@@ -846,7 +846,24 @@ phase admission. Construction and settings getters never probe the OS.
 
 The application owns one `MemoryBudgetController`, with at most one `BlockingIo` sampling task,
 no sampling backlog and a five-second cadence. Task completion delivers host/process observations
-independently of Jobs monitoring. Cache callbacks apply on the owner thread; status bars and
+independently of Jobs monitoring. Between those samples a `MemoryPressureMonitor` thread reads the
+machine sample every 250 ms (Linux also wakes on a `/proc/pressure/memory` PSI trigger). Effective
+available memory is available memory minus the process's own swapped memory (Linux `VmSwap`, macOS
+compressed task memory, Windows private bytes outside the working set). A sample below the RAM
+headroom is queued to the controller's thread and applied with
+`MemoryBudgetLedger::applyPressureSample`, so reusable pools shrink by their share of the deficit
+plus the hysteresis margin (`memoryPressureMarginBytes`, a quarter of the headroom, at least
+512 MiB) within one interval; they grow only above headroom plus margin. System memory pressure,
+whichever process causes it, also shrinks them by one margin per applied sample and stops growth:
+Linux PSI "some" stall time of at least 10% or "full" of at least 2% of the interval, or swap traffic
+(`/proc/vmstat` pswpin + pswpout) of at least 16 MiB/s; the macOS VM pressure level (warning or
+critical); the Windows low-memory resource notification. Another process pushed into zram keeps
+MemAvailable high while this process's own `VmSwap` stays zero, so neither availability nor own swap
+alone detects it. The ledger counts the reusable bytes each application released;
+the monitor then calls `releaseFreedHostMemory()` (glibc `malloc_trim`), and
+`configureHostMemoryReturn()` fixes glibc's mmap threshold at 1 MiB when sampling starts, so freed
+pixel buffers are unmapped rather than left resident in heap arenas. macOS and Windows allocators
+already return large blocks on free. Cache callbacks apply on the owner thread; status bars and
 Preferences observe cached state. Shutdown cancels and stops admission without waiting on a held
 worker. A preference change requests a new sample but applies retention targets immediately.
 

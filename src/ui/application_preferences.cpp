@@ -65,12 +65,14 @@ void writeByteBudget(QSettings& settings, const char* const key, const std::uint
     return QLatin1String(key.data(), static_cast<qsizetype>(key.size()));
 }
 
-// Headroom is stored as a decimal byte string; parseHeadroomBytes reads garbage, overflowing or
-// out-of-range text as the 2 GiB default. Zero is a real value.
+// Headroom is stored as a decimal byte string. Missing, garbage, overflowing or out-of-range text
+// selects the computed default (10% of the protected capacity, evaluated now); an explicit stored
+// value, including zero, wins.
 [[nodiscard]] std::uint64_t headroomFromSettings(const QSettings& settings,
-                                                 const std::string_view key) {
+                                                 const std::string_view key,
+                                                 const std::uint64_t fallback) {
     const auto text = settings.value(headroomKey(key)).toString().toStdString();
-    return runtime::parseHeadroomBytes(text);
+    return runtime::parseHeadroomBytes(text).value_or(fallback);
 }
 
 // QVariant::toDouble() silently yields 0 for a malformed string rather than the caller's default,
@@ -168,8 +170,10 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
     ApplicationPreferences preferences;
     preferences.audioEnabled = settings.value(QLatin1String(kAudioEnabledKey), true).toBool();
     preferences.loopPlayback = settings.value(QLatin1String(kLoopPlaybackKey), true).toBool();
-    preferences.ramHeadroomBytes = headroomFromSettings(settings, runtime::kRamHeadroomKey);
-    preferences.vramHeadroomBytes = headroomFromSettings(settings, runtime::kVramHeadroomKey);
+    preferences.ramHeadroomBytes = headroomFromSettings(settings, runtime::kRamHeadroomKey,
+                                                        runtime::defaultRamHeadroomBytes());
+    preferences.vramHeadroomBytes = headroomFromSettings(settings, runtime::kVramHeadroomKey,
+                                                         runtime::defaultVramHeadroomBytes());
     preferences.mediaDiskCacheEnabled =
         settings.value(QLatin1String(kMediaDiskCacheEnabledKey), true).toBool();
     preferences.mediaDiskCacheDirectory = absoluteDirectoryFromSettings(settings);
@@ -218,12 +222,20 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
 void saveApplicationPreferences(QSettings& settings, const ApplicationPreferences& preferences) {
     settings.setValue(QLatin1String(kAudioEnabledKey), preferences.audioEnabled);
     settings.setValue(QLatin1String(kLoopPlaybackKey), preferences.loopPlayback);
-    settings.setValue(headroomKey(runtime::kRamHeadroomKey),
-                      QString::number(static_cast<qulonglong>(
-                          std::min(preferences.ramHeadroomBytes, runtime::kMaximumMemoryHeadroomBytes))));
-    settings.setValue(headroomKey(runtime::kVramHeadroomKey),
-                      QString::number(static_cast<qulonglong>(
-                          std::min(preferences.vramHeadroomBytes, runtime::kMaximumMemoryHeadroomBytes))));
+    // A headroom equal to the computed default is not stored, so the default keeps following the
+    // measured capacity (a later process limit or GPU); any other value is an explicit preference.
+    const auto storeHeadroom = [&settings](const std::string_view key, const std::uint64_t bytes,
+                                           const std::uint64_t computedDefault) {
+        const auto value = std::min(bytes, runtime::kMaximumMemoryHeadroomBytes);
+        if (value == computedDefault)
+            settings.remove(headroomKey(key));
+        else
+            settings.setValue(headroomKey(key), QString::number(static_cast<qulonglong>(value)));
+    };
+    storeHeadroom(runtime::kRamHeadroomKey, preferences.ramHeadroomBytes,
+                  runtime::defaultRamHeadroomBytes());
+    storeHeadroom(runtime::kVramHeadroomKey, preferences.vramHeadroomBytes,
+                  runtime::defaultVramHeadroomBytes());
     settings.setValue(QLatin1String(kMediaDiskCacheEnabledKey), preferences.mediaDiskCacheEnabled);
     const auto directoryText = directorySettingText(preferences.mediaDiskCacheDirectory);
     if (directoryText.isEmpty())

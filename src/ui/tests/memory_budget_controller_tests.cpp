@@ -25,6 +25,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <iostream>
@@ -483,9 +484,58 @@ void coldForegroundAndSettings() {
     expect(spin([&] { return scheduler.isQuiescent(); }), "cold foreground scheduler retires");
 }
 } // namespace
+// The pressure monitor samples on its own thread; a sample short of the headroom is applied on
+// the UI thread, so a UI-owned cache evicts there within a few intervals, never on the monitor.
+void pressureAppliesOnUiThread() {
+    runtime::MemoryBudgetLedger ledger(60 * gib, 60 * gib);
+    ledger.setRamHeadroom(2 * gib);
+    std::atomic<std::size_t> held{4 * gib};
+    const auto uiThread = std::this_thread::get_id();
+    std::atomic<bool> appliedOnUi{true};
+    ledger.registerCache(
+        &held, 30 * gib, [&] { return held.load(); },
+        [&](const std::size_t value) {
+            if (std::this_thread::get_id() != uiThread)
+                appliedOnUi = false;
+            held = std::min(held.load(), value);
+        });
+    static_cast<void>(ledger.poll({.availableBytes = 20 * gib}));
+    runtime::TaskScheduler scheduler(config());
+    ui::TaskUiBridge bridge(scheduler);
+    std::atomic<std::size_t> taken{0};
+    runtime::MemoryPressureMonitor::Options pressure;
+    pressure.interval = 20ms;
+    pressure.psiTrigger = false;
+    pressure.counterSampler = {};
+    // 20 GiB free until another program takes 19 GiB; what the cache releases becomes free.
+    pressure.sampler = [&] {
+        return runtime::MachineMemorySample{.availableBytes =
+                                                20 * gib - taken.load() + (4 * gib - held.load())};
+    };
+    ui::MemoryBudgetController owner(
+        scheduler, bridge, ledger, [](const auto&) { return sample(); }, nullptr, pressure);
+    const auto end = std::chrono::steady_clock::now() + 150ms;
+    while (std::chrono::steady_clock::now() < end)
+        QCoreApplication::processEvents();
+    expect(owner.pressureApplications() == 0 && held == 4 * gib,
+           "a machine above the headroom applies no pressure");
+    taken = 19 * gib; // Another program takes memory: 1 GiB short of the 2 GiB headroom.
+    expect(spin([&] { return owner.pressureApplications() > 0 && held < 4 * gib; }),
+           "pressure shrinks a UI-owned cache without waiting for the next process sample");
+    const auto settleEnd = std::chrono::steady_clock::now() + 150ms;
+    while (std::chrono::steady_clock::now() < settleEnd)
+        QCoreApplication::processEvents();
+    expect(held == 4 * gib - (gib + gib / 2) && appliedOnUi,
+           "the cache gives back the deficit plus the margin, on the UI thread, then holds");
+    owner.beginShutdown();
+    scheduler.beginShutdown();
+    expect(spin([&] { return scheduler.isQuiescent(); }), "pressure scheduler retires");
+    ledger.unregisterCache(&held);
+}
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     heldSampling();
+    pressureAppliesOnUiThread();
     teardown();
     liveSettingsAndDeliveredCapacity();
     sampledPressurePreviewRecovery();

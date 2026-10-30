@@ -1,7 +1,9 @@
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/memory_headroom.hpp>
 #include <bloom/runtime/memory_pressure_monitor.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <cstdint>
 #include <fstream>
@@ -385,13 +387,19 @@ std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) 
         const auto available = effectiveAvailableBytes(state_.machine);
         const auto margin = memoryPressureMarginBytes(*ramHeadroom_);
         const auto growthFloor = saturatedAdd(*ramHeadroom_, margin);
+        const bool stall = state_.machine.memoryStall;
         std::size_t bytes = own;
-        if (available >= growthFloor) {
-            if (!state_.machine.memoryStall)
-                bytes =
-                    saturatedAdd(own, (available - growthFloor) / std::max<std::size_t>(1, pools));
-        } else if (available < *ramHeadroom_ && retainedTotal > 0) {
-            const auto deficit = static_cast<long double>(growthFloor - available);
+        if (available >= growthFloor && !stall) {
+            bytes = saturatedAdd(own, (available - growthFloor) / std::max<std::size_t>(1, pools));
+        } else if ((available < *ramHeadroom_ || stall) && retainedTotal > 0) {
+            // Under the headroom: the deficit plus the margin. Under pressure the machine is
+            // swapping or stalling even if available memory looks sufficient (another process may
+            // be the one pushed into swap), so give back at least one margin per applied sample
+            // until the pressure stops.
+            auto shortfall = available < *ramHeadroom_ ? growthFloor - available : std::size_t{0};
+            if (stall)
+                shortfall = std::max(shortfall, margin);
+            const auto deficit = static_cast<long double>(shortfall);
             const auto cut = static_cast<std::size_t>(
                 std::min(static_cast<long double>(own),
                          deficit * static_cast<long double>(own) / retainedTotal));
@@ -551,7 +559,9 @@ std::size_t MemoryBudgetLedger::pressureDeficit(const MachineMemorySample& sampl
     if (!ramHeadroom_ || !sample.availableBytes)
         return 0;
     const auto available = effectiveAvailableBytes(sample);
-    return available < *ramHeadroom_ ? *ramHeadroom_ - available : 0;
+    const auto deficit = available < *ramHeadroom_ ? *ramHeadroom_ - available : std::size_t{0};
+    return sample.memoryStall ? std::max(deficit, memoryPressureMarginBytes(*ramHeadroom_))
+                              : deficit;
 }
 
 std::size_t MemoryBudgetLedger::takeReleasedBytes() noexcept {
@@ -671,6 +681,36 @@ MemoryBudgetState MemoryBudgetLedger::applySample(MemoryBudgetSample sample,
 MemoryBudgetState MemoryBudgetLedger::state() const {
     const std::lock_guard lock(mutex_);
     return state_;
+}
+
+namespace {
+std::atomic<std::uint64_t> recordedDeviceLocalBytes{0};
+} // namespace
+
+void recordDeviceLocalMemoryBytes(const std::uint64_t bytes) noexcept {
+    auto current = recordedDeviceLocalBytes.load(std::memory_order_relaxed);
+    while (bytes > current && !recordedDeviceLocalBytes.compare_exchange_weak(
+                                  current, bytes, std::memory_order_relaxed))
+        ;
+}
+
+std::uint64_t defaultRamHeadroomBytes() noexcept {
+    auto& ledger = processMemoryBudgetLedger();
+    std::uint64_t capacity = ledger.physicalByteBudget();
+    if (capacity == 0)
+        capacity = physicalMemoryBytes();
+    try {
+        if (const auto limit = ledger.state().processCacheCeilingBytes)
+            capacity = capacity == 0 ? *limit : std::min<std::uint64_t>(capacity, *limit);
+    } catch (...) { // NOLINT(bugprone-empty-catch)
+        // Reading the cached state cannot fail in practice; physical memory alone remains.
+    }
+    return capacity == 0 ? kUnmeasuredHeadroomBytes : defaultHeadroomForCapacity(capacity);
+}
+
+std::uint64_t defaultVramHeadroomBytes() noexcept {
+    const auto device = recordedDeviceLocalBytes.load(std::memory_order_relaxed);
+    return device == 0 ? kUnmeasuredHeadroomBytes : defaultHeadroomForCapacity(device);
 }
 
 std::size_t memoryPressureMarginBytes(const std::size_t headroom) noexcept {

@@ -1,5 +1,6 @@
 #include <bloom/runtime/memory_pressure_monitor.hpp>
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <fstream>
@@ -73,28 +74,40 @@ void releaseFreedHostMemory() noexcept {
 #endif
 }
 
-std::optional<std::uint64_t> memoryStallMicroseconds() noexcept {
+MemoryPressureCounters memoryPressureCounters() noexcept {
+    MemoryPressureCounters counters;
 #if defined(__linux__)
     try {
+        const auto parse = [](const std::string_view text) -> std::optional<std::uint64_t> {
+            std::uint64_t value = 0;
+            if (std::from_chars(text.data(), text.data() + text.size(), value).ec != std::errc{})
+                return std::nullopt;
+            return value;
+        };
         std::ifstream pressure("/proc/pressure/memory");
         std::string line;
         while (std::getline(pressure, line)) {
-            if (!line.starts_with("some "))
-                continue;
             const auto at = line.find("total=");
             if (at == std::string::npos)
-                return std::nullopt;
-            const auto value = std::string_view(line).substr(at + 6);
-            std::uint64_t total = 0;
-            if (std::from_chars(value.data(), value.data() + value.size(), total).ec != std::errc{})
-                return std::nullopt;
-            return total;
+                continue;
+            const auto total = parse(std::string_view(line).substr(at + 6));
+            if (line.starts_with("some "))
+                counters.someStallMicroseconds = total;
+            else if (line.starts_with("full "))
+                counters.fullStallMicroseconds = total;
+        }
+        std::ifstream vmstat("/proc/vmstat");
+        while (std::getline(vmstat, line)) {
+            if (line.starts_with("pswpin "))
+                counters.swapInPages = parse(std::string_view(line).substr(7));
+            else if (line.starts_with("pswpout "))
+                counters.swapOutPages = parse(std::string_view(line).substr(8));
         }
     } catch (...) { // NOLINT(bugprone-empty-catch)
-        // Best effort: no pressure reading is reported as unknown.
+        // Best effort: an unreadable counter is reported as unknown.
     }
 #endif
-    return std::nullopt;
+    return counters;
 }
 
 std::optional<std::size_t> processResidentBytes() noexcept {
@@ -203,25 +216,45 @@ void MemoryPressureMonitor::run() {
     if (options_.psiTrigger)
         psiDescriptor = openPsiTrigger();
 #endif
-    std::optional<std::uint64_t> lastStall;
-    auto lastStallAt = std::chrono::steady_clock::now();
+    std::uint64_t pageBytes = options_.pageBytes;
+#if defined(__linux__)
+    if (pageBytes == 0)
+        pageBytes = static_cast<std::uint64_t>(std::max(::sysconf(_SC_PAGE_SIZE), 4096L));
+#endif
+    if (pageBytes == 0)
+        pageBytes = 4096;
+    std::optional<MemoryPressureCounters> last;
+    auto lastAt = std::chrono::steady_clock::now();
     std::size_t releasedPending = 0;
     while (waitForNextSample(psiDescriptor)) {
         try {
             auto sample = options_.sampler ? options_.sampler() : MachineMemorySample{};
             samples_.fetch_add(1, std::memory_order_relaxed);
             const auto now = std::chrono::steady_clock::now();
-            if (options_.stallSampler) {
-                const auto stall = options_.stallSampler();
-                if (stall && lastStall && *stall >= *lastStall && now > lastStallAt) {
-                    const auto elapsed =
-                        std::chrono::duration<double, std::micro>(now - lastStallAt).count();
-                    sample.memoryStall =
-                        sample.memoryStall || static_cast<double>(*stall - *lastStall) >=
-                                                  options_.stallFraction * elapsed;
+            if (options_.counterSampler) {
+                const auto counters = options_.counterSampler();
+                if (last && now > lastAt) {
+                    const auto micros =
+                        std::chrono::duration<double, std::micro>(now - lastAt).count();
+                    const auto delta = [](const std::optional<std::uint64_t>& current,
+                                          const std::optional<std::uint64_t>& previous) {
+                        return current && previous && *current >= *previous
+                                   ? static_cast<double>(*current - *previous)
+                                   : 0.0;
+                    };
+                    const auto swapped = (delta(counters.swapInPages, last->swapInPages) +
+                                          delta(counters.swapOutPages, last->swapOutPages)) *
+                                         static_cast<double>(pageBytes);
+                    const bool stalled =
+                        delta(counters.someStallMicroseconds, last->someStallMicroseconds) >=
+                            options_.someStallFraction * micros ||
+                        delta(counters.fullStallMicroseconds, last->fullStallMicroseconds) >=
+                            options_.fullStallFraction * micros ||
+                        swapped >= static_cast<double>(options_.swapBytesPerSecond) * micros / 1e6;
+                    sample.memoryStall = sample.memoryStall || stalled;
                 }
-                lastStall = stall;
-                lastStallAt = now;
+                last = counters;
+                lastAt = now;
             }
             if (ledger_.pressureDeficit(sample) > 0 && deliver_) {
                 deliveries_.fetch_add(1, std::memory_order_relaxed);

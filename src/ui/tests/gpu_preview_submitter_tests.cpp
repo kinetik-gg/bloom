@@ -302,6 +302,7 @@ void testBackgroundRoutesThroughSubmitter(Expectations& expectations) {
     ui::BackgroundPreviewController background(
         session, controller, scheduler, bridge, countingPreparation(fixture.pipeline, probe),
         nullptr, makeSubmitter(scheduler, fixture.pipeline, probe));
+    background.setIdleFill(true); // Qualifies the idle-fill route through the submitter.
     background.fillNextFrame();
     expectations.expect(waitUntil([&] { return frameCache->size() >= 1; }),
                         "the background fill caches a frame");
@@ -332,6 +333,7 @@ void testCachedRequestBypassesSubmitter(Expectations& expectations) {
     ui::BackgroundPreviewController background(
         session, controller, scheduler, bridge, countingPreparation(fixture.pipeline, probe),
         nullptr, makeSubmitter(scheduler, fixture.pipeline, probe));
+    background.setIdleFill(true); // Qualifies the idle-fill route through the submitter.
     expectations.expect(waitUntil([&] { return isReady(controller); }), "opening frame ready");
 
     background.fillNextFrame();

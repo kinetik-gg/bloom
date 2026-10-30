@@ -787,17 +787,35 @@ int main(int argc, char* argv[]) try {
                      applyFeedbackPreferences);
     // Memory headroom (RAM and VRAM left free for the system): the committed value reaches the
     // processing policy on Apply and OK, and once now for the saved value.
-    const auto applyHeadroom = [processingPhasePolicy] {
+    const auto applyHeadroom = [processingPhasePolicy, &memoryBudgetController] {
         const QSettings settings;
         const auto preferences = bloom::ui::loadApplicationPreferences(settings);
         processingPhasePolicy->setHeadroom(
             {.ramBytes = preferences.ramHeadroomBytes, .vramBytes = preferences.vramHeadroomBytes});
         // Reusable caches fill available memory beyond the same RAM headroom.
+        // setRamHeadroom applies the new budgets at once against the last sample; the pressure
+        // monitor then samples the machine now, so a larger headroom evicts within one interval
+        // and the freed memory is returned to the OS.
         bloom::runtime::processMemoryBudgetLedger().setRamHeadroom(
             static_cast<std::size_t>(preferences.ramHeadroomBytes));
+        memoryBudgetController.wakePressureMonitor();
     };
     applyHeadroom();
     QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window, applyHeadroom);
+    // Without a saved preference the headroom is 10% of the measured capacity. Physical memory, a
+    // process limit and the GPU's device-local size are measured after startup, so re-apply when a
+    // sample changes the computed default (a saved value still wins inside applyHeadroom).
+    QObject::connect(
+        &memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied, &window,
+        [applyHeadroom, applied = std::pair{bloom::runtime::defaultRamHeadroomBytes(),
+                                            bloom::runtime::defaultVramHeadroomBytes()}]() mutable {
+            const std::pair current{bloom::runtime::defaultRamHeadroomBytes(),
+                                    bloom::runtime::defaultVramHeadroomBytes()};
+            if (current != applied) {
+                applied = current;
+                applyHeadroom();
+            }
+        });
     QObject::connect(&window, &bloom::ui::MainWindow::soundTestRequested, &window,
                      [&uiFeedback](const bloom::ui::ApplicationPreferences& draft) {
                          uiFeedback.playTest(bloom::ui::feedbackSettingsFrom(draft));
