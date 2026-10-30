@@ -34,6 +34,9 @@ class AudioDeviceControl final : public QObject {
     std::uint64_t requestPlay(core::RationalTime at);
     std::uint64_t requestSeek(core::RationalTime at);
     std::uint64_t requestStop();
+    // Publishes the transport loop the mixer wraps inside (nullopt: no loop). An unchanged range
+    // publishes nothing and returns the current generation.
+    std::uint64_t setLoopRange(std::optional<media::audio::playback::LoopRange> range);
     void requestSilence() noexcept;
     [[nodiscard]] core::RationalTime positionNow() const noexcept;
     [[nodiscard]] core::RationalTime playbackRateRatio() const noexcept;
@@ -53,7 +56,9 @@ class AudioDeviceControl final : public QObject {
     struct Desired final {
         std::shared_ptr<const std::vector<media::audio::playback::AudioClip>> clips;
         core::RationalTime at{};
+        std::optional<media::audio::playback::LoopRange> loop;
         std::uint64_t mixSerial = 0;
+        std::uint64_t loopSerial = 0;
         std::uint64_t transportSerial = 0;
         std::uint64_t generation = 0;
         std::uint64_t silenceGeneration = 0;

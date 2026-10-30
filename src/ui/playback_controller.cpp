@@ -78,6 +78,44 @@ elapsedNanoseconds(const std::chrono::steady_clock::time_point now,
         std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
 }
 
+struct WorkAreaFrames final {
+    std::uint64_t first = 0;
+    std::uint64_t last = 0;
+};
+
+// The work area's valid frames, [first, last], the same derivation play() and tick() use.
+[[nodiscard]] std::optional<WorkAreaFrames>
+workAreaFrames(const core::FrameTimeMapping& mapping, const document::WorkArea& area) noexcept {
+    const auto first = firstFrameAtOrAfter(mapping, area.start);
+    const auto end = core::FrameTimeMapping::create(area.end, mapping.rateNumerator(),
+                                                    mapping.rateDenominator());
+    if (!first || !end)
+        return std::nullopt;
+    const auto last = end.value()->maximumFrameIndex();
+    if (last < *first || last - *first == std::numeric_limits<std::uint64_t>::max())
+        return std::nullopt;
+    return WorkAreaFrames{*first, last};
+}
+
+// The audio loop is the video loop's exact frame grid, [first, last + 1). The mixer's rational wrap
+// and tick()'s frame-modulo wrap then share one period, so they cannot drift apart however many
+// passes play, even when the authored work-area end is off the frame grid.
+[[nodiscard]] std::optional<media::audio::playback::LoopRange>
+gridLoopRange(const core::FrameTimeMapping& mapping, const WorkAreaFrames frames) noexcept {
+    const auto start = mapping.timeForFrame(frames.first);
+    const auto denominator = static_cast<std::uint64_t>(mapping.rateDenominator());
+    if (!start ||
+        frames.last >=
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) / denominator)
+        return std::nullopt;
+    const auto end =
+        core::RationalTime::create(static_cast<std::int64_t>((frames.last + 1) * denominator),
+                                   static_cast<std::int64_t>(mapping.rateNumerator()));
+    if (!end)
+        return std::nullopt;
+    return media::audio::playback::LoopRange{*start.value(), *end};
+}
+
 } // namespace
 
 PlaybackController::PlaybackController(CompositionSession& session,
@@ -169,6 +207,7 @@ void PlaybackController::useWallClock() {
     startClock_ = clock_();
     startFrameIndex_ = mapping->nearestFrameIndex(session_.currentTime());
     appliedOffset_ = 0;
+    completedPassFrames_ = 0;
     lastAppliedFrameIndex_ = startFrameIndex_;
     scheduleTick(wakeCap_);
 }
@@ -215,8 +254,37 @@ void PlaybackController::setLooping(const bool looping) {
     if (looping_ == looping) {
         return;
     }
+    if (!looping && state_ == PlaybackState::Playing) {
+        // Passes already played stay played: the run finishes the pass it is in, then stops on the
+        // last frame, instead of reading its whole unwrapped offset as already past the end.
+        const auto* composition = session_.composition();
+        const auto mapping = composition ? mappingForComposition(*composition) : std::nullopt;
+        const auto frames = mapping ? workAreaFrames(*mapping, session_.workArea()) : std::nullopt;
+        if (frames && startFrameIndex_ >= frames->first &&
+            appliedOffset_ <=
+                std::numeric_limits<std::uint64_t>::max() - (startFrameIndex_ - frames->first)) {
+            const auto raw = startFrameIndex_ - frames->first + appliedOffset_;
+            completedPassFrames_ = raw - raw % (frames->last - frames->first + 1);
+        }
+    }
     looping_ = looping;
+    if (state_ == PlaybackState::Playing)
+        publishAudioLoop();
     emit loopingChanged(looping_);
+}
+
+void PlaybackController::publishAudioLoop() {
+    if (!audioControl_)
+        return;
+    std::optional<media::audio::playback::LoopRange> loop;
+    if (looping_) {
+        const auto* composition = session_.composition();
+        const auto mapping = composition ? mappingForComposition(*composition) : std::nullopt;
+        if (const auto frames =
+                mapping ? workAreaFrames(*mapping, session_.workArea()) : std::nullopt)
+            loop = gridLoopRange(*mapping, *frames);
+    }
+    expectedAudioGeneration_ = audioControl_->setLoopRange(loop);
 }
 
 void PlaybackController::play() {
@@ -258,6 +326,7 @@ void PlaybackController::play() {
             (void)session_.setCurrentTime(*time.value());
     }
     appliedOffset_ = 0;
+    completedPassFrames_ = 0;
     lastAppliedFrameIndex_ = startFrameIndex_;
     runRateNumerator_ = mapping->rateNumerator();
     runRateDenominator_ = mapping->rateDenominator();
@@ -266,6 +335,8 @@ void PlaybackController::play() {
 
     audioClockActive_ = false;
     audioStartPending_ = false;
+    // Published even before clips exist, so a mix that arrives mid-run starts inside the loop.
+    publishAudioLoop();
     if (audioEnabled_ && audioControl_ && audioClipsAvailable_) {
         const auto anchor = mapping->timeForFrame(startFrameIndex_);
         if (!anchor)
@@ -403,7 +474,8 @@ void PlaybackController::tick() {
     // lands on the LAST frame of the work area exactly once and pauses there: it neither wraps nor
     // freezes still-playing on a frame it already showed, and the offset arithmetic below is the
     // same exact integer arithmetic either way -- only the reduction differs.
-    const auto rawOffset = startFrameIndex_ - first + nextOffset;
+    const auto runOffset = startFrameIndex_ - first + nextOffset;
+    const auto rawOffset = runOffset >= completedPassFrames_ ? runOffset - completedPassFrames_ : 0;
     const bool pastEnd = !looping_ && rawOffset >= frameCount;
     const auto targetFrameIndex =
         looping_ ? first + rawOffset % frameCount : first + std::min(rawOffset, frameCount - 1);
@@ -480,11 +552,15 @@ void PlaybackController::handleWorkAreaChanged() {
     startClock_ = clock_();
     startFrameIndex_ = index;
     appliedOffset_ = 0;
+    completedPassFrames_ = 0;
     lastAppliedFrameIndex_ = index;
     const bool moved = session_.currentTime() != *anchor.value();
     applyingOwnTimeChange_ = true;
     (void)session_.setCurrentTime(*anchor.value());
     applyingOwnTimeChange_ = false;
+    // The loop goes ahead of the seek so the restarted mix wraps at the new range. The seek itself
+    // is needed: this relocates the run (new anchor, new grid), it is not a wrap.
+    publishAudioLoop();
     if (audioEnabled_ && audioControl_ && audioClipsAvailable_) {
         useWallClock();
         audioAlignmentRetried_ = false;
@@ -570,6 +646,7 @@ void PlaybackController::handleAudioCompletion(const std::uint64_t generation, c
     audioStartPending_ = false;
     startFrameIndex_ = currentFrame;
     appliedOffset_ = 0;
+    completedPassFrames_ = 0;
     lastAppliedFrameIndex_ = currentFrame;
     scheduleTick(wakeCap_);
 }

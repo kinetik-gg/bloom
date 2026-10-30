@@ -19,6 +19,7 @@ struct AudioDeviceControl::State final {
     // may call the engine's atomic requestSilence/clock methods until closing is set.
     std::unique_ptr<media::audio::playback::AudioEngine> engine;
     std::uint64_t mixSerial = 0;
+    std::uint64_t loopSerial = 0;
     std::uint64_t transportSerial = 0;
     std::atomic<bool> retired{false};
 };
@@ -117,6 +118,17 @@ std::uint64_t AudioDeviceControl::requestStop() {
     return desired_.generation;
 }
 
+std::uint64_t
+AudioDeviceControl::setLoopRange(const std::optional<media::audio::playback::LoopRange> range) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (closing_ || desired_.loop == range)
+        return desired_.generation;
+    desired_.loop = range;
+    ++desired_.loopSerial;
+    publishDesired();
+    return desired_.generation;
+}
+
 void AudioDeviceControl::requestSilence() noexcept {
     if (!closing_ && state_->engine)
         state_->engine->requestSilence();
@@ -153,6 +165,12 @@ void AudioDeviceControl::submitPending() {
                 if (state->mixSerial != desired.mixSerial) {
                     state->engine->replaceClips(*desired.clips);
                     state->mixSerial = desired.mixSerial;
+                }
+                // Before the transport, so a play or seek in the same request starts inside the
+                // new loop. A refused range leaves the engine's previous loop in place.
+                if (state->loopSerial != desired.loopSerial) {
+                    (void)state->engine->setLoopRange(desired.loop);
+                    state->loopSerial = desired.loopSerial;
                 }
                 if (state->transportSerial != desired.transportSerial) {
                     if (desired.playing) {

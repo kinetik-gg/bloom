@@ -895,6 +895,15 @@ the UI transport maps that exact position through `FrameTimeMapping` and never a
 its wall-clock timer. Pausing stops the engine, scrubbing seeks then pauses, and a composition or
 revision change clears the old clips before a new mix is accepted.
 
+Looping keeps audio and pictures on one period. The transport wraps pictures with an exact modulo
+of the work area's frame count and hands the mixer the same frame-grid range,
+[first valid frame, last valid frame + 1); the mixer wraps the audio inside that range on its own
+thread while `positionNow()` stays unwrapped, so every pass is audible and repeated wraps never
+drift under either master clock. Turning looping off mid-run keeps the passes already played: the
+run finishes the pass it is in and pauses on the last frame, and the mixer keeps that pass's offset.
+Turning it on mid-run, or changing the work area, updates the mixer's range in place or with the
+work-area re-anchor described above ([Media I/O](media-io.md#preview-engine-and-synchronization)).
+
 If there is no resolved audio clip, audio playback is disabled, or the backend cannot start, the
 transport falls back to its existing wall-clock frame schedule. That fallback is explicit and keeps
 RAM Preview's prefill and cache behavior unchanged. Mix publication is revision-guarded, so a
