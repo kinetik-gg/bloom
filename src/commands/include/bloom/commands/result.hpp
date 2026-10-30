@@ -197,6 +197,10 @@ struct CommandResult {
     std::vector<OperationFailure> warnings;
     std::vector<CommandOutput> outputs;
     document::ValidationResult validation;
+    // A ValidationFailed execute: the index of the first operation after which the draft no longer
+    // validated, found by replaying the transaction on the failure path only. std::nullopt when no
+    // single operation could be named.
+    std::optional<std::size_t> validationOperationIndex;
     // True when the applied transaction could change rendered pixels. Conservative default: a
     // rejected result, a no-change result, an unclassified operation, and every path that does not
     // aggregate operation effects stay true. Only a successful transaction whose every Applied

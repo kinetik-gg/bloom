@@ -30,6 +30,7 @@ CommandResult makeResult(CommandAction action, CommandStatus status,
         .warnings = {},
         .outputs = {},
         .validation = {},
+        .validationOperationIndex = std::nullopt,
         .renderAffecting = true,
         .affectedTimes = std::nullopt,
         .layerIdentityRemaps = std::nullopt,
@@ -71,6 +72,22 @@ CommandResult resultForCommit(CommandAction action, std::string label,
         result.afterRevision = commitResult.snapshot->revision();
     }
     return result;
+}
+
+// The operation that made a transaction's draft invalid: the first prefix that no longer
+// validates. Runs only after a refusal, so a valid transaction never pays for it.
+std::optional<std::size_t> firstInvalidOperation(const document::Document& document,
+                                                 const document::Snapshot& before,
+                                                 const Transaction& transaction) {
+    document::Draft draft = document.draft(before);
+    std::size_t index = 0;
+    for (const auto& operation : transaction.operations()) {
+        static_cast<void>(operation->apply(draft));
+        if (!draft.validate().ok())
+            return index;
+        ++index;
+    }
+    return std::nullopt;
 }
 
 } // namespace
@@ -451,6 +468,8 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
             auto invalid = makeResult(CommandAction::Execute, CommandStatus::ValidationFailed,
                                       before, std::string(transaction.label()));
             invalid.validation = std::move(validation);
+            invalid.validationOperationIndex =
+                firstInvalidOperation(document_, before, transaction);
             notify(invalid);
             return invalid;
         }
@@ -543,6 +562,8 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     if (!commitResult.committed() || !commitResult.snapshot.has_value()) {
         auto failed = resultForCommit(CommandAction::Execute, std::string(transaction.label()),
                                       before, std::move(commitResult));
+        if (failed.status == CommandStatus::ValidationFailed)
+            failed.validationOperationIndex = firstInvalidOperation(document_, before, transaction);
         notify(failed);
         return failed;
     }

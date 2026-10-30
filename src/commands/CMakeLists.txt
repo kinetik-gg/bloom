@@ -6,6 +6,7 @@ target_sources(
         animation_operations.cpp
         command_stack.cpp
         operations.cpp
+        parameter_source.cpp
         asset_operations.cpp
         data_block_operations.cpp
         export_queue_operations.cpp
