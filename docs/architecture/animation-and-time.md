@@ -674,7 +674,7 @@ one field classification, `document::sameEvaluationInputs()`
 (`src/document/include/bloom/document/evaluation_inputs.hpp`), and a transaction that changed no
 evaluation input is render-neutral whatever its operations declared. Moving, collapsing or resizing
 a node card, framing nodes in a group and the group's name, padding or color, a layer's name, label
-color and lock, a mask's name, composition name, folder, work area, safe areas, timecode display
+color, lock, shy flag and name-follows-source flag, a mask's name, composition name, folder, work area, safe areas, timecode display
 and viewer background, the project name, asset names, folders, tags and order, and the export queue
 are presentation: saved, undoable and dirtying, but invisible to the plan and to every cache. Undo
 and redo replay the impact stored with the history entry, so they are neutral too. Selection,

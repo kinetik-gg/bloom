@@ -1142,9 +1142,10 @@ and offscreen event tests apply to Linux, macOS and Windows; this change's execu
 A `LayerOutputBoundary` owns range, visibility (`enabled`, default true), `solo` (false),
 `locked` (false), optional RGB `labelColor`, and the two document 1.30 presentation flags `shy`
 (false) and `nameFollowsSource`. Neither flag is an evaluation input; their commands
-(`SetLayerShy`, `SetLayerNameFollowsSource`) declare `renderAffecting() == false`, so an edit keeps
-every compiled plan, RAM-preview frame and operation-cache entry valid. When #399's
-`document::evaluationView(LayerOutputBoundary)` lands it must clear both fields alongside `name`.
+(`SetLayerShy`, `SetLayerNameFollowsSource`) declare `renderAffecting() == false`, and
+`document::evaluationView(LayerOutputBoundary)` resets both alongside `name`, so the command stack's
+evaluation-input proof (#399) agrees and an edit keeps every compiled plan, RAM-preview frame and
+operation-cache entry valid.
 
 `shy` is After Effects' Shy switch: the layer table hides a shy layer while its shy filter is on.
 `nameFollowsSource` makes the layer show its source's name. A layer's source is the node feeding its

@@ -70,8 +70,10 @@ void testClassification(TestContext& test) {
                     layer.name = "Renamed layer";
                     layer.labelColor = std::array<std::uint8_t, 3>{200, 40, 40};
                     layer.locked = true;
+                    layer.shy = true;
+                    layer.nameFollowsSource = true;
                 }),
-                "a layer's name, label color and lock are presentation");
+                "a layer's name, label color, lock, shy and name-follows-source are presentation");
     test.expect(!neutralEdit([](Project& project) { firstLayer(project).enabled = false; }),
                 "layer enable is an evaluation input");
     test.expect(!neutralEdit([](Project& project) { firstLayer(project).solo = true; }),
@@ -159,6 +161,9 @@ void testPresentationCommands(TestContext& test) {
     expectNeutralRoundTrip(test, fixture,
                            fixture.run<SetLayerLocked>(kCompositionId, kSecondLayerId, true),
                            "locking a layer is render-neutral");
+    expectNeutralRoundTrip(test, fixture,
+                           fixture.run<SetLayerShy>(kCompositionId, kSecondLayerId, true),
+                           "marking a layer shy is render-neutral");
     expectNeutralRoundTrip(test, fixture,
                            fixture.run<SetCompositionName>(kCompositionId, "Renamed"),
                            "renaming a composition is render-neutral");
