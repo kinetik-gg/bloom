@@ -2,6 +2,8 @@
 
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/popup_window.hpp>
+#include <bloom/ui/compile_failure.hpp>
 #include <bloom/ui/mcp_server_adapter.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <algorithm>
@@ -262,6 +264,14 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
     layout->addWidget(version_);
     layout->addWidget(colorChip_);
     layout->addWidget(previewState_);
+    compileDetails_ = new kit::KButton(tr("Details"), this);
+    compileDetails_->setObjectName(QStringLiteral("windowStatusBarCompileDetails"));
+    compileDetails_->setVariant(kit::KButton::Variant::Ghost);
+    compileDetails_->setControlSize(kit::KButton::ControlSize::Compact);
+    compileDetails_->setAccessibleName(tr("Why the composition cannot render"));
+    compileDetails_->hide();
+    connect(compileDetails_, &QAbstractButton::clicked, this, [this] { openCompileFailure(); });
+    layout->addWidget(compileDetails_);
     layout->addWidget(droppedFrames_);
     layout->addWidget(video_);
     layout->addWidget(cache_);
@@ -493,6 +503,7 @@ void WindowStatusBar::refreshPreviewCells() {
         static_cast<StatusColorChip*>(colorChip_)
             ->setState({tr("Color state unavailable"), kit::Color::Warn});
         previewState_->clear();
+        applyCompileFailure(std::nullopt);
         droppedFrames_->clear();
         cache_->setText(operationCache_ == nullptr ? QString{}
                                                    : operationCacheText(*operationCache_));
@@ -506,6 +517,7 @@ void WindowStatusBar::refreshPreviewCells() {
         static_cast<StatusColorChip*>(colorChip_)
             ->setState({tr("No composition"), kit::Color::Muted});
         previewState_->clear();
+        applyCompileFailure(std::nullopt);
         droppedFrames_->clear();
         cache_->setText(operationCache_ == nullptr ? QString{}
                                                    : operationCacheText(*operationCache_));
@@ -522,6 +534,7 @@ void WindowStatusBar::refreshPreviewCells() {
     previewState_->setTone(preview.activity == PreviewActivity::Failed ? kit::Color::Error
                                                                        : kit::Color::Muted);
     previewState_->setToolTip(displayedViewer_ ? preview.message : QString{});
+    applyCompileFailure(displayedViewer_ ? compileFailureFromPreview(preview) : std::nullopt);
 
     const QString dropped = droppedFrameText(*previewController_);
     droppedFrames_->setText(dropped);
@@ -535,6 +548,39 @@ void WindowStatusBar::refreshPreviewCells() {
                     : operationText.isEmpty() ? previewText
                                               : previewText + tr(" · ") + operationText);
 }
+
+void WindowStatusBar::applyCompileFailure(std::optional<CompileFailure> failure) {
+    compileFailure_ = std::move(failure);
+    compileDetails_->setVisible(compileFailure_.has_value());
+    if (!compileFailure_ && compileFailurePopup_ != nullptr)
+        compileFailurePopup_->close();
+}
+
+void WindowStatusBar::openCompileFailure() {
+    if (!compileFailure_)
+        return;
+    if (compileFailurePopup_ != nullptr)
+        compileFailurePopup_->close();
+    auto* panel = new CompileFailurePanel(*compileFailure_, session_);
+    auto* popup = new kit::KPopupWindow(nullptr, kit::Elevation::Popup);
+    popup->setObjectName(QStringLiteral("windowStatusBarCompileFailurePopup"));
+    popup->setAttribute(Qt::WA_DeleteOnClose);
+    popup->setContent(panel);
+    connect(panel, &CompileFailurePanel::dismissed, popup, &QWidget::close);
+    compileFailurePopup_ = popup;
+    const int border = std::max(1, static_cast<int>(std::lround(kit::kHairlineWidth)));
+    panel->resize(panel->preferredSize());
+    popup->openFor(*this, panel->preferredSize() + QSize(2 * border, 2 * border));
+}
+
+void WindowStatusBar::applyPreviewStateForTest(const CompositionPreviewState& preview) {
+    previewState_->setText(previewActivityText(preview));
+    applyCompileFailure(compileFailureFromPreview(preview));
+}
+
+bool WindowStatusBar::compileDetailsVisibleForTest() const { return !compileDetails_->isHidden(); }
+
+QWidget* WindowStatusBar::compileFailurePopupForTest() const { return compileFailurePopup_; }
 
 void WindowStatusBar::setDisplayedViewer(ViewerEditor* viewer) {
     if (displayedViewer_ != viewer) {

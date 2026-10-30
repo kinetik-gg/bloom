@@ -411,6 +411,37 @@ void testCopyConfig() {
            "the placeholder variants stay available");
 }
 
+void testCompileFailureActivity() {
+    ScriptedMcpPort port;
+    ui::McpServerAdapter adapter(port);
+    show(port, adapter, makeSnapshot(m::McpServerState::Running));
+    ui::McpServerEditor panel(&adapter);
+    panel.resize(760, 820);
+    panel.show();
+    auto* list = find<QListWidget>(panel, "mcpActivityList");
+    ui::McpCompileFailureNote note;
+    note.client = QStringLiteral("Claude Code");
+    note.tool = QStringLiteral("transact");
+    note.composition = QStringLiteral("Main");
+    note.detail = QStringLiteral("Blending Mode is driven by Scalar to Integer.");
+    adapter.noteCompileFailure(note);
+    expect(list != nullptr && list->count() == 1, "a compile failure adds one Activity line");
+    if (list == nullptr || list->count() != 1)
+        return;
+    const auto line = list->item(0)->text();
+    expect(line.contains(QStringLiteral("Claude Code \u00b7 transact \u00b7 left 'Main' unable to render: "
+                                        "Blending Mode is driven by Scalar to Integer.")),
+           "the line reads client, tool, composition and detail");
+    expect(!line.contains(QStringLiteral("bloom.")), "no raw code in the line");
+    expect(list->item(0)->foreground().color() == ui::kit::color(ui::kit::Color::Error),
+           "the line is in the error tone");
+    // A reopened panel shows the failures already noted.
+    ui::McpServerEditor again(&adapter);
+    again.show();
+    auto* list2 = find<QListWidget>(again, "mcpActivityList");
+    expect(list2 != nullptr && list2->count() == 1, "a new panel lists the earlier failure");
+}
+
 void testIndicatorAndSound() {
     namespace doc = bloom::document;
     auto project = doc::makeNewProject("Mcp", "Main", bloom::core::RationalTime::fromInteger(10));
@@ -524,6 +555,7 @@ int main(int argc, char** argv) {
     testRegenerateConfirms();
     testClientsAndActivity();
     testCopyConfig();
+    testCompileFailureActivity();
     testIndicatorAndSound();
     testRealService();
     if (gFailures != 0)

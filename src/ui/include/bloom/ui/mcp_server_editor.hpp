@@ -49,6 +49,7 @@ class McpServerEditor final : public QWidget {
     void refresh();
     void refreshClients(const mcp::McpServerSnapshot& snapshot);
     void refreshActivity();
+    void appendCompileFailures();
     void syncActivityEmpty();
     void refreshToken(const mcp::McpServerSnapshot& snapshot);
     void refreshConfigMenu(const mcp::McpServerSnapshot& snapshot);
@@ -86,6 +87,7 @@ class McpServerEditor final : public QWidget {
     QString portError_;
     bool syncing_ = false;
     std::uint64_t lastActivityId_ = 0;
+    std::uint64_t lastCompileFailureId_ = 0;
     std::uint64_t shownRevision_ = ~std::uint64_t{0};
     bool narrow_ = false;
 };

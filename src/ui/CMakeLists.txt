@@ -479,6 +479,7 @@ target_sources(
         export_detail_fields.hpp
         export_detail_support.hpp
         export_editor_internal.hpp
+        compile_failure.cpp
         mcp_server_adapter.cpp
         mcp_server_editor.cpp
         mcp_server_service_port.cpp
@@ -650,6 +651,7 @@ target_sources(
             include/bloom/ui/export_queue_edits.hpp
             include/bloom/ui/export_queue_service_port.hpp
             include/bloom/ui/export_editor.hpp
+            include/bloom/ui/compile_failure.hpp
             include/bloom/ui/mcp_server_adapter.hpp
             include/bloom/ui/mcp_server_editor.hpp
             include/bloom/ui/mcp_server_service_port.hpp

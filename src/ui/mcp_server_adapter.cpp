@@ -117,6 +117,20 @@ std::shared_ptr<const mcp::McpServerSnapshot> McpServerAdapter::snapshot() const
     return port_.snapshot();
 }
 
+void McpServerAdapter::noteCompileFailure(McpCompileFailureNote note) {
+    note.id = compileFailures_.empty() ? 1 : compileFailures_.back().id + 1;
+    if (note.at == std::chrono::system_clock::time_point{})
+        note.at = std::chrono::system_clock::now();
+    compileFailures_.push_back(std::move(note));
+    // The log is bounded like the panel's list; the oldest note goes first.
+    constexpr std::size_t kCap = 256;
+    if (compileFailures_.size() > kCap)
+        compileFailures_.erase(compileFailures_.begin());
+    if (feedback_ != nullptr)
+        feedback_->play(FeedbackEvent::Warning);
+    Q_EMIT compileFailureNoted();
+}
+
 mcp::McpActivityBatch McpServerAdapter::activity(const std::uint64_t afterId) const {
     return port_.activity(afterId);
 }

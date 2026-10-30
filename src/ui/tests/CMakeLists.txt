@@ -2181,6 +2181,17 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
 )
 
+# Compile-failure details: status bar disclosure, popup, Select, Copy details; DPR captures.
+add_executable(bloom_compile_failure_test compile_failure_tests.cpp)
+target_link_libraries(bloom_compile_failure_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+bloom_enable_warnings(bloom_compile_failure_test)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.compile_failure.dpr${scale} COMMAND bloom_compile_failure_test)
+    set_tests_properties(bloom.ui.compile_failure.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;unit" TIMEOUT 120)
+endforeach()
+
 add_executable(bloom_mcp_panel_capture mcp_panel_capture.cpp)
 target_include_directories(bloom_mcp_panel_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_mcp_panel_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)

@@ -119,6 +119,8 @@ McpServerEditor::McpServerEditor(McpServerAdapter* const adapter, QWidget* const
     build();
     if (adapter_ != nullptr) {
         connect(adapter_, &McpServerAdapter::changed, this, &McpServerEditor::refresh);
+        connect(adapter_, &McpServerAdapter::compileFailureNoted, this,
+                &McpServerEditor::appendCompileFailures);
         connect(qApp, &QApplication::focusChanged, this, &McpServerEditor::onFocusChanged);
     }
     refresh();
@@ -361,6 +363,7 @@ void McpServerEditor::refresh() {
         project_->hide();
     }
     refreshActivity();
+    appendCompileFailures();
 }
 
 void McpServerEditor::refreshToken(const mcp::McpServerSnapshot& snapshot) {
@@ -511,6 +514,22 @@ void McpServerEditor::refreshActivity() {
     lastActivityId_ = std::max(batch.lastId, lastActivityId_);
     if (atBottom)
         activity_->scrollToBottom();
+    syncActivityEmpty();
+}
+
+void McpServerEditor::appendCompileFailures() {
+    if (adapter_ == nullptr)
+        return;
+    for (const auto& note : adapter_->compileFailures()) {
+        if (note.id <= lastCompileFailureId_)
+            continue;
+        lastCompileFailureId_ = note.id;
+        auto* item = new QListWidgetItem(compileFailureLine(note));
+        item->setToolTip(item->text());
+        item->setForeground(kit::color(kit::Color::Error));
+        activity_->addItem(item);
+    }
+    activity_->scrollToBottom();
     syncActivityEmpty();
 }
 

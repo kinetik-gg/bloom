@@ -199,6 +199,20 @@ QString activityLine(const mcp::McpActivityEntry& entry) {
     return line;
 }
 
+QString compileFailureLine(const McpCompileFailureNote& note) {
+    QStringList parts;
+    if (!note.client.isEmpty())
+        parts << note.client;
+    parts << (note.tool.isEmpty() ? QStringLiteral("transact") : note.tool);
+    QString what = tr("left '%1' unable to render").arg(note.composition);
+    if (!note.detail.isEmpty())
+        what += QStringLiteral(": ") + note.detail;
+    parts << what;
+    const auto time = timeText(note.at);
+    return (time.isEmpty() ? QString{} : time + QStringLiteral("  ")) +
+           parts.join(QStringLiteral(" · "));
+}
+
 QString clientKindText(const mcp::McpClientKind kind) {
     switch (kind) {
     case mcp::McpClientKind::ClaudeCode:

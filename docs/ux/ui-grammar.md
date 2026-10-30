@@ -1256,10 +1256,27 @@ without its reason in the tooltip and under the control.
 | `mcpToken`, `mcpTokenRevealButton`, `mcpTokenCopyButton`, `mcpTokenRegenerateButton`, `mcpTokenReason`, `mcpRevealTimer` | token row; the reveal timer is 30 s |
 | `mcpCopyConfigButton`, `mcpCopyConfigMenu`, `mcpCopyConfig_<kind>_<token|placeholder>` | copy client config, four kinds by two disclosures |
 | `mcpClientsList`, `mcpClientsHeader`, `mcpClientRow`, `mcpClientName`, `mcpClientVersion`, `mcpClientSince`, `mcpClientLastActivity`, `mcpClientInFlight`, `mcpClientLastTool`, `mcpNoClients`, `mcpProjectLine` | connected clients |
-| `mcpActivityList` | activity, appended with `activity(afterId)` |
+| `mcpActivityList` | activity, appended with `activity(afterId)`; a compile failure an agent edit caused is added in the error tone (`McpServerAdapter::noteCompileFailure`) |
 | `windowMcpServerAction`, `windowStatusBarMcp`, `preferencesMcpLink` | Window menu action, status bar indicator (shown only while running or failed), Preferences link |
 
 Narrow panels hide the clients columns in this order: last tool, in flight, version.
+
+### Compile failure details
+
+When a composition cannot compile, the status bar keeps its one-sentence headline and gains a
+`Details` disclosure beside it. The disclosure opens a `KPopupWindow` anchored to the bar.
+
+| Object name | Role |
+| --- | --- |
+| `windowStatusBarCompileDetails` | the disclosure button, shown only while the preview failed to compile |
+| `windowStatusBarCompileFailurePopup` | the popup window |
+| `compileFailurePanel` | the popup body |
+| `compileFailureHeadline`, `compileFailureDetail`, `compileFailureSubject` | headline (error tone), plain detail, subject in words ("Layer 'Title' · Blending Mode") |
+| `compileFailureSelect` | selects the layer, or the node, through the session selection commands |
+| `compileFailureCopy` | copies the raw diagnostic (code and ids); the only place a code appears |
+
+Properties and Nodes have no per-parameter invalid state outside text entry, so they show no
+marker of their own; Select moves their selection to the subject.
 
 ## Text fields
 

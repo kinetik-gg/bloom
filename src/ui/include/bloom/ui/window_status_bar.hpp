@@ -4,8 +4,12 @@
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/viewer_editor_probe.hpp>
 
+#include <bloom/ui/compile_failure.hpp>
+
 #include <QPointer>
 #include <QString>
+
+#include <optional>
 
 #include <bloom/ui/kit/surfaces.hpp>
 #include <cstddef>
@@ -22,6 +26,7 @@ struct MediaDiskCacheStatistics;
 namespace bloom::ui::kit {
 class KButton;
 class KLabel;
+class KPopupWindow;
 }
 
 namespace bloom::ui {
@@ -119,6 +124,13 @@ class WindowStatusBar final : public kit::KSurface {
     // The MCP indicator (ADR 0034): shown only while the server runs or has failed, and a click asks
     // the adapter to reveal the MCP Server panel. Null removes it.
     void setMcpServer(McpServerAdapter* adapter);
+    // The compile-failure disclosure (docs/ux/ui-grammar.md, "Compile failure details"): a small
+    // button after the preview state, shown only while the preview failed to compile. It opens a
+    // popup anchored to this bar. The ForTest hooks drive the same code the viewer's state does.
+    void applyPreviewStateForTest(const CompositionPreviewState& preview);
+    void openCompileFailureForTest() { openCompileFailure(); }
+    [[nodiscard]] bool compileDetailsVisibleForTest() const;
+    [[nodiscard]] QWidget* compileFailurePopupForTest() const;
     [[nodiscard]] QString mcpIndicatorTextForTest() const;
     [[nodiscard]] bool mcpIndicatorVisibleForTest() const;
 
@@ -144,6 +156,8 @@ class WindowStatusBar final : public kit::KSurface {
     void refreshProbeCell(const ProbeReadout& readout);
     void refreshMediaDiskCacheCell();
     void refreshMessage();
+    void applyCompileFailure(std::optional<CompileFailure> failure);
+    void openCompileFailure();
     void refreshMcpIndicator();
     // Observes the application-owned worker snapshot. This surface never samples the OS.
     void observeMemoryBudget();
@@ -173,6 +187,9 @@ class WindowStatusBar final : public kit::KSurface {
     QLabel* mediaDiskCacheCell_ = nullptr;
     QLabel* message_ = nullptr;
     kit::KButton* mcpIndicator_ = nullptr;
+    kit::KButton* compileDetails_ = nullptr;
+    std::optional<CompileFailure> compileFailure_;
+    QPointer<kit::KPopupWindow> compileFailurePopup_;
     QPointer<McpServerAdapter> mcpServer_;
     QLabel* version_ = nullptr;
     QLabel* probe_ = nullptr;

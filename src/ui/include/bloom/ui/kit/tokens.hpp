@@ -218,6 +218,8 @@ enum class Size : int {
     PropertyLabelCompact = 64,
     DialogTextWidth = 520,
     DialogWideWidth = 700,
+    // The compile-failure popup under the status bar: a headline, a few lines of detail and two buttons.
+    CompileFailurePopupWidth = 360,
     DiagnosticHeight = 140,
     // The KProgressBar track (#377): thicker than the 4-pixel slider track so a bar with no
     // handle still reads at a glance.

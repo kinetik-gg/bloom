@@ -4,6 +4,7 @@
 // Pure functions: nothing here reads a widget or the service.
 
 #include <bloom/mcp/server_service.hpp>
+#include <bloom/ui/mcp_server_adapter.hpp>
 
 #include <QString>
 
@@ -22,6 +23,8 @@ namespace bloom::ui::mcppanel {
 [[nodiscard]] QString toolText(const std::optional<mcp::McpTool>& tool);
 // One activity line from the entry's typed facts; `summary` only when nothing typed explains it.
 [[nodiscard]] QString activityLine(const mcp::McpActivityEntry& entry);
+// "<time>  <client> · transact · left '<composition>' unable to render: <detail>".
+[[nodiscard]] QString compileFailureLine(const McpCompileFailureNote& note);
 [[nodiscard]] QString clientKindText(mcp::McpClientKind kind);
 
 } // namespace bloom::ui::mcppanel
