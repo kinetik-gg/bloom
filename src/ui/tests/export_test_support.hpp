@@ -8,6 +8,7 @@
 
 #include <bloom/ui/export_queue_adapter.hpp>
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <string>
@@ -164,9 +165,10 @@ class FakeExportPort final : public ExportQueuePort {
     std::function<void(FakeExportPort&)> onPump;
     std::map<std::uint64_t, std::vector<host::ExportLogEntry>> logs;
     bool logGap = false;
-    ExportEditResult nextEdit{true, {}, std::nullopt};
+    ExportEditResult nextEdit{true, {}, std::nullopt, std::nullopt, {}};
     std::string script = "bloom-cli export-script";
     std::uint64_t nextJobRaw = 100;
+    std::uint64_t nextOutputRaw = 5000;
 
     [[nodiscard]] std::shared_ptr<const host::ExportQueueSnapshot> snapshot() const override {
         return snap_;
@@ -239,18 +241,31 @@ class FakeExportPort final : public ExportQueuePort {
     }
     void refreshPreflight() override { calls.emplace_back("refreshPreflight"); }
 
-    ExportEditResult addJob(document::CompositionId composition) override {
-        calls.push_back("addJob " + std::to_string(composition.value()));
+    // Inserts one job per composition at `index` (the end when absent), as the real edit does, and
+    // names them in order in the result.
+    ExportEditResult addJobs(const std::vector<document::CompositionId>& compositions,
+                             const std::optional<std::size_t> index) override {
+        std::string what = "addJobs";
+        for (const auto composition : compositions)
+            what += " " + std::to_string(composition.value());
+        if (index.has_value())
+            what += " @" + std::to_string(*index);
+        calls.push_back(what);
         if (!nextEdit.accepted)
             return nextEdit;
-        const auto added = nextJobRaw;
-        publish([&](host::ExportQueueSnapshot& next) {
-            next.jobs.push_back(makeJob(nextJobRaw, "Added", composition,
-                                        {makeOutput(nextJobRaw + 1000)}));
-            ++nextJobRaw;
-        });
         auto result = nextEdit;
-        result.addedJob = document::ExportJobId::fromRaw(added);
+        publish([&](host::ExportQueueSnapshot& next) {
+            auto at = index.has_value() ? std::min(*index, next.jobs.size()) : next.jobs.size();
+            for (const auto composition : compositions) {
+                next.jobs.insert(next.jobs.begin() + static_cast<std::ptrdiff_t>(at++),
+                                 makeJob(nextJobRaw, "Added " + std::to_string(nextJobRaw), composition,
+                                         {makeOutput(nextJobRaw + 1000)}));
+                result.addedJobs.push_back(document::ExportJobId::fromRaw(nextJobRaw));
+                ++nextJobRaw;
+            }
+        });
+        if (!result.addedJobs.empty())
+            result.addedJob = result.addedJobs.front();
         return result;
     }
     ExportEditResult duplicateJob(document::ExportJobId job) override {
@@ -276,8 +291,24 @@ class FakeExportPort final : public ExportQueuePort {
             what += change.labelColor->has_value() ? " label=set" : " label=clear";
         return edit(what);
     }
-    ExportEditResult addOutput(document::ExportJobId job) override {
-        return edit("addOutput " + std::to_string(job.value()));
+    // Appends an output (in `presetId`'s format when one is given) to the job, as the real edit
+    // does, and names it in the result.
+    ExportEditResult addOutput(document::ExportJobId job, const std::string& presetId) override {
+        auto result = edit("addOutput " + std::to_string(job.value()) +
+                           (presetId.empty() ? std::string{} : " " + presetId));
+        if (!result.accepted)
+            return result;
+        const auto added = document::ExportOutputId::fromRaw(nextOutputRaw++);
+        publish([&](host::ExportQueueSnapshot& next) {
+            for (auto& candidate : next.jobs)
+                if (candidate.id == job) {
+                    auto output = makeOutput(added.value(), presetId.empty() ? "builtin:h264-mp4" : presetId);
+                    candidate.outputs.push_back(output);
+                    candidate.record.outputs.push_back(output.record);
+                }
+        });
+        result.addedOutput = added;
+        return result;
     }
     ExportEditResult applyPreset(document::ExportJobId job, document::ExportOutputId output,
                                  const std::string& presetId) override {

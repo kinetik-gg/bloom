@@ -66,7 +66,7 @@ GpuProcessingPhaseEnvelope frame(const std::uint64_t deviceWorking = 64 * kMiB) 
 
 void headroomIsTheOnlyMargin() {
     GpuProcessingPhasePolicy policy(32);
-    policy.setHeadroom(MemoryHeadroom{});
+    policy.setHeadroom({.ramBytes = 2 * kGiB, .vramBytes = 2 * kGiB});
     deliverHost(policy, 20 * kGiB, 1);
     reportDevice(policy, 1, 22 * kGiB);
     auto usable = policy.usableCapacity();
@@ -89,7 +89,7 @@ void headroomIsTheOnlyMargin() {
 
 void phasesClaimOnlyTheirNeed() {
     GpuProcessingPhasePolicy policy(32);
-    policy.setHeadroom(MemoryHeadroom{});
+    policy.setHeadroom({.ramBytes = 2 * kGiB, .vramBytes = 2 * kGiB});
     deliverHost(policy, 20 * kGiB, 1);
     reportDevice(policy, 1, 22 * kGiB);
     std::vector<GpuProcessingPhaseGrant> grants;
@@ -142,7 +142,7 @@ void contentionWaitsAndResumesOnRelease() {
 
 void exhaustionIsRefusedWithReadableCounters() {
     GpuProcessingPhasePolicy policy(32);
-    policy.setHeadroom(MemoryHeadroom{});
+    policy.setHeadroom({.ramBytes = 2 * kGiB, .vramBytes = 2 * kGiB});
     deliverHost(policy, 4 * kGiB, 1);
     reportDevice(policy, 1, 3 * kGiB);
     // Usable now: 2 GiB RAM, 1 GiB VRAM; the host ceiling is the 64 GiB machine minus headroom.
@@ -184,7 +184,7 @@ void exhaustionIsRefusedWithReadableCounters() {
 
 void manyConcurrentPhases() {
     GpuProcessingPhasePolicy policy(32);
-    policy.setHeadroom(MemoryHeadroom{});
+    policy.setHeadroom({.ramBytes = 2 * kGiB, .vramBytes = 2 * kGiB});
     deliverHost(policy, 60 * kGiB, 1);
     reportDevice(policy, 1, 22 * kGiB);
     std::vector<std::shared_ptr<GpuProcessingPhaseLease>> leases;
@@ -316,9 +316,33 @@ void deviceGrowthBeyondTheClaimUsesLiveRoom() {
 }
 } // namespace
 
+// Preview width is bounded by concurrency and by a quarter of the free capacity, never by how
+// much memory happens to be free: a nearly empty 64 GB machine gets at most eight frames.
+void previewWidthIsBounded() {
+    const std::uint64_t pixels = 2048ULL * 858;
+    const std::uint64_t perFrameHost = pixels * (8 + 3 * 16) + 64 * kMiB;
+    GpuProcessingPhasePolicy policy(32);
+    policy.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+    deliverHost(policy, 60 * kGiB, 1);
+    reportDevice(policy, 1, 22 * kGiB);
+    const auto ample = previewFramesThatFit(policy, pixels, 512 * kMiB);
+    require(ample >= 1 && ample <= kMaximumPreviewFramesInFlight,
+            "an ample machine still runs at most eight preview frames in flight");
+    deliverHost(policy, 13 * perFrameHost, 2);
+    require(previewFramesThatFit(policy, pixels, 512 * kMiB) <= 3,
+            "a run sizes itself to a quarter of the free host capacity");
+    deliverHost(policy, perFrameHost + perFrameHost / 2, 3);
+    require(previewFramesThatFit(policy, pixels, 512 * kMiB) == 1,
+            "one frame still runs when only one fits");
+    deliverHost(policy, perFrameHost / 2, 4);
+    require(previewFramesThatFit(policy, pixels, 512 * kMiB) == 0,
+            "nothing runs when not even one frame fits");
+}
+
 int main() {
     try {
         headroomIsTheOnlyMargin();
+        previewWidthIsBounded();
         phasesClaimOnlyTheirNeed();
         contentionWaitsAndResumesOnRelease();
         exhaustionIsRefusedWithReadableCounters();

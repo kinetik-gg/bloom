@@ -304,8 +304,8 @@ void AssetsEditor::showContextMenu(const QPoint position) {
                                        : exportQueue_->addUnavailableReason();
             auto* queue = add(tr("Add to Export Queue"), "assetsAddToExportQueueAction",
                               [this, selectedCompositions] {
-                                  for (const auto selected : selectedCompositions)
-                                      (void)exportQueue_->addCompositionToQueue(selected);
+                                  // One job each, in selection order, as one undo entry.
+                                  (void)exportQueue_->addCompositionsToQueue(selectedCompositions);
                               });
             queue->setEnabled(reason.isEmpty() && !selectedCompositions.empty());
             if (!reason.isEmpty())

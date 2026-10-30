@@ -70,9 +70,11 @@ struct ApplicationPreferences final {
     bool loopPlayback = true;
 
     // Memory and caches. Headroom is what Bloom leaves free for the rest of the computer (0 to 256
-    // GiB each); Bloom uses everything else. Applied live on Apply and OK.
-    std::uint64_t ramHeadroomBytes = runtime::kDefaultMemoryHeadroomBytes;
-    std::uint64_t vramHeadroomBytes = runtime::kDefaultMemoryHeadroomBytes;
+    // GiB each); Bloom uses everything else. Applied live on Apply and OK. The defaults are
+    // computed when the preferences are built: 10% of RAM (or of a tighter process limit) and of
+    // VRAM.
+    std::uint64_t ramHeadroomBytes = runtime::defaultRamHeadroomBytes();
+    std::uint64_t vramHeadroomBytes = runtime::defaultVramHeadroomBytes();
     bool mediaDiskCacheEnabled = true;
     std::string mediaDiskCacheDirectory;
     std::uint64_t mediaDiskCacheBudgetBytes = 0;

@@ -62,7 +62,7 @@ BackgroundPreviewController::BackgroundPreviewController(
             &BackgroundPreviewController::restart);
     connect(&previewController_, &CompositionPreviewController::previewCachePurged, this,
             &BackgroundPreviewController::suspendForCachePurge);
-    idleTimer_.start();
+    // The fill timer runs only while playback (or an explicitly enabled idle fill) wants frames.
 }
 
 BackgroundPreviewController::~BackgroundPreviewController() { beginShutdown(); }
@@ -105,8 +105,24 @@ void BackgroundPreviewController::suspendForCachePurge() {
 void BackgroundPreviewController::setPlaying(const bool playing) {
     if (playing_ != playing) {
         playing_ = playing;
+        // Stopping playback cancels the read-ahead that is still in flight.
         restart();
+        if (active() && !shuttingDown_)
+            idleTimer_.start();
+        else
+            idleTimer_.stop();
     }
+}
+
+void BackgroundPreviewController::setIdleFill(const bool enabled) {
+    if (idleFill_ == enabled)
+        return;
+    idleFill_ = enabled;
+    restart();
+    if (active() && !shuttingDown_)
+        idleTimer_.start();
+    else
+        idleTimer_.stop();
 }
 
 void BackgroundPreviewController::beginShutdown() {
@@ -125,7 +141,7 @@ void BackgroundPreviewController::fillNextFrame() {
         restart();
         return;
     }
-    if (exhausted_ || !preparation_) {
+    if (exhausted_ || !preparation_ || !active()) {
         return;
     }
     const auto* composition = session_.composition();

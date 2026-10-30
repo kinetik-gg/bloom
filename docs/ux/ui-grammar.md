@@ -169,18 +169,44 @@ ruler, lanes, graph editor, work area and navigator. Other surfaces compose kit 
 
 ## Export panel
 
-The Export panel (`exportEditor`, editor id `bloom.export`) has a header (`exportHeader`) with
-Remove finished, Stop All and Start All (`exportRemoveFinishedButton`, `exportStopAllButton`,
-`exportStartAllButton`; Start All is Primary only while something can run); a run strip
-(`exportRunStrip`) while a job renders; a note (`exportPlatformNote`) where export cannot run; the
-job list (`exportJobTree`) over the detail pane (`exportDetailPane`, in `exportDetailScroll`) in a
-splitter (`exportSplitter`). The list uses the Assets row (Size::AssetRow), alternation, hover and
-selected recipe: columns label colour, enabled check, Name, Composition, Range and Status, outputs
-as child rows. A narrow panel keeps Name and Status. The detail pane uses sections and property
-rows like Properties: `exportRenderSection`, `exportOutputsSection`, `exportPostRenderSection` and
-`exportResultsSection`. The empty state is one line and `exportAddActiveButton`. Waiting for the
-Viewer is Muted ink; only Failed uses Error and only Needs confirmation or Done with warnings use
-Warn. Failure lines never carry stage, code or facet numbers.
+The Export panel (`exportEditor`, editor id `bloom.export`) is one scrolling list of collapsible job
+rows (`exportJobList`). There is no detail pane, no splitter, no run strip and no table: a job's
+settings sit under the job, so selection is never hidden state. The header (`exportHeader`) has
+**Add composition** (`exportAddCompositionButton`, Secondary, shown once the list has a job),
+**Remove finished** (Secondary, shown only when something finished), **Stop All** (Danger, shown only
+while something runs) and **Start All** (`exportStartAllButton`). Start All is the only Primary of
+the panel and exists only while a job is ready, so a list with nothing ready has no Primary; the
+empty state's own Primary is **Add composition** (`exportAddActiveButton`) over "Nothing to render
+yet." and how else to add one. A note (`exportPlatformNote`) says where export cannot run, and
+`exportStartNote` says what a Start All started and what waits for the artist's OK.
+
+A job row (`exportJobRow`) is a `kit::KRow` header on the Assets row recipe (Size::ListRow, hover,
+selection ring): caret, label colour chip, the **Include in Start All** switch, name (edited in
+place with `kit::KInlineEdit`, by double click or F2), composition, range chip, status, a fixed
+`KProgressBar` with the frame count and time left while it runs, **one job button** and the
+overflow menu. The job button is Secondary and shows the one verb that fits the state: Start,
+Pause, Resume, Stop or Retry; the rest (and Duplicate, Move, Remove, Copy as command) are in the
+menu with their reasons as tooltips. Below about 880 px the header folds onto two lines. The body
+holds the **Render** group (`exportRenderSection`), one output row each (`exportOutputRow`), **Add
+output** (Secondary, with a format menu) and, only once the job has run, **Result** and a folded
+**Log** (`exportResults`). Every row inside is a `KPropertyRow`, so labels and fields line up on
+the Properties label column across the Render group and every output.
+
+An output row has its own header (caret, switch, format, where it saves, state, menu) over a body
+with **Format**, **Save to** (a `KPathField` with browse inside it and a small Secondary **?**
+for the name tokens), **If a file is there**, a folded **Quality** group with only the settings of
+the chosen format (Colour space, Display and View are `KDropdown`s of what the project offers)
+and **After render**. The question "A file called X is already in Y." is an inline row at the top
+of the output with **Replace it** and **Choose another name** (both Secondary), and the job opens
+itself when it asks; Start All never opens a second dialog.
+
+Status words are plain (Ready, Needs a location, Needs attention, Waiting for your OK, Up next,
+Getting ready, Rendering 32%, Paused while you work in the Viewer, Checking the file, Done, Done,
+with a note, Failed, Stopped). Every status is Muted ink; only Failed uses Error, and a finished
+job or a note gets a check or info glyph in Muted ink, never green or amber. A reason a control
+cannot run is a visible Muted line in the job or output it concerns; the tooltip repeats it.
+Failure lines never carry stage, code or facet numbers: the raw text is behind **Show details** and
+**Copy details**.
 
 ## Status bar, context bar and tools
 
@@ -1257,7 +1283,7 @@ without its reason in the tooltip and under the control.
 | `mcpCopyConfigButton`, `mcpCopyConfigMenu`, `mcpCopyConfig_<kind>_<token|placeholder>` | copy client config, four kinds by two disclosures |
 | `mcpClientsList`, `mcpClientsHeader`, `mcpClientRow`, `mcpClientName`, `mcpClientVersion`, `mcpClientSince`, `mcpClientLastActivity`, `mcpClientInFlight`, `mcpClientLastTool`, `mcpNoClients`, `mcpProjectLine` | connected clients |
 | `mcpActivityList` | activity, appended with `activity(afterId)`; a compile failure an agent edit caused is added in the error tone (`McpServerAdapter::noteCompileFailure`) |
-| `windowMcpServerAction`, `windowStatusBarMcp`, `preferencesMcpLink` | Window menu action, status bar indicator (shown only while running or failed), Preferences link |
+| `windowStatusBarMcp`, `preferencesMcpLink` | Status bar indicator (shown only while running or failed), Preferences link |
 
 Narrow panels hide the clients columns in this order: last tool, in flight, version.
 

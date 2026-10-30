@@ -1,6 +1,9 @@
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/memory_headroom.hpp>
+#include <bloom/runtime/memory_pressure_monitor.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <cstdint>
 #include <fstream>
@@ -8,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -90,6 +94,22 @@ inline constexpr std::size_t kSwapSustainDivisor = 4;
     }
     if (swapFree)
         sample.swapUsedBytes = sample.swapTotalBytes - std::min(*swapFree, sample.swapTotalBytes);
+    // This process's own swapped (or zram-compressed) anonymous memory.
+    std::ifstream status("/proc/self/status");
+    while (std::getline(status, line)) {
+        if (!line.starts_with("VmSwap:"))
+            continue;
+        auto rest = std::string_view(line).substr(7);
+        while (!rest.empty() && rest.front() == ' ')
+            rest.remove_prefix(1);
+        std::uint64_t kibibytes = 0;
+        if (std::from_chars(rest.data(), rest.data() + rest.size(), kibibytes).ec == std::errc{})
+            sample.processSwappedBytes =
+                static_cast<std::size_t>(std::min<std::uint64_t>(
+                    kibibytes, std::numeric_limits<std::size_t>::max() / 1024U)) *
+                1024U;
+        break;
+    }
     return sample;
 }
 #endif
@@ -141,6 +161,20 @@ MachineMemorySample machineMemorySample() noexcept {
         return TRUE;
     };
     static_cast<void>(K32EnumPageFilesW(callback, &sample));
+    // Private bytes outside the working set are paged out (or not yet touched, which large pixel
+    // buffers are not). Windows has no direct per-process page-file figure.
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    counters.cb = sizeof(counters);
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(),
+                                reinterpret_cast<PPROCESS_MEMORY_COUNTERS>(&counters), // NOLINT
+                                sizeof(counters)) != 0 &&
+        counters.PrivateUsage > counters.WorkingSetSize)
+        sample.processSwappedBytes =
+            static_cast<std::size_t>(counters.PrivateUsage - counters.WorkingSetSize);
+    static const HANDLE lowMemory = CreateMemoryResourceNotification(LowMemoryResourceNotification);
+    BOOL low = FALSE;
+    if (lowMemory != nullptr && QueryMemoryResourceNotification(lowMemory, &low) != 0)
+        sample.memoryStall = low != FALSE;
 #elif defined(__APPLE__)
     const auto host = mach_host_self();
     vm_statistics64_data_t statistics{};
@@ -170,6 +204,19 @@ MachineMemorySample machineMemorySample() noexcept {
         sample.swapTotalBytes = static_cast<std::size_t>(swap.xsu_total);
         sample.swapUsedBytes = static_cast<std::size_t>(swap.xsu_used);
     }
+    // The compressor is macOS's first stage of paging; compressed task memory is not resident.
+    task_vm_info_data_t vmInfo{};
+    mach_msg_type_number_t vmInfoCount = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO,
+                  reinterpret_cast<task_info_t>(&vmInfo), // NOLINT(*-reinterpret-cast)
+                  &vmInfoCount) == KERN_SUCCESS)
+        sample.processSwappedBytes = static_cast<std::size_t>(vmInfo.compressed);
+    // kern.memorystatus_vm_pressure_level: 1 normal, 2 warning, 4 critical.
+    int pressureLevel = 0;
+    auto pressureSize = sizeof(pressureLevel);
+    if (sysctlbyname("kern.memorystatus_vm_pressure_level", &pressureLevel, &pressureSize, nullptr,
+                     0) == 0)
+        sample.memoryStall = pressureLevel >= 2;
 #else
 #if defined(__linux__)
     try {
@@ -319,12 +366,15 @@ std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) 
     if (state_.awaitingProcessSample)
         return 0;
     if (ramHeadroom_ && state_.machine.availableBytes) {
-        // Usable-capacity retention. The free memory beyond headroom is ONE pool shared by every
-        // reusable cache: each may grow by its share, so together they never grow past it before
-        // the next sample (giving each pool the whole free memory let N pools take N times it and
-        // push the machine into swap). When the rest of the machine needs memory and available
-        // falls below the headroom, every pool shrinks by its share of the deficit, below what it
-        // holds now; the caches evict to their new budgets.
+        // Usable-capacity retention. The free memory beyond headroom plus the hysteresis margin is
+        // ONE pool shared by every reusable cache: each may grow by its share, so together they
+        // never grow past it before the next sample (giving each pool the whole free memory let N
+        // pools take N times it and push the machine into swap). This process's own swapped
+        // memory is not available: a cache paged out to swap or zram keeps MemAvailable high while
+        // the machine thrashes. When available falls below the headroom, every pool shrinks by its
+        // share of the deficit plus the margin, below what it holds now; the caches evict to their
+        // new budgets. Between headroom and headroom plus margin, and while the OS reports memory
+        // stalls, pools hold and never grow.
         const auto own = participant.retained ? participant.retained() : 0;
         std::size_t pools = 0;
         long double retainedTotal = 0;
@@ -334,13 +384,22 @@ std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) 
             ++pools;
             retainedTotal += static_cast<long double>(cache.retained ? cache.retained() : 0);
         }
-        const auto available = *state_.machine.availableBytes;
+        const auto available = effectiveAvailableBytes(state_.machine);
+        const auto margin = memoryPressureMarginBytes(*ramHeadroom_);
+        const auto growthFloor = saturatedAdd(*ramHeadroom_, margin);
+        const bool stall = state_.machine.memoryStall;
         std::size_t bytes = own;
-        if (available >= *ramHeadroom_) {
-            bytes =
-                saturatedAdd(own, (available - *ramHeadroom_) / std::max<std::size_t>(1, pools));
-        } else if (retainedTotal > 0) {
-            const auto deficit = static_cast<long double>(*ramHeadroom_ - available);
+        if (available >= growthFloor && !stall) {
+            bytes = saturatedAdd(own, (available - growthFloor) / std::max<std::size_t>(1, pools));
+        } else if ((available < *ramHeadroom_ || stall) && retainedTotal > 0) {
+            // Under the headroom: the deficit plus the margin. Under pressure the machine is
+            // swapping or stalling even if available memory looks sufficient (another process may
+            // be the one pushed into swap), so give back at least one margin per applied sample
+            // until the pressure stops.
+            auto shortfall = available < *ramHeadroom_ ? growthFloor - available : std::size_t{0};
+            if (stall)
+                shortfall = std::max(shortfall, margin);
+            const auto deficit = static_cast<long double>(shortfall);
             const auto cut = static_cast<std::size_t>(
                 std::min(static_cast<long double>(own),
                          deficit * static_cast<long double>(own) / retainedTotal));
@@ -462,15 +521,65 @@ void MemoryBudgetLedger::setRamHeadroom(const std::size_t bytes) {
     applyBudgetsLocked();
 }
 
-void MemoryBudgetLedger::applyBudgetsLocked() {
+std::size_t MemoryBudgetLedger::reusableRetainedLocked() const {
+    std::size_t retained = 0;
     for (const auto& [owner, cache] : caches_)
-        cache.applyBudget(cacheByteBudgetLocked(cache));
+        if (cache.kind == MemoryBudgetOwnerKind::ReusableRetention && cache.retained)
+            retained = saturatedAdd(retained, cache.retained());
+    return retained;
+}
+
+void MemoryBudgetLedger::applyBudgetsLocked() {
+    // Budgets are computed from one retained view before any pool evicts, so an earlier pool's
+    // eviction cannot change a later pool's share within the same application.
+    std::vector<std::pair<const Cache*, std::size_t>> budgets;
+    budgets.reserve(caches_.size());
+    for (const auto& [owner, cache] : caches_)
+        budgets.emplace_back(&cache, cacheByteBudgetLocked(cache));
+    const auto before = reusableRetainedLocked();
+    for (const auto& [cache, bytes] : budgets)
+        cache->applyBudget(bytes);
+    const auto after = reusableRetainedLocked();
+    if (after < before)
+        releasedSinceTake_ = saturatedAdd(releasedSinceTake_, before - after);
+}
+
+MemoryBudgetState MemoryBudgetLedger::applyPressureSample(const MachineMemorySample& sample,
+                                                          const Clock::time_point now) {
+    const std::lock_guard lock(mutex_);
+    static_cast<void>(pollHostLocked(sample, now));
+    if (processSampling_)
+        applyProcessCeilingLocked();
+    applyBudgetsLocked();
+    return state_;
+}
+
+std::size_t MemoryBudgetLedger::pressureDeficit(const MachineMemorySample& sample) const {
+    const std::lock_guard lock(mutex_);
+    if (!ramHeadroom_ || !sample.availableBytes)
+        return 0;
+    const auto available = effectiveAvailableBytes(sample);
+    const auto deficit = available < *ramHeadroom_ ? *ramHeadroom_ - available : std::size_t{0};
+    return sample.memoryStall ? std::max(deficit, memoryPressureMarginBytes(*ramHeadroom_))
+                              : deficit;
+}
+
+std::size_t MemoryBudgetLedger::takeReleasedBytes() noexcept {
+    const std::lock_guard lock(mutex_);
+    return std::exchange(releasedSinceTake_, 0);
+}
+
+std::optional<std::size_t> MemoryBudgetLedger::ramHeadroom() const {
+    const std::lock_guard lock(mutex_);
+    return ramHeadroom_;
 }
 
 void MemoryBudgetLedger::beginProcessSampling() {
     const std::lock_guard lock(mutex_);
     if (processSampling_)
         return;
+    // Production retention: freed cache buffers must leave the process, not stay in heap arenas.
+    configureHostMemoryReturn();
     processSampling_ = true;
     hasPolled_ = true;
     state_.awaitingProcessSample = true;
@@ -572,6 +681,46 @@ MemoryBudgetState MemoryBudgetLedger::applySample(MemoryBudgetSample sample,
 MemoryBudgetState MemoryBudgetLedger::state() const {
     const std::lock_guard lock(mutex_);
     return state_;
+}
+
+namespace {
+std::atomic<std::uint64_t> recordedDeviceLocalBytes{0};
+} // namespace
+
+void recordDeviceLocalMemoryBytes(const std::uint64_t bytes) noexcept {
+    auto current = recordedDeviceLocalBytes.load(std::memory_order_relaxed);
+    while (bytes > current && !recordedDeviceLocalBytes.compare_exchange_weak(
+                                  current, bytes, std::memory_order_relaxed))
+        ;
+}
+
+std::uint64_t defaultRamHeadroomBytes() noexcept {
+    auto& ledger = processMemoryBudgetLedger();
+    std::uint64_t capacity = ledger.physicalByteBudget();
+    if (capacity == 0)
+        capacity = physicalMemoryBytes();
+    try {
+        if (const auto limit = ledger.state().processCacheCeilingBytes)
+            capacity = capacity == 0 ? *limit : std::min<std::uint64_t>(capacity, *limit);
+    } catch (...) { // NOLINT(bugprone-empty-catch)
+        // Reading the cached state cannot fail in practice; physical memory alone remains.
+    }
+    return capacity == 0 ? kUnmeasuredHeadroomBytes : defaultHeadroomForCapacity(capacity);
+}
+
+std::uint64_t defaultVramHeadroomBytes() noexcept {
+    const auto device = recordedDeviceLocalBytes.load(std::memory_order_relaxed);
+    return device == 0 ? kUnmeasuredHeadroomBytes : defaultHeadroomForCapacity(device);
+}
+
+std::size_t memoryPressureMarginBytes(const std::size_t headroom) noexcept {
+    constexpr std::size_t minimum = std::size_t{512} * 1024U * 1024U;
+    return std::max(minimum, headroom / 4);
+}
+
+std::size_t effectiveAvailableBytes(const MachineMemorySample& sample) noexcept {
+    const auto available = sample.availableBytes.value_or(0);
+    return available - std::min(available, sample.processSwappedBytes);
 }
 
 MemoryBudgetLedger& processMemoryBudgetLedger() {

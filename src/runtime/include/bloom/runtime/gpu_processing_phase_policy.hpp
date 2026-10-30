@@ -192,10 +192,15 @@ class GpuProcessingPhasePolicy final {
     void applyDeviceReportsLocked() noexcept;
 };
 
+// RAM-fill and playback read-ahead width ceiling: enough frames to keep CPU preparation, the
+// device (one scene at a time) and the readback overlapped. Frames in flight are bounded by that
+// concurrency, never by how much memory happens to be free.
+inline constexpr std::size_t kMaximumPreviewFramesInFlight = 8;
 // Preview frames (Viewer, RAM fill, playback) of `framePixels` that fit the free capacity now: a
 // packed output, one float source and preparation overlap on the host, the preview working set
 // plus one float frame on the device. Capped at one per hardware thread (decode and scene
-// preparation run on CPU workers); zero when even one frame does not fit right now.
+// preparation run on CPU workers), at kMaximumPreviewFramesInFlight, and at what fits a quarter of
+// the free capacity (at least one frame when one fits); zero when even one frame does not fit.
 [[nodiscard]] std::size_t previewFramesThatFit(const GpuProcessingPhasePolicy&,
                                                std::uint64_t framePixels,
                                                std::uint64_t deviceWorkingBytes) noexcept;

@@ -185,8 +185,9 @@ ExportEditResult ExportQueueAdapter::editJob(const document::ExportJobId job,
     return result;
 }
 
-ExportEditResult ExportQueueAdapter::addOutput(const document::ExportJobId job) {
-    auto result = port_.addOutput(job);
+ExportEditResult ExportQueueAdapter::addOutput(const document::ExportJobId job,
+                                               const std::string& presetId) {
+    auto result = port_.addOutput(job, presetId);
     observe();
     return result;
 }
@@ -215,12 +216,21 @@ ExportEditResult ExportQueueAdapter::removeOutput(const document::ExportJobId jo
 }
 
 ExportEditResult ExportQueueAdapter::addCompositionToQueue(const document::CompositionId composition) {
-    auto result = port_.addJob(composition);
+    return addCompositionsToQueue(std::vector{composition}, std::nullopt);
+}
+
+ExportEditResult ExportQueueAdapter::addCompositionsToQueue(
+    const std::vector<document::CompositionId>& compositions, const std::optional<std::size_t> index) {
+    if (compositions.empty())
+        return {false, tr("There is nothing to add."), std::nullopt, std::nullopt, {}};
+    auto result = port_.addJobs(compositions, index);
     if (!result.accepted) {
         observe();
         return result;
     }
-    const auto added = result.addedJob;
+    // The first job added is the one the panel opens and selects.
+    const auto added = result.addedJobs.empty() ? result.addedJob
+                                                : std::optional(result.addedJobs.front());
     observe();
     pendingSelection_ = added;
     Q_EMIT revealRequested();

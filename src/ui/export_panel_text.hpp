@@ -37,13 +37,12 @@ struct StatusText final {
 // The raw detail for bug reports: the host's reason text and diagnostic code.
 [[nodiscard]] QString failureDetails(const host::ExportJobView& job);
 
-// The Status column of a job row.
+// The status of a job row, in plain words. Every tone is neutral ink except a failure.
 [[nodiscard]] StatusText jobStatus(const host::ExportJobView& job);
-// The Status column of an output row.
-[[nodiscard]] StatusText outputStatus(const host::ExportOutputView& output);
-// Exact wording of a running job's strip line: "Preparing", "Rendering", "Waiting for the Viewer to
-// finish playback", and so on.
-[[nodiscard]] QString runLine(const host::ExportJobView& job);
+// The status of an output row inside `job`: its own word once it has run, the job's progress while
+// it renders, and what blocks it before it starts.
+[[nodiscard]] StatusText outputStatus(const host::ExportOutputView& output,
+                                      const host::ExportJobView& job);
 [[nodiscard]] bool isWaitingForViewer(const host::ExportJobView& job);
 
 // "0:07", "1:02:03".
@@ -74,6 +73,8 @@ struct StatusText final {
 // Blocking issues first, then NeedsConfirmation, then warnings; DestinationCheckPending last.
 [[nodiscard]] std::vector<host::ExportPreflightIssue>
 orderedIssues(const std::vector<host::ExportPreflightIssue>& issues);
+// The output would replace a file that exists, the artist has not said yes, and the output renders.
+[[nodiscard]] bool awaitsReplaceConfirmation(const host::ExportOutputView& output);
 [[nodiscard]] bool hasIssue(const host::ExportOutputView& output, host::ExportPreflightCode code);
 
 } // namespace bloom::ui::exportpanel

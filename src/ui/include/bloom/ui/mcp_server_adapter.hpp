@@ -132,7 +132,7 @@ class McpServerAdapter final : public QObject {
         return compileFailures_;
     }
 
-    // Window > MCP Server and the status bar indicator ask for the panel to be shown.
+    // The status bar indicator asks for the panel to be shown.
     void requestReveal() { Q_EMIT revealRequested(); }
 
   Q_SIGNALS:

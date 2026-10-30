@@ -406,6 +406,8 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
         // Without VK_EXT_memory_budget the device-local heap size is the documented capability
         // fallback; the root's own claims are subtracted by admission, the headroom below covers
         // other processes and driver overhead, and allocation failure stays a typed refusal.
+        // The VRAM headroom default is a share of the largest measured device.
+        recordDeviceLocalMemoryBytes(current.device_local_bytes);
         auto available = current.available_bytes;
         if (ownedLocalNative != 0) {
             const auto physicalRoom =
@@ -636,8 +638,15 @@ std::size_t previewFramesThatFit(const GpuProcessingPhasePolicy& policy,
         return 0;
     const auto host = framePixels * (8 + 3 * 16) + metadata;
     const auto device = addSaturating(deviceWorkingBytes, framePixels * 16);
+    // Frames in flight are bounded by what concurrency gains, never by how much memory is free: the
+    // device executes one scene at a time, so a few frames ahead keep decode, the GPU and the
+    // readback overlapped, and more only hold memory. One run also sizes itself to at most a
+    // quarter of the free capacity at its start, so it can never take most of the machine.
     const auto threads = std::max(1U, std::thread::hardware_concurrency());
-    return std::min<std::size_t>(policy.framesThatFit(host, device), threads);
+    const auto withinQuarter = policy.framesThatFit(addSaturating(host, host * 3), device);
+    const auto fits = policy.framesThatFit(host, device);
+    const auto frames = std::max<std::size_t>(withinQuarter, std::min<std::size_t>(fits, 1));
+    return std::min<std::size_t>({frames, threads, kMaximumPreviewFramesInFlight});
 }
 
 render::GpuProcessingPhaseGrant

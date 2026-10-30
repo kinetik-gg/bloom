@@ -93,13 +93,12 @@ class MainWindow final : public QMainWindow {
                CachePurgeController* cachePurgeController = nullptr);
 
     // ADR 0033: the application's export queue. Enables File > Add to Export Queue (Ctrl+M) and
-    // Window > Export, and shows the Export panel whenever a job is added. Null leaves both
-    // present and disabled with the reason. Borrowed; must outlive the window.
+    // shows the Export panel whenever a job is added. Null leaves the item present and disabled
+    // with the reason. Borrowed; must outlive the window.
     void setExportQueue(ExportQueueAdapter* adapter);
     // The H.264 encoder service the Export panel's Install / Locate encoder remedies open.
     void setH264EncoderService(H264EncoderService* service) noexcept { h264Encoder_ = service; }
     [[nodiscard]] QAction* addToExportQueueAction() const noexcept { return addToExportQueueAction_; }
-    [[nodiscard]] QAction* windowExportAction() const noexcept { return windowExportAction_; }
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
     // The Viewer the status bar and context bar follow: the active area's, else the last active
@@ -122,10 +121,8 @@ class MainWindow final : public QMainWindow {
     // ADR 0031: the fixed contextual bar under the menu bar, and Window > Context Bar.
     [[nodiscard]] ContextBar* contextBar() const noexcept { return contextBar_; }
     [[nodiscard]] QAction* contextBarAction() const noexcept { return contextBarAction_; }
-    // The application's MCP server adapter (ADR 0034): enables Window > MCP Server and the status
-    // bar indicator, and reveals the MCP Server panel when either asks. Borrowed; null removes it.
+    // The application's MCP server adapter (ADR 0034): enables the status bar indicator, and reveals the MCP Server panel when either asks. Borrowed; null removes it.
     void setMcpServer(McpServerAdapter* adapter);
-    [[nodiscard]] QAction* mcpServerAction() const noexcept { return mcpServerAction_; }
     // Test-only seam (same terms as the other test/diagnostic accessors): applies committed
     // preferences exactly as the Preferences dialog's approved path does, without presenting the
     // modal dialog, so a test can assert the View action mirror and the open-editor propagation.
@@ -204,7 +201,6 @@ class MainWindow final : public QMainWindow {
     WindowStatusBar* statusStrip_ = nullptr;
     ContextBar* contextBar_ = nullptr;
     QAction* contextBarAction_ = nullptr;
-    QAction* mcpServerAction_ = nullptr;
     QPointer<McpServerAdapter> mcpServer_;
     WorkspaceHost* workspaceHost_ = nullptr;
     QWidget* readOnlyPlaceholderPage_ = nullptr;
@@ -219,7 +215,6 @@ class MainWindow final : public QMainWindow {
     QAction* projectColorSettingsAction_ = nullptr;
     QAction* preferencesAction_ = nullptr;
     QAction* addToExportQueueAction_ = nullptr;
-    QAction* windowExportAction_ = nullptr;
     ExportQueueAdapter* exportQueue_ = nullptr;
     H264EncoderService* h264Encoder_ = nullptr;
     QAction* quitAction_ = nullptr;

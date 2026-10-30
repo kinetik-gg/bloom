@@ -12,14 +12,20 @@ namespace bloom::ui {
 namespace {
 
 ExportEditResult report(const commands::CommandResult& result) {
-    if (result.succeeded())
-        return {true, {}, commands::addedExportIds(result).job};
+    if (result.succeeded()) {
+        const auto added = commands::addedExportIds(result);
+        return {true, {}, added.job,
+                added.outputs.empty() || added.job.has_value()
+                    ? std::nullopt
+                    : std::optional<document::ExportOutputId>(added.outputs.front()),
+                {}};
+    }
     QString reason = QCoreApplication::translate("ExportQueueEdits", "The edit was refused.");
     if (!result.operationFailures.empty()) {
         const auto& message = result.operationFailures.front().issue.message;
         reason = QString::fromUtf8(message.data(), static_cast<qsizetype>(message.size()));
     }
-    return {false, reason, std::nullopt};
+    return {false, reason, std::nullopt, std::nullopt, {}};
 }
 
 } // namespace
@@ -29,10 +35,23 @@ ExportQueueEdits::ExportQueueEdits(CompositionSession& session, DefaultPreset de
     : session_(session), defaultPreset_(std::move(defaultPreset)), preset_(std::move(preset)) {}
 
 ExportEditResult ExportQueueEdits::addJob(const document::CompositionId composition) {
-    const auto job = host::defaultExportJob(composition, defaultPreset_());
+    return addJobs(std::vector{composition});
+}
+
+ExportEditResult ExportQueueEdits::addJobs(const std::vector<document::CompositionId>& compositions,
+                                           const std::optional<std::size_t> index) {
     commands::Transaction transaction("Add to Export Queue", session_.snapshot().revision());
-    transaction.emplace<commands::AddExportJob>(job);
-    return report(session_.executeTransaction(std::move(transaction)));
+    for (std::size_t i = 0; i < compositions.size(); ++i)
+        transaction.emplace<commands::AddExportJob>(
+            host::defaultExportJob(compositions[i], defaultPreset_()),
+            index.has_value() ? std::optional(*index + i) : std::nullopt);
+    auto outcome = session_.executeTransaction(std::move(transaction));
+    auto result = report(outcome);
+    if (result.accepted)
+        for (std::size_t i = 0; i < compositions.size(); ++i)
+            if (const auto added = commands::addedExportIds(outcome, i); added.job.has_value())
+                result.addedJobs.push_back(*added.job);
+    return result;
 }
 
 ExportEditResult ExportQueueEdits::duplicateJob(const document::ExportJobId job) {
@@ -76,10 +95,24 @@ ExportEditResult ExportQueueEdits::editJob(const document::ExportJobId job,
     return report(session_.executeTransaction(std::move(transaction)));
 }
 
-ExportEditResult ExportQueueEdits::addOutput(const document::ExportJobId job) {
+ExportEditResult ExportQueueEdits::addOutput(const document::ExportJobId job,
+                                             const std::string& presetId) {
     commands::Transaction transaction("Add Export Output", session_.snapshot().revision());
+    auto preset = defaultPreset_();
+    if (!presetId.empty()) {
+        // An output in the chosen format: its preset, its settings and the format's own default
+        // destination, in the same one undo entry as the add.
+        const auto choice = preset_ ? preset_(presetId) : std::nullopt;
+        if (!choice.has_value())
+            return {false, QCoreApplication::translate("ExportQueueEdits",
+                                                       "That format is not in the catalogue."),
+                    std::nullopt, std::nullopt, {}};
+        preset.presetId = choice->presetId;
+        preset.settings = choice->settings;
+        preset.destination = host::defaultExportDestination(choice->settings.format);
+    }
     transaction.emplace<commands::AddExportOutput>(
-        job, host::defaultExportJob(document::CompositionId{}, defaultPreset_()).outputs.front());
+        job, host::defaultExportJob(document::CompositionId{}, preset).outputs.front());
     return report(session_.executeTransaction(std::move(transaction)));
 }
 
@@ -89,7 +122,7 @@ ExportEditResult ExportQueueEdits::applyPreset(const document::ExportOutputId ou
     if (!choice.has_value())
         return {false, QCoreApplication::translate("ExportQueueEdits",
                                                    "That preset is not in the catalogue."),
-                std::nullopt};
+                std::nullopt, std::nullopt, {}};
     commands::Transaction transaction("Apply Export Preset", session_.snapshot().revision());
     transaction.emplace<commands::ApplyExportPreset>(output, presetId, choice->settings);
     return report(session_.executeTransaction(std::move(transaction)));
@@ -107,7 +140,7 @@ ExportEditResult ExportQueueEdits::editOutput(const document::ExportOutputId out
         if (!destination.has_value())
             return {false, QCoreApplication::translate("ExportQueueEdits",
                                                        "Choose a full path for the destination."),
-                    std::nullopt};
+                    std::nullopt, std::nullopt, {}};
         transaction.emplace<commands::SetExportOutputDestination>(output, *destination);
     } else if (edit.destination)
         transaction.emplace<commands::SetExportOutputDestination>(output, *edit.destination);

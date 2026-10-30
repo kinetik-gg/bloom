@@ -263,6 +263,12 @@ bloom_enable_warnings(bloom_runtime_memory_budget_ledger_test)
 bloom_add_test(NAME bloom.runtime.memory_budget_ledger COMMAND bloom_runtime_memory_budget_ledger_test
               LABELS unit runtime TIMEOUT 30)
 
+add_executable(bloom_runtime_memory_pressure_monitor_test memory_pressure_monitor_tests.cpp)
+target_link_libraries(bloom_runtime_memory_pressure_monitor_test PRIVATE bloom_runtime)
+bloom_enable_warnings(bloom_runtime_memory_pressure_monitor_test)
+bloom_add_test(NAME bloom.runtime.memory_pressure_monitor
+              COMMAND bloom_runtime_memory_pressure_monitor_test LABELS unit runtime TIMEOUT 60)
+
 add_executable(bloom_runtime_process_memory_sample_test process_memory_sample_tests.cpp)
 target_link_libraries(bloom_runtime_process_memory_sample_test PRIVATE bloom_runtime)
 bloom_enable_warnings(bloom_runtime_process_memory_sample_test)

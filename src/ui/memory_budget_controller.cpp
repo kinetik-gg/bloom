@@ -7,10 +7,10 @@
 #include <utility>
 
 namespace bloom::ui {
-MemoryBudgetController::MemoryBudgetController(runtime::TaskScheduler& scheduler,
-                                               TaskUiBridge& bridge,
-                                               runtime::MemoryBudgetLedger& ledger, Sampler sampler,
-                                               QObject* parent)
+MemoryBudgetController::MemoryBudgetController(
+    runtime::TaskScheduler& scheduler, TaskUiBridge& bridge, runtime::MemoryBudgetLedger& ledger,
+    Sampler sampler, QObject* parent,
+    std::optional<runtime::MemoryPressureMonitor::Options> pressure)
     : QObject(parent), scheduler_(scheduler), ledger_(ledger), sampler_(std::move(sampler)) {
     connect(&bridge, &TaskUiBridge::resultsAvailable, this, &MemoryBudgetController::consume);
     timer_.setInterval(5'000);
@@ -19,6 +19,39 @@ MemoryBudgetController::MemoryBudgetController(runtime::TaskScheduler& scheduler
     // Queue initial admission until application consumers have connected. This is not a result
     // poll; subsequent delivery comes exclusively through the runtime completion bridge.
     QTimer::singleShot(0, this, &MemoryBudgetController::requestSample);
+    if (pressure) {
+        // The monitor thread never touches cache owners: it queues the sample to this object's
+        // thread. beginShutdown() joins the monitor before this object dies, and Qt drops a
+        // queued call whose context object was destroyed.
+        pressureMonitor_ = std::make_unique<runtime::MemoryPressureMonitor>(
+            ledger_,
+            [this, queued = pressureQueued_](const runtime::MachineMemorySample& sample) {
+                if (queued->exchange(true))
+                    return;
+                if (!QMetaObject::invokeMethod(
+                        this,
+                        [this, queued, sample] {
+                            queued->store(false);
+                            applyPressure(sample);
+                        },
+                        Qt::QueuedConnection))
+                    queued->store(false);
+            },
+            *pressure);
+    }
+}
+
+void MemoryBudgetController::applyPressure(const runtime::MachineMemorySample& sample) {
+    if (closed_)
+        return;
+    static_cast<void>(ledger_.applyPressureSample(sample));
+    ++pressureApplied_;
+    emit pressureApplied();
+}
+
+void MemoryBudgetController::wakePressureMonitor() {
+    if (pressureMonitor_)
+        pressureMonitor_->wake();
 }
 
 MemoryBudgetController::~MemoryBudgetController() { beginShutdown(); }
@@ -28,6 +61,8 @@ void MemoryBudgetController::beginShutdown() {
         return;
     closed_ = true;
     timer_.stop();
+    if (pressureMonitor_)
+        pressureMonitor_->stop();
     if (active_)
         handle_.cancel();
 }

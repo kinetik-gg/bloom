@@ -393,9 +393,15 @@ void testHeadroomFields(Expectations& check) {
     auto* vram =
         window.findChild<ui::kit::KValueField*>(QStringLiteral("preferencesVramHeadroomField"));
     const auto* hint = window.findChild<QLabel*>(QStringLiteral("preferencesMemoryHint"));
-    check.expect(ram && vram && ram->value() == 2.0 && vram->value() == 2.0 &&
-                     ram->minimum() == 0.0 && ram->maximum() == 256.0,
-                 "the Memory page shows RAM and VRAM headroom, 0 to 256 GiB, defaulting to 2");
+    check.expect(
+        ram && vram &&
+            std::abs(ram->value() -
+                     static_cast<double>(bloom::runtime::defaultRamHeadroomBytes()) / gib) < 0.01 &&
+            std::abs(vram->value() -
+                     static_cast<double>(bloom::runtime::defaultVramHeadroomBytes()) / gib) <
+                0.01 &&
+            ram->minimum() == 0.0 && ram->maximum() == 256.0,
+        "the Memory page shows RAM and VRAM headroom, 0 to 256 GiB, defaulting to 10% of capacity");
     check.expect(hint && hint->text() == QStringLiteral(
                              "Headroom is memory Bloom leaves free for the rest of your computer. "
                              "Bloom uses everything else for rendering and caching."),
@@ -414,10 +420,13 @@ void testHeadroomFields(Expectations& check) {
         window.findChild<ui::kit::KSection*>(QStringLiteral("preferencesMemorySection"));
     if (memory != nullptr)
         emit memory->resetRequested();
-    check.expect(window.preferences().ramHeadroomBytes == 2 * gib &&
-                     window.preferences().vramHeadroomBytes == 2 * gib && ram->value() == 2.0 &&
-                     vram->value() == 2.0,
-                 "Restore Defaults on the Memory section restores 2 GiB");
+    const auto ramDefault = bloom::runtime::defaultRamHeadroomBytes();
+    const auto vramDefault = bloom::runtime::defaultVramHeadroomBytes();
+    check.expect(window.preferences().ramHeadroomBytes == ramDefault &&
+                     window.preferences().vramHeadroomBytes == vramDefault &&
+                     std::abs(ram->value() - static_cast<double>(ramDefault) / gib) < 0.01 &&
+                     std::abs(vram->value() - static_cast<double>(vramDefault) / gib) < 0.01,
+                 "Restore Defaults on the Memory section restores the computed 10% defaults");
 }
 
 void testLargeBudgetPreferencesRemainExactOnApply(Expectations& check) {

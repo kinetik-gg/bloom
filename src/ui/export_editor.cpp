@@ -1,9 +1,9 @@
 #include <bloom/ui/export_editor.hpp>
 
-#include "export_editor_internal.hpp"
-#include "export_job_tree.hpp"
+#include "asset_drop.hpp"
+#include "export_colour_choices.hpp"
+#include "export_job_row.hpp"
 #include "export_panel_text.hpp"
-#include "reveal_in_file_manager.hpp"
 
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -11,131 +11,51 @@
 #include <bloom/ui/export_queue_adapter.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
-#include <bloom/ui/kit/dialog_prompts.hpp>
-#include <bloom/ui/kit/progress_bar.hpp>
 #include <bloom/ui/kit/surfaces.hpp>
 
-#include <QAction>
-#include <QClipboard>
-#include <QGuiApplication>
-#include <QHBoxLayout>
-#include <QMenu>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QScrollArea>
-#include <QSettings>
-#include <QSplitter>
 #include <QStackedWidget>
 #include <QTimer>
-#include <QTreeWidgetItem>
-#include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <variant>
 
 namespace bloom::ui {
 
-namespace exportpanel {
-
-ExportRunStrip::ExportRunStrip(QWidget* const parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("exportRunStrip"));
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(kit::px(kit::Spacing::S), kit::px(kit::Spacing::S),
-                               kit::px(kit::Spacing::S), kit::px(kit::Spacing::S));
-    layout->setSpacing(kit::px(kit::Spacing::XS));
-    auto* top = new QHBoxLayout;
-    top->setSpacing(kit::px(kit::Spacing::S));
-    name_ = new kit::KLabel(this);
-    name_->setObjectName(QStringLiteral("exportRunName"));
-    name_->setTypeRole(kit::TypeRole::UiSmallStrong);
-    state_ = new kit::KLabel(this);
-    state_->setObjectName(QStringLiteral("exportRunState"));
-    state_->setTone(kit::Color::Muted);
-    top->addWidget(name_, 1);
-    top->addWidget(state_, 0);
-    layout->addLayout(top);
-    bar_ = new kit::KProgressBar(this);
-    bar_->setObjectName(QStringLiteral("exportRunProgress"));
-    bar_->setAccessibleName(tr("Export progress"));
-    layout->addWidget(bar_);
-    auto* bottom = new QHBoxLayout;
-    bottom->setSpacing(kit::px(kit::Spacing::S));
-    frames_ = new kit::KLabel(QString{}, this, kit::TypeRole::Value);
-    frames_->setObjectName(QStringLiteral("exportRunFrames"));
-    frames_->setTone(kit::Color::Muted);
-    time_ = new kit::KLabel(QString{}, this, kit::TypeRole::Value);
-    time_->setObjectName(QStringLiteral("exportRunTime"));
-    time_->setTone(kit::Color::Muted);
-    bottom->addWidget(frames_, 1);
-    bottom->addWidget(time_, 0);
-    layout->addLayout(bottom);
-    hide();
-}
-
-void ExportRunStrip::setJob(const host::ExportJobView* const job) {
-    if (job == nullptr) {
-        hide();
-        return;
-    }
-    show();
-    name_->setElidedText(qs(job->displayName));
-    const auto& progress = job->progress;
-    state_->setText(runLine(*job));
-    if (progress.framesTotal > 0)
-        bar_->setProgress(std::min(progress.framesCompleted, progress.framesTotal),
-                          progress.framesTotal);
-    else
-        bar_->setBusy();
-    frames_->setText(frameProgressText(progress));
-    auto time = elapsedText(progress);
-    // No estimate exists while the Viewer holds the GPU: show elapsed time only.
-    if (const auto remaining = remainingText(progress); !remaining.isEmpty())
-        time += QStringLiteral(" · ") + remaining;
-    time_->setText(time);
-}
-
-QString ExportRunStrip::nameText() const { return name_->text(); }
-QString ExportRunStrip::stateText() const { return state_->text(); }
-QString ExportRunStrip::frameText() const { return frames_->text(); }
-QString ExportRunStrip::timeText() const { return time_->text(); }
-
-} // namespace exportpanel
-
-using exportpanel::ExportDetailPane;
-using exportpanel::ExportJobTree;
-using exportpanel::ExportRunStrip;
+using exportpanel::ExportColourChoices;
+using exportpanel::JobRow;
 
 namespace {
-
-constexpr auto kSplitterKey = "export/splitter-state";
 
 [[nodiscard]] document::ExportJobId jobId(const qulonglong raw) {
     return document::ExportJobId::fromRaw(raw);
 }
-[[nodiscard]] document::ExportOutputId outputId(const qulonglong raw) {
-    return document::ExportOutputId::fromRaw(raw);
-}
 
-[[nodiscard]] kit::IconId formatGlyph(const document::ExportFormat format) {
-    switch (format) {
-    case document::ExportFormat::Png:
-    case document::ExportFormat::OpenExr:
-    case document::ExportFormat::Tiff:
-    case document::ExportFormat::Dpx:
-        return kit::IconId::Images;
-    case document::ExportFormat::Wav:
-        return kit::IconId::Audio;
-    default:
-        return kit::IconId::Clip;
-    }
+// A job the artist can start now: it is on, and Start is the only thing missing. A platform that
+// cannot render yet still shows its jobs as ready to run when it can.
+[[nodiscard]] bool isReady(const host::ExportJobView& job) {
+    if (!job.record.enabled || job.state != host::ExportJobState::Ready)
+        return false;
+    const auto& start = job.commands[host::ExportCommand::Start];
+    return start.available || start.code == host::ExportUnavailableCode::PlatformNotSupported;
 }
 
 } // namespace
 
 ExportEditor::ExportEditor(CompositionSession& session, ExportQueueAdapter* const adapter,
                            QWidget* const parent)
-    : QWidget(parent), session_(session), adapter_(adapter) {
+    : QWidget(parent), session_(session), adapter_(adapter),
+      colours_(std::make_unique<ExportColourChoices>()) {
     setObjectName(QStringLiteral("exportEditor"));
     setAccessibleName(tr("Export editor"));
     setAccessibleDescription(tr("The render queue: jobs, their outputs and their progress"));
+    setAcceptDrops(true);
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -143,41 +63,67 @@ ExportEditor::ExportEditor(CompositionSession& session, ExportQueueAdapter* cons
 
     chrome_.header.objectName = QStringLiteral("exportHeader");
     chrome_.header.owner = this;
-    const auto headerButton = [this](const QString& text, const QString& name) {
+    const auto headerButton = [this](const QString& text, const QString& name,
+                                     const kit::KButton::Variant variant) {
         auto* button = new kit::KButton(text, this);
         button->setObjectName(name);
+        button->setVariant(variant);
         return button;
     };
-    startAll_ = headerButton(tr("Start All"), QStringLiteral("exportStartAllButton"));
-    stopAll_ = headerButton(tr("Stop All"), QStringLiteral("exportStopAllButton"));
-    removeFinished_ =
-        headerButton(tr("Remove finished"), QStringLiteral("exportRemoveFinishedButton"));
+    addComposition_ = headerButton(tr("Add composition"), QStringLiteral("exportAddCompositionButton"),
+                                   kit::KButton::Variant::Secondary);
+    removeFinished_ = headerButton(tr("Remove finished"), QStringLiteral("exportRemoveFinishedButton"),
+                                   kit::KButton::Variant::Secondary);
+    stopAll_ = headerButton(tr("Stop All"), QStringLiteral("exportStopAllButton"),
+                            kit::KButton::Variant::Danger);
+    // The one Primary of the panel; hidden until a job is ready.
+    startAll_ = headerButton(tr("Start All"), QStringLiteral("exportStartAllButton"),
+                             kit::KButton::Variant::Primary);
+    chrome_.header.addWidget(addComposition_);
     chrome_.header.addStretch();
     chrome_.header.addWidget(removeFinished_);
     chrome_.header.addWidget(stopAll_);
     chrome_.header.addWidget(startAll_);
-
-    strip_ = new ExportRunStrip(this);
-    layout->addWidget(strip_);
+    for (auto* button : {addComposition_, removeFinished_, stopAll_, startAll_})
+        button->setProperty("chromeSuppressed", true);
 
     // Export runs on Linux in this version; the queue stays editable everywhere.
-    platformNote_ = new kit::KLabel(this);
-    platformNote_->setObjectName(QStringLiteral("exportPlatformNote"));
-    platformNote_->setTone(kit::Color::Muted);
-    platformNote_->setContentsMargins(kit::px(kit::Spacing::S), kit::px(kit::Spacing::XS),
-                                      kit::px(kit::Spacing::S), kit::px(kit::Spacing::XS));
-    platformNote_->hide();
+    const auto note = [this](const QString& name) {
+        auto* label = new kit::KLabel(this);
+        label->setObjectName(name);
+        label->setTone(kit::Color::Muted);
+        label->setWordWrap(true);
+        label->setContentsMargins(kit::px(kit::Spacing::S), kit::px(kit::Spacing::XS),
+                                  kit::px(kit::Spacing::S), kit::px(kit::Spacing::XS));
+        label->hide();
+        return label;
+    };
+    platformNote_ = note(QStringLiteral("exportPlatformNote"));
+    startNote_ = note(QStringLiteral("exportStartNote"));
     layout->addWidget(platformNote_);
+    layout->addWidget(startNote_);
 
-    splitter_ = new QSplitter(Qt::Vertical, this);
-    splitter_->setObjectName(QStringLiteral("exportSplitter"));
-    splitter_->setChildrenCollapsible(false);
-    splitter_->setHandleWidth(kit::px(kit::Size::SplitHandle));
-    layout->addWidget(splitter_, 1);
+    pages_ = new QStackedWidget(this);
+    layout->addWidget(pages_, 1);
 
-    pages_ = new QStackedWidget(splitter_);
-    tree_ = new ExportJobTree(session_, pages_);
-    pages_->addWidget(tree_);
+    scroll_ = new QScrollArea(pages_);
+    scroll_->setObjectName(QStringLiteral("exportJobList"));
+    scroll_->setWidgetResizable(true);
+    scroll_->setFrameShape(QFrame::NoFrame);
+    scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* surface = new kit::KSurface(nullptr, kit::Color::Background);
+    rows_ = new QVBoxLayout(surface);
+    rows_->setContentsMargins(0, 0, 0, 0);
+    rows_->setSpacing(0);
+    rows_->addStretch(1);
+    scroll_->setWidget(surface);
+    // The line a drop will land on, between two jobs.
+    dropLine_ = new kit::KSurface(surface, kit::Color::Accent);
+    dropLine_->setObjectName(QStringLiteral("exportDropLine"));
+    dropLine_->setFixedHeight(kit::px(kit::Spacing::XS));
+    dropLine_->hide();
+    pages_->addWidget(scroll_);
+
     emptyPage_ = new kit::KSurface(pages_, kit::Color::Background);
     emptyPage_->setObjectName(QStringLiteral("exportEmptyState"));
     auto* emptyLayout = new QVBoxLayout(emptyPage_);
@@ -187,127 +133,96 @@ ExportEditor::ExportEditor(CompositionSession& session, ExportQueueAdapter* cons
     emptyLayout->addStretch(1);
     emptyText_ = new kit::KLabel(emptyPage_);
     emptyText_->setObjectName(QStringLiteral("exportEmptyText"));
-    emptyText_->setTone(kit::Color::Muted);
+    emptyText_->setTypeRole(kit::TypeRole::Title);
     emptyText_->setAlignment(Qt::AlignHCenter);
     emptyText_->setWordWrap(true);
-    emptyAdd_ = new kit::KButton(tr("Add active composition"), emptyPage_);
+    emptyText_->setText(tr("Nothing to render yet."));
+    auto* emptyLead = new kit::KLabel(emptyPage_);
+    emptyLead->setObjectName(QStringLiteral("exportEmptyLead"));
+    emptyLead->setTone(kit::Color::Muted);
+    emptyLead->setAlignment(Qt::AlignHCenter);
+    emptyLead->setWordWrap(true);
+    emptyLead->setText(tr("Add a composition to turn it into a video, images or audio."));
+    emptyAdd_ = new kit::KButton(tr("Add composition"), emptyPage_);
     emptyAdd_->setObjectName(QStringLiteral("exportAddActiveButton"));
+    emptyAdd_->setVariant(kit::KButton::Variant::Primary);
+    emptyHelp_ = new kit::KLabel(emptyPage_);
+    emptyHelp_->setObjectName(QStringLiteral("exportEmptyHelp"));
+    emptyHelp_->setTone(kit::Color::Muted);
+    emptyHelp_->setAlignment(Qt::AlignHCenter);
+    emptyHelp_->setWordWrap(true);
+    emptyHelp_->setText(tr("You can also drag one in from Assets, or press Ctrl+M."));
     emptyLayout->addWidget(emptyText_);
+    emptyLayout->addWidget(emptyLead);
     emptyLayout->addWidget(emptyAdd_, 0, Qt::AlignHCenter);
+    emptyLayout->addWidget(emptyHelp_);
     emptyLayout->addStretch(1);
     pages_->addWidget(emptyPage_);
-    splitter_->addWidget(pages_);
-
-    if (adapter_ != nullptr)
-        detail_ = new ExportDetailPane(session_, *adapter_, nullptr);
-    auto* scroll = new QScrollArea(splitter_);
-    scroll->setObjectName(QStringLiteral("exportDetailScroll"));
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    auto* surface = new kit::KSurface(nullptr, kit::Color::Background);
-    auto* surfaceLayout = new QVBoxLayout(surface);
-    surfaceLayout->setContentsMargins(kit::px(kit::Spacing::XS), kit::px(kit::Spacing::Gutter),
-                                      kit::px(kit::Spacing::XS), kit::px(kit::Spacing::XS));
-    if (detail_ != nullptr)
-        surfaceLayout->addWidget(detail_);
-    surfaceLayout->addStretch(1);
-    scroll->setWidget(surface);
-    splitter_->addWidget(scroll);
-    splitter_->setStretchFactor(0, 1);
-    splitter_->setStretchFactor(1, 1);
-    detailScroll_ = scroll;
-    scroll->hide();
-
-    try {
-        QSettings settings;
-        splitter_->restoreState(settings.value(QString::fromLatin1(kSplitterKey)).toByteArray());
-    } catch (...) {
-    }
-    connect(splitter_, &QSplitter::splitterMoved, this, [this] {
-        QSettings settings;
-        settings.setValue(QString::fromLatin1(kSplitterKey), splitter_->saveState());
-    });
 
     if (adapter_ == nullptr) {
         emptyText_->setText(tr("Export is not available in this window."));
+        emptyLead->hide();
+        emptyHelp_->hide();
         emptyAdd_->hide();
-        startAll_->setEnabled(false);
-        stopAll_->setEnabled(false);
-        removeFinished_->setEnabled(false);
-        startAll_->setToolTip(tr("Export is not available in this window"));
         pages_->setCurrentWidget(emptyPage_);
         return;
     }
 
-    connect(adapter_, &ExportQueueAdapter::rebound, this,
-            [this] { shownRevision_ = ~std::uint64_t{0}; });
+    connect(adapter_, &ExportQueueAdapter::rebound, this, [this] { shownRevision_ = ~std::uint64_t{0}; });
     connect(adapter_, &ExportQueueAdapter::queueChanged, this, &ExportEditor::sync);
     connect(adapter_, &ExportQueueAdapter::jobAdded, this,
-            [this](const qulonglong job) { selectJob(jobId(job)); });
+            [this](const qulonglong job) {
+                // The queue's change was announced first: the row usually exists by now.
+                if (jobRow(jobId(job)) != nullptr)
+                    selectJob(jobId(job));
+                else
+                    pendingSelection_ = jobId(job);
+            });
     connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
         // Composition names and rates read from the project.
         shownRevision_ = ~std::uint64_t{0};
         sync();
     });
+    connect(&session_, &CompositionSession::colorSettingsChanged, this, [this] { coloursStale_ = true; });
     connect(startAll_, &kit::KButton::clicked, this, &ExportEditor::startAll);
     connect(stopAll_, &kit::KButton::clicked, this, [this] { (void)adapter_->stopAll(); });
-    connect(removeFinished_, &kit::KButton::clicked, this,
-            [this] { (void)adapter_->removeFinished(); });
+    connect(removeFinished_, &kit::KButton::clicked, this, [this] { (void)adapter_->removeFinished(); });
+    connect(addComposition_, &kit::KButton::clicked, this, &ExportEditor::addActiveComposition);
     connect(emptyAdd_, &kit::KButton::clicked, this, &ExportEditor::addActiveComposition);
-    connect(tree_, &QTreeWidget::itemSelectionChanged, this, &ExportEditor::updateSelection);
-    connect(tree_, &QTreeWidget::customContextMenuRequested, this,
-            &ExportEditor::showContextMenu);
-    connect(tree_, &ExportJobTree::enabledToggled, this,
-            [this](const qulonglong job, const qulonglong output, const bool enabled) {
-                if (output == 0)
-                    (void)adapter_->editJob(jobId(job), jobEdit([&](auto& edit) { edit.enabled = enabled; }));
-                else
-                    (void)adapter_->editOutput(jobId(job), outputId(output), outputEdit([&](auto& edit) { edit.enabled = enabled; }));
-            });
-    connect(tree_, &ExportJobTree::moveRequested, this,
-            [this](const qulonglong job, const int index) {
-                (void)adapter_->moveJob(jobId(job), static_cast<std::size_t>(index));
-            });
-    connect(tree_, &ExportJobTree::compositionsDropped, this,
-            [this](const QList<qulonglong>& compositions) {
-                for (const auto composition : compositions)
-                    (void)adapter_->addCompositionToQueue(document::CompositionId::fromRaw(composition));
-            });
-    connect(tree_, &ExportJobTree::removeRequested, this, [this] {
-        if (const auto output = selectedOutput(); output.has_value() && selectedJob().has_value())
-            (void)adapter_->removeOutput(*selectedJob(), *output);
-        else if (const auto job = selectedJob())
-            (void)adapter_->removeJob(*job);
-    });
 
-    sync();
     if (const auto pending = adapter_->takePendingSelection())
-        selectJob(*pending);
+        pendingSelection_ = *pending;
+    sync();
 }
 
 ExportEditor::~ExportEditor() = default;
 
 void ExportEditor::selectJob(const document::ExportJobId job) {
-    if (auto* item = tree_->jobItem(static_cast<qulonglong>(job.value()))) {
-        tree_->setCurrentItem(item);
-        item->setSelected(true);
+    current_ = job;
+    for (auto* row : jobRows_)
+        row->setCurrent(row->job() == job);
+    if (auto* row = jobRow(job)) {
+        row->setExpanded(true);
+        // The row's own height changes as it opens: bring it into view once the layout settles.
+        QTimer::singleShot(0, this, [this, job] {
+            if (auto* shown = jobRow(job))
+                scroll_->ensureWidgetVisible(shown, 0, kit::px(kit::Spacing::M));
+        });
     }
 }
 
-std::optional<document::ExportJobId> ExportEditor::selectedJob() const {
-    const auto* item = tree_->currentItem();
-    if (item == nullptr || !item->isSelected())
-        return std::nullopt;
-    return jobId(item->data(exportpanel::NameColumn, exportpanel::kJobRole).toULongLong());
+std::optional<document::ExportJobId> ExportEditor::selectedJob() const { return current_; }
+
+std::vector<JobRow*> ExportEditor::jobRows() const { return jobRows_; }
+
+JobRow* ExportEditor::jobRow(const document::ExportJobId job) const {
+    for (auto* row : jobRows_)
+        if (row->job() == job)
+            return row;
+    return nullptr;
 }
 
-std::optional<document::ExportOutputId> ExportEditor::selectedOutput() const {
-    const auto* item = tree_->currentItem();
-    if (item == nullptr || !item->isSelected())
-        return std::nullopt;
-    const auto output = item->data(exportpanel::NameColumn, exportpanel::kOutputRole).toULongLong();
-    return output != 0 ? std::optional(outputId(output)) : std::nullopt;
-}
+QString ExportEditor::startNoteText() const { return startNote_->isHidden() ? QString{} : startNote_->text(); }
 
 void ExportEditor::addActiveComposition() {
     if (adapter_ == nullptr)
@@ -317,44 +232,31 @@ void ExportEditor::addActiveComposition() {
 }
 
 void ExportEditor::startAll() {
-    const auto snapshot = adapter_->snapshot();
-    if (!snapshot)
+    const auto before = adapter_->snapshot();
+    if (!before)
         return;
-    // Replacing an existing file is never silent: ask once for every output that would.
-    std::vector<std::pair<document::ExportJobId, document::ExportOutputId>> needing;
-    QStringList names;
-    for (const auto& job : snapshot->jobs) {
-        if (!job.record.enabled || job.state != host::ExportJobState::Ready)
-            continue;
-        for (const auto& output : job.outputs)
-            if (output.record.enabled &&
-                exportpanel::hasIssue(output, host::ExportPreflightCode::DestinationExists) &&
-                !output.replaceConfirmed) {
-                needing.emplace_back(job.id, output.id);
-                names.push_back(exportpanel::qs(job.displayName));
-            }
-    }
-    if (needing.empty()) {
-        (void)adapter_->startAll();
-        return;
-    }
-    kit::KConfirmSpec spec;
-    spec.title = tr("Start All");
-    spec.objectName = QStringLiteral("exportReplaceConfirm");
-    spec.tone = kit::KPromptTone::Warning;
-    spec.heading = tr("Replace existing files?");
-    spec.detail = tr("These jobs would replace files that already exist: %1.")
-                      .arg(names.join(QStringLiteral(", ")));
-    spec.destructiveText = tr("Replace and Start");
-    spec.rejectText = tr("Cancel");
-    spec.defaultRole = kit::KDialog::Role::Reject;
-    kit::confirm(*this, spec, [this, needing](const kit::KDialog::Role role) {
-        if (role != kit::KDialog::Role::Destructive)
-            return;
-        for (const auto& [job, output] : needing)
-            (void)adapter_->confirmReplace(job, output);
-        (void)adapter_->startAll();
+    int startable = 0;
+    for (const auto& job : before->jobs)
+        if (!job.transient && job.record.enabled && job.commands[host::ExportCommand::Start])
+            ++startable;
+    // Start All never asks a second question: it starts what can run and says what waits.
+    (void)adapter_->startAll();
+    startedByStartAll_ = startable;
+    shownRevision_ = ~std::uint64_t{0};
+    sync();
+}
+
+void ExportEditor::moveJob(const qulonglong job, const int direction) {
+    const auto found = std::ranges::find_if(jobRows_, [job](const JobRow* row) {
+        return static_cast<qulonglong>(row->job().value()) == job;
     });
+    if (found == jobRows_.end())
+        return;
+    const auto index = static_cast<int>(found - jobRows_.begin());
+    const auto target = index + direction;
+    if (target < 0 || target >= static_cast<int>(jobRows_.size()))
+        return;
+    (void)adapter_->moveJob(jobId(job), static_cast<std::size_t>(target));
 }
 
 void ExportEditor::sync() {
@@ -368,126 +270,64 @@ void ExportEditor::sync() {
     rebuild();
     updateHeader();
     syncing_ = false;
-    updateSelection();
 }
 
 void ExportEditor::rebuild() {
     const auto snapshot = adapter_->snapshot();
     const auto catalogue = adapter_->catalogue();
-    // A transient job (a script's one-off render) is runtime only: it has no place in the queue list.
+    if (coloursStale_) {
+        *colours_ = exportpanel::exportColourChoices(session_);
+        coloursStale_ = false;
+    }
+    // A transient job (a script's one-off render) is runtime only: it has no place in the list.
     std::vector<const host::ExportJobView*> jobs;
     for (const auto& candidate : snapshot->jobs)
         if (!candidate.transient)
             jobs.push_back(&candidate);
-    const auto& project = session_.snapshot().project();
-    // Remember the selection and the expanded jobs by id: rows are keyed by stable ids.
-    const auto selectedJobId = selectedJob();
-    const auto selectedOutputId = selectedOutput();
 
-    QString signature;
-    for (const auto* shown : jobs) {
-        const auto& job = *shown;
-        signature += QString::number(job.id.value()) + QLatin1Char(':');
-        for (const auto& output : job.outputs)
-            signature += QString::number(output.id.value()) + QLatin1Char(',');
-        signature += QLatin1Char(';');
-    }
-    const bool sameShape = signature == rowSignature_;
-    rowSignature_ = signature;
-    const QSignalBlocker blocker(tree_);
-    if (!sameShape)
-        tree_->clear();
-
-    const auto fill = [&](QTreeWidgetItem& item, const host::ExportJobView& job) {
-        using namespace exportpanel;
-        const auto status = jobStatus(job);
-        const bool editable = job.commands[host::ExportCommand::EditJob].available;
-        const auto* composition = project.findComposition(job.record.composition);
-        item.setData(NameColumn, kJobRole, static_cast<qulonglong>(job.id.value()));
-        item.setData(NameColumn, kOutputRole, qulonglong{0});
-        item.setData(NameColumn, kGlyphRole, static_cast<int>(kit::IconId::Composition));
-        item.setText(NameColumn, qs(job.displayName));
-        item.setToolTip(NameColumn, qs(job.displayName));
-        item.setText(CompositionColumn,
-                     composition ? qs(composition->name()) : tr("Missing composition"));
-        item.setText(RangeColumn, rangeText(job));
-        item.setToolTip(RangeColumn,
-                        composition ? rangeTimecodeText(job, composition->format().frameRate())
-                                    : QString{});
-        item.setText(StatusColumn, status.text);
-        item.setData(StatusColumn, kToneRole, static_cast<int>(status.tone));
-        item.setToolTip(StatusColumn, status.detail);
-        item.setData(EnabledColumn, kEditableRole, editable);
-        item.setCheckState(EnabledColumn, job.record.enabled ? Qt::Checked : Qt::Unchecked);
-        item.setToolTip(EnabledColumn,
-                        editable ? tr("Included by Start All")
-                                 : exportpanel::qs(job.commands[host::ExportCommand::EditJob].reason));
-        if (job.record.labelColor.has_value()) {
-            const auto& rgb = *job.record.labelColor;
-            item.setData(LabelColumn, kLabelRole, QColor(rgb[0], rgb[1], rgb[2]));
-            item.setToolTip(LabelColumn, tr("Label colour"));
-        } else {
-            item.setData(LabelColumn, kLabelRole, QVariant{});
-        }
-        item.setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
-    };
-    const auto fillOutput = [&](QTreeWidgetItem& item, const host::ExportJobView& job,
-                                const host::ExportOutputView& output) {
-        using namespace exportpanel;
-        const auto status = outputStatus(output);
-        const bool editable = output.commands[host::ExportCommand::EditOutput].available;
-        item.setData(NameColumn, kJobRole, static_cast<qulonglong>(job.id.value()));
-        item.setData(NameColumn, kOutputRole, static_cast<qulonglong>(output.id.value()));
-        item.setData(NameColumn, kGlyphRole, static_cast<int>(formatGlyph(output.record.settings.format)));
-        item.setText(NameColumn, presetText(output, catalogue.get()));
-        item.setData(CompositionColumn, kDestinationRole, destinationText(output));
-        item.setToolTip(NameColumn, destinationToolTip(output));
-        item.setToolTip(CompositionColumn, destinationToolTip(output));
-        item.setToolTip(RangeColumn, destinationToolTip(output));
-        item.setText(StatusColumn, status.text);
-        item.setData(StatusColumn, kToneRole, static_cast<int>(status.tone));
-        item.setToolTip(StatusColumn, status.detail);
-        item.setData(EnabledColumn, kEditableRole, editable);
-        item.setCheckState(EnabledColumn, output.record.enabled ? Qt::Checked : Qt::Unchecked);
-        item.setToolTip(EnabledColumn,
-                        editable ? tr("Render this output")
-                                 : exportpanel::qs(output.commands[host::ExportCommand::EditOutput].reason));
-        item.setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-    };
-
+    std::vector<JobRow*> rows;
     for (std::size_t i = 0; i < jobs.size(); ++i) {
         const auto& job = *jobs[i];
-        QTreeWidgetItem* item = sameShape ? tree_->topLevelItem(static_cast<int>(i)) : new QTreeWidgetItem;
-        if (!sameShape)
-            tree_->addTopLevelItem(item);
-        fill(*item, job);
-        for (std::size_t o = 0; o < job.outputs.size(); ++o) {
-            QTreeWidgetItem* child = sameShape ? item->child(static_cast<int>(o)) : new QTreeWidgetItem(item);
-            fillOutput(*child, job, job.outputs[o]);
+        JobRow* row = jobRow(job.id);
+        if (row == nullptr) {
+            row = new JobRow(session_, *adapter_, job.id, rows_->parentWidget());
+            connect(row, &JobRow::activated, this, [this](const qulonglong id) { selectJob(jobId(id)); });
+            connect(row, &JobRow::moveRequested, this,
+                    [this](const qulonglong id, const int direction) { moveJob(id, direction); });
         }
-        if (!sameShape)
-            item->setExpanded(true);
+        // The list order is the queue's: a row at the wrong place is re-inserted there.
+        if (rows_->indexOf(row) != static_cast<int>(i)) {
+            rows_->removeWidget(row);
+            rows_->insertWidget(static_cast<int>(i), row);
+        }
+        rows.push_back(row);
     }
-    tree_->viewport()->update();
+    for (auto* row : jobRows_)
+        if (std::ranges::find(rows, row) == rows.end()) {
+            rows_->removeWidget(row);
+            delete row;
+        }
+    jobRows_ = rows;
+    for (std::size_t i = 0; i < jobs.size(); ++i) {
+        rows[i]->setPosition(static_cast<int>(i), static_cast<int>(jobs.size()));
+        rows[i]->update(*jobs[i], catalogue.get(), *colours_);
+        rows[i]->setCurrent(current_.has_value() && rows[i]->job() == *current_);
+    }
+    if (current_.has_value() && jobRow(*current_) == nullptr)
+        current_.reset();
+    if (pendingSelection_.has_value() && jobRow(*pendingSelection_) != nullptr) {
+        selectJob(*pendingSelection_);
+        pendingSelection_.reset();
+    }
 
-    if (!sameShape && selectedJobId.has_value()) {
-        auto* item = selectedOutputId.has_value()
-                         ? tree_->outputItem(selectedJobId->value(), selectedOutputId->value())
-                         : tree_->jobItem(selectedJobId->value());
-        if (item == nullptr)
-            item = tree_->jobItem(selectedJobId->value());
-        if (item != nullptr) {
-            tree_->setCurrentItem(item);
-            item->setSelected(true);
-        }
-    }
     pages_->setCurrentWidget(jobs.empty() ? static_cast<QWidget*>(emptyPage_)
-                                                    : static_cast<QWidget*>(tree_));
+                                          : static_cast<QWidget*>(scroll_));
     const auto reason = adapter_->addUnavailableReason();
-    emptyText_->setText(tr("The export queue is empty. Add a composition to render it."));
     emptyAdd_->setEnabled(session_.compositionId().isValid() && reason.isEmpty());
-    emptyAdd_->setToolTip(!session_.compositionId().isValid() ? tr("Open a composition first")
-                                                             : reason);
+    emptyAdd_->setToolTip(!session_.compositionId().isValid() ? tr("Open a composition first") : reason);
+    addComposition_->setEnabled(emptyAdd_->isEnabled());
+    addComposition_->setToolTip(emptyAdd_->isEnabled() ? tr("Add the open composition to the list")
+                                                       : emptyAdd_->toolTip());
 }
 
 void ExportEditor::updateHeader() {
@@ -498,132 +338,141 @@ void ExportEditor::updateHeader() {
         button.setToolTip(availability.available ? tip : exportpanel::qs(availability.reason));
     };
     const auto& commands = snapshot->commands;
-    set(*startAll_, commands[host::ExportCommand::StartAll], tr("Start every enabled job"));
-    set(*stopAll_, commands[host::ExportCommand::StopAll], tr("Stop every active job"));
+    int shown = 0;
+    int ready = 0;
+    int waitingForOk = 0;
+    for (const auto& job : snapshot->jobs) {
+        if (job.transient)
+            continue;
+        ++shown;
+        ready += isReady(job) ? 1 : 0;
+        for (const auto& output : job.outputs)
+            if (job.state == host::ExportJobState::Ready && exportpanel::awaitsReplaceConfirmation(output)) {
+                ++waitingForOk;
+                break;
+            }
+    }
+    set(*startAll_, commands[host::ExportCommand::StartAll], tr("Start every job that is ready"));
+    set(*stopAll_, commands[host::ExportCommand::StopAll], tr("Stop every job that is running"));
     set(*removeFinished_, commands[host::ExportCommand::RemoveFinished],
         tr("Remove the jobs that finished"));
-    // The one affirmative action while something is ready to run and nothing runs yet.
-    startAll_->setVariant(commands[host::ExportCommand::StartAll].available &&
-                                  !snapshot->activeJob.has_value()
-                              ? kit::KButton::Variant::Primary
-                              : kit::KButton::Variant::Secondary);
+    // Start All is the one Primary and only exists while a job can be started.
+    // The header row places its controls itself: a control leaves it through "chromeSuppressed".
+    const auto show = [](kit::KButton& button, const bool visible) {
+        if (button.property("chromeSuppressed").toBool() == visible)
+            button.setProperty("chromeSuppressed", !visible);
+    };
+    show(*startAll_, ready > 0);
+    show(*stopAll_, snapshot->activeJob.has_value() || commands[host::ExportCommand::StopAll].available);
+    show(*removeFinished_, commands[host::ExportCommand::RemoveFinished].available);
+    show(*addComposition_, shown > 0);
+
     const auto& start = commands[host::ExportCommand::StartAll];
     const bool unsupported = start.code == host::ExportUnavailableCode::PlatformNotSupported;
     platformNote_->setVisible(unsupported);
     platformNote_->setText(unsupported ? exportpanel::qs(start.reason) : QString{});
 
-    const host::ExportJobView* active = nullptr;
-    if (snapshot->activeJob.has_value())
-        for (const auto& job : snapshot->jobs)
-            if (job.id == *snapshot->activeJob)
-                active = &job;
-    strip_->setJob(active);
-}
-
-void ExportEditor::updateSelection() {
-    if (syncing_ || detail_ == nullptr)
-        return;
-    const auto job = selectedJob();
-    detail_->setSelection(job, selectedOutput());
-    const bool firstShow = job.has_value() && !detailScroll_->isVisible();
-    detailScroll_->setVisible(job.has_value());
-    if (firstShow && !splitterSized_) {
-        splitterSized_ = true;
-        // The list above, the detail below, until the artist drags the handle.
-        QSettings settings;
-        if (!settings.contains(QString::fromLatin1(kSplitterKey)))
-            QTimer::singleShot(0, this, [this] {
-                // The list takes what its rows need (at most half); the detail gets the rest.
-                int rows = 0;
-                for (QTreeWidgetItemIterator it(tree_); *it; ++it)
-                    ++rows;
-                const int total = splitter_->height();
-                const int wanted = (rows + 1) * kit::px(kit::Size::AssetRow) +
-                                   kit::px(kit::Size::AssetRow);
-                const int list = std::clamp(wanted, total / 4, total / 2);
-                splitter_->setSizes({list, total - list});
-            });
+    // "2 started, 1 waiting for your OK": said after Start All, until nobody waits.
+    if (waitingForOk > 0 && startedByStartAll_ >= 0) {
+        startNote_->setText(tr("%1 started, %2 waiting for your OK").arg(startedByStartAll_).arg(waitingForOk));
+        startNote_->show();
+    } else {
+        startNote_->hide();
+        if (waitingForOk == 0)
+            startedByStartAll_ = -1;
     }
 }
 
-void ExportEditor::showContextMenu(const QPoint position) {
-    auto* item = tree_->itemAt(position);
-    if (item == nullptr)
-        return;
-    if (!item->isSelected()) {
-        tree_->setCurrentItem(item);
-        item->setSelected(true);
-    }
-    const auto snapshot = adapter_->snapshot();
-    const auto job = selectedJob();
-    if (!snapshot || !job.has_value())
-        return;
-    const host::ExportJobView* view = nullptr;
-    for (const auto& candidate : snapshot->jobs)
-        if (candidate.id == *job)
-            view = &candidate;
-    if (view == nullptr)
-        return;
-    const auto output = selectedOutput();
-    const host::ExportOutputView* outputView = nullptr;
-    for (const auto& candidate : view->outputs)
-        if (output.has_value() && candidate.id == *output)
-            outputView = &candidate;
-    if (outputView == nullptr && !view->outputs.empty())
-        outputView = &view->outputs.front();
+std::vector<document::CompositionId> ExportEditor::draggedCompositions(const QMimeData& mime) const {
+    std::vector<document::CompositionId> compositions;
+    // An Assets drag lists every selected row in selection order; footage and folders are not jobs.
+    for (const auto& item : layerItemsFromMime(mime, session_))
+        if (const auto* composition = std::get_if<document::CompositionId>(&item))
+            if (std::ranges::find(compositions, *composition) == compositions.end())
+                compositions.push_back(*composition);
+    if (compositions.empty())
+        if (const auto single = compositionFromMime(mime, session_); single.isValid())
+            compositions.push_back(single);
+    return compositions;
+}
 
-    std::unique_ptr<QMenu> menu(kit::makeMenu(this));
-    menu->setObjectName(QStringLiteral("exportContextMenu"));
-    menu->setToolTipsVisible(true);
-    const auto add = [&](const QString& text, const char* name,
-                         const host::ExportCommandAvailability& availability, auto&& slot) {
-        auto* action = menu->addAction(text);
-        action->setObjectName(QString::fromLatin1(name));
-        action->setEnabled(availability.available);
-        if (!availability.available)
-            action->setToolTip(exportpanel::qs(availability.reason));
-        connect(action, &QAction::triggered, this, std::forward<decltype(slot)>(slot));
-        return action;
-    };
-    const auto id = *job;
-    add(tr("Start"), "exportStartAction", view->commands[host::ExportCommand::Start],
-        [this, id] { (void)adapter_->start(id); });
-    add(tr("Pause"), "exportPauseAction", view->commands[host::ExportCommand::Pause],
-        [this, id] { (void)adapter_->pause(id); });
-    add(tr("Resume"), "exportResumeAction", view->commands[host::ExportCommand::Resume],
-        [this, id] { (void)adapter_->resume(id); });
-    add(tr("Stop"), "exportStopAction", view->commands[host::ExportCommand::Stop],
-        [this, id] { (void)adapter_->stop(id); });
-    add(tr("Retry"), "exportRetryAction", view->commands[host::ExportCommand::Retry],
-        [this, id] { (void)adapter_->retry(id); });
-    menu->addSeparator();
-    add(tr("Duplicate"), "exportDuplicateAction", view->commands[host::ExportCommand::DuplicateJob],
-        [this, id] { (void)adapter_->duplicateJob(id); });
-    add(tr("Remove"), "exportRemoveAction", view->commands[host::ExportCommand::RemoveJob],
-        [this, id] { (void)adapter_->removeJob(id); });
-    menu->addSeparator();
-    const host::ExportCommandAvailability reveal =
-        outputView != nullptr ? outputView->commands[host::ExportCommand::RevealOutput]
-                              : host::ExportCommandAvailability{};
-    add(tr("Reveal Output"), "exportRevealAction", reveal, [this, outputView] {
-        if (outputView == nullptr)
-            return;
-        const auto& artifacts = outputView->verification;
-        revealInFileManager(artifacts && !artifacts->artifacts.firstPath.empty()
-                                ? artifacts->artifacts.firstPath
-                                : outputView->destination.firstPath,
-                            this);
-    });
-    menu->addSeparator();
-    const auto copy = [this, view](const host::ExportScriptFormat format) {
-        QGuiApplication::clipboard()->setText(exportpanel::qs(adapter_->jobScript(view->record, format)));
-    };
-    menu->addAction(tr("Copy as bloom-cli Command"), this,
-                    [copy] { copy(host::ExportScriptFormat::CliJson); })
-        ->setObjectName(QStringLiteral("exportCopyCliAction"));
-    menu->addAction(tr("Copy as Python"), this, [copy] { copy(host::ExportScriptFormat::Python); })
-        ->setObjectName(QStringLiteral("exportCopyPythonAction"));
-    menu->exec(tree_->viewport()->mapToGlobal(position));
+std::size_t ExportEditor::dropIndexAt(const QPoint position) const {
+    const auto inList = scroll_->widget()->mapFrom(this, position);
+    std::size_t index = 0;
+    for (const auto* row : jobRows_)
+        if (row->geometry().center().y() < inList.y())
+            ++index;
+    return index;
+}
+
+bool ExportEditor::dropIndicatorShown() const { return !dropLine_->isHidden() || emptyDropShown_; }
+
+int ExportEditor::dropIndicatorY() const { return dropLine_->geometry().y(); }
+
+void ExportEditor::showDropIndicator(const QPoint position) {
+    if (jobRows_.empty()) {
+        // Nothing to put a line between: the whole page lights up.
+        emptyPage_->setFill(kit::Color::SurfaceRaised);
+        emptyDropShown_ = true;
+        return;
+    }
+    const auto index = dropIndexAt(position);
+    const int y = index < jobRows_.size() ? jobRows_[index]->geometry().top()
+                                          : jobRows_.back()->geometry().bottom();
+    dropLine_->setGeometry(QRect(0, y, scroll_->widget()->width(), dropLine_->height()));
+    dropLine_->raise();
+    dropLine_->show();
+}
+
+void ExportEditor::hideDropIndicator() {
+    dropLine_->hide();
+    if (emptyDropShown_) {
+        emptyPage_->setFill(kit::Color::Background);
+        emptyDropShown_ = false;
+    }
+}
+
+void ExportEditor::dragEnterEvent(QDragEnterEvent* const event) {
+    // Not droppable, not accepted: the pointer shows "not allowed".
+    if (adapter_ != nullptr && !draggedCompositions(*event->mimeData()).empty()) {
+        event->acceptProposedAction();
+        showDropIndicator(event->position().toPoint());
+    } else {
+        event->ignore();
+    }
+}
+
+void ExportEditor::dragMoveEvent(QDragMoveEvent* const event) {
+    if (adapter_ != nullptr && !draggedCompositions(*event->mimeData()).empty()) {
+        event->acceptProposedAction();
+        showDropIndicator(event->position().toPoint());
+    } else {
+        event->ignore();
+        hideDropIndicator();
+    }
+}
+
+void ExportEditor::dragLeaveEvent(QDragLeaveEvent* const event) {
+    hideDropIndicator();
+    QWidget::dragLeaveEvent(event);
+}
+
+void ExportEditor::dropEvent(QDropEvent* const event) {
+    hideDropIndicator();
+    if (adapter_ == nullptr) {
+        event->ignore();
+        return;
+    }
+    const auto compositions = draggedCompositions(*event->mimeData());
+    if (compositions.empty()) {
+        event->ignore();
+        return;
+    }
+    // One job per composition, at the line the artist saw, as one undo entry.
+    (void)adapter_->addCompositionsToQueue(
+        compositions, jobRows_.empty() ? std::nullopt : std::optional(dropIndexAt(event->position().toPoint())));
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
 }
 
 bool registerExportEditor(EditorRegistry& registry, CompositionSession& session,

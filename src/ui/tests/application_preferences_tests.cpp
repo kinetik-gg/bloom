@@ -31,6 +31,7 @@ class Expectations final {
 };
 
 namespace ui = bloom::ui;
+namespace runtime = bloom::runtime;
 
 [[nodiscard]] QSettings openSettings(QTemporaryDir& directory) {
     return QSettings(directory.filePath(QStringLiteral("bloom.ini")), QSettings::IniFormat);
@@ -93,9 +94,11 @@ void testHeadroomPreferences(Expectations& check) {
     QTemporaryDir directory;
     auto settings = openSettings(directory);
     const auto defaults = ui::loadApplicationPreferences(settings);
-    check.expect(defaults.ramHeadroomBytes == 2 * gib && defaults.vramHeadroomBytes == 2 * gib &&
-                     ui::defaultApplicationPreferences().ramHeadroomBytes == 2 * gib,
-                 "RAM and VRAM headroom default to 2 GiB");
+    check.expect(defaults.ramHeadroomBytes == runtime::defaultRamHeadroomBytes() &&
+                     defaults.vramHeadroomBytes == runtime::defaultVramHeadroomBytes() &&
+                     ui::defaultApplicationPreferences().ramHeadroomBytes ==
+                         runtime::defaultRamHeadroomBytes(),
+                 "RAM and VRAM headroom default to the computed 10% of capacity");
 
     ui::ApplicationPreferences prefs;
     prefs.ramHeadroomBytes = 0;
@@ -111,11 +114,13 @@ void testHeadroomPreferences(Expectations& check) {
 
     for (const auto* bad : {"garbage", "-5", "1.5", "", " 7", "0x10", "99999999999999999999"}) {
         settings.setValue(QStringLiteral("memory/ramHeadroomBytes"), QString::fromLatin1(bad));
-        check.expect(ui::loadApplicationPreferences(settings).ramHeadroomBytes == 2 * gib,
-                     "garbage or overflowing headroom reads as the 2 GiB default");
+        check.expect(ui::loadApplicationPreferences(settings).ramHeadroomBytes ==
+                         runtime::defaultRamHeadroomBytes(),
+                     "garbage or overflowing headroom reads as the computed default");
     }
     settings.setValue(QStringLiteral("memory/ramHeadroomBytes"), QString::number(900 * gib));
-    check.expect(ui::loadApplicationPreferences(settings).ramHeadroomBytes == 2 * gib,
+    check.expect(ui::loadApplicationPreferences(settings).ramHeadroomBytes ==
+                     runtime::defaultRamHeadroomBytes(),
                  "headroom above the 256 GiB maximum reads as the default");
 
     settings.clear();
