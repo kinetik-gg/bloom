@@ -65,6 +65,12 @@ constexpr auto kHeaderIconRole = kit::IconRole::Chrome;
     if (editorId == "bloom.nodes") {
         return kit::IconId::Graph;
     }
+    if (editorId == "bloom.script") {
+        return kit::IconId::ScriptEditor;
+    }
+    if (editorId == "bloom.mcp-server") {
+        return kit::IconId::McpServer;
+    }
     return std::nullopt;
 }
 

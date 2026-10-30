@@ -329,3 +329,7 @@ SHA-256 of sorted `<sha256>  <filename>\n` lines for all SVGs above: `81e63f6ad9
 ```sh
 (cd regular && sha256sum *.svg; cd ../fill && sha256sum *.svg; cd ../bold && sha256sum *.svg) | LC_ALL=C sort | sha256sum
 ```
+The panel switcher icons (2026-10-30) downloaded the same pinned archive, verified its SHA-256 above
+from the downloaded bytes, and extracted `terminal-window` (the Script editor) and
+`plugs-connected` (the MCP Server panel) in regular, fill and bold from `assets/` without
+modification.

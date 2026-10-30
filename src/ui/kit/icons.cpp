@@ -108,6 +108,8 @@ const auto& iconAssets() {
         {IconId::DistributeHorizontal, QLatin1StringView("columns")},
         {IconId::DistributeVertical, QLatin1StringView("rows")},
         {IconId::Overflow, QLatin1StringView("caret-double-right")},
+        {IconId::ScriptEditor, QLatin1StringView("terminal-window")},
+        {IconId::McpServer, QLatin1StringView("plugs-connected")},
     });
     return entries;
 }

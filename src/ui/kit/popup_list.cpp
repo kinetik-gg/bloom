@@ -112,16 +112,21 @@ class ListDelegate final : public QStyledItemDelegate {
 
         const bool enabled = index.flags().testFlag(Qt::ItemIsEnabled) && view_.isEnabled();
         const bool current = enabled && view_.currentIndex() == index;
-        if (current) {
-            // The one Accent bar, full width, clipped to the frame's rounded inner edge by an
-            // antialiased path -- the corner pixels blend instead of stepping.
+        const bool committed = index.row() == surface_.committedRow();
+        const QIcon glyph = index.data(Qt::DecorationRole).value<QIcon>();
+        // A committed row that carries its own icon (the panel switcher) is marked by one surface
+        // step across the whole row, so its icon stays unframed; the Accent bar still wins.
+        const bool committedPlate = committed && !glyph.isNull() && !current;
+        if (current || committedPlate) {
+            // One full-width bar, clipped to the frame's rounded inner edge by an antialiased
+            // path -- the corner pixels blend instead of stepping.
             const QPoint offset = view_.viewport()->mapTo(&surface_, QPoint(0, 0));
             QPainterPath bar;
             bar.addRect(QRectF(row));
             const QPainterPath clip = surface_.rowClip().translated(-offset);
             painter->setRenderHint(QPainter::Antialiasing, true);
             painter->setPen(Qt::NoPen);
-            painter->setBrush(color(Color::Accent));
+            painter->setBrush(color(current ? Color::Accent : Color::Field));
             painter->drawPath(bar.intersected(clip));
         }
         using kit::State;
@@ -131,21 +136,11 @@ class ListDelegate final : public QStyledItemDelegate {
         const int column = menuIconColumnWidth();
         const QRectF iconBox(row.left() + px(Spacing::MenuItemX),
                              row.top() + (row.height() - column) / 2, column, column);
-        const bool committed = index.row() == surface_.committedRow();
-        const QIcon glyph = index.data(Qt::DecorationRole).value<QIcon>();
         const qreal ratio = painter->device()->devicePixelRatio();
         if (!glyph.isNull()) {
             const QIcon::Mode mode =
                 !enabled ? QIcon::Disabled : (current ? QIcon::Selected : QIcon::Normal);
             drawCentred(*painter, iconBox, glyph.pixmap(QSize(column, column), ratio, mode));
-            if (committed) {
-                // A committed row that carries its own icon frames that icon, as a checked menu
-                // action does, rather than hiding it behind a check mark.
-                painter->setRenderHint(QPainter::Antialiasing, true);
-                const auto ring = static_cast<qreal>(px(Spacing::XXS));
-                fillRoundedSurface(*painter, iconBox.adjusted(-ring, -ring, ring, ring), {}, ink,
-                                   Radius::Small);
-            }
         } else if (committed) {
             drawCentred(*painter, iconBox,
                         iconPixmap(IconId::Check, Size::IconMedium, ink, ratio,
