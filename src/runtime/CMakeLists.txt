@@ -88,6 +88,7 @@ target_sources(
         composite_frame_cache.cpp
         video_source.hpp
         image_source.cpp
+        image_sequence_read_ahead.cpp
         channel_resolution.cpp
         channel_shuffle.cpp
         channel_inspection_listing.cpp
@@ -220,6 +221,7 @@ target_sources(
             include/bloom/runtime/gpu_scene_cache.hpp
             include/bloom/runtime/gpu_scene_coverage_cache.hpp
             include/bloom/runtime/gpu_prepared_upload_cache.hpp
+            include/bloom/runtime/image_sequence_read_ahead.hpp
             include/bloom/runtime/gpu_scene_executor.hpp
             include/bloom/runtime/gpu_process_frame.hpp
             include/bloom/runtime/gpu_processing_phase_policy.hpp

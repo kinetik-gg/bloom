@@ -13,6 +13,8 @@ legacyPreparedMediaContext(const bloom::runtime::CpuCompositionEvaluator& evalua
     auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(evaluator);
     context.preparedUploadCache = std::make_shared<bloom::runtime::GpuPreparedUploadCache>(
         bloom::runtime::kDefaultPreparedUploadCacheBytes);
+    // Deterministic per-build statistics: read-ahead is exercised by its own fixture.
+    context.sequenceReadAhead.reset();
     return context;
 }
 

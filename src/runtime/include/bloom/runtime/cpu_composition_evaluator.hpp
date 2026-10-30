@@ -3,6 +3,7 @@
 #include <bloom/runtime/audio_stream_key.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/image_sequence_read_ahead.hpp>
 #include <bloom/runtime/row_band_execution.hpp>
 
 #include <filesystem>
@@ -113,6 +114,11 @@ class CpuCompositionEvaluator final {
         return assetContext_->diskCache;
     }
     [[nodiscard]] const std::shared_ptr<OperationCache>& operationCache() const { return cache_; }
+    // The image-sequence read-ahead feeding this evaluator's operation cache; preview, playback and
+    // export requests sharing the evaluator share it.
+    [[nodiscard]] const std::shared_ptr<ImageSequenceReadAhead>& sequenceReadAhead() const {
+        return readAhead_;
+    }
     // `rowBands` is the bounded pool the per-row kernels are spread across (the scheduler owns one;
     // TaskContext::rowBandExecutor() is where a task body gets it). Null evaluates every row band
     // on the calling thread, in band order.
@@ -145,6 +151,7 @@ class CpuCompositionEvaluator final {
     };
     std::shared_ptr<AssetContext> assetContext_ = std::make_shared<AssetContext>();
     std::shared_ptr<OperationCache> cache_ = std::make_shared<OperationCache>();
+    std::shared_ptr<ImageSequenceReadAhead> readAhead_ = std::make_shared<ImageSequenceReadAhead>();
 };
 
 } // namespace bloom::runtime

@@ -288,8 +288,8 @@ void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFix
     std::filesystem::rename(fixture.path, heldPath);
     const auto warm = builder.build(planB, requestB);
     if (!warm) {
-        std::cerr << "warm revision preparation: " << static_cast<int>(warm.diagnostic.code)
-                  << ' ' << warm.diagnostic.message << '\n';
+        std::cerr << "warm revision preparation: " << static_cast<int>(warm.diagnostic.code) << ' '
+                  << warm.diagnostic.message << '\n';
     } else {
         const auto& work = warm.scene->mediaStatistics();
         if (work.sourceRevisionCacheHits != 1 || work.sourceRevisionCaptures != 0 ||
@@ -429,8 +429,7 @@ void testRevalidatedFramesReadNothing(Expectations& expectations, const MediaFix
         std::ofstream output(fixture.path, std::ios::binary | std::ios::trunc);
         output.write(original.data(), static_cast<std::streamsize>(original.size()));
     }
-    expectations.expect(builder.build(plan, request).hasValue(),
-                        "restored content verifies again");
+    expectations.expect(builder.build(plan, request).hasValue(), "restored content verifies again");
 }
 
 void testGestureSourceRevisionIsReadOnly(Expectations& checks, const MediaFixture& fixture) {
@@ -460,8 +459,8 @@ void testGestureSourceRevisionIsReadOnly(Expectations& checks, const MediaFixtur
     const auto bytes = context.operationCache->retainedBytes();
     const auto reused = builder.build(gesture, request);
     if (!reused) {
-        std::cerr << "warm gesture preparation: " << static_cast<int>(reused.diagnostic.code)
-                  << ' ' << reused.diagnostic.message << '\n';
+        std::cerr << "warm gesture preparation: " << static_cast<int>(reused.diagnostic.code) << ' '
+                  << reused.diagnostic.message << '\n';
     } else {
         const auto& work = reused.scene->mediaStatistics();
         if (work.sourceRevisionCacheHits != 1 || work.sourceRevisionCaptures != 0) {
@@ -477,4 +476,69 @@ void testGestureSourceRevisionIsReadOnly(Expectations& checks, const MediaFixtur
     const auto cpuReused = evaluator.evaluate(gesture, request, {});
     checks.expect(cpuReused.frame() != nullptr && context.operationCache->retainedBytes() == bytes,
                   "warm CPU gesture remains a read-only source-cache consumer");
+}
+
+// Image-sequence read-ahead: preparing frame 0 captures the next members on the read-ahead
+// workers, so preparing frame 1 then reuses a verified revision and reads nothing itself.
+void testSequenceReadAhead(Expectations& expectations, const MediaFixture& fixture) {
+    CpuCompositionEvaluator evaluator;
+    evaluator.setAssetBaseDirectory(fixture.directory);
+    std::vector<document::AssetSequenceMember> members;
+    for (int frame = 0; frame < 4; ++frame) {
+        auto pixels = signedHdrPixels();
+        pixels.front().red += static_cast<float>(frame);
+        const auto path = fixture.directory / ("read_ahead." + std::to_string(frame) + ".exr");
+        writeExrRgba(path, 3, 2, pixels);
+        members.push_back(sequenceMember(path, frame, static_cast<std::uint64_t>(frame) + 10));
+    }
+    document::AssetRecord asset = fixture.asset;
+    asset.id = bloom::document::AssetId::fromRaw(903);
+    asset.kind = document::AssetKind::Sequence;
+    asset.manifest.pattern = "read_ahead.#.exr";
+    asset.manifest.padding = 1;
+    asset.manifest.first = 0;
+    asset.manifest.last = 3;
+    asset.manifest.members = members;
+    const auto plan = mediaPlan(format(8, 8), asset, LayerValues{}, 1800);
+    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    context.preparedUploadCache = std::make_shared<bloom::runtime::GpuPreparedUploadCache>(
+        bloom::runtime::kDefaultPreparedUploadCacheBytes);
+    expectations.expect(context.sequenceReadAhead != nullptr,
+                        "the evaluator's media context carries its sequence read-ahead");
+    const CpuGpuSceneBuilder builder(nullptr, context);
+    auto request = requestFor(*plan, RationalTime::fromInteger(0));
+    request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Revalidate;
+    request.requireVerifiedMediaSources = true;
+    const auto first = builder.build(plan, request);
+    expectations.expect(first.hasValue() &&
+                            first.scene->mediaStatistics().sourceRevisionCaptures == 1,
+                        "frame 0 captures its own member");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (context.sequenceReadAhead->statistics().captured +
+                   context.sequenceReadAhead->statistics().failed <
+               3 &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    const auto statistics = context.sequenceReadAhead->statistics();
+    expectations.expect(statistics.queued == 3 && statistics.captured == 3 &&
+                            statistics.failed == 0,
+                        "the three following members are captured ahead of need");
+    for (int frame = 1; frame < 4; ++frame) {
+        auto next = requestFor(*plan, rationalTime(frame, 24));
+        next.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Revalidate;
+        next.requireVerifiedMediaSources = true;
+        const auto built = builder.build(plan, next);
+        expectations.expect(built && built.scene->mediaStatistics().sourceRevisionCaptures == 0 &&
+                                built.scene->mediaStatistics().sourceRevisionCacheHits == 1 &&
+                                built.scene->mediaStatistics().sourceBytesRead == 0,
+                            "a read-ahead member is reused without reading the file again");
+    }
+    // A member already cached, queued or in flight is not requested twice.
+    const auto again = builder.build(plan, request);
+    expectations.expect(again.hasValue(), "frame 0 prepares again");
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    expectations.expect(context.sequenceReadAhead->statistics().failed == 0 &&
+                            context.sequenceReadAhead->statistics().captured == 3 &&
+                            context.sequenceReadAhead->statistics().queued == 3,
+                        "cached members are not queued or captured again");
 }

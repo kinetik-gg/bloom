@@ -15,6 +15,105 @@
 
 namespace bloom::runtime::detail {
 
+namespace {
+struct SequenceMemberChoice final {
+    const document::AssetSequenceMember* member = nullptr;
+    std::string warning;
+};
+// The sequence member a composition time selects: start frame, loop mode and gap hold.
+SequenceMemberChoice selectSequenceMember(const CompiledImageSource& source,
+                                          const core::RationalTime time,
+                                          const document::FrameRate rate) {
+    const auto& asset = *source.asset;
+    SequenceMemberChoice choice;
+    const auto frame = valueGraphFrameIndex(time, rate);
+    if (!frame || asset.manifest.members.empty()) {
+        choice.warning = "Sequence time is outside the supported range";
+        return choice;
+    }
+    const auto length = static_cast<std::uint64_t>(asset.manifest.last) -
+                        static_cast<std::uint64_t>(asset.manifest.first) + 1;
+    // Long-double subtraction avoids signed overflow even for hostile hand-built plans.
+    const auto elapsed =
+        static_cast<long double>(*frame) - static_cast<long double>(source.startFrame);
+    // 2^63 is exactly representable even where long double is only double (MSVC),
+    // unlike INT64_MAX which rounds up there. The upper bound is exclusive.
+    if (elapsed < -9223372036854775808.0L || elapsed >= 9223372036854775808.0L) {
+        choice.warning = "Sequence time exceeds the frame range";
+        return choice;
+    }
+    const auto signedOffset = static_cast<std::int64_t>(elapsed);
+    std::uint64_t offset = 0;
+    if (signedOffset >= 0) {
+        offset = static_cast<std::uint64_t>(signedOffset);
+        if (source.loopMode == 1)
+            offset %= length;
+        else if (source.loopMode == 2 && length > 1) {
+            const auto period = 2 * (length - 1);
+            offset %= period;
+            if (offset >= length)
+                offset = period - offset;
+        } else
+            offset = std::min(offset, length - 1);
+    }
+    const auto wanted =
+        static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + offset);
+    auto found = std::ranges::upper_bound(asset.manifest.members, wanted, {},
+                                          &document::AssetSequenceMember::frame);
+    if (found != asset.manifest.members.begin())
+        --found;
+    choice.member = &*found;
+    return choice;
+}
+} // namespace
+
+std::string imageSourceRevisionKey(const core::Sha256Digest& digest,
+                                   const document::AssetLocator& locator,
+                                   const std::filesystem::path& base) {
+    OperationKey revisionKey;
+    revisionKey.add(std::string{"immutable-image-source-v1"});
+    const auto digestHex = digest.toLowercaseHex();
+    revisionKey.add(std::string(digestHex.begin(), digestHex.end()));
+    revisionKey.add(locator.path);
+    revisionKey.add(locator.relinkHint);
+    const auto baseUtf8 = base.generic_u8string();
+    revisionKey.add(std::string(reinterpret_cast<const char*>(baseUtf8.data()), baseUtf8.size()));
+    return revisionKey.bytes();
+}
+
+std::vector<ImageSourceReadAheadTarget>
+imageSequenceReadAheadTargets(const CompiledImageSource& source, const core::RationalTime time,
+                              const document::FrameRate rate, const std::filesystem::path& base,
+                              const std::size_t frames) {
+    std::vector<ImageSourceReadAheadTarget> targets;
+    if (!source.asset || source.asset->kind != document::AssetKind::Sequence || frames == 0)
+        return targets;
+    const auto current = selectSequenceMember(source, time, rate).member;
+    const auto frame = valueGraphFrameIndex(time, rate);
+    if (!frame || *frame > std::numeric_limits<std::int64_t>::max() / 2)
+        return targets;
+    for (std::size_t index = 1; index <= frames; ++index) {
+        const auto next =
+            core::RationalTime::create((*frame + static_cast<std::int64_t>(index)) *
+                                           static_cast<std::int64_t>(rate.denominator()),
+                                       static_cast<std::int64_t>(rate.numerator()));
+        if (!next)
+            break;
+        const auto* member = selectSequenceMember(source, *next, rate).member;
+        if (!member || member == current)
+            continue;
+        auto key = imageSourceRevisionKey(member->contentDigest, member->locator, base);
+        if (std::ranges::any_of(targets,
+                                [&key](const auto& target) { return target.revisionKey == key; }))
+            continue;
+        targets.push_back({.path = media::resolveImagePath(member->locator.path,
+                                                           member->locator.relinkHint, base),
+                           .digest = member->contentDigest,
+                           .revisionKey = std::move(key)});
+    }
+    return targets;
+}
+
 ImageSourceSelection
 selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                   document::FrameRate rate, const std::filesystem::path& base,
@@ -32,56 +131,18 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     selected.digest = asset.contentDigest;
     std::int64_t memberFrame = 0;
     if (asset.kind == document::AssetKind::Sequence) {
-        const auto frame = valueGraphFrameIndex(time, rate);
-        if (!frame || asset.manifest.members.empty()) {
-            selected.warning = "Sequence time is outside the supported range";
+        const auto member = selectSequenceMember(source, time, rate);
+        if (!member.member) {
+            selected.warning = member.warning;
             return selected;
         }
-        const auto length = static_cast<std::uint64_t>(asset.manifest.last) -
-                            static_cast<std::uint64_t>(asset.manifest.first) + 1;
-        // Long-double subtraction avoids signed overflow even for hostile hand-built plans.
-        const auto elapsed =
-            static_cast<long double>(*frame) - static_cast<long double>(source.startFrame);
-        // 2^63 is exactly representable even where long double is only double (MSVC),
-        // unlike INT64_MAX which rounds up there. The upper bound is exclusive.
-        if (elapsed < -9223372036854775808.0L || elapsed >= 9223372036854775808.0L) {
-            selected.warning = "Sequence time exceeds the frame range";
-            return selected;
-        }
-        const auto signedOffset = static_cast<std::int64_t>(elapsed);
-        std::uint64_t offset = 0;
-        if (signedOffset >= 0) {
-            offset = static_cast<std::uint64_t>(signedOffset);
-            if (source.loopMode == 1)
-                offset %= length;
-            else if (source.loopMode == 2 && length > 1) {
-                const auto period = 2 * (length - 1);
-                offset %= period;
-                if (offset >= length)
-                    offset = period - offset;
-            } else
-                offset = std::min(offset, length - 1);
-        }
-        const auto wanted =
-            static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + offset);
-        auto found = std::ranges::upper_bound(asset.manifest.members, wanted, {},
-                                              &document::AssetSequenceMember::frame);
-        if (found != asset.manifest.members.begin())
-            --found;
-        locator = &found->locator;
-        selected.digest = found->contentDigest;
-        memberFrame = found->frame;
+        locator = &member.member->locator;
+        selected.digest = member.member->contentDigest;
+        memberFrame = member.member->frame;
         if (asset.manifest.hasGaps())
             selected.warning = "Sequence gaps hold the preceding frame";
     }
-    OperationKey revisionKey;
-    revisionKey.add(std::string{"immutable-image-source-v1"});
-    const auto digestHex = selected.digest.toLowercaseHex();
-    revisionKey.add(std::string(digestHex.begin(), digestHex.end()));
-    revisionKey.add(locator->path);
-    revisionKey.add(locator->relinkHint);
-    const auto baseUtf8 = base.generic_u8string();
-    revisionKey.add(std::string(reinterpret_cast<const char*>(baseUtf8.data()), baseUtf8.size()));
+    const auto revisionKeyText = imageSourceRevisionKey(selected.digest, *locator, base);
     const auto revisionGeneration =
         revisionCache ? std::optional{revisionCache->decodedMediaGeneration()} : std::nullopt;
     if (cancel.isCancellationRequested()) {
@@ -89,7 +150,7 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
         return selected;
     }
     if (revisionCache) {
-        if (const auto cached = revisionCache->find(revisionKey.bytes(), document::Revision{});
+        if (const auto cached = revisionCache->find(revisionKeyText, document::Revision{});
             cached && cached->sourceRevision &&
             cached->sourceRevision->retainedBytes() < hostByteBudget) {
             if (revisionPolicy == MediaSourceRevisionPolicy::Retained) {
@@ -119,7 +180,7 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
         selected.budgetExceeded = !selected.sourceRevision &&
                                   capture.code == media::ImageDiagnosticCode::PixelBudgetExceeded;
         if (selected.sourceRevision && revisionCache && allowRevisionInsertion)
-            revisionCache->store(revisionKey.bytes(), document::Revision{},
+            revisionCache->store(revisionKeyText, document::Revision{},
                                  {.image = {},
                                   .values = {},
                                   .bounds = {},

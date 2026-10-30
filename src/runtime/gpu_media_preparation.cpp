@@ -1,6 +1,7 @@
 #include "gpu_media_preparation.hpp"
 #include "channel_shuffle.hpp"
 #include "cryptomatte.hpp"
+#include <bloom/runtime/image_sequence_read_ahead.hpp>
 
 #include "image_source.hpp"
 #include "input_color_context.hpp"
@@ -32,6 +33,7 @@ GpuSceneMediaContext GpuSceneMediaContext::fromEvaluator(const CpuCompositionEva
     context.videoContext = evaluator.videoContext();
     context.assetBaseDirectory = evaluator.assetBaseDirectory();
     context.mediaDiskCache = evaluator.mediaDiskCache();
+    context.sequenceReadAhead = evaluator.sequenceReadAhead();
     // Only an explicitly bound pool supplies rooted retention. Unbound legacy evaluators
     // render normally without optional preparation retention.
     if (context.operationCache && context.operationCache->preparedUploadsBound())
@@ -142,6 +144,32 @@ void addPixelAspect(OperationKey& key, const core::PixelAspectRatio ratio) {
 [[nodiscard]] std::size_t byteBudget(const std::uint64_t pixels) {
     return static_cast<std::size_t>(
         std::min<std::uint64_t>(pixels, std::numeric_limits<std::size_t>::max()));
+}
+
+// Composition frames of image-sequence files captured ahead of the frame being prepared.
+constexpr std::size_t kSequenceReadAheadFrames = 8;
+
+// Queues the next sequence members after a verified selection, so their reads overlap this frame.
+void requestSequenceReadAhead(const CompiledImageSource& source, const EvaluationRequest& request,
+                              const CompiledCompositionPlan& plan,
+                              const GpuSceneMediaContext& context,
+                              const ImageSourceSelection& selection, const bool explicitBypass,
+                              const bool planBypass) {
+    if (!context.sequenceReadAhead || !context.operationCache || explicitBypass || planBypass ||
+        !selection.available || !source.asset ||
+        source.asset->kind != document::AssetKind::Sequence)
+        return;
+    auto targets =
+        imageSequenceReadAheadTargets(source, request.time, plan.format().frameRate(),
+                                      context.assetBaseDirectory, kSequenceReadAheadFrames);
+    std::vector<ImageSequenceReadAhead::Request> requests;
+    requests.reserve(targets.size());
+    for (auto& target : targets)
+        requests.push_back({.path = std::move(target.path),
+                            .digest = target.digest,
+                            .revisionKey = std::move(target.revisionKey),
+                            .byteBudget = byteBudget(request.pixelStorageByteLimit)});
+    context.sequenceReadAhead->request(context.operationCache, std::move(requests));
 }
 
 [[nodiscard]] bool resolvedProxyIsUnit(const ResolvedEvaluation& resolved) {
@@ -379,6 +407,7 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
             : request.mediaSourceRevisionPolicy,
         byteBudget(request.pixelStorageByteLimit), !planBypass);
     recordSourceRevisionWork(selection, statistics);
+    requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass);
     if (selection.cancelled) {
         MediaUploadOutcome outcome;
         outcome.cancelled = true;
@@ -451,6 +480,7 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
             : request.mediaSourceRevisionPolicy,
         byteBudget(request.pixelStorageByteLimit), !planBypass);
     recordSourceRevisionWork(selection, statistics);
+    requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass);
     if (selection.cancelled) {
         ++statistics.imageSources;
         MediaUploadOutcome outcome;
@@ -634,9 +664,9 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
             outcome.failure = "A new shuffle backing exceeds the remaining source allowance";
             return outcome;
         }
-        auto image = evaluateChannelShuffle(selection, resolved.imageDescriptor,
-                                            resolved.horizontalScale, resolved.verticalScale,
-                                            byteBudget(pixelBudget), cancellation);
+        auto image =
+            evaluateChannelShuffle(selection, resolved.imageDescriptor, resolved.horizontalScale,
+                                   resolved.verticalScale, byteBudget(pixelBudget), cancellation);
         addMediaWork(statistics.imageRepairedPixels, image.repairedPixels);
         ++statistics.imageConversions;
         if (image.cancelled) {
@@ -646,8 +676,8 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
         if (!image.value.has_value()) {
             if (image.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
                 outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
-            outcome.failure = image.diagnostic.empty() ? "Shuffle could not be evaluated"
-                                                       : image.diagnostic;
+            outcome.failure =
+                image.diagnostic.empty() ? "Shuffle could not be evaluated" : image.diagnostic;
             return outcome;
         }
         outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(*image.value));
@@ -679,8 +709,8 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
             outcome.failure = "A new raw shuffle backing exceeds the remaining source allowance";
             return outcome;
         }
-        auto gathered = gatherChannelShuffle(selection, false, byteBudget(pixelBudget),
-                                             cancellation);
+        auto gathered =
+            gatherChannelShuffle(selection, false, byteBudget(pixelBudget), cancellation);
         addMediaWork(statistics.imageRepairedPixels, gathered.repairedPixels);
         ++statistics.imageConversions;
         if (gathered.cancelled) {
@@ -887,9 +917,8 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
     outcome.uploadDescriptor = *uploadDescriptor;
     outcome.uploadSemanticKey = rawUploadCommandKey(backingKey, *uploadDescriptor);
     outcome.semanticKey = outcome.uploadSemanticKey;
-    outcome.cryptomatte =
-        MediaCryptomattePlan{*matteDescriptor.value(), rankCount, std::move(*ids),
-                             cryptomatte.preview};
+    outcome.cryptomatte = MediaCryptomattePlan{*matteDescriptor.value(), rankCount, std::move(*ids),
+                                               cryptomatte.preview};
     if (!resolvedProxyIsUnit(resolved)) {
         const auto proxyDescriptor = proxyOutputDescriptor(*matteDescriptor.value(), resolved);
         if (!proxyDescriptor.has_value()) {

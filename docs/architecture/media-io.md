@@ -626,6 +626,17 @@ identical, the recorded digest stands for the bytes; any difference forces a ful
 changed digest still reports `SourceChanged` and the relink diagnostic. A pathname or size alone
 never proves content. Whole-file reads are counted by `platform::sourceReadWork()`.
 
+**Image-sequence read-ahead.** Each evaluator owns a `runtime::ImageSequenceReadAhead`, carried
+in its `GpuSceneMediaContext`, so preview, playback and export requests sharing the evaluator
+share it. When GPU scene preparation verifies a sequence member, it queues the distinct members the
+next eight composition frames select (start frame, loop mode and gap hold included). Four I/O
+workers capture them as ordinary verified revisions under the same revision-cache keys, so a later
+selection reuses them after the usual identity observation and reads nothing itself. Several reads
+stay outstanding, which is what a network share needs: on an SMB share measured at 61-66 MB/s with
+one reader, four and eight concurrent readers reached 75-82 MB/s. Read-ahead never evicts; a file
+that does not fit the cache's free budget, or one already cached, queued or in flight, is skipped.
+Destroying the evaluator cancels outstanding captures and joins the workers.
+
 `EvaluationRequest::mediaSourceRevisionPolicy` defaults to `Revalidate`: source verification
 precedes CPU operation memoization and GPU prepared-upload lookup, including nested evaluation. A
 retained still revision is reused under `Revalidate` only after an identity observation of the

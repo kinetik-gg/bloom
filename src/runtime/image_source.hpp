@@ -6,7 +6,9 @@
 #include <bloom/runtime/operation_cache.hpp>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace bloom::media::cache {
 class MediaDiskCache;
@@ -43,6 +45,22 @@ struct ImageSourceSelection {
     std::shared_ptr<const media::ImageSourceRevision> sourceRevision;
     bool retainedRevision = false;
 };
+// The revision-cache key of one immutable image file (selectImageSource stores captures under it).
+[[nodiscard]] std::string imageSourceRevisionKey(const core::Sha256Digest& digest,
+                                                 const document::AssetLocator& locator,
+                                                 const std::filesystem::path& base);
+// One sequence member file to capture ahead of need.
+struct ImageSourceReadAheadTarget final {
+    std::filesystem::path path;
+    core::Sha256Digest digest;
+    std::string revisionKey;
+};
+// The distinct sequence members the next `frames` composition frames after `time` select (start
+// frame, loop mode and gap hold included), excluding the member `time` itself selects.
+[[nodiscard]] std::vector<ImageSourceReadAheadTarget>
+imageSequenceReadAheadTargets(const CompiledImageSource& source, core::RationalTime time,
+                              document::FrameRate rate, const std::filesystem::path& base,
+                              std::size_t frames);
 [[nodiscard]] ImageSourceSelection selectImageSource(
     const CompiledImageSource& source, core::RationalTime time, document::FrameRate rate,
     const std::filesystem::path& base, const CancellationToken& cancel,
