@@ -87,7 +87,7 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
     if (operations.empty() || operations.size() > kGpuOperationBatchCapacity ||
         (operations.size() == 1 && !std::holds_alternative<GpuBatchGradient>(operations.front()))) {
         fail(GpuOperationBatchCode::InvalidRequest,
-             "native batch requires two to eight operations, or one gradient");
+             "native batch requires two to sixty-four operations, or one gradient");
         return false;
     }
     const auto resolve = [this](const GpuBatchImageRef& ref, const std::uint32_t index,

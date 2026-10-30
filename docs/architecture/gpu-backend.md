@@ -725,9 +725,12 @@ synchronous fence wait hidden inside a task function is not a valid interim impl
 
 ### Bounded Native Command Batches
 
-The production scene executor records two to eight consecutive eligible Solid, translation,
-affine and source-over kernels into one command buffer with explicit dependencies and one fence.
-Other kernels delimit those runs and retain their existing native paths. Inputs may reference
+The production scene executor records two to sixty-four consecutive eligible Solid, gradient,
+translation, affine and source-over kernels into one command buffer with explicit dependencies and
+one fence. Other kernels (upload, blur and OCIO programs, blend, coverage, point resample) delimit
+those runs and keep one submission and fence each. Between steps neither owner waits on a clock:
+the preview service and the export evaluator start the next step as soon as a poll made progress
+and wait 50 microseconds only while a fence is pending. Inputs may reference
 earlier batch outputs or Ready images from the exact device generation; every GPU status word is
 validated before outputs leave the native batch owner.
 
