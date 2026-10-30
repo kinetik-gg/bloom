@@ -17,6 +17,7 @@
 
 namespace bloom::host {
 class ExportQueueService;
+class GpuExportProvider;
 } // namespace bloom::host
 namespace bloom::runtime {
 class TaskScheduler;
@@ -50,14 +51,36 @@ namespace bloom::mcp {
 using McpSessionSource = std::variant<std::reference_wrapper<scripting::Session>,
                                       std::reference_wrapper<scripting::LiveSessionHost>>;
 
+// How the core reaches the one export queue (ADR 0033). Export queue commands are owner-thread
+// calls, so the core never calls the queue directly from a request worker: it hands `run` a
+// function that executes on the queue's owner thread with the current queue (null while none is
+// bound, for example while File > New replaces it) and that queue's generation, which advances
+// whenever the queue is replaced.
+// - stdio: the calling thread owns its headless queue, so `run` calls the function inline and
+//   `callerIsOwner` is set; a waiting task tool then pumps the queue itself.
+// - desktop: McpServerService marshals the function to the UI thread through its pump(), and a
+//   waiting task tool sleeps on the queue's ExportQueueSubscription.
+struct McpExportAccess final {
+    using Work = std::function<void(host::ExportQueueService*, std::uint64_t generation)>;
+    // Returns false when the function could not run (the request stopped, or the server is
+    // stopping); the function then never runs.
+    std::function<bool(const Work&, const std::stop_token&)> run;
+    bool callerIsOwner = false;
+};
+
 // Borrowed collaborators; all must outlive the core.
 struct McpCoreDependencies final {
     McpSessionSource session;
-    // The one export runner (ADR 0033): render, export and capture are transient queue jobs, and
-    // the export.* tools are its session calls. The stdio host constructs a headless service over
-    // its own session exactly as bloom-cli export does.
-    host::ExportQueueService& exports;
+    // The export.* tools are the queue's session calls; on the live host render, export and
+    // capture are transient queue jobs (ADR 0033 section 13). The stdio host's render and export
+    // keep the scripting render path (scripting::Render::run and the sequence runner) and its
+    // capture renders the still route there.
+    McpExportAccess exports;
     runtime::TaskScheduler& scheduler;
+    // stdio: the server-lifetime GPU final-render provider that render and capture reuse (the
+    // composition root shares it with its headless export queue and retires it after the core).
+    // The live host renders through the export queue, which owns its provider; leave it null.
+    std::shared_ptr<host::GpuExportProvider> gpuProvider;
     // Where capture publishes its PNG before embedding it: a per-user cache folder (desktop:
     // <user cache>/mcp-captures; stdio: the same). Empty makes capture answer ExportUnavailable
     // with the reason "Bloom can't find a folder for captures." At most kMcpRetainedCaptures files
@@ -198,6 +221,15 @@ class McpServerCore final {
     // The tools/list payload's tool names in listing order (schemas come from the registry and
     // the export queue's vocabularies). Any thread.
     [[nodiscard]] std::span<const McpTool> tools() const noexcept;
+
+    // The live host: follow the live session's current generation's command events (the service
+    // calls it from pump() so events after a replacement are kept from the start). Any thread.
+    void followLiveSession();
+
+    struct State;
+
+  private:
+    std::unique_ptr<State> state_;
 };
 
 // The stdio transport (newline-delimited UTF-8 JSON-RPC on the given streams), moved unchanged from

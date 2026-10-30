@@ -1,4 +1,8 @@
-#include "server.hpp"
+// The document tools both hosts share: query, transact, history and events (moved from
+// apps/bloom-mcp/tools.cpp and server.cpp).
+#include "core_internal.hpp"
+
+#include <bloom/scripting/operation_registry.hpp>
 
 #include <algorithm>
 #include <array>
@@ -226,22 +230,69 @@ yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result) 
     return value;
 }
 
-yyjson_mut_val* Server::transact(Json& out, yyjson_val* arguments) {
+namespace {
+
+// The live host's refusal codes, as MCP tool errors.
+void throwLiveRefusal(const scripting::SessionCommandResult& result) {
+    if (!result.diagnostic)
+        return;
+    const auto& code = result.diagnostic->code;
+    using scripting::LiveCommitStatus;
+    const auto is = [&](const LiveCommitStatus status) {
+        return code == scripting::liveCommitDiagnosticCode(status);
+    };
+    if (is(LiveCommitStatus::QueueFull))
+        throw ToolFailure(McpToolErrorCode::CommitQueueFull,
+                          "Bloom has too many edits waiting; nothing was queued.");
+    if (is(LiveCommitStatus::ProjectReplaced))
+        throw ToolFailure(McpToolErrorCode::ProjectReplaced,
+                          "The project was replaced; nothing was applied.");
+    if (is(LiveCommitStatus::Cancelled) || is(LiveCommitStatus::ShuttingDown))
+        throw ToolFailure(McpToolErrorCode::Cancelled,
+                          "The request was cancelled; nothing was applied.");
+    if (is(LiveCommitStatus::DeadlineExceeded))
+        throw ToolFailure(McpToolErrorCode::DeadlineExceeded,
+                          "Bloom was busy past the request's deadline; nothing was applied.");
+    if (is(LiveCommitStatus::GestureOpen))
+        throw ToolFailure(McpToolErrorCode::GestureOpen,
+                          "The artist kept an edit open past the deadline; nothing was applied.");
+}
+
+// A command the session could not run at all.
+void throwUnavailable(const McpCall& call, const scripting::SessionCommandResult& result) {
+    throwLiveRefusal(result);
+    if (call.lease != nullptr && call.lease->revoked())
+        throw ToolFailure(McpToolErrorCode::ProjectReplaced,
+                          "The project was replaced; nothing was applied.");
+    if (result.status == host::ProjectSessionCommandStatus::ReadOnly)
+        throw ToolFailure(McpToolErrorCode::ReadOnly, "The project is read-only.");
+    throw std::runtime_error("The session cannot edit");
+}
+
+} // namespace
+
+yyjson_mut_val* transactTool(McpServerCore::State&, Json& out, McpCall& call,
+                             yyjson_val* arguments) {
     members(arguments, {"expectedRevision", "operations", "label"},
             {"expectedRevision", "operations"});
     const auto revision = integer(member(arguments, "expectedRevision"));
-    const auto label =
-        member(arguments, "label") ? string(member(arguments, "label")) : "MCP transaction";
+    const auto label = member(arguments, "label") ? string(member(arguments, "label"))
+                       : call.live != nullptr     ? "Agent edit"
+                                                  : "MCP transaction";
     auto* operations = member(arguments, "operations");
     if (!yyjson_is_arr(operations) || yyjson_arr_size(operations) == 0)
         throw InvalidInput("Expected operations");
     commands::Transaction transaction(label, document::Revision::fromRaw(revision));
-    const auto context = session_->operationContext();
+    const auto& context = call.context;
+    const auto& registry = call.session.operations();
+    std::string operationIds;
     yyjson_arr_iter iterator = yyjson_arr_iter_with(operations);
     while (auto* operation = yyjson_arr_iter_next(&iterator)) {
         members(operation, {"op", "args"}, {"op", "args"});
         const auto id = string(member(operation, "op"), 128);
-        const auto* descriptor = facade_.operations.find(id);
+        const auto* descriptor = registry.find(id);
+        if (operationIds.size() < 200)
+            operationIds += (operationIds.empty() ? "" : ",") + id;
         if (!descriptor)
             throw InvalidInput("Unknown operation ID");
         auto* args = member(operation, "args");
@@ -266,7 +317,7 @@ yyjson_mut_val* Server::transact(Json& out, yyjson_val* arguments) {
                                      ? scripting::Value(scripting::StableId{integer(item)})
                                      : value(item));
         }
-        auto created = facade_.operations.create(id, std::move(values), context);
+        auto created = registry.create(id, std::move(values), context);
         if (!created) {
             auto* result = out.object();
             out.set(result, "succeeded", out.boolean(false));
@@ -283,15 +334,119 @@ yyjson_mut_val* Server::transact(Json& out, yyjson_val* arguments) {
         if (!transaction.add(std::move(created).takeOperation()))
             throw InvalidInput("Invalid operation");
     }
-    if (cancellationRequested_.load())
+    call.summary = operationIds + " \"" + std::string(label.substr(0, 64)) + "\"";
+    if (call.control.stop.stop_requested())
         throw std::runtime_error("Request cancelled");
-    const auto result = session_->execute(std::move(transaction));
+    const auto result = call.session.execute(std::move(transaction));
     if (!result.command)
-        throw std::runtime_error("The session cannot edit");
+        throwUnavailable(call, result);
     return commandResult(out, *result.command);
 }
 
-yyjson_mut_val* Server::query(Json& out, yyjson_val* arguments) {
+yyjson_mut_val* historyTool(McpServerCore::State&, Json& out, McpCall& call,
+                            yyjson_val* arguments) {
+    members(arguments, {"action", "expectedRevision"}, {"action", "expectedRevision"});
+    const auto action = string(member(arguments, "action"), 8);
+    if (action != "undo" && action != "redo")
+        throw InvalidInput("History action is undo or redo");
+    const bool redo = action == "redo";
+    const auto expected =
+        document::Revision::fromRaw(integer(member(arguments, "expectedRevision")));
+    call.summary = action;
+    scripting::SessionCommandResult result;
+    if (call.lease != nullptr) {
+        result = call.lease->history(redo, expected);
+    } else if (call.session.snapshot().revision() != expected) {
+        commands::CommandResult stale;
+        stale.action = redo ? commands::CommandAction::Redo : commands::CommandAction::Undo;
+        stale.status = commands::CommandStatus::StaleRevision;
+        stale.beforeRevision = call.session.snapshot().revision();
+        stale.afterRevision = stale.beforeRevision;
+        stale.expectedRevision = expected;
+        return commandResult(out, stale);
+    } else {
+        result = redo ? call.session.redo() : call.session.undo();
+    }
+    if (!result.command)
+        throwUnavailable(call, result);
+    return commandResult(out, *result.command);
+}
+
+yyjson_mut_val* eventsTool(McpServerCore::State& core, Json& out, McpCall& call,
+                           yyjson_val* arguments) {
+    members(arguments, {"sinceRevision", "afterSequence"}, {"sinceRevision"});
+    const auto since = integer(member(arguments, "sinceRevision"));
+    const auto after =
+        member(arguments, "afterSequence") ? integer(member(arguments, "afterSequence")) : 0;
+    const auto revision = call.session.snapshot().revision().value();
+    const std::lock_guard lock(core.eventsMutex);
+    // A cursor from before the live project was replaced must start again.
+    const bool replaced = core.replaced && after < core.resetSequence;
+    if (!replaced && (since > revision || after > core.sequence))
+        throw InvalidInput("Event cursor is in the future");
+    auto* result = out.object();
+    out.set(result, "revision", out.number(revision));
+    out.set(result, "sequence", out.number(core.sequence));
+    const auto& events = core.events;
+    out.set(result, "resetRequired",
+            out.boolean(replaced || (!events.empty() && events.front().first > 1 &&
+                                     after < events.front().first - 1 &&
+                                     since <= events.front().second.result.afterRevision.value())));
+    auto* list = out.array();
+    constexpr std::array<std::string_view, 3> names{"revision", "history", "rejected"};
+    for (const auto& [sequence, event] : events) {
+        if ((!replaced && sequence <= after) ||
+            (!replaced && event.result.afterRevision.value() < since))
+            continue;
+        auto* value = commandResult(out, event.result);
+        out.set(value, "sequence", out.number(sequence));
+        out.set(value, "kind", out.text(names.at(static_cast<std::size_t>(event.kind))));
+        out.append(list, value);
+    }
+    out.set(result, "events", list);
+    return result;
+}
+
+namespace {
+// query kind "context": the live editor context (or the headless session defaults).
+yyjson_mut_val* contextProjection(Json& out, McpCall& call, const document::Snapshot& snapshot) {
+    auto* result = out.object();
+    out.set(result, "revision", out.number(snapshot.revision().value()));
+    out.set(result, "live", out.boolean(call.live != nullptr));
+    auto* project = out.object();
+    out.set(project, "id", out.number(snapshot.project().id().value()));
+    out.set(project, "name", out.text(snapshot.project().name()));
+    out.set(result, "project", project);
+    const auto& context = call.context;
+    out.set(result, "composition",
+            context.composition ? out.number(*context.composition) : out.null());
+    auto* selection = out.array();
+    for (const auto node : context.selection)
+        out.append(selection, out.number(node));
+    out.set(result, "selectedNodes", selection);
+    auto* layers = out.array();
+    for (const auto layer : context.layers)
+        out.append(layers, out.number(layer));
+    out.set(result, "selectedLayers", layers);
+    const auto time = context.time.value_or(core::RationalTime::fromInteger(0));
+    auto* timeValue = out.array();
+    out.append(timeValue, out.signedNumber(time.numerator()));
+    out.append(timeValue, out.signedNumber(time.denominator()));
+    out.set(result, "time", timeValue);
+    // The Viewer's display and view; empty means the project's default display and view.
+    out.set(result, "display", out.text(call.live ? call.live->viewerDisplay : std::string{}));
+    out.set(result, "view", out.text(call.live ? call.live->viewerView : std::string{}));
+    out.set(result, "readOnly",
+            out.boolean(call.live ? call.live->readOnly
+                                  : call.session.state().contentKind ==
+                                        host::ProjectSessionContentKind::PreservedReadOnly));
+    return result;
+}
+} // namespace
+
+yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
+                          yyjson_val* arguments) {
+    const auto sessionToken = core.cursorToken ^ (call.generation * 0x9e3779b97f4a7c15ULL);
     members(arguments,
             {"kind", "composition", "pageSize", "cursor", "parameter", "expectedRevision", "offset",
              "limit"},
@@ -311,7 +466,9 @@ yyjson_mut_val* Server::query(Json& out, yyjson_val* arguments) {
          member(arguments, "limit")) &&
         !individualParameter)
         throw InvalidInput("Unexpected parameter fetch option");
-    const auto snapshot = facade_.query.snapshot();
+    const auto snapshot = call.session.snapshot();
+    if (kind == "context")
+        return contextProjection(out, call, snapshot);
     auto* result = out.object();
     out.set(result, "revision", out.number(snapshot.revision().value()));
     if (kind == "project") {
@@ -379,7 +536,7 @@ yyjson_mut_val* Server::query(Json& out, yyjson_val* arguments) {
     }
     auto* records = out.array();
     if (kind == "operations") {
-        for (const auto& descriptor : facade_.operations.descriptors()) {
+        for (const auto& descriptor : call.session.operations().descriptors()) {
             auto* record = out.object();
             out.set(record, "id", out.text(descriptor.schema.typeId));
             auto* schema = out.array();
@@ -412,7 +569,7 @@ yyjson_mut_val* Server::query(Json& out, yyjson_val* arguments) {
             out.append(records, record);
         }
     } else if (kind == "assets") {
-        for (const auto& asset : facade_.query.assets()) {
+        for (const auto& asset : snapshot.project().assets()) {
             auto* record = out.object();
             out.set(record, "id", out.number(asset.id.value()));
             out.set(record, "name", out.text(asset.name));
@@ -454,7 +611,7 @@ yyjson_mut_val* Server::query(Json& out, yyjson_val* arguments) {
             const auto parameters = composition->parameters().records();
             const auto offset =
                 member(arguments, "cursor")
-                    ? parseParameterCursor(string(member(arguments, "cursor"), 160), sessionToken_,
+                    ? parseParameterCursor(string(member(arguments, "cursor"), 160), sessionToken,
                                            snapshot.project().id().value(), id,
                                            snapshot.revision().value(), parameters.size())
                     : 0;
@@ -463,7 +620,7 @@ yyjson_mut_val* Server::query(Json& out, yyjson_val* arguments) {
                 out.append(records, parameterSummary(out, parameters[index]));
             out.set(result, "nextCursor",
                     end < parameters.size()
-                        ? out.text(parameterCursor(sessionToken_, snapshot.project().id().value(),
+                        ? out.text(parameterCursor(sessionToken, snapshot.project().id().value(),
                                                    id, snapshot.revision().value(), end))
                         : out.null());
             out.set(result, "totalRecords", out.number(parameters.size()));

@@ -1,4 +1,5 @@
-#include "server.hpp"
+// Parameter projections shared by both hosts (moved from apps/bloom-mcp).
+#include "core_internal.hpp"
 
 #include <type_traits>
 
@@ -110,5 +111,31 @@ yyjson_mut_val* parameterSummary(Json& out, const document::ParameterRecord& val
         },
         value.source);
     return record;
+}
+std::string base64(const std::span<const std::byte> bytes) {
+    constexpr std::string_view alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((bytes.size() + 2) / 3 * 4);
+    std::size_t index = 0;
+    for (; index + 3 <= bytes.size(); index += 3) {
+        const auto value = (std::to_integer<unsigned>(bytes[index]) << 16U) |
+                           (std::to_integer<unsigned>(bytes[index + 1]) << 8U) |
+                           std::to_integer<unsigned>(bytes[index + 2]);
+        out.push_back(alphabet[(value >> 18U) & 63U]);
+        out.push_back(alphabet[(value >> 12U) & 63U]);
+        out.push_back(alphabet[(value >> 6U) & 63U]);
+        out.push_back(alphabet[value & 63U]);
+    }
+    if (const auto left = bytes.size() - index; left > 0) {
+        auto value = std::to_integer<unsigned>(bytes[index]) << 16U;
+        if (left == 2)
+            value |= std::to_integer<unsigned>(bytes[index + 1]) << 8U;
+        out.push_back(alphabet[(value >> 18U) & 63U]);
+        out.push_back(alphabet[(value >> 12U) & 63U]);
+        out.push_back(left == 2 ? alphabet[(value >> 6U) & 63U] : '=');
+        out.push_back('=');
+    }
+    return out;
 }
 } // namespace bloom::mcp

@@ -1,5 +1,7 @@
 """Drive the Qt-free MCP server through actual stdin/stdout pipes."""
+import base64
 import hashlib
+import os
 import json
 import pathlib
 import subprocess
@@ -10,6 +12,10 @@ import unittest
 
 MCP, CLI = sys.argv[1:3]
 del sys.argv[1:3]
+# Captures publish into the per-user cache; keep this test's out of the real one.
+CACHE = tempfile.TemporaryDirectory(prefix='bloom-mcp-cache-')
+os.environ['XDG_CACHE_HOME'] = CACHE.name
+os.environ['LOCALAPPDATA'] = CACHE.name
 
 
 def request(id, method, params=None):
@@ -201,8 +207,13 @@ class Protocol(unittest.TestCase):
             tool(7, 'events', {'sinceRevision': 0}),
             tool(8, 'query', {'kind': 'operations'})])
         self.assertEqual(responses[0]['result']['serverInfo']['name'], 'Bloom')
+        # ADR 0034: both hosts list the same tools; the original five keep their shapes.
         self.assertEqual({t['name'] for t in responses[1]['result']['tools']},
-                         {'query', 'transact', 'render', 'export', 'events'})
+                         {'query', 'transact', 'history', 'events', 'render', 'export',
+                          'capture', 'export.start', 'export.start-all', 'export.pause',
+                          'export.resume', 'export.stop', 'export.stop-all', 'export.retry',
+                          'export.confirm-replace', 'export.status', 'export.events',
+                          'export.log', 'export.wait', 'export.presets', 'export.script'})
         self.assertTrue(responses[2]['result']['structuredContent']['succeeded'])
         self.assertEqual(responses[3]['result']['structuredContent']['project']['name'], 'MCP')
         self.assertFalse(responses[4]['result']['structuredContent']['succeeded'])
@@ -248,6 +259,46 @@ class Protocol(unittest.TestCase):
         rejected = responses[4]['result']['structuredContent']
         self.assertFalse(rejected['succeeded'])
         self.assertIn('bloom.context', rejected['diagnostics'][0]['message'])
+
+    def test_context_history_capture_and_export_status(self):
+        """ADR 0034: the tools the in-app server added, on the headless session."""
+        responses = exchange([
+            INIT, READY,
+            tool(2, 'query', {'kind': 'context'}),
+            tool(3, 'transact', {'expectedRevision': 0, 'operations': [
+                {'op': 'bloom.project.set-name', 'args': {'name': 'Undo me'}}]}),
+            tool(4, 'history', {'action': 'undo', 'expectedRevision': 0}),
+            tool(5, 'history', {'action': 'undo', 'expectedRevision': 1}),
+            tool(6, 'query', {'kind': 'project'}),
+            tool(7, 'history', {'action': 'redo', 'expectedRevision': 2}),
+            tool(8, 'export.status', {}),
+            tool(9, 'export.presets', {}),
+            tool(10, 'capture', {'composition': 1, 'frame': 0})])
+        context = responses[1]['result']['structuredContent']
+        self.assertFalse(context['live'])
+        self.assertEqual(context['composition'], 1)
+        self.assertEqual(context['selectedNodes'], [])
+        self.assertEqual(context['time'], [0, 1])
+        stale = responses[3]['result']
+        self.assertTrue(stale['isError'])
+        self.assertEqual(stale['structuredContent']['diagnostics'][0]['code'],
+                         'bloom.scripting.stale-revision')
+        self.assertFalse(responses[4]['result']['isError'], responses[4])
+        self.assertEqual(responses[5]['result']['structuredContent']['project']['name'],
+                         'Untitled')
+        self.assertFalse(responses[6]['result']['isError'], responses[6])
+        status = responses[7]['result']
+        self.assertFalse(status['isError'], status)
+        self.assertEqual(status['structuredContent']['jobs'], [])
+        presets = responses[8]['result']['structuredContent']['presets']
+        self.assertTrue(any(preset['id'] == 'builtin:png-sequence' for preset in presets))
+        capture = responses[9]['result']
+        self.assertFalse(capture['isError'], capture)
+        image = capture['content'][0]
+        self.assertEqual(image['type'], 'image')
+        self.assertEqual(image['mimeType'], 'image/png')
+        self.assertTrue(base64.b64decode(image['data']).startswith(b'\x89PNG'))
+        self.assertTrue(capture['structuredContent']['inline'])
 
     def test_hostile_requests(self):
         hostile = [

@@ -1,6 +1,6 @@
-bloom_find_dependency(yyjson)
-add_executable(bloom-mcp main.cpp json.cpp server.cpp tools.cpp projections.cpp render.cpp tool_schemas.cpp transport.cpp)
-target_link_libraries(bloom-mcp PRIVATE bloom_scripting yyjson::yyjson)
+# ADR 0034: a thin composition root over the shared server core in src/mcp.
+add_executable(bloom-mcp main.cpp)
+target_link_libraries(bloom-mcp PRIVATE bloom_mcp)
 target_compile_definitions(bloom-mcp PRIVATE BLOOM_VERSION="${PROJECT_VERSION}")
 if(TARGET bloom-media-worker)
     add_dependencies(bloom-mcp bloom-media-worker)

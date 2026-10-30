@@ -57,7 +57,8 @@ enum class McpHttpMethod : std::uint8_t { Get, Post, Delete, Options, Other };
 
 struct McpHttpRequest final {
     McpHttpMethod method = McpHttpMethod::Other;
-    // The origin-form target, without query (a query string is a 404).
+    // The origin-form target exactly as sent; a query string makes it differ from the endpoint
+    // path, so it is a 404.
     std::string path;
     // Field names lower-cased; values trimmed; order kept; duplicates kept (admission rejects a
     // duplicate of any field it reads).
@@ -88,20 +89,46 @@ enum class McpHttpParseStatus : std::uint8_t {
 };
 
 // Incremental request parser for one connection. Feed bytes as they arrive; after Complete, take
-// the request and the parser is ready for the next one (pipelined bytes are kept). Any failure is
-// terminal for the connection: the server answers it and closes.
+// the request and the parser is ready for the next one (pipelined bytes are kept: feed an empty
+// span to parse them). Any failure is terminal for the connection: the server answers it and
+// closes, and every later feed() repeats the failure.
+//
+// Strict by design (a hostile-input surface): CRLF line endings only; no obsolete line folding;
+// field names are tokens with no whitespace before the colon; values carry no control characters
+// other than horizontal tab; Content-Length is decimal digits only; chunk sizes are bounded hex.
 class McpHttpRequestParser final {
   public:
     McpHttpRequestParser(McpHttpLimits limits, std::size_t bodyLimit);
     [[nodiscard]] McpHttpParseStatus feed(std::span<const char> bytes);
     [[nodiscard]] McpHttpRequest take();
+    // No buffered bytes and no request in progress (a keep-alive connection may idle out).
     [[nodiscard]] bool idle() const noexcept;
+    // The head is complete and the body is being read (the body deadline applies, not the head's).
+    [[nodiscard]] bool readingBody() const noexcept {
+        return phase_ == Phase::Body || phase_ == Phase::Chunked;
+    }
 
   private:
+    enum class Phase : std::uint8_t { Head, Body, Chunked, Done, Failed };
+    enum class ChunkStep : std::uint8_t { Size, Data, DataEnd, Trailer };
+    [[nodiscard]] McpHttpParseStatus advance();
+    [[nodiscard]] McpHttpParseStatus parseHead(std::string_view head);
+    [[nodiscard]] McpHttpParseStatus advanceChunked();
+    McpHttpParseStatus fail(McpHttpParseStatus status);
+
     McpHttpLimits limits_;
     std::size_t bodyLimit_ = 0;
     std::string buffer_;
-    std::size_t state_ = 0;
+    // Bytes of buffer_ consumed by the request in progress.
+    std::size_t consumed_ = 0;
+    // Where the search for the end of the head resumes.
+    std::size_t scanned_ = 0;
+    Phase phase_ = Phase::Head;
+    ChunkStep chunkStep_ = ChunkStep::Size;
+    std::size_t remaining_ = 0;
+    std::size_t trailerBytes_ = 0;
+    McpHttpParseStatus failure_ = McpHttpParseStatus::Malformed;
+    McpHttpRequest request_;
 };
 
 // Why a request is refused before it reaches the protocol core. Admission runs in this order, so a
@@ -198,6 +225,26 @@ struct McpHttpAdmissionPolicy final {
 [[nodiscard]] McpHttpRejection admitRequest(const McpHttpRequest& request,
                                             const McpHttpAdmissionPolicy& policy,
                                             std::string_view token) noexcept;
+
+// ---------------------------------------------------------------------------------------------
+// Responses (pure)
+
+// The status line's reason phrase for the statuses this server sends ("OK", "Not Found", ...).
+[[nodiscard]] std::string_view httpReasonPhrase(int status) noexcept;
+
+// A complete HTTP/1.1 response: status line, the given header fields, Content-Length (when
+// `body` is set) and the body. Never adds CORS headers. `headers` values must not contain CR or
+// LF; the caller only passes fixed or validated values.
+[[nodiscard]] std::string
+httpResponse(int status, std::span<const std::pair<std::string_view, std::string>> headers,
+             std::optional<std::string_view> body);
+
+// One server-sent event carrying one JSON-RPC message (`data: <json>` then a blank line). JSON
+// text contains no raw line breaks, so one data line carries the whole message.
+[[nodiscard]] std::string sseMessage(std::string_view json);
+
+// Unpadded base64url of `bytes` (RFC 4648 section 5), for the token. Pure.
+[[nodiscard]] std::string base64Url(std::span<const std::byte> bytes);
 
 // ---------------------------------------------------------------------------------------------
 // Sessions and tokens

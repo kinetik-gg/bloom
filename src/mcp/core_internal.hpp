@@ -1,0 +1,143 @@
+#pragma once
+
+// Private to src/mcp: the shared server core's state and the tool handlers both hosts use
+// (ADR 0034, section 2). Moved from apps/bloom-mcp/server.hpp.
+
+#include "json.hpp"
+
+#include <bloom/commands/command_stack.hpp>
+#include <bloom/host/export_queue.hpp>
+#include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/mcp/server_core.hpp>
+#include <bloom/scripting/events.hpp>
+#include <bloom/scripting/live_session_host.hpp>
+#include <bloom/scripting/session.hpp>
+
+#include <deque>
+#include <filesystem>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace bloom::mcp {
+
+// A tool failure with a stable code: structuredContent carries
+// {"succeeded": false, "diagnostic": {"code": "bloom.mcp.<...>", "message": ...}}. Uncoded
+// runtime failures keep the stdio server's existing {"diagnostic": "<message>"} shape.
+struct ToolFailure final : std::runtime_error {
+    ToolFailure(const McpToolErrorCode errorCode, const std::string& message,
+                std::string detailCode = {})
+        : std::runtime_error(message), code(errorCode), detail(std::move(detailCode)) {}
+    McpToolErrorCode code;
+    // The refusing collaborator's own code, e.g. the export queue's "PlatformNotSupported";
+    // published as diagnostic.detail when present.
+    std::string detail;
+};
+
+// What one tools/call works against.
+struct McpCall final {
+    scripting::Session& session;
+    // Contextual-argument defaults (the live editor context, or the headless session defaults).
+    scripting::OperationContext context;
+    // The live application's state at the start of the call; null for the stdio host.
+    const scripting::LiveSessionState* live = nullptr;
+    scripting::LiveSessionLease* lease = nullptr;
+    // Live generation (0 for stdio); paging cursors bind it.
+    std::uint64_t generation = 0;
+    const McpRequestControl& control;
+    // MCP content blocks placed before the text copy of structuredContent (capture's image or
+    // resource_link).
+    std::vector<yyjson_mut_val*> content;
+    // Activity facts: operation ids and label of a transact (never argument values).
+    std::string summary;
+    // A tool diagnostic that did not make the call an error (capture linked instead of inline).
+    std::optional<McpToolErrorCode> notice;
+};
+
+struct McpProtocolSession::State {
+    mutable std::mutex mutex;
+    bool initialized = false;
+    bool ready = false;
+    std::optional<McpClientInfo> client;
+};
+
+struct McpServerCore::State {
+    explicit State(McpCoreDependencies value);
+    ~State();
+    State(const State&) = delete;
+    State& operator=(const State&) = delete;
+
+    McpCoreDependencies dependencies;
+    // Paging cursors bind this per-process value, so a cursor never crosses servers.
+    std::uint64_t cursorToken = 0;
+
+    // Command events for the `events` tool (the newest retainedCommandEvents).
+    std::mutex subscriptionMutex;
+    scripting::Subscription subscription;
+    std::optional<std::uint64_t> eventGeneration;
+    mutable std::mutex eventsMutex;
+    std::deque<std::pair<std::uint64_t, commands::CommandEvent>> events;
+    std::uint64_t sequence = 0;
+    // The sequence when the live project was last replaced; an older cursor must reset.
+    std::uint64_t resetSequence = 0;
+    bool replaced = false;
+
+    // stdio only: the server-lifetime GPU final-render provider (McpCoreDependencies).
+    std::shared_ptr<host::GpuExportProvider> gpuExportProvider;
+
+    std::mutex captureMutex;
+    std::uint64_t captureCounter = 0;
+
+    [[nodiscard]] scripting::LiveSessionHost* liveHost() const noexcept;
+    // Follows the live session's current generation's command events (no-op for stdio).
+    void syncEvents();
+    void record(const commands::CommandEvent& event);
+};
+
+// ---- Projections (projections.cpp, tools_document.cpp)
+[[nodiscard]] yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result);
+[[nodiscard]] yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& value);
+[[nodiscard]] yyjson_mut_val* parameterSummary(Json& out, const document::ParameterRecord& value);
+[[nodiscard]] std::string digestFile(const std::filesystem::path& path);
+// Standard padded base64 (RFC 4648 section 4), for MCP image content.
+[[nodiscard]] std::string base64(std::span<const std::byte> bytes);
+
+// ---- Transient export queue jobs (tools_export.cpp)
+struct TransientResult final {
+    std::uint64_t frames = 0;
+    std::vector<std::filesystem::path> files;
+    std::string report;
+};
+// Submits a transient job on the export queue's owner thread, waits on the request worker
+// (reporting progress), stops the job when the request is cancelled, and acknowledges the result.
+// Throws ToolFailure on refusal, failure or cancellation.
+[[nodiscard]] TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
+                                              host::ExportTransientJobRequest request);
+// `path` as an export destination: absolute paths become external file URIs, relative paths stay
+// project-relative. `overwrite` is the tool's optional "ask"|"replace"|"refuse" argument; absent
+// means ask (nothing is replaced silently).
+[[nodiscard]] document::ExportDestination transientDestination(const std::string& path,
+                                                               yyjson_val* overwrite);
+
+// ---- Tools
+[[nodiscard]] yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
+                                        yyjson_val* arguments);
+[[nodiscard]] yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& call,
+                                           yyjson_val* arguments);
+[[nodiscard]] yyjson_mut_val* historyTool(McpServerCore::State& core, Json& out, McpCall& call,
+                                          yyjson_val* arguments);
+[[nodiscard]] yyjson_mut_val* eventsTool(McpServerCore::State& core, Json& out, McpCall& call,
+                                         yyjson_val* arguments);
+[[nodiscard]] yyjson_mut_val* renderTool(McpServerCore::State& core, Json& out, McpCall& call,
+                                         yyjson_val* arguments, bool compositionExport);
+[[nodiscard]] yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call,
+                                          yyjson_val* arguments);
+[[nodiscard]] yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out,
+                                                McpCall& call, McpTool tool, yyjson_val* arguments);
+[[nodiscard]] yyjson_mut_val* toolList(Json& out);
+
+} // namespace bloom::mcp
