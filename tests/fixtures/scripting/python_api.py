@@ -235,6 +235,36 @@ class PythonApi(unittest.TestCase):
             bloom.ops.layer.set_enabled(False)
         self.assertIn('bloom.context', str(error.exception))
 
+    def test_easing_and_layer_flags(self):
+        """Document 1.30: easing equations, Easy Ease and the shy flag through the registry."""
+        result = bloom.ops.layer.add_solid('Red', (1, 0, 0, 1))
+        layer = next(o['id'] for o in result['outputs'] if o['name'] == 'layer')
+        composition = bloom.context.composition
+        opacity = bloom.data.nodes(composition)[-1].parameters['opacity']
+        bloom.ops.animation.create_for_parameter(opacity, time=0)
+        bloom.ops.animation.set_keyframe_at_time_for_parameter(opacity, 0.0, time=0)
+        bloom.ops.animation.set_keyframe_at_time_for_parameter(opacity, 1.0, time=12)
+        curve = bloom.data.curves(composition)[-1]
+        key = curve.components[0][0]['id']
+        self.assertTrue(bloom.ops.animation.set_keyframes_easing(
+            keys=((int(curve), key),), interpolation='elastic', ease='out',
+            amplitude=2.0)['succeeded'])
+        row = bloom.data.curves(composition)[-1].components[0][0]
+        self.assertEqual((row['interpolation'], row['interpolation_name'], row['ease']),
+                         (12, 'elastic', 'out'))
+        self.assertEqual((row['amplitude'], row['back']), (2.0, 1.70158))
+        self.assertTrue(bloom.ops.animation.easy_ease(keys=((int(curve), key),))['succeeded'])
+        row = bloom.data.curves(composition)[-1].components[0][0]
+        self.assertEqual(row['interpolation_name'], 'ease-in-out')
+        self.assertTrue(bloom.ops.animation.set_keyframes_interpolation(
+            keys=((int(curve), key),), interpolation='constant')['succeeded'])
+        self.assertEqual(bloom.data.curves(composition)[-1].components[0][0]['interpolation'], 0)
+        found = bloom.data.layers(composition).get(layer)
+        self.assertFalse(found.shy)
+        self.assertFalse(found.name_follows_source)
+        self.assertTrue(bloom.ops.layer.set_shy(True, layer=layer)['succeeded'])
+        self.assertTrue(bloom.data.layers(composition).get(layer).shy)
+
     def test_align_and_distribute_layers(self):
         """ADR 0031: the ops measure the layers headlessly and move them in one undoable step."""
         layers = []
