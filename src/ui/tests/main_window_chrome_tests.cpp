@@ -1272,7 +1272,8 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
         return;
 
     const auto choose = [&](const QString& expectedConfig, const QString& expectedWorking,
-                            const QString& changeConfig = {}) {
+                            const QString& changeConfig = {},
+                            const QString& expectedWorkingLabel = {}) {
         QTimer::singleShot(0, &window, [&] {
             auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
             auto* config =
@@ -1287,6 +1288,10 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
                                     "colour settings: dialog opens on the saved intent");
                 if (!changeConfig.isEmpty())
                     config->setCurrentIndex(config->findData(changeConfig));
+                if (!expectedWorkingLabel.isEmpty())
+                    expectations.expect(
+                        working->currentText() == expectedWorkingLabel,
+                        "color settings: the working space reads by its label, not its id");
             }
             if (dialog)
                 dialog->accept();
@@ -1342,6 +1347,15 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
     expectations.expect(builtIn && builtIn->uri == bloom::color::kBloomNeutralV1ConfigUri &&
                             changed->processColorSpaceId == "lin_rec709_scene",
                         "colour settings: an explicit config choice updates the project");
+
+    // Bloom Neutral's working space reads "Linear Rec.709 (sRGB)" while the item data, and so the
+    // saved id, stays lin_rec709_scene: the dialog accepts unchanged and the project is unchanged.
+    const auto neutral = *fixture.projectHost.colorSettings();
+    choose("neutral", "lin_rec709_scene", {}, "Linear Rec.709 (sRGB)");
+    expectations.expect(*fixture.projectHost.colorSettings() == neutral &&
+                            fixture.projectHost.colorSettings()->processColorSpaceId ==
+                                "lin_rec709_scene",
+                        "color settings: the labelled Neutral working space saves its stored id");
 }
 
 } // namespace

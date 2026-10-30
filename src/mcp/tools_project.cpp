@@ -23,6 +23,8 @@ yyjson_mut_val* colorResult(Json& out, const std::string& code, const std::strin
         out.set(value, "config",
                 out.text(host::projectColorConfigName(host::projectColorConfigOf(*settings))));
         out.set(value, "workingSpace", out.text(settings->processColorSpaceId));
+        out.set(value, "workingSpaceLabel",
+                out.text(std::string(host::workingColorSpaceLabel(settings->processColorSpaceId))));
     }
     return value;
 }

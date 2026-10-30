@@ -4,6 +4,7 @@
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/document/color_settings.hpp>
+#include <bloom/host/project_color_choice.hpp>
 
 #include <bloom/document/graph.hpp>
 
@@ -68,18 +69,17 @@ std::vector<WorkingColorSpaceChoice>
 workingColorSpaceChoices(const document::ColorSettings& settings) {
     std::vector<WorkingColorSpaceChoice> choices{
         {QCoreApplication::translate("bloom::ui", "Inherit"), QString{}}};
-    const auto* builtIn =
-        std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
-    const bool aces = builtIn != nullptr && builtIn->uri == color::kAcesCgV1ConfigUri;
-    const std::array<std::string_view, 5> spaces =
-        aces ? std::array<std::string_view, 5>{"ACEScg", "ACES2065-1", "Linear Rec.709 (sRGB)",
-                                               "Linear P3-D65", "Linear Rec.2020"}
-             : std::array<std::string_view, 5>{settings.processColorSpaceId, {}, {}, {}, {}};
-    for (const auto id : spaces)
-        if (!id.empty()) {
-            const auto text = QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size()));
-            choices.push_back({text, text});
-        }
+    const auto add = [&choices](const std::string_view id) {
+        const auto label = host::workingColorSpaceLabel(id);
+        choices.push_back({QString::fromUtf8(label.data(), static_cast<qsizetype>(label.size())),
+                           QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size()))});
+    };
+    if (host::projectColorConfigOf(settings) == host::ProjectColorConfig::AcesCg) {
+        for (const auto id : host::projectWorkingColorSpaces(host::ProjectColorConfig::AcesCg))
+            add(id);
+    } else if (!settings.processColorSpaceId.empty()) {
+        add(settings.processColorSpaceId);
+    }
     return choices;
 }
 
