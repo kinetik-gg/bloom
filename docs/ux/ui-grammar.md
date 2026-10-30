@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-10-29
+Updated: 2026-10-30
 
 Bloom's mechanical interface contract is owned here and implemented by `src/ui/kit`.
 [ADR 0021](../decisions/0021-ui-grammar.md) records its rationale and extension procedure.
@@ -33,8 +33,25 @@ The panel switcher is the icon variant of **KDropdown**, with the same height, s
 interaction and popup. Menus are created only through `kit::makeMenu`. A popup is a
 `KPopupWindow` and a list in one is a `KPopupList` (dropdowns, the Add search, the colour picker);
 no surface positions, shadows or dismisses a popup of its own.
+Dialogs are `KDialog` and its forms: `kit::confirm`, `kit::inform`, `kit::promptText`,
+`kit::promptRange`, `kit::chooseFile` and the `KTaskDialog` progress-then-summary modal (see
+"Dialogs" below). The contextual bar under the menu bar is the `ContextBar`; the one active tool
+lives in the `ToolController`.
 Constructing QToolButton, QPushButton, QComboBox, QLineEdit, QCheckBox, QSlider,
-QLabel or QMenu outside the kit is a quality violation.
+QLabel, QMenu, QPlainTextEdit or QTextEdit outside the kit is a quality violation, and so is using
+QMessageBox, QInputDialog, QFileDialog, QColorDialog, QFontDialog, QDialogButtonBox, QSpinBox or
+QDoubleSpinBox anywhere outside the kit.
+
+## Escape confirms
+
+**Escape confirms everywhere.** This is the one statement of the rule; every other section and
+document refers here. Return, Escape, Tab and focus loss all commit typing and finish an inline
+edit; a pointer release or key release finishes a scrub or step; in the Viewer, Escape keeps what
+already exists (a shape, mask, path or text mid-gesture commits at its current state, a gizmo
+drag keeps the change made so far, a region-of-interest drag keeps its region) and returns to
+Select. Nothing is thrown away by Escape: discarding is Undo, one step per completed gesture.
+The only text that is refused is text that does not parse, carries another unit or falls outside
+the parameter's range, and that is refused by every key alike (see "Live Value Editing").
 
 ## Metric grid
 
@@ -222,7 +239,7 @@ away from new text) the Viewer returns to Select, for a new layer and for a new 
 layer alike. The next click outside therefore selects or deselects and never creates another
 object; drawing again means choosing the tool again. Each created object is exactly one undo entry.
 
-Escape confirms everywhere in the Viewer: it keeps what already exists, never throws work away,
+Escape confirms (see "Escape confirms") in the Viewer: it keeps what already exists, never throws work away,
 and then returns to Select. Discarding is Undo, one step per created or edited object.
 
 - A shape or mask mid-drag commits at its current size.
@@ -576,9 +593,15 @@ centering divisors and wheel detents are unitless computations, not pixel dimens
 
 ## Enforcement and migration
 
-`bloom-quality-check` rejects raw controls (including default construction without parentheses),
-forbidden paintEvent, literal dimensions and QFont construction. The allowlist is empty;
-adding any entry is itself a hard failure. Balanced extent-call checks detect literal arguments
+`bloom-quality-check` rejects, outside the kit: raw controls (including default construction
+without parentheses and QPlainTextEdit/QTextEdit), forbidden paintEvent, literal dimensions and
+QFont construction; the Qt convenience dialogs and spin boxes; numeric QColor construction, colour
+strings (`#rrggbb`, `rgb(`) and Qt colour names; `.darker(`/`.lighter(`; palette overrides
+(`setPalette`, `setColor(QPalette::...)`); `setStyleSheet`; raw `Qt::Popup`/`Qt::ToolTip` windows;
+literal pen widths; literal `resize(w, h)`; and `Variant::Ghost` other than on a disclosure caret
+(`expand`, `chevron`, `caret`, `disclosure`). The kit's own `.cpp` files are held to the pixel
+literal rule too (only the structural values 1 and 2 pass; the tokens file is the one place a
+value is defined). The allowlist is empty; adding any entry is itself a hard failure. Balanced extent-call checks detect literal arguments
 after nested token calls without consuming unrelated following expressions.
 
 Offscreen fixture-window metric audits run at DPR 1, 1.5 and 2. Whole-window references run
@@ -780,7 +803,7 @@ double-click opens Add search at the cursor. Footer count is hidden at zero; sna
 are exposed by View, with their legacy footer controls hidden.
 `kNodeLinkWidth` (1) is identical for idle, selected and hovered links; activation applies
 `kLinkActiveLightness` (135 percent) to the socket-kind tint, preserving its hue.
-Node parameter rows are KPropertyRows with a separate fixed diamond column. Their numeric fields
+Node parameter rows are `KPropertyRow`s with a separate fixed diamond column. Their numeric fields
 use the parameter's presentation places at rest, trailing zeros kept so a column's decimal points
 line up; editing retains full precision. KDiamond draws vector geometry through the painter's device transform, including canvas
 zoom. Vertices and `kDiamondStroke` (1.5, Bold icon weight at IconSmall) resolve to integer device
@@ -1168,9 +1191,8 @@ no rounding through a double, so a value above 2^53 survives. Valid text, Up/Dow
 Down update the session's live value and every visible readback immediately. Intermediate text such
 as a minus sign does not replace the last valid value.
 
-**Escape confirms everywhere.** Return, Escape, Tab and focus loss all commit typing; a pointer
-release or key release finishes a scrub/step. Undo is the discard. One completed gesture is one undo
-entry. Text that does not parse, carries another unit, or falls outside the parameter's range is
+Typing follows "Escape confirms" above: Return, Escape, Tab and focus loss all commit, and a
+pointer release or key release finishes a scrub/step. One completed gesture is one undo entry. Text that does not parse, carries another unit, or falls outside the parameter's range is
 refused, never clamped and never zero: Return or Tab keeps the editor open with an `Error` border and
 the reason in its tooltip and accessible description; Escape or focus loss closes it on the last
 valid value and a tooltip says the typed text was not taken. Tab and Shift+Tab commit and travel to

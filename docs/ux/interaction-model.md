@@ -160,7 +160,7 @@ Passive picking uses the actual published image, destination and evaluated bound
 pending selection outline or a different project/composition/time has no passive hit geometry.
 Once a gesture begins, its mapping stays frozen through preparation/presentation lag and admission
 lease expiry. Actual time, composition format, viewport/transform, selection, domain or lifecycle
-changes, mouse-ungrab and window deactivation cancel it. Escape confirms everywhere in the Viewer:
+changes, mouse-ungrab and window deactivation cancel it. Escape confirms (see [ui-grammar.md](ui-grammar.md), "Escape confirms"):
 a move, rotate, scale or anchor-point gizmo drag keeps the change made so far as one undoable
 command, a region-of-interest drag keeps its region, and the Viewer returns to Select.
 Creation tools are one-shot and Escape confirms rather than discards: committing a shape, a mask on
@@ -195,7 +195,7 @@ visible Viewer, the window makes no displayed qualification claim.
 | Drop files onto the Viewer | Imports them (the import progress modal), then makes layers of them the same way as one more undoable step |
 
 The transport lives in the Viewer footer's centred time group: go to start, step back, play/pause,
-step forward, go to end, a loop toggle and the time readout; RAM Preview is in the trailing group.
+step forward, go to end, a loop toggle and the frame field (a frame index or a timecode, per the field's reading); RAM Preview is in the trailing group.
 A narrow footer offers collapsed controls (including Go to Start/End and RAM Preview) in its View
 options menu with the same actions and shortcuts (ui-grammar.md, "Viewer header and footer"). **The keys are unchanged.** `Space`, `Ctrl+Shift+Space`, `Esc`,
 `Left`, `Right`, `Home` and `End` all do exactly what they did when the transport sat in the
@@ -653,15 +653,13 @@ None and the other layers of the same Merge, then Alpha, Luma and Inverted for t
 
 | Gesture | Action |
 | --- | --- |
-| Type in header search | Filter labels by case-insensitive substring; hide empty sections |
-| Escape in search | Clear query, restore rows and return focus to the panel |
 | Scrub a numeric row | Preview locally; commit once on release; cancellation writes nothing |
 | Click color / text disclosure chevron | Reveal detailed color components / multiline text editing |
 | Leave a multiline editor, `Escape`, `Ctrl+Return` | Commit the complete text as one parameter edit |
 | `Escape` in a value field or text row | Commits what was typed (Escape confirms everywhere); Undo discards |
 | Click section-header jump icon / driver link | Select the target and frame it in the node canvas |
 | Right-click parameter row or control | Reset to its registered default; driven reset disconnects with Undo support |
-| Wheel over the body | Scroll cards beneath the panel header search |
+| Wheel over the body | Scroll the section cards; Properties has no filter or header search, every section stays visible |
 | Click an anchor grid dot | Set anchor offset from evaluated local bounds, one undoable command |
 | Edit Anchor X/Y | Highlight a matching grid point; clear highlight for a custom offset |
 | Arrow keys on the anchor grid | Move to a neighbouring grid point |
