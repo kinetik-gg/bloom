@@ -57,7 +57,7 @@ void ExportRowDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opt
     const int left = cell.left() + kit::px(kit::Spacing::S);
     const auto metrics = option.fontMetrics;
     painter->setFont(option.font);
-    const qreal ratio = painter->device()->devicePixelRatio();
+    const qreal ratio = painter->device()->devicePixelRatioF();
     const auto text = index.data(Qt::DisplayRole).toString();
     const bool enabled =
         index.siblingAtColumn(EnabledColumn).data(Qt::CheckStateRole).toInt() == Qt::Checked;

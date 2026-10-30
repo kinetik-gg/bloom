@@ -229,7 +229,7 @@ ButtonColors fieldColors(const bool enabled, const bool active, const bool hover
 
 void applyHairlinePen(QPainter& painter, const QColor& value) {
     QPen pen(value);
-    pen.setWidthF(snappedHairlineWidth(painter.device()->devicePixelRatio()));
+    pen.setWidthF(snappedHairlineWidth(painter.device()->devicePixelRatioF()));
     pen.setCosmetic(false);
     painter.setPen(pen);
 }
@@ -247,7 +247,21 @@ QRectF snappedToDevicePixels(const QPainter& painter, const QRectF& bounds) {
 
 QRectF controlBounds(const QWidget& widget) {
     const auto inset = static_cast<qreal>(px(Spacing::ControlInset));
-    return QRectF(widget.rect()).adjusted(inset, inset, -inset, -inset);
+    const QRectF body = QRectF(widget.rect()).adjusted(inset, inset, -inset, -inset);
+    // The body's size is the recipe's; its left edge lands on a whole device pixel of the window
+    // so that, at a fractional device pixel ratio, the plate and its hairline are crisp wherever
+    // the control sits and the geometry a test reads is the geometry that is painted.
+    const qreal ratio = widget.devicePixelRatioF();
+    if (!(ratio > 0.0) || widget.window() == nullptr)
+        return body;
+    const QPointF origin(widget.mapTo(widget.window(), QPoint()));
+    const auto snapped = [ratio](const qreal logical) {
+        return std::round(logical * ratio) / ratio;
+    };
+    // Only the horizontal position moves: rows are centred on one another by their vertical
+    // geometry, which the layout owns.
+    return QRectF(QPointF(snapped(origin.x() + body.left()) - origin.x(), body.top()),
+                  body.size());
 }
 
 QRectF controlBody(const QWidget& widget) {
@@ -296,7 +310,7 @@ void paintSelectedRow(QPainter& painter, const QRectF& row, const Color surface,
 void paintRowSeparator(QPainter& painter, const QRectF& row) {
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, false);
-    const qreal width = snappedHairlineWidth(painter.device()->devicePixelRatio());
+    const qreal width = snappedHairlineWidth(painter.device()->devicePixelRatioF());
     const QRectF snapped = snappedToDevicePixels(painter, row);
     painter.fillRect(QRectF(snapped.left(), snapped.bottom() - width, snapped.width(), width),
                      color(Color::Background));
@@ -440,7 +454,7 @@ void drawElevationShadow(QPainter& painter, const QRectF& caster, const Radius r
     if (token.isFlat() || caster.isEmpty()) {
         return;
     }
-    const qreal dpr = painter.device()->devicePixelRatio();
+    const qreal dpr = painter.device()->devicePixelRatioF();
     const int corner =
         radiusPx(radius, static_cast<int>(std::min(caster.width(), caster.height())));
     static std::vector<std::pair<ShadowKey, QImage>> tiles;

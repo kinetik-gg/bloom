@@ -202,7 +202,7 @@ void paintBranchIndicator(const QStyleOption& option, QPainter& painter) {
     if ((option.state & QStyle::State_Children) == 0)
         return;
     const bool open = (option.state & QStyle::State_Open) != 0;
-    const qreal ratio = painter.device()->devicePixelRatio();
+    const qreal ratio = painter.device()->devicePixelRatioF();
     const QPixmap glyph = iconPixmap(
         open ? IconId::CaretDown : IconId::CaretRight, IconRole::Chrome, Color::Muted,
         (option.state & QStyle::State_MouseOver) != 0 ? kit::State::Hover : kit::State::Normal,
@@ -458,7 +458,7 @@ void AltUnderlineProxyStyle::drawControl(const ControlElement element, const QSt
     const QColor shortcutInk =
         selected ? withOpacity(color(Color::OnAccent), kSecondaryInkOnAccentOpacity)
                  : inkForState(Color::Faint, enabled ? State::Normal : State::Disabled);
-    const qreal ratio = painter->device()->devicePixelRatio();
+    const qreal ratio = painter->device()->devicePixelRatioF();
     const auto drawGlyph = [&](const QRect& box, const QPixmap& pixmap) {
         const QSizeF extent = pixmap.deviceIndependentSize();
         painter->drawPixmap(
