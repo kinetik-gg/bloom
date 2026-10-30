@@ -34,9 +34,11 @@ class QMouseEvent;
 class QPainter;
 class QResizeEvent;
 class QShowEvent;
+class QTimer;
 class QWheelEvent;
 
 namespace bloom::ui::kit {
+class KButton;
 class KDropdown;
 class KSwitch;
 } // namespace bloom::ui::kit
@@ -123,6 +125,10 @@ class NodeGraphicsScene final : public QGraphicsScene {
     // through setProjection() would rebuild every edge and re-frame the canvas once per frame of
     // playback for a question only the rows ask.
     void refreshValues();
+    // The playhead's refresh (bug #401): only the cards whose values move with time, only where a
+    // view shows them, and without rebuilding any selector. A time-varying card outside every view
+    // is marked stale; `staleOnly` brings exactly those up to date once a view reaches them.
+    void refreshTimeValues(bool staleOnly = false);
     [[nodiscard]] QGraphicsItem* findNodeItem(document::NodeId nodeId) const;
     [[nodiscard]] QGraphicsItem* findNodeGroupItem(document::NodeGroupId groupId) const;
     // Recomputes every group frame from the live member cards. Called by the projection and by
@@ -238,6 +244,8 @@ class NodeGraphicsView final : public QGraphicsView {
     // behavior, which no item here consumes. `viewportPosition` is in viewport coordinates, so it
     // feeds itemAt()/mapToGlobal() directly.
     void contextMenuRequested(const QPoint& viewportPosition);
+    // The visible part of the scene moved: a zoom, a pan, a frame or a resize.
+    void viewChanged();
     void canvasKeyPressed(int key, Qt::KeyboardModifiers modifiers);
     void canvasFocusLost();
 
@@ -288,6 +296,12 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     // Applies the Preferences window's committed node-graph preferences through the scene's own
     // setters.
     void applyApplicationPreferences(const ApplicationPreferences& preferences) override;
+
+  protected:
+    // A time change that arrived while the panel was hidden is applied once, on show.
+    void showEvent(QShowEvent* event) override;
+
+  public:
 
     // Test/diagnostic surface only: the exact menu a right-click builds, parented to this widget
     // and never shown. Lets a test enumerate what the canvas offers -- and, just as importantly,
@@ -396,6 +410,12 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     void applyGridSnap(bool enabled);
     void refreshSelectionReadout();
 
+    // Bug #401: playback ticks coalesce into one card refresh per display frame, and none while the
+    // panel is hidden.
+    void scheduleTimeRefresh();
+    QTimer* timeRefresh_ = nullptr;
+    bool hiddenTimeChange_ = false;
+
     CompositionSession& session_;
     NodeGraphicsScene* scene_ = nullptr;
     NodeGraphicsView* view_ = nullptr;
@@ -443,6 +463,7 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     kit::KSwitch* footerSnapSwitch_ = nullptr;
     kit::KDropdown* footerLinkStyleDropdown_ = nullptr;
     kit::KLabel* footerSelectionLabel_ = nullptr;
+    kit::KButton* footerArrangeButton_ = nullptr;
 };
 
 } // namespace bloom::ui

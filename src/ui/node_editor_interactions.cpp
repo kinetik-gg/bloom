@@ -15,6 +15,13 @@ QPointF snappedToGrid(const QPointF point, const qreal gridSize) {
     return {std::round(point.x() / gridSize) * gridSize,
             std::round(point.y() / gridSize) * gridSize};
 }
+// Every line a gesture draws on the canvas (a link in flight, a cut or reroute stroke) keeps its
+// screen width at any zoom, exactly as a committed link does (NodeEdgeItem::linkPen()).
+[[nodiscard]] QPen linePen(const QColor& color, const qreal width) {
+    QPen pen(color, width);
+    pen.setCosmetic(true);
+    return pen;
+}
 // The pointer slop a socket gets, measured where the artist actually aims: on SCREEN. The socket's
 // own hit shape is fixed in scene units (SocketItem::shape()), so at a zoomed-out canvas -- which
 // is what Fit leaves the artist looking at -- kSocketHitSlop's 12 scene px shrink to three or four
@@ -358,7 +365,7 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         gesture.origin = event->scenePos();
         gesture.revision = session_->snapshot().revision();
         gesture.line = addPath(QPainterPath(gesture.origin),
-                               QPen(kit::color(kit::Color::Accent), kit::kEmphasisStroke));
+                               linePen(kit::color(kit::Color::Accent), kit::kEmphasisStroke));
         gesture.line->setZValue(10);
         gesture.line->setData(kNodeItemKindRole, QStringLiteral("reroute-preview"));
         event->accept();
@@ -371,7 +378,7 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         gesture.origin = event->scenePos();
         gesture.revision = session_->snapshot().revision();
         gesture.line = addPath(QPainterPath(gesture.origin),
-                               QPen(kit::color(kit::Color::Error), kit::kEmphasisStroke));
+                               linePen(kit::color(kit::Color::Error), kit::kEmphasisStroke));
         gesture.line->setZValue(10);
         gesture.line->setData(kNodeItemKindRole, QStringLiteral("cut-preview"));
         event->accept();
@@ -383,6 +390,20 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
     }
     if (!fieldAt(*this, event->scenePos()))
         clearFocus();
+    // The header's disclosure caret folds or unfolds this one card (task N1, item 6), as one
+    // SetNodeCollapsed -- the command Node > Collapse issues -- and never starts a move. It is
+    // tested before the sockets: on a folded card the caret sits within a socket's grab slop.
+    if (auto* card = cardAt(*this, event->scenePos());
+        card != nullptr && submit_ && card->onCollapseToggle(card->mapFromScene(event->scenePos()))) {
+        event->accept();
+        cancelGesture();
+        commands::Transaction transaction(card->collapsed() ? "Expand Node" : "Collapse Node",
+                                          session_->snapshot().revision());
+        transaction.emplace<commands::SetNodeCollapsed>(session_->compositionId(), card->id(),
+                                                        !card->collapsed());
+        (void)submit(std::move(transaction));
+        return;
+    }
     if (auto* socket = socketAt(*this, event->scenePos())) {
         event->accept();
         if (!submit_ || !socket->draggable())
@@ -403,6 +424,8 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
                 pressedInput = socket->orderedInputs()[*index];
         }
         gesture.input = pressedInput;
+        if (socket->multiInput() && pressedInput)
+            gesture.origin = socket->mapToScene(socket->anchorFor(*pressedInput));
         if (pressedInput) {
             if (const auto existing = incomingSource(*session_->composition(), *pressedInput)) {
                 auto* source = findOutput(*this, *existing);
@@ -424,7 +447,7 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         }
         gesture.linkKind = socket->kind;
         gesture.line =
-            addPath({}, QPen(kit::color(socketColorToken(gesture.linkKind)), kit::kNodeLinkWidth));
+            addPath({}, linePen(kit::color(socketColorToken(gesture.linkKind)), kit::kNodeLinkWidth));
         gesture.line->setZValue(10);
         gesture.line->setData(kNodeItemKindRole, QStringLiteral("link-preview"));
         markLinkAffinity(*this, gesture, socket);
@@ -590,8 +613,8 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         const bool incompatible =
             target != nullptr && (!target->draggable() || orientationWrong || kindWrong);
         gesture.line->setPen(
-            QPen(kit::color(incompatible ? kit::Color::Error : socketColorToken(gesture.linkKind)),
-                 kit::kNodeLinkWidth));
+            linePen(kit::color(incompatible ? kit::Color::Error : socketColorToken(gesture.linkKind)),
+                    kit::kNodeLinkWidth));
         gesture.line->setPath(gesture.output
                                   ? linkPath(gesture.origin, event->scenePos(), linkStyle_)
                                   : linkPath(event->scenePos(), gesture.origin, linkStyle_));

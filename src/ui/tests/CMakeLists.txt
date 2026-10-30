@@ -957,6 +957,15 @@ bloom_add_test(NAME bloom.ui.node-card COMMAND bloom_node_card_test LABELS ui in
 
 # Task S2 (issue #132): node group frames -- geometry, frame drag, membership by drop, inline title
 # rename, and the two menus. Its own executable for the same reason node_card_tests.cpp is.
+# Task N1: the node canvas -- cursor placement, overlap-free adds, the layer-stack Arrange and its
+# footer button, collapse, frame colour, constant-width links, Merge's per-slot sockets, source
+# cards without previews and the Nodes icon.
+add_executable(bloom_node_canvas_polish_test node_canvas_polish_tests.cpp)
+target_include_directories(bloom_node_canvas_polish_test PRIVATE ..)
+target_link_libraries(bloom_node_canvas_polish_test PRIVATE bloom_ui bloom_project Qt6::Test)
+bloom_enable_warnings(bloom_node_canvas_polish_test)
+bloom_add_test(NAME bloom.ui.node-canvas-polish COMMAND bloom_node_canvas_polish_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_group_test node_group_tests.cpp)
 target_include_directories(bloom_node_group_test PRIVATE ..)
 target_link_libraries(bloom_node_group_test PRIVATE bloom_ui bloom_project Qt6::Test)
@@ -1322,6 +1331,15 @@ endif()
 # The maximized Viewer at a small and a large size, with and without a composition: captures for
 # review, plus the check that no hosted header or footer control lies outside its row.
 # The popup chin check: holds one dropdown popup or menu open for a compositor screenshot.
+# Task N1 review captures of the Node editor (a tool, not a test):
+# bloom_node_canvas_capture <directory> <1|1.5>.
+add_executable(bloom_node_canvas_capture node_canvas_capture.cpp)
+target_include_directories(bloom_node_canvas_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_node_canvas_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_node_canvas_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_node_canvas_capture)
+
 # Lane C review captures of every dialog (a tool, not a test): bloom_dialog_capture <dir> <1|1.5>.
 add_executable(bloom_dialog_capture dialog_capture.cpp)
 target_include_directories(bloom_dialog_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)

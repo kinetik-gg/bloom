@@ -147,7 +147,6 @@ class AssetController final : public QObject {
     [[nodiscard]] std::optional<std::uint64_t> fileSize(document::AssetId id) const;
     [[nodiscard]] QString audioDiagnostic(document::AssetId id) const;
     [[nodiscard]] QImage thumbnail(document::AssetId id) const;
-    [[nodiscard]] QImage nodeThumbnail(document::NodeId id) const;
     [[nodiscard]] QString inputColorSpaceDisplay(document::AssetId id) const;
     [[nodiscard]] QString inputColorSpaceWarning(document::AssetId id) const;
     // The resolved input colour space by its plain name ("Linear Rec.709", "sRGB", or the
@@ -191,7 +190,6 @@ class AssetController final : public QObject {
     [[nodiscard]] QByteArray dragToken() const { return dragToken_; }
   signals:
     void changed();
-    void nodeThumbnailsChanged();
     void activityChanged();
     void diagnostic(QString message);
     void importStarted();
@@ -236,7 +234,6 @@ class AssetController final : public QObject {
         std::map<runtime::AudioStreamKey, std::shared_ptr<const media::audio::AudioBuffer>>;
     struct Thumbnails {
         Previews assets;
-        std::map<document::NodeId, Preview> nodes;
         std::map<std::string, QImage> cache;
         Waveforms waveforms;
         AudioBuffers audioBuffers;
@@ -246,7 +243,6 @@ class AssetController final : public QObject {
         std::size_t proxyBytes = 0;
         std::size_t audioBytes = 0;
         bool retryAudioAfterCapacitySample = false;
-        bool timeDependentNodes = false;
     };
     struct InputColorCatalog {
         document::ColorSettings settings;
@@ -257,7 +253,6 @@ class AssetController final : public QObject {
     void prepare(const QStringList& paths, document::AssetId relinkId = {},
                  std::optional<document::AssetFolderId> folder = {});
     void refresh();
-    void refreshNodeThumbnails();
     void startThumbnails();
     void poll();
     // One status notice for an import job's diagnostics; the Jobs panel keeps each one.
@@ -290,7 +285,6 @@ class AssetController final : public QObject {
     bool inputColorCatalogPending_ = false;
     std::optional<document::Snapshot> base_;
     Previews previews_;
-    std::map<document::NodeId, Preview> nodePreviews_;
     std::map<std::string, QImage> thumbnailCache_;
     Waveforms waveforms_;
     AudioBuffers audioBuffers_;
@@ -300,7 +294,6 @@ class AssetController final : public QObject {
     std::size_t proxyCacheBytes_ = 0;
     std::size_t decodedAudioBytes_ = 0;
     QByteArray dragToken_;
-    QTimer freshnessTimer_;
     bool busy_ = false;
     bool previewPending_ = false;
     bool previewDirty_ = false;
@@ -308,7 +301,6 @@ class AssetController final : public QObject {
     bool retryAudioAfterCapacitySample_ = false;
     bool assetsDirty_ = true;
     bool previewIncludesAssets_ = false;
-    bool timeDependentNodes_ = true;
     std::uint64_t contentGeneration_ = 0;
     std::uint64_t previewContentGeneration_ = 0;
 };

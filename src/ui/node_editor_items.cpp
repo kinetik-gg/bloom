@@ -8,7 +8,6 @@
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <memory>
-#include <numbers>
 
 namespace bloom::ui {
 kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
@@ -445,7 +444,9 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     };
 
     // The header strip: one step down the surface ladder from the card so it reads as chrome, with
-    // its own hairline foot rather than a second rounded rectangle.
+    // its own hairline foot rather than a second rounded rectangle. A collapsed card IS its header,
+    // so the strip covers all of it.
+    const qreal band = headerHeight();
     QPainterPath header;
     // Winding, not QPainterPath's default odd-even rule: the header is a rounded rectangle UNION a
     // square strip that squares off its bottom corners, and the two subpaths overlap. Under
@@ -453,17 +454,27 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     // of every header, which is exactly what the pre-U4 projection drew.
     header.setFillRule(Qt::WindingFill);
     const auto headerRadius = static_cast<qreal>(
-        kit::radiusPx(radiusToken, static_cast<int>(std::min(bounds.width(), kCardHeaderHeight))));
-    header.addRoundedRect(QRectF(0.0, 0.0, bounds.width(), kCardHeaderHeight), headerRadius,
+        kit::radiusPx(radiusToken, static_cast<int>(std::min(bounds.width(), band))));
+    header.addRoundedRect(QRectF(0.0, 0.0, bounds.width(), band), headerRadius,
                           headerRadius);
     if (!layout_.collapsed)
-        header.addRect(QRectF(0.0, kCardHeaderHeight - headerRadius, bounds.width(), headerRadius));
+        header.addRect(QRectF(0.0, band - headerRadius, bounds.width(), headerRadius));
     painter->setPen(Qt::NoPen);
     painter->fillPath(header, kit::color(kit::Color::Surface));
     kit::applyHairlinePen(*painter, kit::color(kit::Color::Border));
     if (!layout_.collapsed)
-        painter->drawLine(QPointF(0.0, kCardHeaderHeight),
-                          QPointF(bounds.width(), kCardHeaderHeight));
+        painter->drawLine(QPointF(0.0, band), QPointF(bounds.width(), band));
+
+    // The collapse toggle (task N1, item 6): Blender's disclosure caret at the head of the title --
+    // down while the card is open, right while it is folded to its header.
+    const auto caret =
+        kit::iconPixmap(layout_.collapsed ? kit::IconId::CaretRight : kit::IconId::CaretDown,
+                        kit::Size::IconSmall, kit::Color::Muted);
+    const QRectF toggle = collapseToggleRect();
+    painter->drawPixmap(
+        toggle.center() - QPointF(caret.width() / caret.devicePixelRatio() / 2.0,
+                                  caret.height() / caret.devicePixelRatio() / 2.0),
+        caret);
 
     const auto [titleRect, categoryRect] = titleBandRects();
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
@@ -475,125 +486,31 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
         titleRect, Qt::AlignLeft | Qt::AlignVCenter,
         QFontMetricsF(painter->font()).elidedText(title_, Qt::ElideRight, titleRect.width()));
 
-    if (layout_.muted) {
-        const auto badge =
-            kit::iconPixmap(kit::IconId::Hidden, kit::Size::IconSmall, kit::Color::Foreground);
+    // The header's trailing badges, right to left: muted, then a source whose asset cannot be read.
+    // A source card carries no preview (task N1, item 2), so the header is where a missing or
+    // unreadable asset is said.
+    qreal badgeRight = bounds.width() - kCardPadding;
+    const auto drawBadge = [&](const QPixmap& badge) {
+        const qreal side = badge.width() / badge.devicePixelRatio();
         painter->drawPixmap(
-            QPointF(bounds.width() - kCardPadding - badge.width() / badge.devicePixelRatio(),
-                    (kCardHeaderHeight - badge.height() / badge.devicePixelRatio()) / 2.0),
+            QPointF(badgeRight - side,
+                    (band - badge.height() / badge.devicePixelRatio()) / 2.0),
             badge);
-    }
+        badgeRight -= side + kCardPadding;
+    };
+    if (layout_.muted)
+        drawBadge(
+            kit::iconPixmap(kit::IconId::Hidden, kit::Size::IconSmall, kit::Color::Foreground));
+    if (assetProblem())
+        drawBadge(kit::iconPixmap(kit::IconId::Warning, kit::Size::IconSmall, kit::Color::Warn));
     if (layout_.collapsed) {
         selectionOutline();
         return;
     }
     painter->setOpacity(layout_.muted ? 0.5 : 1.0);
-    if (shapeSource_) {
-        const QRectF cell(
-            kCardPadding, parameterRowsTop_ - kit::px(kit::Size::ImageThumbnail) + kCardPadding,
-            width_ - 2 * kCardPadding, kit::px(kit::Size::ImageThumbnail) - 2 * kCardPadding);
-        painter->fillRect(cell, kit::color(kit::Color::SurfaceSunken));
-        const auto inset = kCardPadding + kCardPadding;
-        const auto side = cell.height() - inset;
-        const QRectF icon(cell.center() - QPointF(side / 2, side / 2), QSizeF(side, side));
-        QPainterPath path;
-        if (shapeKind_ == document::ShapeKind::Rectangle)
-            path.addRect(icon);
-        else if (shapeKind_ == document::ShapeKind::Ellipse)
-            path.addEllipse(icon);
-        else if (shapeKind_ == document::ShapeKind::Line) {
-            path.moveTo(icon.bottomLeft());
-            path.lineTo(icon.topRight());
-        } else if (shapeKind_ == document::ShapeKind::Path) {
-            path.moveTo(icon.bottomLeft());
-            path.cubicTo(icon.topLeft(), icon.bottomRight(), icon.topRight());
-        } else {
-            const int count = shapeKind_ == document::ShapeKind::Triangle ? 3
-                              : shapeKind_ == document::ShapeKind::Star   ? 10
-                                                                          : 5;
-            for (int index = 0; index < count; ++index) {
-                const double angle = -std::numbers::pi / 2 + 2 * std::numbers::pi * index / count;
-                const double radius =
-                    side / 2 * (shapeKind_ == document::ShapeKind::Star && index % 2 ? 0.45 : 1.0);
-                const auto point =
-                    icon.center() + QPointF(std::cos(angle) * radius, std::sin(angle) * radius);
-                if (index == 0)
-                    path.moveTo(point);
-                else
-                    path.lineTo(point);
-            }
-            path.closeSubpath();
-        }
-        kit::applyHairlinePen(*painter, kit::color(kit::Color::Foreground));
-        painter->setBrush(shapeKind_ == document::ShapeKind::Line ||
-                                  shapeKind_ == document::ShapeKind::Path
-                              ? Qt::NoBrush
-                              : QBrush(kit::color(kit::Color::Foreground)));
-        painter->drawPath(path);
-        painter->setBrush(Qt::NoBrush);
-    }
-    if (imageSource_ || audioSource_) {
-        const QRectF cell(kCardPadding, kCardHeaderHeight + kCardPadding, width_ - 2 * kCardPadding,
-                          kit::px(kit::Size::ImageThumbnail) - 2 * kCardPadding);
-        painter->fillRect(cell, kit::color(kit::Color::SurfaceSunken));
-        const auto* controller = session_ ? session_->assetController() : nullptr;
-        const auto thumbnail =
-            imageSource_ && controller ? controller->nodeThumbnail(id_) : QImage{};
-        const auto waveform =
-            audioSource_ && controller ? controller->waveform(imageAsset_) : nullptr;
-        if (!thumbnail.isNull()) {
-            auto size = QSizeF(thumbnail.size());
-            size.scale(cell.size(), Qt::KeepAspectRatio);
-            painter->drawImage(
-                QRectF(cell.center() - QPointF(size.width() / 2, size.height() / 2), size),
-                thumbnail);
-        } else if (waveform && !waveform->buckets.empty()) {
-            painter->setPen(QPen(kit::color(kit::Color::DataAudio), kit::kHairlineWidth));
-            const auto bucketCount = waveform->buckets.size();
-            for (std::size_t index = 0; index < bucketCount; ++index) {
-                float minimum = 0.0F;
-                float maximum = 0.0F;
-                for (const auto& channel : waveform->buckets[index]) {
-                    minimum = std::min(minimum, channel.minimum);
-                    maximum = std::max(maximum, channel.maximum);
-                }
-                const auto x = cell.left() + cell.width() * (static_cast<qreal>(index) + 0.5) /
-                                                 static_cast<qreal>(bucketCount);
-                const auto top =
-                    cell.center().y() -
-                    cell.height() * std::clamp(static_cast<qreal>(maximum), 0.0, 1.0) / 2.0;
-                const auto bottom =
-                    cell.center().y() -
-                    cell.height() * std::clamp(static_cast<qreal>(minimum), -1.0, 0.0) / 2.0;
-                painter->drawLine(QPointF(x, top), QPointF(x, bottom));
-            }
-        } else {
-            const auto glyph =
-                kit::iconPixmap(audioSource_ ? kit::IconId::Audio : kit::IconId::Warning,
-                                kit::Size::IconSmall, kit::Color::Muted);
-            painter->drawPixmap(cell.center() -
-                                    QPointF(glyph.width() / glyph.devicePixelRatio() / 2,
-                                            glyph.height() / glyph.devicePixelRatio() / 2),
-                                glyph);
-        }
-    }
 
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
     painter->setPen(kit::color(kit::Color::Muted));
-    if ((imageSource_ || audioSource_) && session_) {
-        const auto* asset = session_->snapshot().project().findAsset(imageAsset_);
-        const auto* controller = session_->assetController();
-        if (!asset || asset->manifest.hasGaps() ||
-            (controller && (controller->missing(imageAsset_) ||
-                            !controller->problem(imageAsset_).isEmpty()))) {
-            const auto warning =
-                kit::iconPixmap(kit::IconId::Warning, kit::Size::IconSmall, kit::Color::Warn);
-            painter->drawPixmap(
-                QPointF(width_ - kCardPadding - warning.width() / warning.devicePixelRatio(),
-                        kCardHeaderHeight + kCardPadding),
-                warning);
-        }
-    }
     for (const auto* socket : sockets_) {
         if (parameterSocketY_.contains(socket->name))
             continue;
@@ -612,6 +529,16 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     }
 
     selectionOutline();
+}
+
+bool NodeItem::assetProblem() const {
+    if (!(imageSource_ || audioSource_) || session_ == nullptr)
+        return false;
+    const auto* asset = session_->snapshot().project().findAsset(imageAsset_);
+    const auto* controller = session_->assetController();
+    return asset == nullptr || asset->manifest.hasGaps() ||
+           (controller != nullptr &&
+            (controller->missing(imageAsset_) || !controller->problem(imageAsset_).isEmpty()));
 }
 
 QVariant NodeItem::itemChange(const GraphicsItemChange change, const QVariant& value) {
@@ -791,6 +718,25 @@ bool SocketItem::accepts(const document::InputPortRef& ref) const {
            });
 }
 
+QPointF SocketItem::anchorFor(const document::InputPortRef& ref) const {
+    if (!multiInput() || orderedInputs_.empty())
+        return {};
+    const auto* slot = std::get_if<document::LayerStackInputRef>(&ref);
+    const auto found = std::ranges::find_if(orderedInputs_, [&](const auto& candidate) {
+        if (candidate == ref)
+            return true;
+        const auto* ordered = std::get_if<document::LayerStackInputRef>(&candidate);
+        return slot != nullptr && ordered != nullptr && ordered->stackNodeId == slot->stackNodeId &&
+               ordered->slotId == slot->slotId && ordered->role == slot->role;
+    });
+    if (found == orderedInputs_.end())
+        return {};
+    const qreal length = pillLength();
+    const qreal pitch = length / static_cast<qreal>(orderedInputs_.size());
+    const auto index = static_cast<qreal>(std::distance(orderedInputs_.begin(), found));
+    return {0.0, -length / 2.0 + pitch * (index + 0.5)};
+}
+
 void SocketItem::setDropIndicator(const std::optional<std::size_t> slotIndex) {
     if (dropIndicator_ == slotIndex)
         return;
@@ -943,6 +889,7 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
         sockets_.push_back(new SocketItem(node.id, QString::fromStdString(port.name),
                                           kindOf(port.valueKind), input, std::nullopt, this));
         sockets_.back()->setAcceptsAnyKind(kindless);
+        sockets_.back()->linked = linked;
     }
     if (definition->layerSlotInput && composition.graph().merge(node.id)) {
         // Task S1, item 7: ONE ordered multi-input for the whole stack, not one repeated row per
@@ -963,6 +910,7 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
             node.id, QString::fromStdString(port.role), port.valueKind,
             document::LayerStackInputRef{node.id, document::LayerSlotId{}, port.role}, std::nullopt,
             this);
+        pill->linked = !ordered.empty();
         pill->setOrderedInputs(std::move(ordered));
         sockets_.push_back(pill);
     }
@@ -986,13 +934,28 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
             node.id, QString::fromStdString(port.role), port.valueKind,
             document::LayerStackInputRef{node.id, document::LayerSlotId{}, port.role}, std::nullopt,
             this);
+        pill->linked = !ordered.empty();
         pill->setOrderedInputs(std::move(ordered));
         sockets_.push_back(pill);
     }
-    for (const auto& port : definition->outputs)
+    // An output is linked when an edge or a driver binding reads from it.
+    std::set<std::string> linkedOutputs;
+    for (const auto& edge : composition.graph().edges())
+        if (edge.source.nodeId == node.id)
+            linkedOutputs.insert(edge.source.port);
+    for (const auto& candidate : composition.graph().nodes())
+        for (const auto& binding : candidate.parameters)
+            if (const auto* parameter = composition.parameters().find(binding.parameterId))
+                if (const auto* driver =
+                        std::get_if<document::DriverBindingSource>(&parameter->source);
+                    driver != nullptr && driver->sourceNodeId == node.id)
+                    linkedOutputs.insert(driver->outputPort);
+    for (const auto& port : definition->outputs) {
         sockets_.push_back(new SocketItem(node.id, QString::fromStdString(port.name),
                                           port.valueKind, std::nullopt,
                                           document::OutputPortRef{node.id, port.name}, this));
+        sockets_.back()->linked = linkedOutputs.contains(port.name);
+    }
 }
 
 NodeEdgeItem::NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& output,
@@ -1015,20 +978,34 @@ NodeEdgeItem::NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& 
     updatePath();
 }
 void NodeEdgeItem::updatePath() {
-    setPath(linkPath(output_.scenePos(), input_.scenePos(), style_));
+    setPath(linkPath(output_.scenePos(), input_.mapToScene(input_.anchorFor(edge.destination)),
+                     style_));
 }
 QPainterPath NodeEdgeItem::shape() const {
     QPainterPathStroker stroke;
     stroke.setWidth(kit::px(kit::Size::NodeLinkHit));
     return stroke.createStroke(path());
 }
-void NodeEdgeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) {
+QPen NodeEdgeItem::linkPen() const {
     const bool emphasized = hovered_ || source_.isSelected() || destination_.isSelected();
     const QColor base = kit::color(socketColorToken(output_.kind));
+    QPen pen(emphasized ? kit::emphasizedStrokeFor(base) : base, kit::kNodeLinkWidth,
+             Qt::SolidLine, Qt::RoundCap);
+    // Cosmetic: the width is in screen pixels, so a link reads as the same line at 25% as at 400%
+    // instead of thinning to nothing when the artist zooms out.
+    pen.setCosmetic(true);
+    return pen;
+}
+QRectF NodeEdgeItem::boundingRect() const {
+    // A cosmetic stroke is a fixed number of SCREEN pixels, which is this many scene units at the
+    // smallest zoom the canvas allows; the rectangle must cover it there or the stroke leaves trails.
+    const qreal overhang = kit::kNodeLinkWidth / ViewTransform::kMinZoom;
+    return shape().boundingRect().adjusted(-overhang, -overhang, overhang, overhang);
+}
+void NodeEdgeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) {
     painter->setRenderHint(QPainter::Antialiasing);
     painter->setBrush(Qt::NoBrush);
-    painter->setPen(QPen(emphasized ? kit::emphasizedStrokeFor(base) : base,
-                         kit::kNodeLinkWidth, Qt::SolidLine, Qt::RoundCap));
+    painter->setPen(linkPen());
     painter->drawPath(path());
 }
 void NodeEdgeItem::hoverEnterEvent(QGraphicsSceneHoverEvent* event) {
@@ -1142,6 +1119,8 @@ void NodeGroupItem::refresh(const document::NodeGroupRecord& record) {
     title_ = QString::fromStdString(record.name);
     members_ = record.members;
     padding_ = record.padding;
+    color_ = record.color ? QColor((*record.color)[0], (*record.color)[1], (*record.color)[2])
+                          : QColor();
     setToolTip(QStringLiteral("%1\nNode group %2").arg(title_).arg(id_.value()));
     update();
 }
@@ -1169,9 +1148,12 @@ void NodeGroupItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QW
     if (bounds.isEmpty())
         return;
     painter->setRenderHint(QPainter::Antialiasing, true);
+    // A coloured frame (task N1, item 5) takes its own tint in place of the raised surface, at the
+    // same faint opacity, so it still reads as ground behind the cards it holds.
     painter->setOpacity(kGroupFillOpacity);
-    kit::fillRoundedSurface(*painter, bounds, kit::color(kit::Color::SurfaceRaised), QColor(),
-                            kGroupRadius);
+    kit::fillRoundedSurface(*painter, bounds,
+                            color_.isValid() ? color_ : kit::color(kit::Color::SurfaceRaised),
+                            QColor(), kGroupRadius);
     painter->setOpacity(1.0);
     // The border keeps full opacity: the fill is what recedes, while the hairline is what says
     // where the frame actually ends -- which is the line a drop is judged against.

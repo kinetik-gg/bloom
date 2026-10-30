@@ -393,13 +393,13 @@ as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
 | `Home` | Fit the graph (alias) |
 | Middle drag | Pan |
 | Wheel | Zoom about the pointer |
-| `Tab` | Open the Add search at the pointer |
+| `Tab` | Open the Add search; the new card lands with its title under the pointer |
 | `Ctrl+A` | Select all nodes |
 | `Delete` / `Backspace` | Remove the selection |
 | `Ctrl+D` | Duplicate the selection and start placing it |
 | `Ctrl+G` | Group the selection in a node group |
 | `Ctrl+Shift+G` | Ungroup every node group the selection is in |
-| `Ctrl+Shift+A` | Arrange all nodes left to right, then fit the graph |
+| `Ctrl+Shift+A` | Arrange all nodes like the layer stack (output on the right), then fit the graph |
 | `Ctrl+Alt+A` | Arrange the selected induced subgraph in place |
 | `Enter` | Rename the selected layer node |
 | Double-click a layer node | Rename it |
@@ -408,12 +408,14 @@ as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
 | Left drag on a card | Move the selection |
 | Left drag on a group frame | Move every member of that group |
 | Left drag on a card's right edge | Resize the card |
+| Click a card's header caret | Collapse or expand that card |
 | Left drag from a socket | Connect, rewire, or disconnect |
 | `Ctrl` + right drag | Cut every wire crossed |
 | `Shift` + right drag | Add a reroute on the wire crossed |
 | Right-click a card, a group frame, a link, or the canvas | Context menu |
 
-Mute, collapse, and dissolve are context-menu commands in this editor and bind no key. A group's own
+Mute, collapse, and dissolve are context-menu commands in this editor and bind no key; collapse is
+also the caret at the head of every card's title. The footer's Arrange button runs Arrange All. A group's own
 `Rename` is likewise a menu command and a double-click: `Enter` keeps its one meaning, so it never
 becomes "rename whichever thing is selected".
 
@@ -434,7 +436,7 @@ Invert bind no new keys; Arrange uses the two explicit node-canvas bindings belo
 | View | Frame Selected | Frames exactly the selected cards; frames the whole graph if nothing is selected |
 | View | Grid Snapping | Toggles grid snapping (see below); the same toggle the footer's switch offers |
 | View | Link Style | Spline / Straight / Angled (see below); the same choice the footer's dropdown offers |
-| View → Organize | Arrange All | Lays out every node, fits the graph, and commits one `MoveNodes` transaction |
+| View → Organize | Arrange All | Lays out every node like the layer stack, fits the graph, and commits one `MoveNodes` transaction; the footer's Arrange button runs the same command |
 | View → Organize | Arrange Selection | Lays out the selected induced subgraph in place and commits one `MoveNodes` transaction |
 | Select | None | Clears the selection |
 | Select | Invert | Selects every unselected node, deselecting every selected one |

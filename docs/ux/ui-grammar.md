@@ -509,24 +509,43 @@ parameters retain the existing hidden-editor/driver behavior. Ordered multi-inpu
 their segmented pill and insertion semantics; reroutes remain dots.
 
 `NodeCardWidth` is the normal floor. Content can require a wider minimum, and an authored
-resize remains authoritative above that minimum. `Arrange All` lays out the graph left to right:
-longest-path ranks place sources and value drivers before their consumers, and stable barycenter
-sweeps order each rank to reduce crossings. Each rank uses its maximum measured card width plus one
-`Spacing::L` gap; cards in a rank use their measured heights plus the same gap, and shorter ranks
-are vertically centred. Disconnected components stack below one another. Nodes in a group remain a
-contiguous rank block, and the frame is recomputed from its members after the transaction.
-`Arrange Selection` applies the same rule to the induced selection and preserves its bounding-box
-top-left. Both commands are one undoable `MoveNodes` transaction; Arrange All fits the canvas after
-publication.
+resize remains authoritative above that minimum. `Arrange All` reads the graph like the layer
+stack: Composition Output is the rightmost column, and each node sits further left the further
+upstream it is (its column is the longest path to the output side), so every Layer card shares one
+column and the sources the next. Rows follow the stack top to bottom, as the Timeline lists it:
+each node's upstream subtree owns a horizontal band, its inputs in their own order (Merge's slots
+top first, other ports in declaration order), and a node is centred on its band. Columns use the
+widest measured card plus `NodeArrangeGap`, bands are `NodeArrangeGap` apart, and every position
+lands on the `NodeGrid` lattice. Disconnected graphs stack below the output's. Nodes in a group
+stay adjacent among their siblings, and the frame is recomputed from its members after the
+transaction. `Arrange Selection` applies the same rule to the induced selection and preserves its
+grid-aligned bounding-box top-left. Both commands are one undoable `MoveNodes` transaction from the
+View menu, the keys or the footer's Arrange button; Arrange All fits the canvas after publication.
+Scripts and agents run the same command (`bloom.node.arrange`) with the command-side card estimate
+in place of measured sizes.
 
-Authored positions are never rearranged by creation. A new card keeps its requested free position,
-or searches the nearest rank-grid slot around its connection (down, up, then the next column) using
-an indexed collision test against every card and a `Spacing::L` clearance. Structured layer
-creation puts the Layer card one gap left of Merge and its source one gap left of Layer. This rule
-also applies to Assets drops and viewer/timeline layer actions, so existing cards never move and a
-new card never touches another card. Links use the socket-kind palette and a horizontal-tangent
-cubic spline with `NodeLinkHandleMin`; existing straight/angled preferences remain available.
-Every selected card, including the primary selection, uses an Accent outline.
+Authored positions are never rearranged by creation. A card added from the canvas lands with its
+title band centred under the pointer (the Tab or right-click point; the header's Add uses the
+middle of the view). When that spot would touch another card, the new card alone moves to the
+nearest `NodeGrid` position `NodeArrangeGap` past its neighbour. A new layer's Layer card goes into
+the layer column at its stack position (above the layer under it) and its source on the same row
+to the left, each moved off any card it would touch. This rule also applies to Assets drops and
+viewer/timeline layer actions, so existing cards never move and a new card never touches another
+card. Links use the socket-kind palette and a horizontal-tangent cubic spline with
+`NodeLinkHandleMin`; existing straight/angled preferences remain available. A link and every line
+a gesture draws keep their screen width at any zoom (a cosmetic stroke). Every selected card,
+including the primary selection, uses an Accent outline.
+
+The title band starts with a `CaretDown` disclosure caret (`CaretRight` while collapsed); a click
+on it collapses or expands that card, the same `SetNodeCollapsed` Node > Collapse issues. A
+collapsed card is its header alone, as a folded Blender node: only its linked sockets stay, centred
+down its two edges, and it grows past `NodeTitleBand` only when those need the room. Source cards
+(Image, Video, Audio, Shape) carry no preview: their rows start under the title band, and a missing
+or unreadable asset shows a `Warn` badge at the right of the header. Merge's ordered multi-input
+gives each stack slot its own attach point, the middle of its pill segment.
+
+The footer's right edge holds the Arrange button: a labelled `KButton` with the `Arrange` glyph and
+an "Arrange" label (the Viewer footer's RAM Preview shape), running Arrange All.
 
 
 Keyframe diamonds have four forms: a muted outline for a constant, a gold outline for an animated
@@ -603,7 +622,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `NodeSocketDot / NodeRerouteDot` | 8 / 10 | Scene port geometry |
 | `NodeLinkHandleMin` | 32 | Minimum spline tangent |
 | `NodeColumnGap / NodeRowGap` | 80 / 24 | Legacy unplaced-node grid |
-| `NodeArrangeGap` | `Spacing::L` (16) | Rank, component and creation clearance |
+| `NodeArrangeGap` | 64 (four `NodeGrid` steps) | Column, band and creation clearance |
 | `GraphValueAxis / GraphHandleDot` | 48 / 6 | Graph editor value gutter / ease-handle dot |
 | `Hairline / SelectionEdge` | 1 / 2 | Pixel-edge arithmetic / scene selection outline |
 | `NodeGrid` | 16 | Node snap grid |

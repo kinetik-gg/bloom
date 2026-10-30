@@ -534,22 +534,32 @@ result. Missing records use the original four-column placement (origin 32, colum
 row pitch 180, width 128). Unknown-node layout entries are preserved with warning diagnostics,
 not document errors. Zoom, framing, grouping, and transient gestures remain session state.
 
-`Arrange All` is an editor command over this presentation state, not a graph mutation. It assigns
-each connected component a longest-path rank from its sources toward Composition Output, then uses
-stable barycenter sweeps in both directions to reduce crossings. Rank columns use the maximum card
-width in that rank plus `Spacing::L`; cards in a column use their measured heights plus the same
-gap, and the columns are vertically centred. Components are stacked below each other. Node-group
-members are kept as contiguous rank blocks, while the group's frame follows the resulting member
-bounding rectangle. `Arrange Selection` runs the same algorithm on the induced selected subgraph and
-translates the result back to the selection bounding-box top-left. Both publish one `MoveNodes`
-transaction and do not change graph, parameter, or group membership truth.
+`Arrange All` is an editor command over this presentation state, not a graph mutation
+(`commands::ArrangeNodes`, `bloom.node.arrange`). Composition Output is the rightmost column; a
+node's column is its longest path to a node that feeds nothing, so upstream nodes sit further left
+and every Layer Output shares one column. One spanning tree is grown from the output through each
+node's inputs in order -- a Merge's stack slots top first, an ordinary node's declared ports, then
+driven parameters -- so the rows read in layer-stack order. Each node's subtree owns a vertical
+band one `kNodeLayoutGap` (64, four grid steps) from its siblings', and a node is centred on its
+band; because sibling bands are disjoint and a tree child always sits in a column further left,
+no two cards can overlap. Positions are on the 16-unit layout grid. Components without the output
+stack below it. Node-group members stay adjacent among their siblings, while the group's frame
+follows the resulting member bounding rectangle. `Arrange Selection` runs the same algorithm on the
+induced selected subgraph and translates the result back to the grid-aligned selection bounding-box
+top-left. Both publish one `MoveNodes` transaction and do not change graph, parameter, or group
+membership truth. The editor supplies measured card sizes; a script or agent gets the command-side
+estimate (`commands::estimatedNodeCardSize`, an upper bound of every built-in card the editor
+draws).
 
-Creation uses the complementary local rule. A free requested point is retained; otherwise the new
-card probes the rank-grid slot nearest to its connection, down before up and then by column, with
-an indexed rectangle collision test and `Spacing::L` clearance. A disconnected card uses the view
-centre supplied by the caller. Structured layer creation places its Layer Output one gap left of
-the Merge slot it feeds and the source one gap left of that Layer Output. Existing cards are never
-moved by these placement probes.
+Creation uses the complementary local rule (`commands::placeNodeCard`). A requested point that is
+clear of every card is retained, so a card lands where the artist pointed; otherwise only the new
+card moves, to the nearest grid position `kNodeLayoutGap` past its neighbour on one axis. A
+disconnected card uses the view centre supplied by the caller. Structured layer creation
+(`commands::placeLayerCards`) puts the new Layer Output in the layer column at its stack position
+-- above the layer under it, below the layer over it -- and its source on the same row to the left,
+each moved off any card it would touch. An in-place `DuplicateNodes` (a zero offset, the Timeline's
+Duplicate) moves its copies together, as one block, to the nearest clear grid position instead of
+stacking them on their originals. Existing cards are never moved by these placement probes.
 
 Node definitions and their socket schemas now belong to the Qt-free document module so graph
 validation, commands, and compilation share one schema vocabulary without a document-to-runtime
@@ -605,7 +615,7 @@ text source entirely.
 
 ## Node Groups
 
-Compositions own `NodeGroupRecord{id, name, members, padding}` keyed by `NodeGroupId`, stored in the
+Compositions own `NodeGroupRecord{id, name, members, padding, color}` keyed by `NodeGroupId`, stored in the
 composition LAYOUT beside `NodeLayout`. A group is presentation: it has no ports, no encapsulation,
 no parameters and no evaluation meaning, and compilation never sees one. It is the Blender `Frame`
 shape -- a named rectangle drawn around cards -- and deliberately not the encapsulation feature the
@@ -623,6 +633,10 @@ reissued after an undo and layout identity still never advances the node waterma
 group held them, because a node belongs to exactly one. `UngroupNodes(groupId)` removes the frame
 and nothing else -- every member keeps its position, width, collapse, mute and wiring.
 `RenameGroup(groupId, name)` changes the name in place; an identical name is a no-op.
+`SetGroupColor(groupId, color)` sets the frame's optional 8-bit sRGB tint (document 1.30), or clears
+it to the neutral frame; like every group command it is not render-affecting, so it invalidates no
+render cache. The frame's context menu offers None and the eight Timeline label swatches
+(`bloom.node-group.set-color` for scripts and agents).
 `SetGroupMembers(groupId, set)` replaces a frame's membership wholesale. `MoveNodes` additionally
 carries optional membership deltas, so a drag that ends inside or outside a frame publishes the move
 and the membership change in ONE transaction and therefore one undo. Any group a command leaves with
@@ -638,8 +652,8 @@ drops it in one.
 ### Group Frames In The Editor
 
 A frame is painted BEHIND its members -- behind their links too -- as the bounding rectangle of the
-member cards plus the record's padding, with a bordered hairline, a faint `SurfaceRaised` fill at
-low opacity, `Radius::Panel`, and an inline-editable title strip along its top. The frame owns no
+member cards plus the record's padding, with a bordered hairline, a faint fill at low opacity (the
+frame's colour when it has one, `SurfaceRaised` otherwise), `Radius::Panel`, and an inline-editable title strip along its top. The frame owns no
 geometry of its own: it is recomputed from the live cards, including while a gesture is in flight.
 
 While a member is being dragged out of a frame, that frame is computed from the members holding
@@ -657,7 +671,7 @@ frame.
 `Ctrl+G` groups the selection and `Ctrl+Shift+G` ungroups every frame the selection sits in; the
 canvas claims both through `ShortcutOverride` like every other key it owns. The selection's context
 menu offers `Group`, and `Ungroup` when the selection is in one; a right-click on a frame offers
-`Ungroup` and `Rename`. `Enter` keeps its one meaning in this editor -- rename the selected layer
+`Ungroup`, `Rename` and `Color`. `Enter` keeps its one meaning in this editor -- rename the selected layer
 node -- so a frame's title opens on double-click or from its own menu, and `Enter` commits from
 inside the field. `docs/ux/interaction-model.md` remains the binding key list.
 
@@ -1205,14 +1219,21 @@ artist-authored source-name field; existing authored Layer boundary names remain
 Dimensions and sequence member count / numbered range are read-only asset-record projections on
 the card and in Properties, without evaluation.
 
-The session's AssetController requests node thumbnails on snapshot and time changes. Its worker
-uses the public runtime rational frame mapping and projects the Image source timing and
-interpretation contract, then publishes a 64-pixel RGBA8 proxy. Runtime implementation headers
-remain private; thumbnail frame-selection tests pin Hold, Loop, Ping-pong and Start Frame. A content / selected-frame / interpretation cache holds at most
-512 proxies. One active request is cancelled when superseded; only the newest requested state is
-published. No file access or decode runs during card painting or on the UI thread. Pending and
-missing sources show a warning glyph on SurfaceSunken. Qt widgets and worker adapters share this
-implementation on Linux, macOS and Windows; local executed desktop qualification is Linux.
+Source cards carry no preview (task N1): the AssetController prepares only the Assets panel's
+per-asset proxies, so neither a snapshot change nor a playhead move decodes a frame for a node
+card. The playhead is not connected to the controller at all: playback ticks and scrubs start no
+job, probe no file and hash nothing (bug #401); source freshness is checked on every snapshot and
+composition change instead. The Node editor follows the playhead the same way: a time change
+reaches only the cards with an animated, driven or otherwise non-constant parameter, only where a
+view shows them (an off-screen card catches up when the view reaches it), coalesced into one
+refresh per display frame, never while the panel is hidden, and never rebuilding a selector's
+items, which follow the snapshot and the assets alone. A missing or unreadable
+source shows a warning badge in the card's header. Runtime implementation headers remain private;
+thumbnail frame-selection tests pin Hold, Loop, Ping-pong and Start Frame. A content /
+selected-frame / interpretation cache holds at most 512 proxies. One active request is cancelled
+when superseded; only the newest requested state is published. No file access or decode runs
+during card painting or on the UI thread. Qt widgets and worker adapters share this implementation
+on Linux, macOS and Windows; local executed desktop qualification is Linux.
 
 The snapshot compiler copies the selected asset into `CompiledImageSource`; only sequence
 sources make a plan time-dependent. Missing records remain compilable warning sources.

@@ -540,15 +540,15 @@ These use design pixels in graph space at 100% zoom. They scale with the canvas 
 | Surface/state | Rendering or interaction contract |
 | --- | --- |
 | Port socket | Kind-coloured edge dots aligned to parameter rows; geometry is owned by the [UI grammar](ui-grammar.md#node-cards) |
-| Ordered multi-input | Each Merge's ordered image port: a vertical pill in the kind's `Socket*` token, `kStackSlotPitch` long per ordered slot, divided by `Surface` hairlines. A `Muted` caret marks the position under the pointer during a drag, and the pill highlights compatible image drops; the card shows its input count |
+| Ordered multi-input | Each Merge's ordered image port: a vertical pill in the kind's `Socket*` token, `kStackSlotPitch` long per ordered slot, divided by `Surface` hairlines; each slot's link attaches at the middle of its own segment. A `Muted` caret marks the position under the pointer during a drag, and the pill highlights compatible image drops; the card shows its input count |
 | Card eyebrow | Each card carries a `UiSmall`/`Faint` kind label above its display name |
 | In-card vocabulary row | A parameter whose value is a closed vocabulary rather than a number takes a Compact `KDropdown` in the card's control column, sized and stretched exactly as a `KValueField` row is. Blending is one example; its value is not animatable and carries no keyframe indicator |
 | Socket hover/hit | Hover grows the circle to 12px; its hit radius is 16px (12px beyond the resting 4px radius); tooltip is `<port name> · <kind>` |
 | Selected node | 2px inset Accent outline, painted above the card/header surfaces |
 | Primary/active node | The same Accent outline; primary identity still belongs to the session selection |
 | Muted node | Body and in-node controls at 50% opacity; normal header and existing Phosphor `Hidden`/eye-slash badge, without strikethrough |
-| Collapsed node | Header-only `Radius::Full` pill; sockets distributed along the header edges; parameter controls hidden |
-| Link | Schema kind ink, widened 12px hit stroke; hover/selected-endpoint emphasis uses brighter ink and 2px stroke |
+| Collapsed node | Header-only `Radius::Full` pill, folded by the title's `CaretDown`/`CaretRight` disclosure caret; only linked sockets stay, centred down the two edges; parameter controls hidden |
+| Link | Schema kind ink as a cosmetic stroke (the same screen width at every zoom), widened 12px hit stroke; hover/selected-endpoint emphasis uses brighter ink |
 | Incompatible drag | Error link ink; release publishes nothing. Compatible sockets brighten and incompatible ones dim for the duration of the drag |
 | Structural socket/link | Explanatory tooltip and forbidden drag cursor; cut/rewire/insertion unavailable |
 | Resize | Right-edge 6px grab zone with horizontal resize cursor; preview is local and release commits width |
