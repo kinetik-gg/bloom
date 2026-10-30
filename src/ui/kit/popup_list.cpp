@@ -40,7 +40,7 @@ enum class RowKind : std::uint8_t { Entry, Heading, Separator };
 
 // Draws a pixmap centred in `box`, on whole device pixels.
 void drawCentred(QPainter& painter, const QRectF& box, const QPixmap& pixmap) {
-    const qreal ratio = painter.device()->devicePixelRatio();
+    const qreal ratio = painter.device()->devicePixelRatioF();
     const QSizeF extent = pixmap.deviceIndependentSize();
     painter.drawPixmap(
         QPointF(std::round((box.x() + (box.width() - extent.width()) / 2.0) * ratio) / ratio,
@@ -136,7 +136,7 @@ class ListDelegate final : public QStyledItemDelegate {
         const int column = menuIconColumnWidth();
         const QRectF iconBox(row.left() + px(Spacing::MenuItemX),
                              row.top() + (row.height() - column) / 2, column, column);
-        const qreal ratio = painter->device()->devicePixelRatio();
+        const qreal ratio = painter->device()->devicePixelRatioF();
         if (!glyph.isNull()) {
             const QIcon::Mode mode =
                 !enabled ? QIcon::Disabled : (current ? QIcon::Selected : QIcon::Normal);

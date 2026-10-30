@@ -80,7 +80,7 @@ void AssetRowDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
     const auto text = index.data(Qt::DisplayRole).toString();
     if (index.column() == NameColumn) {
         if (index.data(kGlyphRole).isValid()) {
-            const qreal ratio = painter->device()->devicePixelRatio();
+            const qreal ratio = painter->device()->devicePixelRatioF();
             const auto pixmap = kit::iconPixmap(glyphFor(option, index), kit::IconRole::Chrome,
                                                 glyphInk(index, selected), kit::State::Normal,
                                                 ratio);
