@@ -123,6 +123,8 @@ enum class IconId : std::uint8_t {
     // Panel switcher glyphs: the Script editor (a terminal window) and the MCP Server (plugs).
     ScriptEditor,
     McpServer,
+    // The Export panel (a box with an outgoing arrow).
+    ExportPanel,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add

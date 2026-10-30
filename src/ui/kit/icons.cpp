@@ -110,6 +110,7 @@ const auto& iconAssets() {
         {IconId::Overflow, QLatin1StringView("caret-double-right")},
         {IconId::ScriptEditor, QLatin1StringView("terminal-window")},
         {IconId::McpServer, QLatin1StringView("plugs-connected")},
+        {IconId::ExportPanel, QLatin1StringView("export")},
     });
     return entries;
 }

@@ -333,3 +333,6 @@ The panel switcher icons (2026-10-30) downloaded the same pinned archive, verifi
 from the downloaded bytes, and extracted `terminal-window` (the Script editor) and
 `plugs-connected` (the MCP Server panel) in regular, fill and bold from `assets/` without
 modification.
+The Export panel icon (2026-10-30) downloaded the same pinned archive, verified its SHA-256 above
+from the downloaded bytes, and extracted `export` in regular, fill and bold from `assets/` without
+modification.

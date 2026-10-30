@@ -71,6 +71,9 @@ constexpr auto kHeaderIconRole = kit::IconRole::Chrome;
     if (editorId == "bloom.mcp-server") {
         return kit::IconId::McpServer;
     }
+    if (editorId == "bloom.export") {
+        return kit::IconId::ExportPanel;
+    }
     return std::nullopt;
 }
 
