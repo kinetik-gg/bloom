@@ -388,6 +388,14 @@ class ImageDriver final : public DriverBase {
             }
             frame.outcome.emplace(std::move(*outcome));
         }
+        if (pendingRepublish_ && std::holds_alternative<std::monostate>(inFlight_)) {
+            // Republish once no frame ahead is analysing or holding an analysed attempt.
+            releaseAnalysedFrames();
+            if (runningAnalyses() != 0)
+                return;
+            approve(std::exchange(pendingRepublish_, nullptr));
+            return;
+        }
         // The head frame enters the serial tail (EXR colour preparation, then publication).
         if (std::holds_alternative<std::monostate>(inFlight_) && !window_.empty() &&
             window_.front().outcome) {
@@ -525,6 +533,8 @@ class ImageDriver final : public DriverBase {
     // retries the earliest refused frame once something completed since its refusal.
     void fill() {
         for (auto& frame : window_) {
+            if (pendingRepublish_)
+                break;
             if (!frame.awaitingCapacity)
                 continue;
             const bool due = frame.externalWait
@@ -536,8 +546,16 @@ class ImageDriver final : public DriverBase {
         }
         // The frame in the publication tail counts: a depth of one is one frame at a time.
         const auto tailFrames = std::holds_alternative<std::monostate>(inFlight_) ? 0U : 1U;
-        while (!pauseRequested_ && nextStart_ <= input_.range.last &&
+        while (!pauseRequested_ && !pendingRepublish_ && nextStart_ <= input_.range.last &&
                window_.size() + tailFrames < depthLimit_) {
+            // Frames that publish to the same file (a name pattern without a frame number) stay
+            // one at a time: a newer attempt's publication intent supersedes an older one.
+            if (const auto path = exportFramePath(input_.job, input_.output, nextStart_);
+                path && ((!std::holds_alternative<std::monostate>(inFlight_) && *path == target_) ||
+                         std::ranges::any_of(window_, [&path](const auto& frame) {
+                             return frame.target == *path;
+                         })))
+                break;
             window_.emplace_back();
             window_.back().index = nextStart_++;
             if (!startAttempt(window_.back()))
@@ -803,7 +821,20 @@ class ImageDriver final : public DriverBase {
         inFlight_.emplace<PrepareHandle>(std::move(submission.handle));
     }
 
+    // Analysed frames waiting behind the tail give their retained memory back and analyse again.
+    void releaseAnalysedFrames() {
+        for (auto& frame : window_) {
+            if (frame.outcome) {
+                frame.outcome.reset();
+                frame.awaitingCapacity = true;
+                frame.externalWait = false;
+                frame.refusedAtEpoch = releaseEpoch_ - 1;
+            }
+        }
+    }
+
     void approve(const std::shared_ptr<const output::OutputAnalysisAttemptV1>& attempt) {
+        tailAttempt_ = attempt;
         const auto digest = attempt->digest();
         if (!digest)
             return fail(failure(ExportFailureCode::AnalysisRefused, "export.analysis.digest",
@@ -862,6 +893,19 @@ class ImageDriver final : public DriverBase {
                 return fail(
                     failure(ExportFailureCode::PublicationConflict, "export.publication.conflict",
                             "The destination changed outside Bloom; it was not replaced", next_));
+            // Frames analysed ahead hold the memory this publication's scratch needs: continue
+            // one frame at a time and publish the same approved frame again once they released.
+            if (result->failure() &&
+                result->failure()->payloadAs<FrameExportResourceExhaustedV1>() && tailAttempt_ &&
+                !republishing_ && std::ranges::any_of(window_, [](const auto& frame) {
+                    return frame.runner.has_value() || frame.outcome.has_value();
+                })) {
+                depthLimit_ = 1;
+                republishing_ = true;
+                pendingRepublish_ = tailAttempt_;
+                releaseAnalysedFrames();
+                return;
+            }
             auto code = ExportFailureCode::WriteFailed;
             std::string reason = "The frame could not be published; earlier frames are unaffected";
             if (result->failure()) {
@@ -890,6 +934,8 @@ class ImageDriver final : public DriverBase {
         ++published_;
         ++next_;
         ++releaseEpoch_;
+        tailAttempt_.reset();
+        republishing_ = false;
     }
 
     void verify() {
@@ -945,6 +991,11 @@ class ImageDriver final : public DriverBase {
     std::uint64_t nextStart_ = 0;
     std::size_t depthLimit_ = 1;
     std::uint64_t releaseEpoch_ = 0;
+    // The frame in the publication tail, kept so a publication refused for memory held by frames
+    // analysed ahead can be published again once they released it.
+    std::shared_ptr<const output::OutputAnalysisAttemptV1> tailAttempt_;
+    std::shared_ptr<const output::OutputAnalysisAttemptV1> pendingRepublish_;
+    bool republishing_ = false;
     std::shared_ptr<OutputMediaDisplayCommandV1> mediaDisplay_;
     std::shared_ptr<std::shared_ptr<OutputMediaDisplayCommandV1>> mediaDisplaySlot_ =
         std::make_shared<std::shared_ptr<OutputMediaDisplayCommandV1>>();
@@ -1041,6 +1092,7 @@ class MediaDriver final : public DriverBase {
             request.artifactByteLimit = input_.output.artifactByteLimit;
         request.gpuProvider = dependencies_.gpu;
         request.owner = input_.owner;
+        request.useCachedFrames = settings.useCachedFrames;
         runner_ = std::make_unique<SequenceExportRunnerV1>(
             dependencies_.scheduler, dependencies_.compiler, dependencies_.publications,
             dependencies_.artifacts, *dependencies_.ledger, std::move(request),
@@ -1119,6 +1171,7 @@ class MediaDriver final : public DriverBase {
         provenance.gpuProcessPayloadBytes = result.gpuProcessPayloadBytes;
         provenance.gpuEncodedPayloadBytes = result.gpuEncodedPayloadBytes;
         provenance.gpuDeviceOwnershipEpoch = result.gpuDeviceOwnershipEpoch;
+        provenance.framesReused = result.framesReused;
         route_ = provenance.cpuReferenceFrames > 0 ? ExportDeviceRoute::CpuReference
                                                    : ExportDeviceRoute::Gpu;
         if (const auto* analysis = runner_->analysis())
