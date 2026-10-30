@@ -33,6 +33,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace bloom::ui {
 
@@ -46,6 +47,10 @@ struct ExportEditResult final {
     QString reason;
     // The job an add created, read from the command result.
     std::optional<document::ExportJobId> addedJob;
+    // The output an add-output created, read from the command result.
+    std::optional<document::ExportOutputId> addedOutput;
+    // Every job an add created, in the order they were asked for.
+    std::vector<document::ExportJobId> addedJobs;
 };
 
 // A change to a job's render settings. Absent members are left alone.
@@ -117,14 +122,19 @@ class ExportQueuePort {
     virtual void refreshPreflight() = 0;
 
     // ---- Project-truth commands: one undo entry each, on the ordinary command path.
-    virtual ExportEditResult addJob(document::CompositionId composition) = 0;
+    // One job per composition, in order, as one undoable edit. `index` is where the first one goes
+    // among the jobs (the end when absent).
+    virtual ExportEditResult addJobs(const std::vector<document::CompositionId>& compositions,
+                                     std::optional<std::size_t> index) = 0;
     virtual ExportEditResult duplicateJob(document::ExportJobId job) = 0;
     virtual ExportEditResult removeJob(document::ExportJobId job) = 0;
     virtual ExportEditResult removeFinished() = 0;
     // Moves the job so it sits at `index` among the jobs after the move.
     virtual ExportEditResult moveJob(document::ExportJobId job, std::size_t index) = 0;
     virtual ExportEditResult editJob(document::ExportJobId job, const ExportJobEdit& edit) = 0;
-    virtual ExportEditResult addOutput(document::ExportJobId job) = 0;
+    // Adds an output in the format of `presetId` (the catalogue's default when empty), as one
+    // undoable edit.
+    virtual ExportEditResult addOutput(document::ExportJobId job, const std::string& presetId) = 0;
     virtual ExportEditResult applyPreset(document::ExportJobId job,
                                          document::ExportOutputId output,
                                          const std::string& presetId) = 0;
@@ -185,7 +195,7 @@ class ExportQueueAdapter final : public QObject {
     ExportEditResult removeFinished();
     ExportEditResult moveJob(document::ExportJobId job, std::size_t index);
     ExportEditResult editJob(document::ExportJobId job, const ExportJobEdit& edit);
-    ExportEditResult addOutput(document::ExportJobId job);
+    ExportEditResult addOutput(document::ExportJobId job, const std::string& presetId = {});
     ExportEditResult applyPreset(document::ExportJobId job, document::ExportOutputId output,
                                  const std::string& presetId);
     ExportEditResult editOutput(document::ExportJobId job, document::ExportOutputId output,
@@ -196,6 +206,10 @@ class ExportQueueAdapter final : public QObject {
     // success it asks for the Export panel to be revealed and announces the new job so a panel
     // selects it.
     ExportEditResult addCompositionToQueue(document::CompositionId composition);
+    // The same for several compositions at once (an Assets drag or its context menu): one job each,
+    // in order, one undo entry, revealed and selected. `index` places the first among the jobs.
+    ExportEditResult addCompositionsToQueue(const std::vector<document::CompositionId>& compositions,
+                                            std::optional<std::size_t> index = std::nullopt);
     // Jobs > Show in Export: reveals the panel and selects `job`.
     void showJob(document::ExportJobId job);
     // Why the queue cannot take a job right now (empty when it can).

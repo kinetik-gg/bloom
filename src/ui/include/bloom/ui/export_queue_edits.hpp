@@ -38,12 +38,17 @@ class ExportQueueEdits final {
     void setProjectFolder(ProjectFolder folder) { projectFolder_ = std::move(folder); }
 
     ExportEditResult addJob(document::CompositionId composition);
+    // One job per composition, in order, in one transaction (one undo entry). `index` is where the
+    // first goes among the jobs; the end when absent.
+    ExportEditResult addJobs(const std::vector<document::CompositionId>& compositions,
+                             std::optional<std::size_t> index = std::nullopt);
     ExportEditResult duplicateJob(document::ExportJobId job);
     ExportEditResult removeJob(document::ExportJobId job);
     ExportEditResult removeFinished(const std::vector<document::ExportJobId>& finished);
     ExportEditResult moveJob(document::ExportJobId job, std::size_t index);
     ExportEditResult editJob(document::ExportJobId job, const ExportJobEdit& edit);
-    ExportEditResult addOutput(document::ExportJobId job);
+    // `presetId` empty adds the catalogue default; otherwise an output in that preset's format.
+    ExportEditResult addOutput(document::ExportJobId job, const std::string& presetId = {});
     ExportEditResult applyPreset(document::ExportOutputId output, const std::string& presetId);
     ExportEditResult editOutput(document::ExportOutputId output, const ExportOutputEdit& edit);
     ExportEditResult removeOutput(document::ExportOutputId output);

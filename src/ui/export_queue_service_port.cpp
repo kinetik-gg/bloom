@@ -101,8 +101,9 @@ void ServiceExportQueuePort::refreshPreflight() {
         s->refreshPreflight();
 }
 
-ExportEditResult ServiceExportQueuePort::addJob(const document::CompositionId composition) {
-    return published(edits_.addJob(composition));
+ExportEditResult ServiceExportQueuePort::addJobs(const std::vector<document::CompositionId>& compositions,
+                                                 const std::optional<std::size_t> index) {
+    return published(edits_.addJobs(compositions, index));
 }
 ExportEditResult ServiceExportQueuePort::duplicateJob(const document::ExportJobId job) {
     return published(edits_.duplicateJob(job));
@@ -127,8 +128,9 @@ ExportEditResult ServiceExportQueuePort::editJob(const document::ExportJobId job
                                                  const ExportJobEdit& edit) {
     return published(edits_.editJob(job, edit));
 }
-ExportEditResult ServiceExportQueuePort::addOutput(const document::ExportJobId job) {
-    return published(edits_.addOutput(job));
+ExportEditResult ServiceExportQueuePort::addOutput(const document::ExportJobId job,
+                                                   const std::string& presetId) {
+    return published(edits_.addOutput(job, presetId));
 }
 ExportEditResult ServiceExportQueuePort::applyPreset(const document::ExportJobId,
                                                      const document::ExportOutputId output,

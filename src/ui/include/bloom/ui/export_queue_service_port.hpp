@@ -39,13 +39,14 @@ class ServiceExportQueuePort final : public ExportQueuePort {
                                              document::ExportOutputId output) override;
     void refreshPreflight() override;
 
-    ExportEditResult addJob(document::CompositionId composition) override;
+    ExportEditResult addJobs(const std::vector<document::CompositionId>& compositions,
+                             std::optional<std::size_t> index) override;
     ExportEditResult duplicateJob(document::ExportJobId job) override;
     ExportEditResult removeJob(document::ExportJobId job) override;
     ExportEditResult removeFinished() override;
     ExportEditResult moveJob(document::ExportJobId job, std::size_t index) override;
     ExportEditResult editJob(document::ExportJobId job, const ExportJobEdit& edit) override;
-    ExportEditResult addOutput(document::ExportJobId job) override;
+    ExportEditResult addOutput(document::ExportJobId job, const std::string& presetId) override;
     ExportEditResult applyPreset(document::ExportJobId job, document::ExportOutputId output,
                                  const std::string& presetId) override;
     ExportEditResult editOutput(document::ExportJobId job, document::ExportOutputId output,
