@@ -438,6 +438,9 @@ void migrationPin() {
     replace(R"(,\s*"backgroundColor"\s*:\s*\[[^\]]*\])", "");
     replace(R"(,\s*"asset"\s*:\s*"0")", "");
     replace(R"(,\s*"dataBlock"\s*:\s*"0")", "");
+    replace(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\s*\]\s*\})", "");
+    replace(R"(,\s*"exportJob"\s*:\s*"0")", "");
+    replace(R"(,\s*"exportOutput"\s*:\s*"0")", "");
     auto coordinator = project::ProjectIoMemoryCoordinator::create(64ULL << 20U);
     if (!coordinator)
         std::abort();

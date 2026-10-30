@@ -4,8 +4,8 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/result.hpp>
 #include <bloom/commands/transaction.hpp>
-#include <bloom/document/document.hpp>
 #include <bloom/document/color_settings.hpp>
+#include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/project/canonical_document.hpp>
@@ -38,6 +38,7 @@
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <regex>
 #include <source_location>
 #include <stdexcept>
 #include <string>
@@ -923,13 +924,24 @@ void testSaveCopyUnavailableOnEditableContent(Expectations& expectations) {
     std::string text(size ? *size.value() : 0U, '\0');
     if (!size || !bloom::project::encodeCanonicalDocument(input, text))
         throw std::runtime_error("older video document encode");
-    const auto current = "\"minor\": " +
-                         std::to_string(bloom::project::kCanonicalDocumentSchemaVersionV1.minor) +
-                         "\n  },\n  \"project\"";
+    const auto current =
+        "\"minor\": " + std::to_string(bloom::project::kCanonicalDocumentSchemaVersionV1.minor) +
+        "\n  },\n  \"project\"";
     const auto anchor = text.find(current);
     if (anchor == std::string::npos)
         throw std::runtime_error("older video version anchor");
     text.replace(anchor, current.find('\n'), "\"minor\": " + std::to_string(minor));
+    // Before 1.29 a document has no export queue or export id allocators (ADR 0033).
+    if (minor < 29) {
+        for (const auto* pattern :
+             {R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\s*\]\s*\})",
+              R"(,\s*"exportJob"\s*:\s*"0")", R"(,\s*"exportOutput"\s*:\s*"0")"}) {
+            const std::regex expression(pattern);
+            if (!std::regex_search(text, expression))
+                throw std::runtime_error("older video export queue member");
+            text = std::regex_replace(text, expression, "");
+        }
+    }
     return text;
 }
 
@@ -942,9 +954,9 @@ void writeArchiveAtMinor(const std::filesystem::path& path, const std::string& d
     if (!manifestSize || !bloom::project::encodeCanonicalManifest(manifest, manifestText))
         throw std::runtime_error("older video manifest encode");
     namespace zip = bloom::project::test;
-    const auto archive =
-        zip::buildConformingArchive(zip::makeStoredEntry("manifest.json", zip::toBytes(manifestText)),
-                                    zip::makeStoredEntry("document.json", zip::toBytes(documentText)));
+    const auto archive = zip::buildConformingArchive(
+        zip::makeStoredEntry("manifest.json", zip::toBytes(manifestText)),
+        zip::makeStoredEntry("document.json", zip::toBytes(documentText)));
     std::ofstream file(path, std::ios::binary);
     file.write(reinterpret_cast<const char*>(archive.data()),
                static_cast<std::streamsize>(archive.size()));
@@ -978,7 +990,8 @@ void testOlderProjectVideoColourNotice(Expectations& expectations) {
                         "video colour notice: the 1.27 project opens");
     expectations.expect(
         !noticeAtSignal.isEmpty() && noticeAtSignal.contains("earlier version of Bloom") &&
-            noticeAtSignal.contains("affects 1 video in") && noticeAtSignal.contains("Input Colour"),
+            noticeAtSignal.contains("affects 1 video in") &&
+            noticeAtSignal.contains("Input Colour"),
         "video colour notice: an older project with an Auto video asset shows the note, got: " +
             noticeAtSignal.toStdString());
 
@@ -1004,6 +1017,7 @@ void testOlderProjectVideoColourNotice(Expectations& expectations) {
     auto [document, stack] = host.liveDocumentAndStack();
     expectations.expect(
         snapshot.contentKind == ProjectSessionContentKind::DecodedDocument && document != nullptr &&
+            !document->snapshot().project().assets().empty() &&
             document->snapshot().project().assets().front().interpretation.inputColorSpaceId ==
                 "lin_rec709_scene",
         "video colour notice: the explicit input colour opens exactly as saved");
