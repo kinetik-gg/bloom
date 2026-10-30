@@ -25,7 +25,7 @@
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/platform/staged_artifact.hpp>
-#include <bloom/render/packed_host_retirement.hpp>
+#include <bloom/runtime/packed_host_retirement.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 
 #include <algorithm>

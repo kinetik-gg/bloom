@@ -1,6 +1,6 @@
 #include "command_test_support.hpp"
 
-#include "../layer_lock.hpp"
+#include "layer_lock.hpp"
 
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/document/value_nodes.hpp>

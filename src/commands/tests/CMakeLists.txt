@@ -49,7 +49,8 @@ bloom_add_test(NAME bloom.commands.nodes COMMAND bloom_commands_node_test LABELS
 
 add_executable(bloom_commands_node_eligibility_test node_operation_eligibility_tests.cpp)
 target_link_libraries(bloom_commands_node_eligibility_test PRIVATE bloom_commands)
-target_include_directories(bloom_commands_node_eligibility_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(bloom_commands_node_eligibility_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/..)
 bloom_enable_warnings(bloom_commands_node_eligibility_test)
 bloom_add_test(NAME bloom.commands.node-eligibility COMMAND bloom_commands_node_eligibility_test
                LABELS commands unit)

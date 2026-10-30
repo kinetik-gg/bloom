@@ -288,7 +288,7 @@ int main(int argc, char** argv) {
     try {
         test::check(argc == 2, "test output directory");
         tests(argv[1]);
-        // Issue #352: one 8K UHD ProRes frame exports and passes reopen QC.
+        // Issue #352: one 8K UHD ProRes frame exports and passes reopen quality check.
         EncodeSettingsV1 eightK;
         eightK.width = 7680;
         eightK.height = 4320;

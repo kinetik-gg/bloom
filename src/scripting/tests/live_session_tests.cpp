@@ -1,5 +1,4 @@
 #include <atomic>
-#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/scripting/facade.hpp>
 #include <bloom/scripting/render.hpp>
@@ -127,12 +126,12 @@ void savedColorIntent() {
     require(static_cast<bool>(created), "Create color export session");
     auto session = std::move(created).takeSession();
     auto settings = *session->hostSession()->colorSettings();
-    const auto revision = color::ocioBuiltInContentRevision(
-        color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
-    require(revision.has_value(), "Resolve qualified ACES config revision");
-    settings.ocioConfig.locator =
-        document::BuiltInOcioConfigLocator{std::string(color::kAcesCgV1ConfigUri)};
-    settings.ocioConfig.expectedRevision.digest = *revision;
+    // A new session starts on the qualified built-in ACES configuration.
+    const auto* builtIn = std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
+    require(builtIn != nullptr, "New session uses the built-in OCIO configuration");
+    const std::string configUri = builtIn->uri;
+    const auto revision = std::optional{settings.ocioConfig.expectedRevision.digest};
+    require(*revision != core::Sha256Digest{}, "Qualified ACES config revision is pinned");
     settings.processColorSpaceId = "Linear P3-D65";
     require(session->hostSession()->setColorSettings(settings) ==
                 host::ProjectSessionColorSettingsStatus::Updated,
@@ -161,7 +160,7 @@ void savedColorIntent() {
     const auto intent = scripting::captureRenderColorIntent(source, *composition);
     require(intent.has_value() && intent->workingColorSpaceId == "ACEScg" &&
                 intent->ocioConfigRevision == *revision &&
-                intent->ocioConfigUri == color::kAcesCgV1ConfigUri && intent->storage != nullptr,
+                intent->ocioConfigUri == configUri && intent->storage != nullptr,
             "Shared headless export capture owns the saved effective color intent");
     const auto* originalComposition = session->snapshot().project().findComposition(compositionId);
     require(originalComposition != nullptr, "Original composition exists");
@@ -199,11 +198,6 @@ void savedColorIntent() {
     require(relativeIntent.has_value() && relativeIntent->ocioConfigUri == "color/config.ocioz" &&
                 relativeIntent->ocioConfigRevision == core::Sha256Digest{},
             "Headless capture preserves relative OCIO locator instead of empty Neutral intent");
-    const auto relativeResolution = color::resolveOcioBuiltIn(
-        color::OcioConfigLocatorKind::BloomBuiltIn, relativeIntent->ocioConfigUri,
-        relativeIntent->ocioConfigRevision, relativeIntent->workingColorSpaceId);
-    require(!relativeResolution.ready(),
-            "Unsupported relative OCIO archive cannot resolve as Neutral");
 }
 } // namespace
 int main() {

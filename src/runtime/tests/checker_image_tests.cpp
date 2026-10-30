@@ -1,4 +1,4 @@
-#include "../checker_image.hpp"
+#include "checker_image.hpp"
 
 #include <bloom/render/image_types.hpp>
 
