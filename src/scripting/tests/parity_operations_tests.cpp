@@ -241,19 +241,19 @@ void nodeOperations() {
     if (nodes.empty())
         return;
 
-    // A Math node fed by a Value node's output, then a reroute inserted into that link.
+    // A Blur node fed by a Solid node's image output, then a reroute inserted into that link.
     auto value =
         fixture.run("bloom.node.add", {{"composition", Value(StableId{fixture.main.value()})},
-                                       {"nodeType", Value("bloom.value-scalar")}});
+                                       {"nodeType", Value("bloom.solid-source")}});
     const auto values = Fixture::outputs<document::NodeId>(value, "node");
-    expect(values.size() == 1, "a value node is added");
+    expect(values.size() == 1, "a source node is added");
     if (values.empty())
         return;
     auto fed = fixture.run("bloom.node.add-fed-by",
                            {{"composition", Value(StableId{fixture.main.value()})},
-                            {"nodeType", Value("bloom.math")},
+                            {"nodeType", Value("bloom.gaussian-blur")},
                             {"node", Value(StableId{values.front().value()})},
-                            {"port", Value(std::string(document::kValuePortName))}});
+                            {"port", Value("image")}});
     expect(fed.succeeded(), "a node fed by an output is added and wired");
     const auto fedNodes = Fixture::outputs<document::NodeId>(fed, "editorNode");
     expect(fedNodes.size() == 1, "the fed node is output");
