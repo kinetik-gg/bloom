@@ -48,6 +48,14 @@ void require(const bool value, const char* message) {
     }
 }
 MemoryBudgetState sample(GpuProcessingPhasePolicy::Clock::time_point now);
+void headroomPreferenceRoundTrips() {
+    GpuProcessingPhasePolicy policy;
+    require(policy.headroom() == MemoryHeadroom{}, "the root starts with the 2 GiB defaults");
+    policy.setHeadroom({.ramBytes = 4ULL << 30, .vramBytes = 0});
+    require(policy.headroom().ramBytes == 4ULL << 30 && policy.headroom().vramBytes == 0,
+            "the root keeps the delivered headroom preferences");
+}
+
 void sourceFreeOutputStage() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
     GpuProcessingPhasePolicy policy;
@@ -1122,6 +1130,7 @@ int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string_view(argv[1]) == "--live-unlimited-probe")
             return liveConstraintRemoval();
+        headroomPreferenceRoundTrips();
         sourceFreeOutputStage();
         lowMemoryHostFinalAdmission();
         liveHeadroomDuringCachePressure();

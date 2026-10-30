@@ -368,6 +368,15 @@ GpuProcessingPhasePolicySnapshot GpuProcessingPhasePolicy::snapshot() const noex
             .usesNominalDeviceEstimate = nominal};
 }
 
+void GpuProcessingPhasePolicy::setHeadroom(const MemoryHeadroom headroom) noexcept {
+    const std::lock_guard lock(mutex_);
+    headroom_ = headroom;
+}
+MemoryHeadroom GpuProcessingPhasePolicy::headroom() const noexcept {
+    const std::lock_guard lock(mutex_);
+    return headroom_;
+}
+
 render::GpuProcessingPhaseGrant reserveHostEvaluationPhase(GpuProcessingPhasePolicy& policy,
                                                            const std::uint64_t pixels,
                                                            const std::uint64_t requestedPixelBytes,

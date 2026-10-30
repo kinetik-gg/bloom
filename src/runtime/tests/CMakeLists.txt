@@ -1831,6 +1831,12 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     set_tests_properties(bloom.runtime.gpu_image_reclamation PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+add_executable(bloom_runtime_memory_headroom_test memory_headroom_tests.cpp)
+target_link_libraries(bloom_runtime_memory_headroom_test PRIVATE bloom_runtime)
+bloom_enable_warnings(bloom_runtime_memory_headroom_test)
+bloom_add_test(NAME bloom.runtime.memory_headroom
+    COMMAND bloom_runtime_memory_headroom_test LABELS unit memory)
+
 add_executable(bloom_runtime_gpu_processing_phase_policy_test gpu_processing_phase_policy_tests.cpp)
 target_link_libraries(bloom_runtime_gpu_processing_phase_policy_test PRIVATE bloom_runtime_evaluator)
 bloom_enable_warnings(bloom_runtime_gpu_processing_phase_policy_test)
