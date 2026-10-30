@@ -18,6 +18,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <atomic>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -358,6 +360,55 @@ void testForeignThreadLifetime(Expectations& expectations, GpuDevice& device) {
 
 } // namespace
 
+// #401: a large upload's staging copy runs as chunks through the caller's parallel-for. Chunks
+// copied out of order on other threads must still give a bit-exact resident image.
+void testChunkedStagingCopy(Expectations& expectations, GpuImageUpload& upload) {
+    const auto window = ImageWindow::create(0, 0, 1280, 720); // 14.7 MB: two 8 MiB chunks
+    const auto pixelAspect = PixelAspectRatio::create(1, 1);
+    if (!window || !pixelAspect) {
+        expectations.expect(false, "the chunked fixture windows build");
+        return;
+    }
+    auto fixture = buildFixture(*window.value(), *window.value(), *pixelAspect);
+    expectations.expect(fixture.has_value(), "the chunked fixture builds");
+    if (!fixture)
+        return;
+    const auto source = std::make_shared<const Rgba32fImage>(std::move(*fixture));
+    std::atomic<std::size_t> chunksRun{0};
+    std::size_t chunksAsked = 0;
+    GpuImageUploadParameters parameters;
+    parameters.source = source;
+    parameters.parallelFor = [&](const std::size_t count,
+                                 const std::function<void(std::size_t)>& body) {
+        chunksAsked = count;
+        std::vector<std::thread> threads;
+        for (std::size_t index = count; index-- > 0;)
+            threads.emplace_back([&body, &chunksRun, index] {
+                body(index);
+                chunksRun.fetch_add(1);
+            });
+        for (auto& thread : threads)
+            thread.join();
+    };
+    const auto accepted = upload.begin(parameters, 1ULL << 32ULL);
+    expectations.expect(accepted.code == GpuImageUploadDiagnosticCode::None,
+                        "a chunked upload begins");
+    if (accepted.code != GpuImageUploadDiagnosticCode::None)
+        return;
+    expectations.expect(chunksAsked == 2 && chunksRun.load() == 2,
+                        "a 14.7 MB staging copy runs as two parallel chunks");
+    expectations.expect(pollUntilTerminal(upload) == GpuImageUploadPollResult::Ready,
+                        "the chunked upload reaches Ready");
+    auto readback = upload.readback();
+    expectations.expect(readback.hasValue() &&
+                            readback.pixels.size() == source->pixels().size() &&
+                            std::memcmp(readback.pixels.data(), source->pixels().data(),
+                                        readback.pixels.size() * sizeof(Rgba32f)) == 0,
+                        "chunks copied out of order give a bit-exact resident image");
+    GpuImage taken = upload.takeImage();
+    expectations.expect(taken.isValid(), "the chunked upload result is taken");
+}
+
 int main(const int argc, char** argv) {
     const Options options = parseOptions(argc, argv);
     if (!options.valid) {
@@ -387,6 +438,7 @@ int main(const int argc, char** argv) {
     GpuImageUpload& upload = *created.upload;
     expectations.expect(upload.isBoundTo(*device.device), "the upload is bound to its device");
     testBitExactUpload(expectations, *device.device, upload);
+    testChunkedStagingCopy(expectations, upload);
     testBudgetsAndArguments(expectations, upload);
     testWrongThread(expectations, upload);
     testCancellation(expectations, upload);

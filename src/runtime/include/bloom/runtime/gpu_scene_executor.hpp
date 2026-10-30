@@ -51,6 +51,8 @@
 
 namespace bloom::runtime {
 
+class CpuRowBandExecutor;
+
 enum class GpuSceneExecutorJobState : std::uint8_t { Idle, Pending, Ready, Failure };
 enum class GpuSceneExecutorPollResult : std::uint8_t { Pending, Ready, Failure, WrongThread };
 
@@ -246,6 +248,11 @@ struct GpuSceneExecutorBudgets final {
     // Bounded two-to-eight kernel native command batches; serial native fallback preserves
     // coverage and live-memory bounds for ineligible or pre-submit-refused plans.
     bool enableNativeBatches = true;
+    // Optional bounded pool for the host side of uploads (issue #401): the staging copy of a large
+    // source runs as chunks on it, the owner thread participating, instead of one memcpy that
+    // serialises every layer of every frame on the owner. Null copies on the owner thread. Not
+    // owned; it must outlive the executor (the scheduler's row-band executor does).
+    CpuRowBandExecutor* uploadCopyExecutor = nullptr;
 };
 
 struct GpuSceneExecutorCreateResult;

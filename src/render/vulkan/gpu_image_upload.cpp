@@ -2,6 +2,10 @@
 
 #include <bloom/render/image.hpp>
 
+#include <algorithm>
+#include <cstddef>
+#include <functional>
+
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -27,6 +31,27 @@ std::atomic<std::uint64_t> initializationCreated{0};
 std::atomic<std::uint64_t> initializationDestroyed{0};
 std::atomic<std::uint64_t> initializationFaultHits{0};
 std::atomic<std::uint64_t> initializationSlotReturns{0};
+
+// The staging copy's chunk size: large enough that hand-off is negligible against the copy, small
+// enough that a 1080p RGBA32F frame (33 MB) spreads over several workers.
+constexpr std::size_t kStagingCopyChunkBytes = 8U * 1024U * 1024U;
+
+// Copies `bytes` into the mapped staging buffer, in independent chunks through `parallelFor` when
+// it is set and the copy spans more than one chunk. The destination bytes are the same either way.
+void copyIntoStaging(
+    std::byte* const destination, const std::byte* const source, const std::size_t bytes,
+    const std::function<void(std::size_t, const std::function<void(std::size_t)>&)>& parallelFor) {
+    const std::size_t chunks = (bytes + kStagingCopyChunkBytes - 1) / kStagingCopyChunkBytes;
+    if (!parallelFor || chunks < 2) {
+        std::memcpy(destination, source, bytes);
+        return;
+    }
+    parallelFor(chunks, [&](const std::size_t chunk) {
+        const std::size_t offset = chunk * kStagingCopyChunkBytes;
+        std::memcpy(destination + offset, source + offset,
+                    std::min(kStagingCopyChunkBytes, bytes - offset));
+    });
+}
 
 bool initializationFails(upload_detail::UploadInitializationFault boundary) noexcept {
     if (initializationFault.load() != static_cast<std::uint8_t>(boundary)) {
@@ -379,8 +404,9 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
                       "the upload staging buffer could not be mapped");
             return impl.jobDiagnostic;
         }
-        std::memcpy(stagingInfo.pMappedData, source.pixels().data(),
-                    static_cast<std::size_t>(imageBytes));
+        copyIntoStaging(static_cast<std::byte*>(stagingInfo.pMappedData),
+                        reinterpret_cast<const std::byte*>(source.pixels().data()),
+                        static_cast<std::size_t>(imageBytes), parameters.parallelFor);
         if (vmaFlushAllocation(impl.control->allocator, impl.staging.allocation, 0,
                                VK_WHOLE_SIZE) != VK_SUCCESS) {
             impl.staging.release();

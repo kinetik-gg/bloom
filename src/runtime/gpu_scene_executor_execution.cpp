@@ -1,9 +1,11 @@
 #include <bloom/runtime/gpu_scene_executor.hpp>
+#include <bloom/runtime/row_band_execution.hpp>
 
 #include "gpu_scene_executor_private.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -297,10 +299,18 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
                                   "an upload step has no converted source before dispatch");
         }
-        const auto native = upload->begin(
-            render::GpuImageUploadParameters{step.uploadSource, device->retainedProcessingPhase(),
-                                             step.uploadDescriptor},
-            remaining);
+        render::GpuImageUploadParameters parameters{
+            step.uploadSource, device->retainedProcessingPhase(), step.uploadDescriptor};
+        if (auto* const copyPool = budgets.uploadCopyExecutor; copyPool != nullptr)
+            parameters.parallelFor = [copyPool](const std::size_t count,
+                                                const std::function<void(std::size_t)>& body) {
+                // A band that threw leaves its chunk unwritten: copy it again on this thread so
+                // the staging bytes are always complete. memcpy itself does not throw.
+                if (!copyPool->run(count, body))
+                    for (std::size_t index = 0; index < count; ++index)
+                        body(index);
+            };
+        const auto native = upload->begin(parameters, remaining);
         if (native.code != render::GpuImageUploadDiagnosticCode::None) {
             return diagnosticFromUpload(native);
         }

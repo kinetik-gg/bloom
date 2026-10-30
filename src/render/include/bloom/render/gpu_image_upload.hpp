@@ -27,7 +27,9 @@
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/image.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -72,6 +74,11 @@ struct GpuImageUploadParameters final {
     // Request geometry can differ from the immutable source's descriptor without rebasing its
     // pixel allocation. Its packed layout must match the source exactly.
     std::optional<Rgba32fImageDescriptor> descriptorOverride = {};
+    // Optional parallel-for (count, body) for the host copy into the staging buffer: a large
+    // upload is copied as independent chunks on the caller's bounded worker pool, the calling
+    // thread participating, instead of one single-threaded memcpy on the device owner thread
+    // (issue #401). Empty copies on the calling thread. The bytes written are identical.
+    std::function<void(std::size_t, const std::function<void(std::size_t)>&)> parallelFor = {};
 };
 
 // Separately bounded image and staging ceilings. The per-call byteBudget is the peak allowance and

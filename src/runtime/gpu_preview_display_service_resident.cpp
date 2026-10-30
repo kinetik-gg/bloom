@@ -3,6 +3,7 @@
 // service owner thread with the service's own device; no second thread/device/service exists.
 
 #include "gpu_preview_display_service_private.hpp"
+#include <bloom/runtime/task_scheduler.hpp>
 
 #include <bloom/color/ocio_cpu_display_frame.hpp>
 #include <bloom/render/gpu_composite.hpp>
@@ -73,6 +74,9 @@ bool createAndQualifyResidentRoute(
                 nominal.isKnown() ? nominal.availableBytes : kUnknownResidentPoolBytes);
         }
         executorBudgets.collectQueueTimestamps = core->queueTimingRequested();
+        // #401: the host copy of each upload spreads over the scheduler's row bands.
+        if (core->scheduler != nullptr && executorBudgets.uploadCopyExecutor == nullptr)
+            executorBudgets.uploadCopyExecutor = core->scheduler->rowBandExecutor();
         auto executor =
             GpuSceneExecutor::create(*core->device, *core->residentSceneCache, executorBudgets);
         if (!executor) {
