@@ -65,9 +65,6 @@ enum class ExportAvailabilityCode : std::uint8_t {
     HardwareEncoderMissing = 5,
     // The supervised media worker could not be started on this computer.
     WorkerUnavailable = 6,
-    // Never produced (ADR 0035: every platform exports). Kept only until the desktop UI drops its
-    // references; do not produce it.
-    PlatformNotSupported = 7,
     // Project-dependent: a named deliverable needs the built-in ACES CG config.
     RequiresAcesConfig = 8,
     // Project-dependent: the selected OCIO config has no pinned revision.
@@ -145,8 +142,6 @@ struct ExportEncoderStatus final {
     bool mediaWorker = false;
     // The VA-API render node whose driver opened the encode entry points (#369).
     std::string vaapiRenderNode;
-    // Ignored (ADR 0035: every platform exports). Kept only until the desktop UI stops setting it.
-    bool exportPlatform = false;
     // True once the first worker probe has answered.
     bool probed = false;
 };

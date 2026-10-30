@@ -40,9 +40,8 @@ void expect(const bool condition, const std::string& message) {
     }
 }
 
-host::ExportEncoderStatus encoders(const bool platform) {
+host::ExportEncoderStatus encoders() {
     host::ExportEncoderStatus status;
-    (void)platform; // ADR 0035: exportPlatform is ignored; every platform exports.
     status.probed = true;
     status.mediaWorker = true;
     status.h264Software = output::H264EncoderV1::OpenH264;
@@ -75,10 +74,8 @@ struct Fixture {
         std::make_shared<host::testing::FakeExportRunBackend>();
     std::unique_ptr<host::ExportQueueService> service;
 
-    bool platform_ = true;
-    explicit Fixture(const bool platform = true) : platform_(platform) { makeService(); }
+    Fixture() { makeService(); }
     void makeService() {
-        const bool platform = platform_;
         service = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
             .session = session,
             .scheduler = scheduler,
@@ -89,7 +86,7 @@ struct Fixture {
             .gpu = nullptr,
             .retirement = nullptr,
             .presets = host::ExportPresetCatalogue::create(
-                {.userDataDirectory = std::nullopt, .initialEncoders = encoders(platform)}),
+                {.userDataDirectory = std::nullopt, .initialEncoders = encoders()}),
             .limits = {},
             .displayProcessor = nullptr,
             .scratchDirectory = {},
@@ -422,12 +419,12 @@ void testTransientAndPlatform() {
         expect(f.service->acknowledgeTransient(*submitted.job) && !f.view(*submitted.job),
                "an acknowledged transient job leaves the snapshot");
     }
-    Fixture f(false);
+    Fixture f;
     const auto job = f.addJob();
     f.settle();
-    expect(f.service->canStart(job).code != ExportUnavailableCode::PlatformNotSupported &&
+    expect(f.service->canStart(job).available &&
                f.service->availability(job, ExportCommand::EditJob).available,
-           "the exportPlatform flag is ignored: Start is never PlatformNotSupported (ADR 0035)");
+           "every platform exports: Start and Edit are available (ADR 0035)");
 }
 
 } // namespace

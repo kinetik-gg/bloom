@@ -34,7 +34,7 @@ struct ToolFailure final : std::runtime_error {
                 std::string detailCode = {})
         : std::runtime_error(message), code(errorCode), detail(std::move(detailCode)) {}
     McpToolErrorCode code;
-    // The refusing collaborator's own code, e.g. the export queue's "PlatformNotSupported";
+    // The refusing collaborator's own code, e.g. the export queue's "PreflightBlocked";
     // published as diagnostic.detail when present.
     std::string detail;
     // A failed transient render, export or capture: its job id and the run's log (bounded),
