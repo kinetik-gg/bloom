@@ -72,6 +72,31 @@ QString toolErrorText(const mcp::McpToolErrorCode code) {
     }
     return {};
 }
+
+// A successful project call as a plain line: "saved 'SC020'". The service records the project's
+// name after the tool name in the entry's summary ("project.save SC020").
+QString projectLine(const mcp::McpActivityEntry& entry) {
+    using T = mcp::McpTool;
+    if (!entry.tool || !entry.outcome || *entry.outcome != mcp::McpCallOutcome::Succeeded)
+        return {};
+    const auto toolName = std::string(mcp::toolName(*entry.tool));
+    if (entry.summary.size() <= toolName.size() + 1 || !entry.summary.starts_with(toolName + " "))
+        return {};
+    const auto name = qs(entry.summary.substr(toolName.size() + 1));
+    switch (*entry.tool) {
+    case T::ProjectSave:
+    case T::ProjectSaveAs:
+        return tr("saved '%1'").arg(name);
+    case T::ProjectOpen:
+        return tr("opened '%1'").arg(name);
+    case T::ProjectNew:
+        return tr("created '%1'").arg(name);
+    case T::ProjectClose:
+        return tr("closed '%1'").arg(name);
+    default:
+        return {};
+    }
+}
 } // namespace
 
 QString statusText(const mcp::McpServerSnapshot& snapshot) {
@@ -160,6 +185,10 @@ QString activityLine(const mcp::McpActivityEntry& entry) {
                 what += QStringLiteral(": ") + reason;
         break;
     case K::ToolCall: {
+        if (const auto project = projectLine(entry); !project.isEmpty()) {
+            what = project;
+            break;
+        }
         what = toolText(entry.tool);
         if (what.isEmpty() && !entry.summary.empty())
             what = qs(entry.summary);

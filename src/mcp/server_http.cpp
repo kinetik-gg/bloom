@@ -568,6 +568,7 @@ void McpServerService::State::startNetwork(std::unique_ptr<platform::LoopbackLis
                     entry.toolError = handled.toolError;
                     entry.duration = duration;
                     entry.summary = handled.summary;
+                    entry.compileFailures = handled.compileFailures;
                     recordActivity(std::move(entry));
                 }
                 {

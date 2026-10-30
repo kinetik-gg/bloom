@@ -84,6 +84,22 @@ struct TaskAdmissionRetry final {
     friend bool operator==(const TaskAdmissionRetry&, const TaskAdmissionRetry&) = default;
 };
 
+// What a diagnostic is about, as ids a surface can select and name; no text. Raw ids of the
+// document objects the producer knew (a compile diagnostic fills the ones that apply).
+struct TaskDiagnosticSubject {
+    std::optional<std::uint64_t> node{};
+    std::optional<std::uint64_t> edge{};
+    std::optional<std::uint64_t> parameter{};
+    std::optional<std::uint64_t> layer{};
+    std::optional<std::uint64_t> layerSlot{};
+    std::string field{};
+
+    [[nodiscard]] bool empty() const noexcept {
+        return !node && !edge && !parameter && !layer && !layerSlot && field.empty();
+    }
+    friend bool operator==(const TaskDiagnosticSubject&, const TaskDiagnosticSubject&) = default;
+};
+
 struct TaskDiagnostic {
     std::string code;
     DiagnosticSeverity severity = DiagnosticSeverity::Error;
@@ -93,6 +109,8 @@ struct TaskDiagnostic {
     std::optional<TaskAdmissionRetry> admissionRetry = {};
     // A delivered-default refusal uses a new fresh sample epoch, never a stale root watermark.
     std::optional<TaskDefaultBudgetRetry> defaultBudgetRetry = {};
+    // What the diagnostic is about, when the producer knows (compile diagnostics do).
+    std::optional<TaskDiagnosticSubject> subject = {};
 
     friend bool operator==(const TaskDiagnostic&, const TaskDiagnostic&) = default;
 };

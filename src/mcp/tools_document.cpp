@@ -267,7 +267,7 @@ void throwUnavailable(const McpCall& call, const scripting::SessionCommandResult
 // After a successful edit, every edited composition is compiled once (never rendered) so an edit
 // that leaves one uncompilable is reported with the edit instead of surfacing later as a failed
 // preview or export: compileFailures in the result, and a composition.compile-failed event.
-yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, const McpCall& call,
+yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, McpCall& call,
                                 const commands::CommandResult& command) {
     auto* failures = out.array();
     const auto snapshot = call.session.snapshot();
@@ -300,6 +300,12 @@ yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, const Mcp
                 failure->parameterId ? out.number(failure->parameterId->value()) : out.null());
         out.set(record, "subject", subject);
         out.append(failures, record);
+        call.compileFailures.push_back(
+            {.composition = failure->compositionId.value(),
+             .detail = failure->detail,
+             .node = failure->nodeId ? std::optional(failure->nodeId->value()) : std::nullopt,
+             .parameter =
+                 failure->parameterId ? std::optional(failure->parameterId->value()) : std::nullopt});
         core.notice(
             {.kind = "composition.compile-failed",
              .message = failure->detail,

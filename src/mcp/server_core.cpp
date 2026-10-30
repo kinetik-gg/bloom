@@ -493,7 +493,8 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                                  .control = control,
                                  .content = {},
                                  .summary = {},
-                                 .notice = std::nullopt};
+                                 .notice = std::nullopt,
+                                 .compileFailures = {}};
                     auto* arguments = member(params, "arguments");
                     switch (*tool) {
                     case McpTool::Query:
@@ -526,6 +527,7 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                         handled.summary += " " + call.summary;
                     content = std::move(call.content);
                     handled.toolError = call.notice;
+                    handled.compileFailures = std::move(call.compileFailures);
                 }
             } catch (const ToolFailure& failure) {
                 failed = true;

@@ -187,6 +187,16 @@ enum class McpCallOutcome : std::uint8_t {
     Cancelled = 3,
 };
 
+// A composition an agent's edit left uncompilable (transact's compileFailures, the
+// composition.compile-failed event), carried to the activity log so the application can show it.
+struct McpCompileFailureFact final {
+    std::uint64_t composition = 0;
+    // Plain sentence, no codes or ids.
+    std::string detail{};
+    std::optional<std::uint64_t> node{};
+    std::optional<std::uint64_t> parameter{};
+};
+
 // What handle() produced, plus the facts the activity log records. `summary` is built from the
 // method, the tool name and, for transact, the operation ids and label (at most 256 bytes). It
 // never contains argument values, file contents, headers or any secret.
@@ -199,6 +209,8 @@ struct McpHandled final {
     McpCallOutcome outcome = McpCallOutcome::Succeeded;
     std::optional<McpToolErrorCode> toolError;
     std::string summary;
+    // transact: the compositions the edit left unable to compile.
+    std::vector<McpCompileFailureFact> compileFailures;
     // This message completed initialize; the protocol session now has a client.
     bool initializedClient = false;
 };

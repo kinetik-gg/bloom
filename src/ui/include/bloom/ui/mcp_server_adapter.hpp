@@ -21,6 +21,7 @@
 #include <QString>
 
 #include <chrono>
+#include <functional>
 #include <vector>
 
 #include <atomic>
@@ -43,11 +44,10 @@ class UiFeedback;
 [[nodiscard]] mcp::McpServerPreferences loadMcpServerPreferences(const QSettings& settings);
 void saveMcpServerPreferences(QSettings& settings, const mcp::McpServerPreferences& preferences);
 
-// An agent edit that left a composition unable to compile. ENGINE SWAP POINT: the Engine agent's
-// transact result field `compileFailures:[{composition, detail, subject}]` and the
-// `composition.compile-failed` event are not on main yet. When they land, McpServerAdapter::
-// handleEvents() builds one of these from the event (client label, tool, composition name, detail)
-// and calls noteCompileFailure(); the panel and its text already read this struct and nothing else.
+// An agent edit that left a composition unable to compile. McpServerAdapter::handleEvents() builds
+// one from a transact activity entry's compileFailures (the client label, the tool, the composition
+// name and the plain detail) and calls noteCompileFailure(); the panel and its text read this struct
+// and nothing else.
 struct McpCompileFailureNote final {
     std::uint64_t id = 0;
     std::chrono::system_clock::time_point at;
@@ -120,6 +120,12 @@ class McpServerAdapter final : public QObject {
     [[nodiscard]] mcp::McpClientConfig clientConfig(mcp::McpClientKind kind,
                                                     mcp::McpTokenDisclosure disclosure) const;
 
+    // Names a composition id for the Activity line ("left 'Main' unable to render"). Without one
+    // the line says "Composition 3". Set by the composition root; read on the UI thread.
+    void setCompositionNamer(std::function<QString(std::uint64_t)> namer) {
+        compositionNamer_ = std::move(namer);
+    }
+
     // Records an agent edit that broke compilation; the MCP Server panel shows it in Activity.
     void noteCompileFailure(McpCompileFailureNote note);
     [[nodiscard]] const std::vector<McpCompileFailureNote>& compileFailures() const noexcept {
@@ -145,6 +151,8 @@ class McpServerAdapter final : public QObject {
     std::uint64_t revision_ = 0;
     std::uint64_t preferencesRevision_ = 0;
     std::uint64_t lastEventSequence_ = 0;
+    std::uint64_t lastActivityId_ = 0;
+    std::function<QString(std::uint64_t)> compositionNamer_;
     std::vector<McpCompileFailureNote> compileFailures_;
     std::atomic<bool> wakePending_{false};
     std::jthread waiter_;

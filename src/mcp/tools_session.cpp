@@ -182,7 +182,9 @@ yyjson_mut_val* projectTool(McpServerCore::State& core, Json& out, const McpTool
                           "Query the project to see where it ended.");
     const auto result = *pending->result;
     lock.unlock();
-    summary = std::string(toolName(tool));
+    // The activity log reads the project's name after the tool name ("project.save SC020").
+    summary = result.ok() && !result.projectName.empty() ? result.projectName
+                                                         : std::string(toolName(tool));
     if (!result.ok())
         return refusal(out, result.refusal,
                        result.message.empty() ? "Bloom refused the request." : result.message);

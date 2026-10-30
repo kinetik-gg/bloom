@@ -360,6 +360,9 @@ struct McpActivityEntry final {
     std::chrono::milliseconds duration{0};
     // At most 256 bytes.
     std::string summary;
+    // transact: compositions the edit left unable to compile; the application shows each as an
+    // error line in the panel's Activity list.
+    std::vector<McpCompileFailureFact> compileFailures;
 };
 
 struct McpActivityBatch final {

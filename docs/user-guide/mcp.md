@@ -102,6 +102,38 @@ for the others. A window tool the application has not connected answers `bloom.m
 Other refusals are `bloom.mcp.unknown-target`, `bloom.mcp.invalid-argument`, `bloom.mcp.busy` and
 `bloom.mcp.failed`, each with a message that says what to do.
 
+#### Acting in the open app
+
+In the desktop application these tools are the artist's own actions, not a second path: an agent's
+call goes through the same controllers the window uses, and the window shows it at once.
+
+- **Project tools** use the File menu's open, save, save-as, new and close flows without any dialog.
+  A refusal never changes anything: `project.save` of a never-saved project answers
+  `bloom.mcp.no-path` ("use `project.save-as`"), `project.save-as` onto an existing file answers
+  `bloom.mcp.destination-exists` unless `replace` is true, and a dirty project or a running export
+  answers `bloom.mcp.unsaved-changes` or `bloom.mcp.jobs-running` unless `discardChanges` or
+  `stopJobs` is passed. `stopJobs` stops the jobs through the export queue and the call goes on once
+  they have. While another project operation or a dialog is open the call answers `bloom.mcp.busy`.
+  `project.close` leaves the same empty project File > New does.
+- **`selection.set`** selects as clicks in the Timeline and Nodes do: the Timeline, Nodes and
+  Properties show it, and a `layers`-only `set` or `add` extends like Shift-click. The composition is
+  made active first when it is not.
+- **`transport`** drives the Viewer footer's transport: `seek` and the step and go-to actions stop
+  playback first, as the footer does; `time` outside the composition answers
+  `bloom.mcp.invalid-argument`.
+- **`viewer.set`** moves the displayed Viewer's own controls, so the footer and the View menu show
+  the new channel, exposure, zoom, display and view. An empty `display` or `view` returns to the
+  project's default. A value the project does not offer answers `bloom.mcp.invalid-argument` and
+  lists the choices. Nothing here reaches a render.
+- **`editor.reveal`** brings the Viewer and Timeline forward on the composition.
+- **`project.set-color-settings`** is Project Settings > Colour: not undoable, marks the project
+  dirty, `bloom.mcp.busy` while a project opens.
+
+Selection, the active composition, the playhead and the Viewer's settings are session state: they
+never mark the project as changed and never enter the undo history. An edit that leaves a
+composition unable to render also appears in the MCP Server editor's activity list as a red line
+("left 'Main' unable to render: ...") and in `transact`'s `compileFailures`.
+
 `render`, `export` and `capture` run as transient jobs of the export queue, with the same checks,
 verification and Viewer priority as the Export editor; they are never saved. Nothing replaces an
 existing file silently: pass `"overwrite":"replace"` or confirm with `export.confirm-replace`.

@@ -442,6 +442,85 @@ void testCompileFailureActivity() {
     expect(list2 != nullptr && list2->count() == 1, "a new panel lists the earlier failure");
 }
 
+// A transact activity entry that carries compileFailures becomes one red Activity line, once.
+void testCompileFailureFromActivity() {
+    ScriptedMcpPort port;
+    ui::McpServerAdapter adapter(port);
+    adapter.setCompositionNamer([](const std::uint64_t id) {
+        return id == 7 ? QStringLiteral("Main") : QString{};
+    });
+    show(port, adapter, makeSnapshot(m::McpServerState::Running));
+    ui::McpServerEditor panel(&adapter);
+    panel.resize(760, 820);
+    panel.show();
+    auto* list = find<QListWidget>(panel, "mcpActivityList");
+
+    m::McpActivityEntry entry;
+    entry.id = 41;
+    entry.kind = m::McpActivityKind::ToolCall;
+    entry.clientLabel = "Claude Code";
+    entry.tool = m::McpTool::Transact;
+    entry.outcome = m::McpCallOutcome::Succeeded;
+    entry.summary = "transact";
+    entry.compileFailures.push_back({.composition = 7,
+                                     .detail = "Blending Mode is driven by Scalar to Integer.",
+                                     .node = 3,
+                                     .parameter = 9});
+    entry.compileFailures.push_back({.composition = 8, .detail = "Layer Output could not be lowered."});
+    port.addActivity(entry);
+    adapter.drain();
+    expect(adapter.compileFailures().size() == 2, "each failed composition is noted once");
+    adapter.drain();
+    expect(adapter.compileFailures().size() == 2, "a second drain does not repeat the notes");
+    if (adapter.compileFailures().size() != 2)
+        return;
+    const auto& first = adapter.compileFailures()[0];
+    expect(first.client == QStringLiteral("Claude Code") && first.tool == QStringLiteral("transact") &&
+               first.composition == QStringLiteral("Main") &&
+               first.detail == QStringLiteral("Blending Mode is driven by Scalar to Integer."),
+           "the note names the client, tool, composition and plain detail");
+    expect(adapter.compileFailures()[1].composition == QStringLiteral("Composition 8"),
+           "a composition without a name is numbered");
+    expect(list != nullptr && list->count() >= 2, "the panel lists the failures");
+    bool found = false;
+    for (int row = 0; list != nullptr && row < list->count(); ++row)
+        if (list->item(row)->text().contains(QStringLiteral("left 'Main' unable to render")) &&
+            list->item(row)->foreground().color() == ui::kit::color(ui::kit::Color::Error))
+            found = true;
+    expect(found, "the MCP compile failure is a red Activity line");
+}
+
+// Project calls read as plain sentences in the Activity list.
+void testProjectActivityLines() {
+    const auto line = [](const m::McpTool tool, const std::string& summary) {
+        m::McpActivityEntry entry;
+        entry.id = 1;
+        entry.kind = m::McpActivityKind::ToolCall;
+        entry.clientLabel = "claude-code";
+        entry.tool = tool;
+        entry.outcome = m::McpCallOutcome::Succeeded;
+        entry.summary = std::string(m::toolName(tool)) + " " + summary;
+        return ui::mcppanel::activityLine(entry);
+    };
+    expect(line(m::McpTool::ProjectSave, "SC020").endsWith(QStringLiteral("claude-code  saved 'SC020'")),
+           "project.save reads \"saved 'SC020'\"");
+    expect(line(m::McpTool::ProjectSaveAs, "SC020").contains(QStringLiteral("saved 'SC020'")),
+           "project.save-as reads as saved");
+    expect(line(m::McpTool::ProjectOpen, "My Reel").contains(QStringLiteral("opened 'My Reel'")),
+           "project.open reads as opened, with spaces in the name");
+    expect(line(m::McpTool::ProjectNew, "Untitled").contains(QStringLiteral("created 'Untitled'")),
+           "project.new reads as created");
+    expect(line(m::McpTool::ProjectClose, "SC020").contains(QStringLiteral("closed 'SC020'")),
+           "project.close reads as closed");
+    m::McpActivityEntry refused;
+    refused.kind = m::McpActivityKind::ToolCall;
+    refused.tool = m::McpTool::ProjectNew;
+    refused.outcome = m::McpCallOutcome::ToolError;
+    refused.summary = "project.new";
+    expect(ui::mcppanel::activityLine(refused).contains(QStringLiteral("project.new")),
+           "a refused project call keeps the tool name");
+}
+
 void testIndicatorAndSound() {
     namespace doc = bloom::document;
     auto project = doc::makeNewProject("Mcp", "Main", bloom::core::RationalTime::fromInteger(10));
@@ -556,6 +635,8 @@ int main(int argc, char** argv) {
     testClientsAndActivity();
     testCopyConfig();
     testCompileFailureActivity();
+    testCompileFailureFromActivity();
+    testProjectActivityLines();
     testIndicatorAndSound();
     testRealService();
     if (gFailures != 0)

@@ -36,6 +36,7 @@ McpServerAdapter::McpServerAdapter(McpServerPort& port, UiFeedback* const feedba
     if (const auto snapshot = port_.snapshot())
         preferencesRevision_ = snapshot->preferencesRevision;
     lastEventSequence_ = port_.events(0).lastSequence;
+    lastActivityId_ = port_.activity(0).lastId;
 }
 
 McpServerAdapter::~McpServerAdapter() {
@@ -111,6 +112,30 @@ void McpServerAdapter::handleEvents() {
             feedback_->play(FeedbackEvent::Warning);
     }
     lastEventSequence_ = std::max(lastEventSequence_, batch.lastSequence);
+
+    // An agent edit that left a composition unable to compile is told once, as a red Activity line.
+    const auto activity = port_.activity(lastActivityId_);
+    for (const auto& entry : activity.entries) {
+        if (entry.id <= lastActivityId_)
+            continue;
+        lastActivityId_ = entry.id;
+        for (const auto& failure : entry.compileFailures) {
+            const auto name = compositionNamer_ ? compositionNamer_(failure.composition) : QString{};
+            noteCompileFailure(
+                {.id = 0,
+                 .at = entry.at,
+                 .client = QString::fromStdString(entry.clientLabel),
+                 .tool = QString::fromUtf8(entry.tool ? mcp::toolName(*entry.tool).data() : "",
+                                           entry.tool ? static_cast<qsizetype>(
+                                                            mcp::toolName(*entry.tool).size())
+                                                      : 0),
+                 .composition = name.isEmpty()
+                                    ? tr("Composition %1").arg(failure.composition)
+                                    : name,
+                 .detail = QString::fromStdString(failure.detail)});
+        }
+    }
+    lastActivityId_ = std::max(lastActivityId_, activity.lastId);
 }
 
 std::shared_ptr<const mcp::McpServerSnapshot> McpServerAdapter::snapshot() const {

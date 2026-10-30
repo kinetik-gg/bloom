@@ -61,6 +61,8 @@ struct McpCall final {
     std::string summary;
     // A tool diagnostic that did not make the call an error (capture linked instead of inline).
     std::optional<McpToolErrorCode> notice;
+    // transact: the compositions the edit left unable to compile (copied to McpHandled).
+    std::vector<McpCompileFailureFact> compileFailures;
 };
 
 // A non-command fact the events tool reports beside command events: a project lifecycle step
