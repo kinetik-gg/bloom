@@ -901,14 +901,14 @@ QWidget* PreferencesWindow::buildViewerPage() {
         rows, content, QStringLiteral("preferencesViewerBackgroundDropdown"), tr("Background"));
     background->setToolTip(tr("The canvas around the composition frame"));
     background->addItem(tr("Solid"), QStringLiteral("Solid"));
-    background->addItem(tr("Gray"), QStringLiteral("Grey"));
+    background->addItem(tr("Gray"), QStringLiteral("Gray"));
     background->addItem(tr("Black"), QStringLiteral("Black"));
     background->addItem(tr("White"), QStringLiteral("White"));
     background->setCurrentIndex(
         background->findData(QLatin1String(viewerBackgroundValue(draft_.viewerBackground))));
     connect(background, &kit::KDropdown::currentIndexChanged, this, [this, background](int) {
         const auto data = background->currentData().toString();
-        if (data == QLatin1StringView("Grey"))
+        if (data == QLatin1StringView("Gray"))
             draft_.viewerBackground = ViewerBackgroundPreference::Grey;
         else if (data == QLatin1StringView("Black"))
             draft_.viewerBackground = ViewerBackgroundPreference::Black;

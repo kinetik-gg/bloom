@@ -3,6 +3,7 @@
 #include <QElapsedTimer>
 #include <QEvent>
 #include <QSettings>
+#include <QSplitter>
 #include <QTemporaryDir>
 #include <QTest>
 #include <bloom/commands/node_operations.hpp>
@@ -24,7 +25,9 @@
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/export_queue_adapter.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
+#include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/workspace_host.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -139,6 +142,22 @@ struct WindowFixture {
         window->setExportQueue(exportQueue);
         window->resize(1920, 1200);
         window->show();
+        // The Default workspace has four panels; the fixtures exercise a Nodes panel as well, so it
+        // sits under Properties, so no other panel loses width. The Timeline gets the height the
+        // earlier default gave it, so its expanded rows keep clear of its footer.
+        for (auto* area : window->workspaceHost()->findChildren<EditorArea*>()) {
+            if (area->editorId() == "bloom.properties") {
+                (void)window->workspaceHost()->splitArea(*area, Qt::Vertical, "bloom.nodes");
+                break;
+            }
+        }
+        for (auto* area : window->workspaceHost()->findChildren<EditorArea*>()) {
+            if (area->editorId() == "bloom.timeline") {
+                if (auto* column = qobject_cast<QSplitter*>(area->parentWidget()))
+                    column->setSizes({560, 440});
+                break;
+            }
+        }
         QElapsedTimer timer;
         timer.start();
         while (preview->state().activity != PreviewActivity::Ready && timer.elapsed() < 15000)

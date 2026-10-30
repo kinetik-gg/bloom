@@ -118,7 +118,8 @@ class ToolController final : public QObject {
     ViewerTool lastShapeTool_ = ViewerTool::Rectangle;
     NewShapeStyle shapeStyle_;
     NewTextStyle textStyle_;
-    commands::AlignmentTarget target_ = commands::AlignmentTarget::Selection;
+    // Composition is the default: aligning layers to the frame is the common case.
+    commands::AlignmentTarget target_ = commands::AlignmentTarget::Composition;
 };
 
 } // namespace bloom::ui

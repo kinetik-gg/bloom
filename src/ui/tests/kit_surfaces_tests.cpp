@@ -88,6 +88,15 @@ void testKLabelWrapsAndTones(Expectations& expectations) {
                             kit::disabledInk(kit::color(kit::Color::Warn)),
                         "a disabled toned label fades from its own tone, the one disabled recipe");
     expectations.expect(single->tone() == kit::Color::Warn, "the tone is reported back");
+
+    // Inside an item view (a list row's cell), a label still paints in its own tone, never the
+    // viewport's Text ink.
+    QTreeView view;
+    auto* inCell = new kit::KLabel(QStringLiteral("Queued"), view.viewport());
+    inCell->setTone(kit::Color::Muted);
+    expectations.expect(inCell->foregroundRole() == QPalette::WindowText &&
+                            inCell->palette().color(inCell->foregroundRole()) == kit::color(kit::Color::Muted),
+                        "a label in an item view paints in its tone");
 }
 
 // KRow and the timeline share one recipe: the opaque wash over the row's surface, an Accent edge

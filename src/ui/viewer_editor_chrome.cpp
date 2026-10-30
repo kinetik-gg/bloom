@@ -608,8 +608,8 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     backgroundDropdown_->setObjectName("viewerBackgroundDropdown");
     backgroundDropdown_->setAccessibleName(tr("Background"));
     for (const auto* name : kBackgroundNames) {
-        // "Grey" is the persisted setting value; the visible word is American English.
-        backgroundDropdown_->addItem(std::string_view(name) == "Grey" ? tr("Gray") : tr(name));
+        // "Gray" is the persisted setting value; the visible word is American English.
+        backgroundDropdown_->addItem(std::string_view(name) == "Gray" ? tr("Gray") : tr(name));
     }
     const auto backdrop = viewerBackdropFromSettings(QSettings());
     background_ = viewerBackgroundFor(backdrop.background);

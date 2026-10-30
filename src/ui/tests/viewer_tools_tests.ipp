@@ -796,6 +796,29 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
     toolReady(fixture, expectations);
     auto t = target(fixture);
     expectations.expect(t && t->path.anchors.size() == 4, name("a four-anchor path is editable"));
+    expectations.expect(
+        contextBar(fixture).findChild<QWidget*>("contextBarAnchorOptions") != nullptr &&
+            !contextBar(fixture)
+                 .findChild<QWidget*>("contextBarAnchorOptions")
+                 ->property("chromeSuppressed")
+                 .toBool(),
+                        name("the handle modes show once a path is selected"));
+    // Review captures (BLOOM_CONTEXT_BAR_CAPTURE_DIR): the bar with a path selected, Select and Pen.
+    if (const auto captureDirectory = qEnvironmentVariable("BLOOM_CONTEXT_BAR_CAPTURE_DIR");
+        !captureDirectory.isEmpty()) {
+        const auto ratio = contextBar(fixture).devicePixelRatioF() == 1.0 ? QStringLiteral("dpr1")
+                                                                          : QStringLiteral("dpr15");
+        const auto grabBar = [&](const char* name) {
+            QCoreApplication::processEvents();
+            (void)contextBar(fixture).grab().save(captureDirectory + QStringLiteral("/bar-after-") +
+                                                  QString::fromLatin1(name) + QLatin1Char('-') +
+                                                  ratio + QStringLiteral(".png"));
+        };
+        grabBar("select-path");
+        fixture.session.tools().setTool(bloom::ui::ViewerTool::Pen);
+        grabBar("pen-path");
+        fixture.session.tools().setTool(bloom::ui::ViewerTool::Select);
+    }
     if (!t || t->path.anchors.size() != 4)
         return;
 

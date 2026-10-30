@@ -80,7 +80,7 @@ void testViewerSurroundNeverDrawsInsideTheFrame(Expectations& expectations) {
             const char* name;
         };
         const std::array<Choice, 4> choices{{
-            {ui::ViewerBackground::Grey, ui::kit::color(ui::kit::Color::CanvasGrey), "Grey"},
+            {ui::ViewerBackground::Grey, ui::kit::color(ui::kit::Color::CanvasGrey), "Gray"},
             {ui::ViewerBackground::Black, QColor(Qt::black), "Black"},
             {ui::ViewerBackground::Solid, ui::kit::color(ui::kit::Color::Canvas), "Solid"},
             {ui::ViewerBackground::White, QColor(Qt::white), "White"},

@@ -299,7 +299,7 @@ void testStoredSpellingsMatchReaders(Expectations& check) {
     check.expect(std::string_view(
                      ui::viewerBackgroundValue(ui::ViewerBackgroundPreference::Solid)) == "Solid" &&
                      std::string_view(ui::viewerBackgroundValue(
-                         ui::ViewerBackgroundPreference::Grey)) == "Grey",
+                         ui::ViewerBackgroundPreference::Grey)) == "Gray",
                  "the viewer background vocabulary matches the existing reader");
 }
 

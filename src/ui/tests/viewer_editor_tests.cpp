@@ -10,6 +10,9 @@
 #include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/context_bar.hpp>
+#include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/workspace_host.hpp>
+#include <bloom/ui/workspace_presets.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/tool_controller.hpp>
 #include <bloom/ui/viewer_editor.hpp>
@@ -2267,6 +2270,8 @@ int main(int argc, char** argv) {
     testContextBarTools(expectations);
     testContextBarOptions(expectations);
     testContextBarAlignment(expectations);
+    testContextBarLayoutAndDefaults(expectations);
+    testContextBarWorkspaceField(expectations);
     testContextBarReturnsFocus(expectations);
     try {
         testViewerChromeRoiClearFollowsTheRegion(expectations);

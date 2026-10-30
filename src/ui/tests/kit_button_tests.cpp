@@ -177,10 +177,41 @@ void testEveryVariantHasADistinctRecipe(Expectations& expectations) {
                         "Danger's committed ink is legible on its fill");
 }
 
+void testLinkIsAccentTextWithoutAPlate(Expectations& expectations) {
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto& link = *new kit::KButton(QStringLiteral("Exports/a-very-long-folder/SC020.mov"), &host);
+    link.setVariant(kit::KButton::Variant::Link);
+    layout->addWidget(&link);
+    expectations.expect(!link.fillForState(kit::State::Normal).isValid() &&
+                            !link.fillForState(kit::State::Hover).isValid(),
+                        "a link never draws a plate");
+    expectations.expect(link.inkForVisualState(kit::State::Normal) == kit::color(kit::Color::Accent),
+                        "a link rests in Accent ink");
+    expectations.expect(link.inkForVisualState(kit::State::Hover) ==
+                            kit::color(kit::Color::AccentHover),
+                        "a link hovers to AccentHover");
+    expectations.expect(link.inkForVisualState(kit::State::Pressed) ==
+                            kit::color(kit::Color::AccentPressed),
+                        "a link presses to AccentPressed");
+    expectations.expect(!kit::buttonColors(kit::ButtonKind::Link, kit::State::Normal, false)
+                             .border.isValid(),
+                        "a link has no border at rest");
+    expectations.expect(kit::buttonColors(kit::ButtonKind::Link, kit::State::Normal, true).border ==
+                            kit::color(kit::Color::Accent),
+                        "keyboard focus still draws the one focus border on a link");
+    kit::KButton plain(QStringLiteral("Exports/a-very-long-folder/SC020.mov"));
+    expectations.expect(link.sizeHint().width() < plain.sizeHint().width(),
+                        "a link is as wide as its text, without a button's side padding");
+    expectations.expect(link.sizeHint().height() == kit::px(kit::Size::Control),
+                        "a link is one control tall, so it sits in a list row");
+}
+
 void testDisabledInkIsFortyPercentInEveryVariant(Expectations& expectations) {
     kit::KButton button(QStringLiteral("Render"));
     for (const auto variant : {kit::KButton::Variant::Primary, kit::KButton::Variant::Secondary,
-                               kit::KButton::Variant::Ghost, kit::KButton::Variant::Danger}) {
+                               kit::KButton::Variant::Ghost, kit::KButton::Variant::Danger,
+                               kit::KButton::Variant::Link}) {
         button.setVariant(variant);
         const QColor disabled = button.inkForVisualState(kit::State::Disabled);
         expectations.expect(
@@ -474,6 +505,7 @@ int main(int argc, char** argv) {
     testTheStateMachineResolvesOneStateAtATime(expectations);
     testEveryVariantHasADistinctRecipe(expectations);
     testDisabledInkIsFortyPercentInEveryVariant(expectations);
+    testLinkIsAccentTextWithoutAPlate(expectations);
     testControlSizesAndTheOutsideFocusRing(expectations);
     testAnIconButtonRendersBothGlyphAndLabel(expectations);
     testIconOnlyButtonsAreSquareAcrossEverySize(expectations);

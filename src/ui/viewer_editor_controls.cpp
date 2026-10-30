@@ -367,15 +367,15 @@ void ViewerEditor::updateRamPreviewButton() {
     // all cached once it is. Both counts are the controller's own.
     const auto total = ramPreview_->totalFrameCount();
     const auto cachedFrames = ramPreview_->cachedFrameCount();
-    QString label = tr("RAM Preview");
+    QString label = caching ? tr("Cancel") : tr("RAM Preview");
     if (caching && total > 0)
-        label = tr("Caching %1%").arg(std::min<std::uint64_t>(100, cachedFrames * 100 / total));
+        label = tr("Cancel %1%").arg(std::min<std::uint64_t>(100, cachedFrames * 100 / total));
     else if (!caching && total > 0 && cachedFrames >= total)
         label = tr("RAM Cached");
     ramPreviewButton_->setText(label);
     ramPreviewButton_->setToolTip(
         caching ? tr("Cancel the RAM preview being cached (Esc)")
-                : tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space)"));
+                : tr("RAM Preview: cache this composition, then play it (Ctrl+Shift+Space or Numpad 0)"));
     if (!caching &&
         ramPreview_->lastCompletion() == RamPreviewController::Completion::PartialBudget) {
         ramPreviewButton_->setToolTip(

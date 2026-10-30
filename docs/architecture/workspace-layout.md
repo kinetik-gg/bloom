@@ -43,7 +43,7 @@ The first slice supports:
 - split the active area left/right or top/bottom
 - close an area while preserving at least one leaf
 - maximize and restore an area without rewriting the underlying tree
-- reset the Compositing workspace to the owner's five-area layout
+- reset the Compositing workspace to the Default preset
 - save and restore topology, proportions, area IDs, active area, and editor type IDs
 
 Split, close, maximize, restore, and reset are available through visible Window-menu actions. Area
@@ -80,30 +80,31 @@ multi-monitor geometry are not yet part of schema version 2.
 
 ## Authored default and Version 2 migration
 
-The first-run and `Window → Reset Workspace` arrangement is authored in `WorkspaceHost` as
-per-mille splitter weights, applied after the complete tree receives its window extent:
+The first-run and `Window → Reset Workspace` arrangement is the built-in **Default** workspace
+preset (owner, 2026-10-31), authored in `WorkspacePresets` as normalized split weights and applied
+through `WorkspaceHost::applyArrangement()`:
 
 | Split | Children, left-to-right or top-to-bottom | Weights |
 | --- | --- | --- |
-| Workspace columns | Left region, right column | 800 / 200 (80% / 20%) |
-| Left region | Viewer/Nodes row, Timeline | 560 / 440 (56% / 44%) |
-| Viewer/Nodes row | Viewer, Nodes | 505 / 495 (50.5% / 49.5%) |
-| Right column | Assets, Properties | 395 / 605 (39.5% / 60.5%) |
+| Workspace columns | Left region, Properties | 80% / 20% |
+| Left region | Assets/Viewer row, Timeline | 66% / 34% |
+| Assets/Viewer row | Assets, Viewer | 25% / 75% |
 
 The Timeline layer-table/lanes divider defaults to 37% of the Timeline width. Its persisted pixel
 width remains authoritative for an existing session; Reset Workspace clears that width and writes
-the newly resolved 37% default together with the workspace tree. Viewer starts at RGBA/Fit, Nodes
-starts fitted, and Properties shows Composition when there is no selection. These are editor-owned
-presentation defaults and do not enter document state.
+the newly resolved 37% default together with the workspace tree. Viewer starts at RGBA/Fit and
+Properties shows Composition when there is no selection. These are editor-owned presentation
+defaults and do not enter document state. The Workspace field then reads "Default". Nodes is no
+longer in the default; the Node preset has it. The older five-area arrangement (Viewer | Nodes
+beside Assets over Properties) is gone; a saved workspace of an existing session is restored as it
+is and is never replaced by a preset.
 
-Schema version 2 stores this five-area default as a left region (the Viewer/Nodes row over the
-Timeline) beside a full-height right column (Assets over Properties). Assets and Properties are
-pinned into the default and migrated layout, while editor areas remain replaceable during use. The
-menu bar and the toolbar under it remain the only fixed application surfaces
+Schema version 2 stores the arrangement as a tree of areas and splits. The menu bar and the
+toolbar under it remain the only fixed application surfaces
 ([ADR 0031](../decisions/0031-contextual-tool-bar.md)).
 
 The application first validates and restores a legacy version-1 layout, then replaces its panel
-arrangement with this complete default. Window geometry is retained. This intentional reset prevents
+arrangement with the Default preset. Window geometry is retained. This intentional reset prevents
 old saved arrangements from omitting Assets or giving Timeline the sidebar's width. Subsequent saves
 write schema 2. The generic WorkspaceHost still reads valid version-1 trees for its callers; the
 application owns the Compositing migration policy. Invalid layouts keep the safe default, and future
@@ -114,7 +115,37 @@ callbacks are retired if that tree is replaced before showing, so restoration ca
 by pending default-layout work. Minimum widths continue to apply normally. The timeline left column
 uses the sum of its token-defined columns; metric audits verify full menus at 1600 and 1920 pixels.
 The main-window migration test starts with a valid one-area version-1 layout without Assets and
-asserts a five-area schema-2 result containing Assets.
+asserts the Default preset's four areas, including Assets, with the preset named Default.
+
+## Workspace presets
+
+A preset is a named arrangement, stored as the same versioned layout state `saveLayoutState()`
+writes (topology, proportions, stable editor type IDs); it never holds project data or an editor's
+own state. `WorkspacePresets` (`src/ui`) owns the list: built-in Default, Node, Export and Animation
+are authored in code, the artist's own are stored in application preferences under
+`workspace/presets/user` (a JSON array of `{name, layout}`), and the active preset's name under
+`workspace/presets/active`. Names are unique across both lists, case-insensitively, and a built-in's
+name cannot be reused. The toolbar's Workspace field reads this one list; there is no menu for it.
+
+`WorkspaceHost::applyArrangement()` applies a preset without rebuilding what it keeps: each area of
+the new tree is taken from the live tree when one hosts the same editor type (so zoom, scroll and
+selection survive), created otherwise, and areas with no place close. The state is validated in a
+dry pass before any widget moves, so an invalid state changes nothing. It runs through the same
+native-surface retirement gate as every other mutation. Reset Workspace applies the Default preset, so
+the field reads Default.
+
+`WorkspaceHost::layoutChanged()` fires for splits, closes, divider drags, editor swaps and restored
+layouts. After a preset is chosen, the picker compares the live arrangement (topology, editor types,
+divider weights within a tolerance of six percent) with the preset and shows "<name> (edited)" while
+they differ.
+
+## Reveal policy
+
+`WorkspaceHost::revealEditor(id)` shows an editor and makes its area active and focused: the area
+that already hosts it, else a new area split below the Timeline's. Per-editor policy overrides the
+second step. `bloom.export` is never split off: with an Export area open it is only activated; else
+an open Timeline's area switches to Export in place; else a new area takes the bottom of the whole
+workspace.
 
 ## Acceptance And Gating
 
@@ -127,7 +158,7 @@ The following remain deferred:
 
 - drag-from-corner splitting and drag-to-merge gestures
 - tabs, floating areas, and detached windows
-- multiple functional workspaces and user-named presets
+- per-workspace content beyond the arrangement (a preset stores panel arrangement only)
 - per-editor internal session-state migration
 - keymap customization
 - layout undo history
@@ -138,7 +169,7 @@ than creating a second workspace mechanism.
 ## Script editor
 
 `bloom.script` is a replaceable registered editor with kit input, history, output and shared editor
-header/footer controls. It is offered by the panel switcher without changing the five-area default
+header/footer controls. It is offered by the panel switcher without changing the default
 layout. Python-enabled builds attach it to the live host; other builds show an explicit unavailable
 state. See [Scripting Bloom with Python](../user-guide/python.md) for execution and undo behavior.
 

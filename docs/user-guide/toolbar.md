@@ -2,8 +2,9 @@
 
 The toolbar is the row directly under the menu bar
 ([ADR 0031](../decisions/0031-contextual-tool-bar.md)). It holds the tools on the left, the active
-tool's options next to them, and actions on the selected layers on the right. Window > Toolbar
-hides or shows it; Bloom remembers the choice.
+tool's options next to them, actions on the selected layers in the middle, and the Workspace picker
+on the right. Its edges line up with the panels below. Window > Toolbar hides or shows it; Bloom
+remembers the choice.
 
 Nothing the bar does is different from doing it anywhere else: every option and action is the same
 undoable command Properties, the Timeline and the menus use.
@@ -41,7 +42,8 @@ that layer; with none, they set what the next one starts with.
 
 - **Select and Pen:** the handle mode of the selected anchors on a path or mask: Corner, Mirrored,
   Aligned, Free or Auto. With anchors of different modes selected, no mode is shown; choosing one
-  converts them all. With no anchors selected the control is unavailable.
+  converts them all. The control is only there while a path or mask is selected; with no path
+  selected it is hidden, and with a path selected but no anchors it is grayed out.
 - **Shapes, Line and Pen:** Fill and its color, Stroke and its color, and the stroke width. A line
   always has a stroke and no fill.
 - **Text:** the font, the size and the alignment (left, center or right).
@@ -56,9 +58,9 @@ type into a field in the bar and press Enter or Escape, the keyboard returns to 
 - **Distribute** spaces the selected layers' centers evenly, horizontally or vertically. It needs
   three or more layers.
 - **Align To** chooses what they line up with:
-  - **Selection** (the default): the box around all the selected layers. Distributing keeps the
+  - **Selection**: the box around all the selected layers. Distributing keeps the
     two outermost layers where they are. Aligning needs two or more layers.
-  - **Composition**: the composition frame. Distributing moves the outermost layers to the frame's
+  - **Composition** (the default): the composition frame. Distributing moves the outermost layers to the frame's
     edges.
   - **Key Object**: the primary selected layer, named in Align To, which stays where it is.
 
@@ -78,5 +80,10 @@ The same actions are scriptable as `bloom.ops.layer.align_layers` and
 ## Narrow windows
 
 When the window is too narrow for the whole bar, groups fold into the » button at the end of the
-tool options, from the right: Distribute first, then Align To, then Align, then the tool options.
-The tools themselves always stay.
+tool options: Distribute first, then Align To, then Align, then the tool options, and last the
+Workspace picker (it moves into the menu as a Workspace submenu). The tools themselves always stay.
+
+## Workspace
+
+The **Workspace** field on the right picks how the panels are arranged. See
+[Workspace presets](workspace-presets.md).

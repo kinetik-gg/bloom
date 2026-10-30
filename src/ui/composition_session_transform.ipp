@@ -154,9 +154,11 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
     const auto point = transformPoint(state.mapping.toComposition(screenPoint));
     const auto origin = transformPoint(state.mapping.toComposition(state.gesture.origin));
     const auto screenDelta = screenPoint - state.gesture.origin;
-    const auto compositionDelta =
-        state.mapping.toComposition(state.mapping.displayRect.topLeft() + screenDelta);
-    const auto delta = state.inverseParent.map(transformPoint(compositionDelta));
+    auto compositionDelta =
+        transformPoint(state.mapping.toComposition(state.mapping.displayRect.topLeft() + screenDelta));
+    if (modifiers.shift && state.gesture.kind == TransformGesture::Kind::Move)
+        compositionDelta = constrainToAxis45(compositionDelta);
+    const auto delta = state.inverseParent.map(compositionDelta);
     if (!finite(delta) || !finite(point) || !finite(origin)) {
         cancelTransformInteraction();
         return;

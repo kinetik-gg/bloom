@@ -151,7 +151,7 @@ void writeByteBudget(QSettings& settings, const char* const key, const std::uint
 }
 
 [[nodiscard]] ViewerBackgroundPreference viewerBackgroundFromString(const QString& value) {
-    if (value == QLatin1StringView("Grey"))
+    if (value == QLatin1StringView("Gray"))
         return ViewerBackgroundPreference::Grey;
     if (value == QLatin1StringView("Black"))
         return ViewerBackgroundPreference::Black;
@@ -322,7 +322,7 @@ ViewerBackdropSetting viewerBackdropFromSettings(const QSettings& settings) {
 const char* viewerBackgroundValue(const ViewerBackgroundPreference background) noexcept {
     switch (background) {
     case ViewerBackgroundPreference::Grey:
-        return "Grey";
+        return "Gray";
     case ViewerBackgroundPreference::Black:
         return "Black";
     case ViewerBackgroundPreference::White:

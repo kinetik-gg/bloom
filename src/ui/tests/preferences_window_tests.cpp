@@ -120,7 +120,7 @@ void testControlsReflectPreferences(Expectations& check) {
     auto* background = window.findChild<ui::kit::KDropdown*>(
         QStringLiteral("preferencesViewerBackgroundDropdown"));
     check.expect(background != nullptr &&
-                     background->currentData().toString() == QStringLiteral("Grey") &&
+                     background->currentData().toString() == QStringLiteral("Gray") &&
                      background->findData(QStringLiteral("Checkerboard")) < 0,
                  "the surround dropdown reflects the stored value and offers no checker");
     auto* transparencyGrid = window.findChild<QAbstractButton*>(

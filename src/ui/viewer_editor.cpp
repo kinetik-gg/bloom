@@ -14,6 +14,7 @@
 #include "viewer_editor_internal.hpp"
 #include "viewer_editor_text_layout.hpp"
 #include "viewer_timecode_readout.hpp"
+#include "viewer_axis_constraint.hpp"
 #include "viewer_tool_geometry.hpp"
 
 #include <bloom/ui/composition_commands.hpp>
@@ -1446,6 +1447,7 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         return;
     }
     dragActive_ = true;
+    dragPointer_ = event->position();
     activeMapping_ = mapping;
     activeGestureIdentity_ = actual->frame->desiredIdentity();
     activeGestureViewport_ = contentRect();
@@ -1526,10 +1528,41 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
     // Total displacement from the ORIGINAL press point, not from the previous move -- base value
     // plus TOTAL gesture displacement, never a chain of already-rounded intermediates (docs/
     // architecture/animation-and-time.md).
-    session_.updateTransformInteraction(event->position(),
-                                        {event->modifiers().testFlag(Qt::ShiftModifier),
-                                         event->modifiers().testFlag(Qt::AltModifier)});
+    refreshDrag(event->position(), event->modifiers());
     event->accept();
+}
+
+// One path for every pointer or modifier change: the position always recomputes from the press
+// point, so Shift pressed or released mid-drag changes the result without a jump.
+void ViewerEditor::refreshDrag(const QPointF pointer, const Qt::KeyboardModifiers modifiers) {
+    dragPointer_ = pointer;
+    const bool shift = modifiers.testFlag(Qt::ShiftModifier);
+    session_.updateTransformInteraction(
+        pointer, {shift, modifiers.testFlag(Qt::AltModifier)});
+}
+
+// A Shift change re-evaluates a path-point move at the last pointer position.
+bool ViewerEditor::refreshAnchorDrag(QKeyEvent* event) {
+    if (!anchorGesture_ || event->isAutoRepeat() || event->key() != Qt::Key_Shift)
+        return false;
+    const auto pointer = anchorGesture_->gesture.pointer;
+    QMouseEvent move(QEvent::MouseMove, pointer, pointer, Qt::NoButton, Qt::LeftButton,
+                     event->modifiers());
+    return anchorMove(&move);
+}
+
+void ViewerEditor::keyReleaseEvent(QKeyEvent* event) {
+    if (refreshAnchorDrag(event)) {
+        event->accept();
+        return;
+    }
+    if (dragActive_ && !event->isAutoRepeat() && event->key() == Qt::Key_Shift &&
+        mappingStillValid()) {
+        refreshDrag(dragPointer_, event->modifiers());
+        event->accept();
+        return;
+    }
+    QWidget::keyReleaseEvent(event);
 }
 
 void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
@@ -1588,6 +1621,16 @@ void ViewerEditor::wheelEvent(QWheelEvent* event) {
 }
 
 void ViewerEditor::keyPressEvent(QKeyEvent* event) {
+    if (refreshAnchorDrag(event)) {
+        event->accept();
+        return;
+    }
+    if (dragActive_ && !event->isAutoRepeat() && event->key() == Qt::Key_Shift &&
+        mappingStillValid()) {
+        refreshDrag(dragPointer_, event->modifiers());
+        event->accept();
+        return;
+    }
     // Escape confirms every Viewer drag as it stands and returns to Select; Undo discards a
     // document edit. A region-of-interest drag keeps the region drawn so far.
     if (roiGesture_ && event->key() == Qt::Key_Escape) {

@@ -82,6 +82,8 @@ namespace bloom::ui::kit {
 //                 no resting surface: disclosure carets and the window title bar.
 //   Danger        Outlined in Error at rest, Error fill once the pointer commits.
 //   GhostDanger   Ghost at rest, the Danger fill under the pointer (close buttons).
+//   Link          No plate, no border at rest; Accent ink, AccentHover under the pointer and
+//                 AccentPressed held. A link-style value in a dense row (the Export render list).
 //   MenuItem      A menu-strip title: transparent at rest, the Accent hover bar under the pointer --
 //                 a menu, like a menu bar's titles, not a button.
 //
@@ -95,6 +97,7 @@ enum class ButtonKind : std::uint8_t {
     Ghost,
     Danger,
     GhostDanger,
+    Link,
     MenuItem,
 };
 

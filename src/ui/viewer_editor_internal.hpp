@@ -61,7 +61,7 @@ inline constexpr std::array<const char*, 4> kResolutionCompactNames = {"Auto", "
 // composite first, then the composite without alpha, then the three colour channels, then alpha.
 inline constexpr std::array<const char*, 6> kChannelNames = {"RGBA", "RGB", "R", "G", "B", "Alpha"};
 // The surround names, in ViewerBackground order; also the stored spellings.
-inline constexpr std::array<const char*, 4> kBackgroundNames = {"Solid", "Grey", "Black", "White"};
+inline constexpr std::array<const char*, 4> kBackgroundNames = {"Solid", "Gray", "Black", "White"};
 inline constexpr auto kResolutionSetting = "viewer/resolution";
 inline constexpr auto kBackgroundSetting = kViewerBackgroundSettingKey;
 inline constexpr auto kTransparencyGridSetting = kViewerTransparencyGridSettingKey;

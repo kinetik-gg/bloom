@@ -37,6 +37,7 @@
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
+#include <bloom/ui/workspace_presets.hpp>
 
 #include <QAction>
 #include <QApplication>
@@ -227,6 +228,7 @@ WorkspaceLayoutRestoreResult MainWindow::restoreApplicationState(QSettings& sett
     contextBarAction_->setChecked(barVisible);
 
     const auto result = workspaceHost_->restorePersistedLayout(settings, workspaceLayoutKey);
+    workspacePresets_->load();
     if (result == WorkspaceLayoutRestoreResult::Deferred) {
         // A live native surface must retire before the restored tree may replace the current one.
         // Nothing was replaced and no version migration is claimed; the restore completes
@@ -422,7 +424,12 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     // would give one key two owners.
     ramPreviewAction_ = compositionMenu.addAction("&RAM Preview");
     ramPreviewAction_->setObjectName("compositionRamPreviewAction");
-    ramPreviewAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space));
+    // Numpad 0 is After Effects' RAM Preview key. With Num Lock off the same key reports Insert, so
+    // both keypad forms are bound. A keypad digit typed into a text or value field is text input,
+    // which Qt delivers as a ShortcutOverride to the field first, so it never fires here.
+    ramPreviewAction_->setShortcuts({QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space),
+                                     QKeySequence(Qt::KeypadModifier | Qt::Key_0),
+                                     QKeySequence(Qt::KeypadModifier | Qt::Key_Insert)});
     ramPreviewAction_->setShortcutContext(Qt::WindowShortcut);
     ramPreviewAction_->setEnabled(ramPreview_ != nullptr);
     // Escape ends a run that is caching. Enabled only while one is, so Escape keeps meaning
@@ -855,6 +862,7 @@ void MainWindow::updateContentSurface() {
 
 void MainWindow::createEditorLayout(const EditorRegistry& editorRegistry) {
     workspaceHost_ = new WorkspaceHost(editorRegistry, this);
+    workspacePresets_ = new WorkspacePresets(*workspaceHost_, this);
     resetCompositingLayout();
 }
 
@@ -887,6 +895,7 @@ void MainWindow::createCentralStack() {
     contextBar_ = new ContextBar(compositionSession_, previewController_, central);
     connect(contextBar_, &ContextBar::notice, statusStrip_,
             [this](const QString& message) { statusStrip_->showTransientMessage(message); });
+    contextBar_->setWorkspacePresets(workspacePresets_);
     column->addWidget(contextBar_);
     column->addWidget(centralStack_, 1);
     column->addWidget(statusStrip_);
@@ -930,8 +939,9 @@ void MainWindow::resetCompositingLayout(const bool persist) {
         settings.remove(QLatin1StringView(timelineLayerColumnWidthKey));
     }
 
-    workspaceHost_->resetToDefaultLayout("bloom.viewer", "bloom.nodes", "bloom.assets",
-                                         "bloom.timeline", "bloom.properties");
+    // The first-run and Reset Workspace arrangement is the Default preset (owner, 2026-10-31). The
+    // startup and migration paths do not overwrite the stored active preset; Reset does.
+    workspacePresets_->apply(QStringLiteral("Default"), persist);
     workspaceLayoutWritable_ = true;
 
     // The Timeline's 37% divider default is applied at show time, but the Timeline is nested inside

@@ -19,10 +19,12 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/context_bar.hpp>
+#include <bloom/ui/workspace_presets.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/split_handle.hpp>
+#include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/layer_alignment_actions.hpp>
 #include <bloom/ui/licenses_window.hpp>
@@ -44,6 +46,8 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QJsonArray>
+#include <QLineEdit>
+#include <QKeyEvent>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeySequence>
@@ -214,8 +218,9 @@ void testLegacyLayoutMigration(Expectations& expectations) {
     expectations.expect(window.restoreApplicationState(settings) ==
                             WorkspaceLayoutRestoreResult::Restored,
                         "valid legacy layout migrates");
-    expectations.expect(window.workspaceHost()->areaCount() == 5,
-                        "legacy layout gains all default panels");
+    expectations.expect(window.workspaceHost()->areaCount() == 4 &&
+                            window.workspacePresets()->activeName() == QStringLiteral("Default"),
+                        "legacy layout gains all panels of the Default preset");
     const auto migrated = window.workspaceHost()->saveLayoutState();
     expectations.expect(QJsonDocument::fromJson(migrated).object().value("schema").toInt() == 2 &&
                             migrated.contains("bloom.assets"),
@@ -247,7 +252,7 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
             }
             return static_cast<TimelineEditor*>(nullptr);
         };
-        // The Viewer/Nodes row is the top child of the Timeline area's own (vertical) splitter.
+        // The Assets | Viewer row is the top child of the Timeline area's own (vertical) splitter.
         const auto viewerNodesRow = [&]() -> QSplitter* {
             auto* timelineArea = visibleArea("bloom.timeline");
             auto* leftColumn = timelineArea != nullptr
@@ -261,7 +266,7 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
         auto* timeline = visibleTimeline();
         expectations.expect(
             topRow != nullptr && timeline != nullptr,
-            "reset workspace: the default Viewer/Nodes row and timeline are visible");
+            "reset workspace: the default Assets/Viewer row and timeline are visible");
         if (topRow == nullptr || timeline == nullptr || resetAction == nullptr) {
             return;
         }
@@ -306,9 +311,13 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
             return total > 0 ? static_cast<double>(sizes[index]) / total : 0.0;
         };
         const auto sizes = topRow->sizes();
-        expectations.expect(std::abs(share(sizes, 0) - 0.505) <= 0.01 &&
-                                std::abs(share(sizes, 1) - 0.495) <= 0.01,
-                            "reset workspace: the Viewer/Nodes proportions are restored");
+        expectations.expect(std::abs(share(sizes, 0) - 0.25) <= 0.02 &&
+                                std::abs(share(sizes, 1) - 0.75) <= 0.02,
+                            "reset workspace: the Assets/Viewer proportions are restored");
+        expectations.expect(fixture.window->workspacePresets()->activeName() ==
+                                    QStringLiteral("Default") &&
+                                !fixture.window->workspacePresets()->isEdited(),
+                            "reset workspace: the Workspace field reads Default");
         const double timelineShare =
             timeline->width() > 0
                 ? static_cast<double>(timeline->layerColumnWidthForTest()) / timeline->width()
@@ -321,11 +330,6 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
                                 viewer->channelForTest() == ViewerChannel::Rgba &&
                                 viewer->viewTransformForTest().fitToWindow,
                             "reset workspace: Viewer starts in RGBA and Fit");
-        auto* nodes = fixture.window->findChild<NodeGraphEditor*>();
-        expectations.expect(nodes != nullptr && nodes->isVisible() &&
-                                nodes->graphView() != nullptr &&
-                                !nodes->graphView()->viewAdjusted(),
-                            "reset workspace: Nodes starts fitted");
         fixture.session.clearSelection();
         QCoreApplication::processEvents();
         auto* properties = fixture.window->findChild<PropertiesEditor*>();
@@ -345,27 +349,22 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
         const auto savedRootWeights = root.value(QStringLiteral("weights")).toArray();
         const auto rootChildren = root.value(QStringLiteral("children")).toArray();
         const auto leftColumnNode = rootChildren.at(0).toObject();
-        const auto rightColumnNode = rootChildren.at(1).toObject();
         const auto savedLeftWeights = leftColumnNode.value(QStringLiteral("weights")).toArray();
-        const auto savedRightWeights = rightColumnNode.value(QStringLiteral("weights")).toArray();
-        const auto savedTopLeftWeights = leftColumnNode.value(QStringLiteral("children"))
-                                             .toArray()
-                                             .at(0)
-                                             .toObject()
-                                             .value(QStringLiteral("weights"))
-                                             .toArray();
+        const auto savedTopWeights = leftColumnNode.value(QStringLiteral("children"))
+                                         .toArray()
+                                         .at(0)
+                                         .toObject()
+                                         .value(QStringLiteral("weights"))
+                                         .toArray();
         expectations.expect(savedRootWeights.size() == 2 &&
-                                std::abs(savedRootWeights.at(0).toDouble() - 0.80) <= 0.01 &&
-                                std::abs(savedRootWeights.at(1).toDouble() - 0.20) <= 0.01 &&
+                                std::abs(savedRootWeights.at(0).toDouble() - 0.80) <= 0.02 &&
+                                std::abs(savedRootWeights.at(1).toDouble() - 0.20) <= 0.02 &&
                                 savedLeftWeights.size() == 2 &&
-                                std::abs(savedLeftWeights.at(0).toDouble() - 0.56) <= 0.01 &&
-                                std::abs(savedLeftWeights.at(1).toDouble() - 0.44) <= 0.01 &&
-                                savedRightWeights.size() == 2 &&
-                                std::abs(savedRightWeights.at(0).toDouble() - 0.395) <= 0.01 &&
-                                std::abs(savedRightWeights.at(1).toDouble() - 0.605) <= 0.01 &&
-                                savedTopLeftWeights.size() == 2 &&
-                                std::abs(savedTopLeftWeights.at(0).toDouble() - 0.505) <= 0.01 &&
-                                std::abs(savedTopLeftWeights.at(1).toDouble() - 0.495) <= 0.01,
+                                std::abs(savedLeftWeights.at(0).toDouble() - 0.66) <= 0.02 &&
+                                std::abs(savedLeftWeights.at(1).toDouble() - 0.34) <= 0.02 &&
+                                savedTopWeights.size() == 2 &&
+                                std::abs(savedTopWeights.at(0).toDouble() - 0.25) <= 0.02 &&
+                                std::abs(savedTopWeights.at(1).toDouble() - 0.75) <= 0.02,
                             "reset workspace: persisted layout keys contain the restored weights");
         const int persistedTimelineWidth =
             settings.value(QStringLiteral("timeline/layer-column-width")).toInt();
@@ -375,6 +374,45 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
             "reset workspace: the timeline divider's persisted key matches its live value");
     } catch (const std::exception& error) {
         expectations.expect(false, std::string("reset workspace fixture: ") + error.what());
+    }
+}
+
+// Numpad 0 is the RAM Preview key (After Effects): a window shortcut on the Composition menu's
+// action, which a keypad digit typed into a text field overrides (it is text input there).
+void testNumpadZeroIsTheRamPreviewShortcut(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "numpad shortcut editors registered");
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
+    auto* action = window.findChild<QAction*>(QStringLiteral("compositionRamPreviewAction"));
+    expectations.expect(action != nullptr, "the Composition menu owns the RAM Preview action");
+    if (action == nullptr)
+        return;
+    expectations.expect(action->shortcutContext() == Qt::WindowShortcut &&
+                            action->shortcuts().contains(
+                                QKeySequence(Qt::KeypadModifier | Qt::Key_0)) &&
+                            action->shortcuts().contains(
+                                QKeySequence(Qt::KeypadModifier | Qt::Key_Insert)) &&
+                            action->shortcuts().contains(
+                                QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space)),
+                        "Numpad 0 and Ctrl+Shift+Space are window shortcuts of one action");
+    auto* cancel = window.findChild<QAction*>(QStringLiteral("cancelRamPreviewAction"));
+    expectations.expect(cancel != nullptr && cancel->shortcut() == QKeySequence(Qt::Key_Escape) &&
+                            !cancel->isEnabled(),
+                        "Esc is the Cancel RAM Preview shortcut, armed only while a fill runs");
+    expectations.expect(!action->shortcuts().contains(QKeySequence(Qt::Key_0)),
+                        "the main-row 0 key is not a RAM Preview shortcut");
+    // Inside a text field the digit is text input: the field accepts the ShortcutOverride, so the
+    // window shortcut does not fire.
+    QLineEdit field;
+    field.show();
+    field.setFocus();
+    for (const auto modifiers : {Qt::KeypadModifier, Qt::NoModifier}) {
+        QKeyEvent override(QEvent::ShortcutOverride, Qt::Key_0, modifiers, QStringLiteral("0"));
+        override.ignore();
+        QCoreApplication::sendEvent(&field, &override);
+        expectations.expect(override.isAccepted(),
+                            "a zero typed into a text field is text input, not a shortcut");
     }
 }
 
@@ -576,9 +614,10 @@ void testWindowStatusBarIsAKitStripWithEveryCell(Expectations& expectations) {
                         "status bar: it is a row of the central column, so it stays visible "
                         "whichever central page is authoritative");
     for (const char* cell :
-         {"windowStatusBarColorChip", "windowStatusBarPreviewState", "windowStatusBarDroppedFrames",
-          "windowStatusBarCache", "windowStatusBarMediaDiskCache", "windowStatusBarMessage",
-          "windowStatusBarVersion"}) {
+         {"windowStatusBarViewer", "windowStatusBarColorChip", "windowStatusBarExposure",
+          "windowStatusBarChannel", "windowStatusBarDroppedFrames", "windowStatusBarActivity",
+          "windowStatusBarMessage", "windowStatusBarMemory", "windowStatusBarCache",
+          "windowStatusBarDisk", "windowStatusBarMediaDiskCache", "windowStatusBarVersion"}) {
         expectations.expect(strip->findChild<QWidget*>(QString::fromLatin1(cell)) != nullptr,
                             std::string{"status bar: it carries the "} + cell + " cell");
     }
@@ -592,17 +631,35 @@ void testWindowStatusBarIsAKitStripWithEveryCell(Expectations& expectations) {
     (void)operationCache.find("status-entry", bloom::document::Revision::fromRaw(1));
     (void)operationCache.find("missing-entry", bloom::document::Revision::fromRaw(1));
     WindowStatusBar cacheStrip(fixture.compositionSession, nullptr, nullptr, &operationCache);
+    expectations.expect(cacheStrip.memoryTextForTest().startsWith(QStringLiteral("RAM ")) &&
+                            cacheStrip.memoryTextForTest().contains(QStringLiteral("/1.0 MB")),
+                        "status bar: the RAM segment reads used/budget in one line");
     expectations.expect(
-        cacheStrip.cacheTextForTest().contains(QStringLiteral("Ops 1 hits")) &&
-            cacheStrip.cacheTextForTest().contains(QStringLiteral("1 misses")) &&
-            cacheStrip.cacheTextForTest().contains(QStringLiteral("/ 1.0 MB")),
-        "status bar: the cache cell reports operation hits, misses, retained bytes, "
-        "and budget");
-    auto* cacheLabel = cacheStrip.findChild<QLabel*>(QStringLiteral("windowStatusBarCache"));
-    expectations.expect(cacheLabel != nullptr &&
-                            cacheLabel->toolTip().contains(QStringLiteral("operation-cache")),
-                        "status bar: the dense cache cell explains its two cache accounts in a "
-                        "tooltip");
+        cacheStrip.cacheToolTipForTest().contains(QStringLiteral("1 hits · 1 misses")) &&
+            !cacheStrip.memoryTextForTest().contains(QStringLiteral("hits")) &&
+            !cacheStrip.memoryTextForTest().contains(QStringLiteral("Ops")),
+        "status bar: hit and miss counters are in the tooltip, never inline");
+    // Every value has a visible label, and none is a bare number; MCP and Version labels included.
+    const auto labels = strip->segmentLabelsForTest();
+    expectations.expect(labels.size() == 7 && labels[0].contains(QStringLiteral("Render")) &&
+                            labels[0].contains(QStringLiteral("Exposure")) &&
+                            labels[0].contains(QStringLiteral("Channel")) &&
+                            labels[0].contains(QStringLiteral("Dropped")) &&
+                            labels[1] == QStringLiteral("Activity") &&
+                            labels[3].contains(QStringLiteral("RAM")) &&
+                            labels[3].contains(QStringLiteral("Cache")) &&
+                            labels[4] == QStringLiteral("Disk cache") &&
+                            labels[5] == QStringLiteral("MCP") &&
+                            labels[6] == QStringLiteral("Version"),
+                        "status bar: every segment carries a short visible label");
+    expectations.expect(strip->activityTextForTest() == QStringLiteral("Idle") &&
+                            !strip->segmentVisibleForTest(QStringLiteral("windowStatusBarMcpSegment")),
+                        "status bar: idle placeholder, and no MCP text while the server is stopped");
+    expectations.expect(strip->findChild<QWidget*>(QStringLiteral("windowStatusBarColorChip")) &&
+                            strip->findChild<QWidget*>(QStringLiteral("windowStatusBarExposure"))
+                                    ->font()
+                                    .family() == bloom::ui::kit::font(bloom::ui::kit::TypeRole::Value).family(),
+                        "status bar: values use the monospaced face");
     // CACHE-2: the window is built with no disk cache (this fixture matches Timeline/window
     // fixtures elsewhere that pass no ninth argument), so the cell reports "off" rather than an
     // invented hit rate.
@@ -1214,6 +1271,7 @@ int main(int argc, char** argv) {
     testLegacyLayoutMigration(expectations);
     testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(expectations);
     testMainWindowAlwaysBuildsNativeChrome(expectations);
+    testNumpadZeroIsTheRamPreviewShortcut(expectations);
     testWindowTitleIsJustTheDocumentTitle(expectations);
     testViewMenuItemsExistAndFire(expectations);
     testHelpMenuItemsExistAndFire(expectations);

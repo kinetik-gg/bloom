@@ -472,16 +472,21 @@ target_sources(
         export_queue_edits.cpp
         export_queue_service_port.cpp
         export_editor.cpp
+        export_editor_actions.cpp
         export_panel_text.cpp
         export_panel_text.hpp
         export_colour_choices.cpp
         export_colour_choices.hpp
-        export_job_row.cpp
-        export_job_row.hpp
-        export_output_row.cpp
-        export_output_row.hpp
-        export_job_results.cpp
-        export_job_results.hpp
+        export_render_list.cpp
+        export_render_list.hpp
+        export_job_lines.cpp
+        export_job_lines.hpp
+        export_render_settings_dialog.cpp
+        export_render_settings_dialog.hpp
+        export_output_module_dialog.cpp
+        export_output_module_dialog.hpp
+        export_job_details.cpp
+        export_job_details.hpp
         export_detail_support.hpp
         compile_failure.cpp
         mcp_live_ui_binding.cpp
@@ -619,6 +624,8 @@ target_sources(
         gpu_viewer_bootstrap.cpp
         native_surface_retirement.cpp
         window_status_bar.cpp
+        window_status_bar_text.cpp
+        workspace_presets.cpp
         workspace_host.cpp
     workspace_host_shutdown.cpp
         "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}"
@@ -706,6 +713,7 @@ target_sources(
             include/bloom/ui/gpu_viewer_bootstrap.hpp
             include/bloom/ui/window_status_bar.hpp
             include/bloom/ui/workspace_host.hpp
+            include/bloom/ui/workspace_presets.hpp
 )
 
 target_compile_features(bloom_ui PUBLIC cxx_std_20)

@@ -58,6 +58,9 @@ class KDropdown final : public QWidget {
     // dropdown becomes its value silently, so a freshly built list shows something.
     int addItem(const QString& text, const QVariant& data = {});
     int addItem(const QIcon& icon, const QString& text, const QVariant& data = {});
+    // A hairline between two groups of items: never current, never chosen, skipped by the keys. A
+    // list with a separator draws its rows at their own heights.
+    int addSeparator();
     void setItemText(int index, const QString& text);
     [[nodiscard]] QIcon itemIcon(int index) const;
     void setItemToolTip(int index, const QString& toolTip);
