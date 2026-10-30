@@ -5,6 +5,7 @@
 #include <bloom/commands/node_editor_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/project.hpp>
 #include <limits>
 #include <type_traits>
 #include <utility>
