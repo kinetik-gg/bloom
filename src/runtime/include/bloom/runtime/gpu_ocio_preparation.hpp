@@ -51,6 +51,9 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // geometry (layerMaskProgramData) uploaded per dispatch, so keyed paths never recompile. The
     // data bytes are part of the prepare key and the command identity.
     LayerMask = 7,
+    // The Display kind's exact display/view transform as a float ProcessEffect: display-referred
+    // RGBA32F for media delivery quantized beyond 8 bits at the codec boundary.
+    DisplayEffect = 8,
 };
 
 struct GpuOcioTransformSpec final {

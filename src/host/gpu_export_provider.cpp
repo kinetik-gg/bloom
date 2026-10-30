@@ -431,10 +431,10 @@ bool GpuExportProvider::gpuDisplayPreparationAvailable() const noexcept {
            runtime::validGpuOcioCompileOptions(*state_->displayCompile);
 }
 
-runtime::GpuOcioPreparationResult GpuExportProvider::prepareGpuDisplayCommand(
-    const color::ResolvedBloomNeutralConfig& config, const std::string_view display,
-    const std::string_view view, const runtime::GpuOcioCommandGeometry geometry,
-    const runtime::GpuOcioCancellation& cancel) {
+runtime::GpuOcioPreparationResult GpuExportProvider::prepareDisplayCommand(
+    const runtime::GpuOcioTransformKind kind, const color::ResolvedBloomNeutralConfig& config,
+    const std::string_view display, const std::string_view view,
+    const runtime::GpuOcioCommandGeometry geometry, const runtime::GpuOcioCancellation& cancel) {
     if (state_ == nullptr) {
         return {nullptr, runtime::GpuOcioPreparationError::InvalidRequest,
                 "no GPU export provider"};
@@ -467,10 +467,28 @@ runtime::GpuOcioPreparationResult GpuExportProvider::prepareGpuDisplayCommand(
         }
     }
     runtime::GpuOcioTransformSpec spec;
-    spec.kind = runtime::GpuOcioTransformKind::Display;
+    spec.kind = kind;
     spec.display = std::string(display);
     spec.view = std::string(view);
     return preparer->prepare(config, spec, geometry, compile, cancel);
 }
 
+} // namespace bloom::host
+
+namespace bloom::host {
+runtime::GpuOcioPreparationResult GpuExportProvider::prepareGpuDisplayCommand(
+    const color::ResolvedBloomNeutralConfig& config, const std::string_view display,
+    const std::string_view view, const runtime::GpuOcioCommandGeometry geometry,
+    const runtime::GpuOcioCancellation& cancel) {
+    return prepareDisplayCommand(runtime::GpuOcioTransformKind::Display, config, display, view,
+                                 geometry, cancel);
+}
+
+runtime::GpuOcioPreparationResult GpuExportProvider::prepareGpuMediaDisplayCommand(
+    const color::ResolvedBloomNeutralConfig& config, const std::string_view display,
+    const std::string_view view, const runtime::GpuOcioCommandGeometry geometry,
+    const runtime::GpuOcioCancellation& cancel) {
+    return prepareDisplayCommand(runtime::GpuOcioTransformKind::DisplayEffect, config, display,
+                                 view, geometry, cancel);
+}
 } // namespace bloom::host

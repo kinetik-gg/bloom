@@ -152,8 +152,20 @@ class GpuExportProvider final {
                              std::string_view display, std::string_view view,
                              runtime::GpuOcioCommandGeometry geometry,
                              const runtime::GpuOcioCancellation& cancel = {});
+    // The same display/view as a float ProcessEffect command (display-referred RGBA32F) for media
+    // delivery, which quantizes to its codec sample depth after the single combined readback.
+    [[nodiscard]] runtime::GpuOcioPreparationResult
+    prepareGpuMediaDisplayCommand(const color::ResolvedBloomNeutralConfig& config,
+                                  std::string_view display, std::string_view view,
+                                  runtime::GpuOcioCommandGeometry geometry,
+                                  const runtime::GpuOcioCancellation& cancel = {});
 
   private:
+    [[nodiscard]] runtime::GpuOcioPreparationResult
+    prepareDisplayCommand(runtime::GpuOcioTransformKind kind,
+                          const color::ResolvedBloomNeutralConfig& config, std::string_view display,
+                          std::string_view view, runtime::GpuOcioCommandGeometry geometry,
+                          const runtime::GpuOcioCancellation& cancel);
     friend struct detail::GpuExportProviderTestAccess;
     explicit GpuExportProvider(runtime::GpuProcessFrameEvaluatorOptions options,
                                std::shared_ptr<std::timed_mutex> bootstrapGate);

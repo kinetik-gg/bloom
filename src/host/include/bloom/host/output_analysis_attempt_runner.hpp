@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/output/display_output.hpp>
 #include <bloom/output/output_analysis_analyzer.hpp>
 #include <bloom/output/output_analysis_attempt.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
@@ -15,6 +16,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <variant>
@@ -90,6 +92,38 @@ struct OutputAnalysisAttemptGpuProvenanceV1 final {
                            const OutputAnalysisAttemptGpuProvenanceV1&) = default;
 };
 
+// One range's media display command, shared by every frame attempt of a sequence export. The
+// first Evaluating worker that finds the provider able to prepare GPU colour prepares the export's
+// display/view (resolved exactly as the CPU display) as a float ProcessEffect; later frames reuse
+// it. A failed preparation is remembered with its reason, so frames take the CPU reference path
+// with explicit provenance instead of retrying. Thread-safe.
+class OutputMediaDisplayCommandV1 final {
+  public:
+    OutputMediaDisplayCommandV1(std::shared_ptr<const output::PreparedOutputDisplayV1> display,
+                                const runtime::EvaluationColorIntent& intent);
+    // CPU worker only (preparation may extract and compile). Null when GPU colour is unavailable.
+    [[nodiscard]] std::shared_ptr<const runtime::PreparedGpuOcioCommand>
+    command(GpuExportProvider& provider, runtime::GpuOcioCommandGeometry geometry,
+            const runtime::GpuOcioCancellation& cancel);
+    [[nodiscard]] const output::PreparedOutputDisplayV1& display() const noexcept {
+        return *display_;
+    }
+    // The prepared command's identity (zero until prepared), for the codec-boundary binding check.
+    [[nodiscard]] core::Sha256Digest commandIdentity() const;
+    // Why GPU colour was not prepared (empty while prepared or not yet attempted).
+    [[nodiscard]] std::string unavailableReason() const;
+
+  private:
+    std::shared_ptr<const output::PreparedOutputDisplayV1> display_;
+    std::string workingColorSpaceId_;
+    core::Sha256Digest ocioConfigRevision_;
+    std::string ocioConfigUri_;
+    mutable std::mutex mutex_;
+    bool attempted_ = false;
+    std::shared_ptr<const runtime::PreparedGpuOcioCommand> command_;
+    std::string unavailableReason_;
+};
+
 struct OutputAnalysisAttemptRequestV1 final {
     std::shared_ptr<const runtime::CompiledCompositionPlan> plan;
     runtime::EvaluationRequest evaluation;
@@ -145,6 +179,12 @@ struct OutputAnalysisAttemptRequestV1 final {
     // refused and the attempt falls back to the honest CPU reference/display path; a foreign
     // command is never stamped with the canonical display identity.
     std::shared_ptr<const runtime::PreparedGpuOcioCommand> outputColorCommand = nullptr;
+    // Media delivery (video and TIFF sequence export): the export's own display/view. For non-PNG
+    // presets at full composition resolution the Evaluating worker prepares (once per range) the
+    // display/view as a float ProcessEffect command and runs it in the same combined readback; the
+    // display-referred RGBA32F is retained as the attempt's gpuMediaDisplay. Null, or a provider
+    // that cannot prepare GPU colour, keeps the CPU reference display path at the codec boundary.
+    std::shared_ptr<OutputMediaDisplayCommandV1> mediaDisplay = nullptr;
     // Production callers leave the numeric evaluator field unset and resolve it once from the
     // sampled processing root on the Evaluating CPU worker. Explicit caller byte limits, including
     // zero, remain unchanged when this flag is false.

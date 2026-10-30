@@ -6,6 +6,7 @@
 #include <bloom/render/image.hpp>
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <string_view>
 
 namespace bloom::output {
@@ -79,4 +80,14 @@ analyzeMediaOutputV1(OutputPresetV1 preset, media::provider::EncodeSettingsV1 se
 prepareMediaRgba16V1(const render::Rgba32fImage& image, media::provider::Rational pts,
                      const platform::ProcessCancellation& cancellation = {},
                      const PreparedOutputDisplayV1* display = nullptr);
+// The codec-boundary half of prepareMediaRgba16V1 for pixels the GPU already transformed to the
+// display: `displayAssociated` is the display-referred RGBA32F the export's display/view
+// ProcessEffect produced, still associated with the process alpha. Un-associates, clamps and
+// quantizes exactly as the CPU reference does after its display transform; no colour math runs
+// here.
+[[nodiscard]] media::provider::Result<media::provider::FrameProduct>
+prepareMediaRgba16FromDisplayV1(std::span<const render::Rgba32f> displayAssociated,
+                                std::uint32_t width, std::uint32_t height,
+                                media::provider::Rational pts,
+                                const platform::ProcessCancellation& cancellation = {});
 } // namespace bloom::output

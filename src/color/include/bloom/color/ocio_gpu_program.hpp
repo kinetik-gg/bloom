@@ -21,6 +21,11 @@ namespace bloom::color {
 
 inline constexpr std::string_view kOcioGpuDisplaySemanticsId = "bloom.color.ocio-display-gpu.v1";
 inline constexpr std::string_view kOcioGpuCstSemanticsId = "bloom.color.ocio-process-cst.v1";
+// The same display/view transform as kOcioGpuDisplaySemanticsId, emitted as a float ProcessEffect
+// (straight RGB in, display-referred RGB out, alpha re-associated) instead of packed RGBA8, for
+// media delivery that quantizes beyond 8 bits at the codec boundary.
+inline constexpr std::string_view kOcioGpuDisplayEffectSemanticsId =
+    "bloom.color.ocio-display-effect-gpu.v1";
 inline constexpr std::string_view kOcioGpuFileTransformSemanticsId =
     "bloom.color.ocio-process-file-transform.v1";
 inline constexpr std::string_view kOcioGpuExposureContrastSemanticsId =
@@ -86,6 +91,14 @@ buildOcioGpuProgramForDisplay(const ResolvedBloomNeutralConfig& resolved, std::s
                               std::string_view view,
                               const render::OcioGpuProgramLimits& limits = {}) noexcept;
 
+// The display/view transform of buildOcioGpuProgramForDisplay as a float ProcessEffect program:
+// the wrapper un-associates alpha, runs the exact display/view body and re-associates, so the
+// caller reads back display-referred RGBA32F rather than packed RGBA8.
+[[nodiscard]] render::OcioGpuProgramResult
+buildOcioGpuProgramForDisplayEffect(const ResolvedBloomNeutralConfig& resolved,
+                                    std::string_view display, std::string_view view,
+                                    const render::OcioGpuProgramLimits& limits = {}) noexcept;
+
 // Colour space transform extraction. Both ids must resolve to non-data spaces in the exact config;
 // an equal source/destination is reported as IdentityTransform (the caller keeps its CPU identity
 // path rather than compiling a fabricated passthrough).
@@ -96,9 +109,10 @@ buildOcioGpuProgramForCst(const ResolvedBloomNeutralConfig& resolved, std::strin
 
 // Exact scene-linear RGB scale and offset, extracted from OCIO MatrixTransform. Alpha remains
 // unchanged by the production ProcessEffect wrapper, including transparent pixels.
-[[nodiscard]] render::OcioGpuProgramResult buildOcioGpuProgramForPointwiseAffine(
-    const ResolvedBloomNeutralConfig& resolved, float scale, float offset,
-    const render::OcioGpuProgramLimits& limits = {}) noexcept;
+[[nodiscard]] render::OcioGpuProgramResult
+buildOcioGpuProgramForPointwiseAffine(const ResolvedBloomNeutralConfig& resolved, float scale,
+                                      float offset,
+                                      const render::OcioGpuProgramLimits& limits = {}) noexcept;
 
 // File transform extraction. Arbitrary `.cube`/`.clf`/`.spi1d`/`.spi3d` bytes are never parsed
 // in-process: the exact bytes and their digest are handed to the isolated bloom-color-worker, which

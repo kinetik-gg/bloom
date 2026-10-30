@@ -286,6 +286,23 @@ std::optional<Unavailable> CompositionOutputStreamV1::writeFrame(const render::R
         return error;
     }
 }
+std::optional<Unavailable> CompositionOutputStreamV1::writePreparedFrame(
+    FrameProduct prepared, const std::uint64_t samplesThrough, runtime::TaskContext& context) {
+    try {
+        auto& s = *state_;
+        s.checkpoint();
+        if (!s.started) {
+            checked(s.encoder->begin(s.encoding));
+            s.started = true;
+        }
+        require(!s.encoding.videoCodec.empty(), "Prepared frames need a video stream");
+        checked(s.encoder->video(std::move(prepared)));
+        s.audio(context, samplesThrough);
+        return {};
+    } catch (const Unavailable& error) {
+        return error;
+    }
+}
 Result<EncodeQcV1> CompositionOutputStreamV1::finish() { return state_->encoder->finish(); }
 Result<EncodedChunkV1> CompositionOutputStreamV1::read(std::uint64_t offset) {
     return state_->encoder->read(offset);

@@ -26,6 +26,11 @@ class CompositionOutputStreamV1 final {
     [[nodiscard]] std::optional<media::provider::Unavailable>
     writeFrame(const render::Rgba32fImage&, std::uint64_t frame, std::uint64_t samplesThrough,
                runtime::TaskContext&);
+    // Writes a frame whose RGBA16 display product the caller already prepared at the codec
+    // boundary (prepareMediaRgba16FromDisplayV1 over the GPU display payload).
+    [[nodiscard]] std::optional<media::provider::Unavailable>
+    writePreparedFrame(media::provider::FrameProduct prepared, std::uint64_t samplesThrough,
+                       runtime::TaskContext&);
     [[nodiscard]] media::provider::Result<media::provider::EncodeQcV1> finish();
     [[nodiscard]] media::provider::Result<media::provider::EncodedChunkV1>
     read(std::uint64_t offset);

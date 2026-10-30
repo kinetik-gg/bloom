@@ -254,6 +254,9 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
             return color::buildOcioGpuProgramForCst(config, transform.fromId, transform.toId);
         case GpuOcioTransformKind::Display:
             return color::buildOcioGpuProgramForDisplay(config, transform.display, transform.view);
+        case GpuOcioTransformKind::DisplayEffect:
+            return color::buildOcioGpuProgramForDisplayEffect(config, transform.display,
+                                                              transform.view);
         case GpuOcioTransformKind::ExposureContrast:
             return color::buildOcioGpuProgramForExposureContrast(
                 config, transform.fromId, transform.exposure, transform.contrast);

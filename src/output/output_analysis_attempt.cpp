@@ -47,11 +47,11 @@ namespace {
 // bound for the digest's own bounded streaming preimage (never allocated in full --
 // output_analysis_digest.hpp streams it -- but charged conservatively at its closed cap anyway, so
 // this reservation is never an under-count of what Analyzing/digesting can touch).
-[[nodiscard]] std::optional<std::uint64_t>
-checkedAttemptRetainedBytes(const render::Rgba32fImageDescriptor& descriptor,
-                            const OutputAnalysisReportV1& report,
-                            const OutputAnalysisAttemptDisplayProductsV1& display,
-                            const OutputAnalysisAttemptGpuDisplayV1& gpuDisplay) noexcept {
+[[nodiscard]] std::optional<std::uint64_t> checkedAttemptRetainedBytes(
+    const render::Rgba32fImageDescriptor& descriptor, const OutputAnalysisReportV1& report,
+    const OutputAnalysisAttemptDisplayProductsV1& display,
+    const OutputAnalysisAttemptGpuDisplayV1& gpuDisplay,
+    const OutputAnalysisAttemptGpuMediaDisplayV1& gpuMediaDisplay) noexcept {
     constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t total = descriptor.layout().pixelStorageBytes;
     const auto descriptorBytes = static_cast<std::uint64_t>(report.descriptorByteCount());
@@ -95,6 +95,12 @@ checkedAttemptRetainedBytes(const render::Rgba32fImageDescriptor& descriptor,
         return std::nullopt;
     }
     total += gpuDisplayBytes;
+    const auto gpuMediaDisplayBytes =
+        static_cast<std::uint64_t>(gpuMediaDisplay.pixels.size()) * sizeof(render::Rgba32f);
+    if (gpuMediaDisplayBytes > maximum - total) {
+        return std::nullopt;
+    }
+    total += gpuMediaDisplayBytes;
     return total;
 }
 
@@ -120,6 +126,15 @@ alreadyRootedPixelBytes(const OutputAnalysisAttemptBuildInputsV1& inputs) noexce
         const auto snapshot = encoded->snapshot();
         const auto expected = inputs.gpuDisplay.pixels.size() * sizeof(render::Rgba8);
         if (encoded->rootIdentity() != root || !snapshot.published || snapshot.bytes != expected ||
+            snapshot.bytes > std::numeric_limits<std::uint64_t>::max() - bytes)
+            return std::nullopt;
+        bytes += snapshot.bytes;
+    }
+    const auto media = inputs.gpuMediaDisplay.pixels.authority();
+    if (media) {
+        const auto snapshot = media->snapshot();
+        const auto expected = inputs.gpuMediaDisplay.pixels.size() * sizeof(render::Rgba32f);
+        if (media->rootIdentity() != root || !snapshot.published || snapshot.bytes != expected ||
             snapshot.bytes > std::numeric_limits<std::uint64_t>::max() - bytes)
             return std::nullopt;
         bytes += snapshot.bytes;
@@ -211,6 +226,23 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
         }
     }
 
+    // The media display payload binds to non-PNG presets, the exact process data-window geometry
+    // and the exact process-pixel identity of the frame it was transferred with.
+    if (inputs.gpuMediaDisplay.isPresent()) {
+        const auto& media = inputs.gpuMediaDisplay;
+        const auto extent = inputs.frame->processImage().descriptor()->dataWindow().extent();
+        if (preset == OutputPresetV1::PngRgba8SrgbV1 || inputs.processIdentity == nullptr ||
+            media.processPixelDigest != inputs.processIdentity->processPixelDigest() ||
+            media.width != extent.width() || media.height != extent.height() ||
+            media.commandIdentity == core::Sha256Digest{} ||
+            media.displayDigest == core::Sha256Digest{} ||
+            media.pixels.size() != static_cast<std::size_t>(extent.width()) *
+                                       static_cast<std::size_t>(extent.height())) {
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidDisplayProducts);
+        }
+    }
+
     // A nonapprovable report is still a successful, completed attempt (frame-output.md: "A
     // nonapprovable but valid report is a successful analysis attempt"); only an approvable report
     // gets a digest at all. The PNG dependencies below are the exact retained products
@@ -233,8 +265,8 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
     }
 
     const auto* descriptor = inputs.frame->processImage().descriptor();
-    auto retainedBytes =
-        checkedAttemptRetainedBytes(*descriptor, *inputs.report, inputs.display, inputs.gpuDisplay);
+    auto retainedBytes = checkedAttemptRetainedBytes(*descriptor, *inputs.report, inputs.display,
+                                                     inputs.gpuDisplay, inputs.gpuMediaDisplay);
     // ADR 0026: retained channel layers are charged with the attempt; only a flat EXR writes them.
     if (inputs.channelLayers) {
         if (preset != OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 ||
@@ -242,7 +274,8 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
             return OutputAnalysisAttemptBuildResultV1::failure(
                 OutputAnalysisAttemptErrorCodeV1::InvalidReport);
         const auto layerBytes = inputs.channelLayers->byteCost();
-        if (retainedBytes && layerBytes > std::numeric_limits<std::uint64_t>::max() - *retainedBytes)
+        if (retainedBytes &&
+            layerBytes > std::numeric_limits<std::uint64_t>::max() - *retainedBytes)
             retainedBytes.reset();
         else if (retainedBytes)
             *retainedBytes += layerBytes;
@@ -272,6 +305,7 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
             digest, preset, std::move(inputs.target), std::move(inputs.display),
             std::move(inputs.gpuDisplay), std::move(reservation)));
         attempt->channelLayers_ = std::move(inputs.channelLayers);
+        attempt->gpuMediaDisplay_ = std::move(inputs.gpuMediaDisplay);
         return OutputAnalysisAttemptBuildResultV1::success(std::move(attempt));
     } catch (const std::bad_alloc&) {
         return OutputAnalysisAttemptBuildResultV1::failure(

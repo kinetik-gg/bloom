@@ -97,6 +97,25 @@ struct OutputAnalysisAttemptGpuDisplayV1 final {
     [[nodiscard]] bool isPresent() const noexcept { return !pixels.empty(); }
 };
 
+// GPU display-referred RGBA32F for media delivery (video and TIFF): the export's display/view
+// transform run as a float ProcessEffect on the device, transferred by the same single combined
+// readback as the process payload. Pixels stay associated with the process alpha; the codec
+// boundary un-associates and quantizes them. A consumer accepts the payload only for its own
+// display (displayDigest) and, where it holds the command, that command's identity.
+struct OutputAnalysisAttemptGpuMediaDisplayV1 final {
+    render::FinalRgba32fStorage pixels;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    core::Sha256Digest commandIdentity{};
+    // PreparedOutputDisplayV1::digest() of the display/view the command was prepared from; a
+    // consumer uses the payload only for that exact display.
+    core::Sha256Digest displayDigest{};
+    // Binds the payload to the exact process pixels it was transferred with.
+    core::Sha256Digest processPixelDigest{};
+
+    [[nodiscard]] bool isPresent() const noexcept { return !pixels.empty(); }
+};
+
 enum class OutputAnalysisAttemptErrorCodeV1 : std::uint8_t {
     None,
     InvalidTarget,
@@ -123,6 +142,9 @@ struct OutputAnalysisAttemptBuildInputsV1 final {
     OutputAnalysisAttemptDisplayProductsV1 display;
     // Optional GPU-encoded display payload. Absent keeps the unchanged CPU display path.
     OutputAnalysisAttemptGpuDisplayV1 gpuDisplay = {};
+    // Optional GPU display-referred media payload (non-PNG presets). Absent keeps the CPU
+    // reference display path at the codec boundary.
+    OutputAnalysisAttemptGpuMediaDisplayV1 gpuMediaDisplay = {};
     // The already sampled composition root used by final evaluation. The retained resource
     // reservation owns it through approval/publication, including EXR re-preparation.
     std::shared_ptr<runtime::GpuProcessingPhasePolicy> processingPolicy = nullptr;
@@ -203,6 +225,12 @@ class OutputAnalysisAttemptV1 final {
         return gpuDisplay_;
     }
     [[nodiscard]] const OutputAnalysisAttemptGpuDisplayV1& gpuDisplay() const&& = delete;
+    // The retained GPU display-referred media payload, if the GPU evaluated the export's display
+    // command with this frame. Empty on the CPU path.
+    [[nodiscard]] const OutputAnalysisAttemptGpuMediaDisplayV1& gpuMediaDisplay() const& noexcept {
+        return gpuMediaDisplay_;
+    }
+    [[nodiscard]] const OutputAnalysisAttemptGpuMediaDisplayV1& gpuMediaDisplay() const&& = delete;
     [[nodiscard]] const OutputAnalysisAttemptTargetV1& target() const noexcept { return target_; }
     [[nodiscard]] const std::shared_ptr<const render::ChannelSetImage>&
     channelLayers() const& noexcept {
@@ -240,6 +268,7 @@ class OutputAnalysisAttemptV1 final {
     OutputAnalysisAttemptTargetV1 target_;
     OutputAnalysisAttemptDisplayProductsV1 display_;
     OutputAnalysisAttemptGpuDisplayV1 gpuDisplay_;
+    OutputAnalysisAttemptGpuMediaDisplayV1 gpuMediaDisplay_;
     std::shared_ptr<const render::ChannelSetImage> channelLayers_;
 };
 

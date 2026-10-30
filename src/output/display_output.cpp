@@ -1,9 +1,8 @@
 #include <bloom/output/display_output.hpp>
 
 namespace bloom::output {
-std::shared_ptr<const PreparedOutputDisplayV1>
-PreparedOutputDisplayV1::prepare(const runtime::EvaluationColorIntent& intent,
-                                 std::string_view display, std::string_view view) {
+std::optional<color::ResolvedBloomNeutralConfig>
+resolveOutputDisplayConfigV1(const runtime::EvaluationColorIntent& intent) {
     const auto revision = intent.ocioConfigRevision == core::Sha256Digest{}
                               ? color::kBloomNeutralV1ConfigDigest
                               : intent.ocioConfigRevision;
@@ -13,7 +12,15 @@ PreparedOutputDisplayV1::prepare(const runtime::EvaluationColorIntent& intent,
                                                                       : intent.ocioConfigUri;
     auto resolution = color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, uri,
                                                 revision, intent.workingColorSpaceId);
-    auto config = std::move(resolution).takeResolved();
+    return std::move(resolution).takeResolved();
+}
+std::shared_ptr<const PreparedOutputDisplayV1>
+PreparedOutputDisplayV1::prepare(const runtime::EvaluationColorIntent& intent,
+                                 std::string_view display, std::string_view view) {
+    const auto revision = intent.ocioConfigRevision == core::Sha256Digest{}
+                              ? color::kBloomNeutralV1ConfigDigest
+                              : intent.ocioConfigRevision;
+    auto config = resolveOutputDisplayConfigV1(intent);
     if (!config)
         return {};
     if (display.empty())

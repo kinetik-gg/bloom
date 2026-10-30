@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/output/media_output.hpp>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 namespace {
 void check(bool condition, const char* message) {
     if (!condition)
@@ -13,6 +15,84 @@ bloom::output::MediaOutputAnalysisV1 analyze(bloom::output::OutputPresetV1 prese
     check(std::holds_alternative<bloom::output::MediaOutputAnalysisV1>(result),
           "media analysis succeeds");
     return std::get<bloom::output::MediaOutputAnalysisV1>(std::move(result));
+}
+// The codec-boundary half used after GPU display colour must reproduce the CPU reference exactly
+// when it is handed the CPU reference's own display values (associated with the process alpha):
+// same un-association, clamp, round-half-up quantization, byte order and plane digest.
+void testDisplayPayloadQuantizationMatchesReference() {
+    namespace o = bloom::output;
+    namespace r = bloom::render;
+    const auto display = o::PreparedOutputDisplayV1::prepare({});
+    check(display != nullptr, "neutral display prepared");
+    constexpr std::uint32_t width = 7;
+    constexpr std::uint32_t height = 3;
+    const auto associated = [](const float red, const float green, const float blue,
+                               const float alpha) {
+        const auto pixel = r::Rgba32f::fromPremultiplied(red, green, blue, alpha);
+        check(pixel.value() != nullptr, "valid associated pixel");
+        return *pixel.value();
+    };
+    std::vector<r::Rgba32f> process;
+    for (std::uint32_t index = 0; index < width * height; ++index) {
+        // Opaque, half and transparent coverage over SDR, HDR and negative values. Power-of-two
+        // alphas keep association exact, so equality is bitwise.
+        const float alpha = index % 3 == 0 ? 1.0F : (index % 3 == 1 ? 0.5F : 0.0F);
+        const float value = -0.25F + static_cast<float>(index) * 0.11F;
+        process.push_back(alpha == 0.0F ? r::Rgba32f::transparent()
+                                        : associated(value * alpha, value * 0.5F * alpha,
+                                                     (1.5F - value) * alpha, alpha));
+    }
+    const auto windowResult = r::ImageWindow::create(0, 0, width, height);
+    check(windowResult.value() != nullptr, "window");
+    const auto window = *windowResult.value();
+    const auto descriptor =
+        r::Rgba32fImageDescriptor::create(window, window, bloom::core::PixelAspectRatio::square());
+    check(static_cast<bool>(descriptor), "descriptor");
+    auto builder = r::Rgba32fImageBuilder::create(*descriptor.value(),
+                                                  descriptor.value()->layout().pixelStorageBytes);
+    check(static_cast<bool>(builder), "builder");
+    for (std::uint32_t row = 0; row < height; ++row) {
+        auto destination = builder.value()->row(row);
+        check(static_cast<bool>(destination), "row");
+        std::copy_n(process.begin() + static_cast<std::ptrdiff_t>(row * width), width,
+                    destination.value()->begin());
+    }
+    auto frozen = std::move(*builder.value()).freeze();
+    check(static_cast<bool>(frozen), "frozen");
+    const auto& image = *frozen.value();
+    std::vector<r::Rgba32f> displayAssociated;
+    for (const auto pixel : image.pixels()) {
+        const float alpha = pixel.alpha();
+        if (alpha == 0.0F) {
+            displayAssociated.push_back(pixel);
+            continue;
+        }
+        const auto converted = display->processor().referenceToDisplay(
+            {static_cast<double>(pixel.red() / alpha), static_cast<double>(pixel.green() / alpha),
+             static_cast<double>(pixel.blue() / alpha), static_cast<double>(alpha)});
+        check(converted.has_value(), "reference display conversion");
+        displayAssociated.push_back(associated(static_cast<float>(converted->red) * alpha,
+                                               static_cast<float>(converted->green) * alpha,
+                                               static_cast<float>(converted->blue) * alpha, alpha));
+    }
+    namespace p = bloom::media::provider;
+    const auto reference = o::prepareMediaRgba16V1(image, {1, 24}, {}, display.get());
+    const auto boundary =
+        o::prepareMediaRgba16FromDisplayV1(displayAssociated, width, height, {1, 24});
+    check(std::holds_alternative<p::FrameProduct>(reference) &&
+              std::holds_alternative<p::FrameProduct>(boundary),
+          "both preparations succeed");
+    const auto& left = std::get<p::FrameProduct>(reference);
+    const auto& right = std::get<p::FrameProduct>(boundary);
+    check(left.planes.size() == 1 && right.planes.size() == 1 &&
+              left.planes[0].bytes == right.planes[0].bytes &&
+              left.planes[0].digest == right.planes[0].digest && left.pts == right.pts &&
+              left.format == right.format && left.colour == right.colour &&
+              left.planes[0].stride == right.planes[0].stride,
+          "GPU display payload quantizes exactly like the CPU reference");
+    check(std::holds_alternative<p::Unavailable>(
+              o::prepareMediaRgba16FromDisplayV1(displayAssociated, width + 1, height, {1, 24})),
+          "a payload that does not match the frame geometry is refused");
 }
 } // namespace
 int main() {
@@ -111,6 +191,7 @@ int main() {
         check(std::holds_alternative<p::Unavailable>(
                   o::analyzeMediaOutputV1(o::OutputPresetV1::ProResMovV1, s)),
               "codec/preset mismatch refused");
+        testDisplayPayloadQuantizationMatchesReference();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

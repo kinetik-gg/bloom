@@ -3,6 +3,10 @@
 #include <bloom/runtime/evaluation.hpp>
 
 namespace bloom::output {
+// The built-in OCIO config an output colour intent names, resolved exactly as
+// PreparedOutputDisplayV1::prepare resolves it (an empty revision selects Bloom Neutral).
+[[nodiscard]] std::optional<color::ResolvedBloomNeutralConfig>
+resolveOutputDisplayConfigV1(const runtime::EvaluationColorIntent&);
 class PreparedOutputDisplayV1 final {
   public:
     [[nodiscard]] static std::shared_ptr<const PreparedOutputDisplayV1>

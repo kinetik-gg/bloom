@@ -33,8 +33,15 @@ TiffExportWriterV1::run(const OutputAnalysisAttemptV1& attempt,
                                  : TiffExportWriteErrorCodeV1::ProviderFailed);
         };
         const auto cancel = [&] { return cancellation.isCancellationRequested(); };
-        auto prepared = prepareMediaRgba16V1(attempt.frame()->processImage(), {0, 1}, cancel,
-                                             attempt.report()->display().get());
+        // GPU output colour when the attempt carries the display payload of this report's exact
+        // display; otherwise the CPU reference display transform.
+        const auto& media = attempt.gpuMediaDisplay();
+        auto prepared =
+            media.isPresent() && media.displayDigest == attempt.report()->display()->digest()
+                ? prepareMediaRgba16FromDisplayV1(media.pixels.pixels(), media.width, media.height,
+                                                  {0, 1}, cancel)
+                : prepareMediaRgba16V1(attempt.frame()->processImage(), {0, 1}, cancel,
+                                       attempt.report()->display().get());
         if (const auto* e = std::get_if<Unavailable>(&prepared))
             return fail(*e);
         auto frame = std::get<FrameProduct>(std::move(prepared));

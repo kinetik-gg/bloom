@@ -98,10 +98,13 @@ extract(const OCIO::ConstProcessorRcPtr& processor, const render::OcioGpuProgram
 
 } // namespace
 
-render::OcioGpuProgramResult
-buildOcioGpuProgramForDisplay(const ResolvedBloomNeutralConfig& resolved,
-                              const std::string_view display, const std::string_view view,
-                              const render::OcioGpuProgramLimits& limits) noexcept {
+namespace {
+
+[[nodiscard]] render::OcioGpuProgramResult
+buildDisplayProgram(const ResolvedBloomNeutralConfig& resolved, const std::string_view display,
+                    const std::string_view view, const render::OcioGpuProgramLimits& limits,
+                    const render::OcioGpuProgramStage stage,
+                    const std::string_view semanticsId) noexcept {
     if (!validId(display) || !validId(view)) {
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
     }
@@ -130,13 +133,32 @@ buildOcioGpuProgramForDisplay(const ResolvedBloomNeutralConfig& resolved,
         appendText(semanticBytes, display);
         appendText(semanticBytes, view);
         appendText(semanticBytes, entry->colourSpaceId);
-        return extract(processor, render::OcioGpuProgramStage::DisplayPacking,
-                       kOcioGpuDisplaySemanticsId, std::move(semanticBytes),
+        return extract(processor, stage, semanticsId, std::move(semanticBytes),
                        resolved.expectedRevision(), limits);
     } catch (const std::exception&) {
         return render::OcioGpuProgramResult::failure(
             render::OcioGpuProgramError::TransformBuildFailed);
     }
+}
+
+} // namespace
+
+render::OcioGpuProgramResult
+buildOcioGpuProgramForDisplay(const ResolvedBloomNeutralConfig& resolved,
+                              const std::string_view display, const std::string_view view,
+                              const render::OcioGpuProgramLimits& limits) noexcept {
+    return buildDisplayProgram(resolved, display, view, limits,
+                               render::OcioGpuProgramStage::DisplayPacking,
+                               kOcioGpuDisplaySemanticsId);
+}
+
+render::OcioGpuProgramResult
+buildOcioGpuProgramForDisplayEffect(const ResolvedBloomNeutralConfig& resolved,
+                                    const std::string_view display, const std::string_view view,
+                                    const render::OcioGpuProgramLimits& limits) noexcept {
+    return buildDisplayProgram(resolved, display, view, limits,
+                               render::OcioGpuProgramStage::ProcessEffect,
+                               kOcioGpuDisplayEffectSemanticsId);
 }
 
 render::OcioGpuProgramResult
@@ -177,21 +199,35 @@ buildOcioGpuProgramForCst(const ResolvedBloomNeutralConfig& resolved, const std:
     }
 }
 
-render::OcioGpuProgramResult buildOcioGpuProgramForPointwiseAffine(
-    const ResolvedBloomNeutralConfig& resolved, const float scale, const float offset,
-    const render::OcioGpuProgramLimits& limits) noexcept {
+render::OcioGpuProgramResult
+buildOcioGpuProgramForPointwiseAffine(const ResolvedBloomNeutralConfig& resolved, const float scale,
+                                      const float offset,
+                                      const render::OcioGpuProgramLimits& limits) noexcept {
     if (!std::isfinite(scale) || !std::isfinite(offset)) {
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
     }
     if (scale == 1.0F && offset == 0.0F) {
-        return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::IdentityTransform);
+        return render::OcioGpuProgramResult::failure(
+            render::OcioGpuProgramError::IdentityTransform);
     }
     try {
         auto transform = OCIO::MatrixTransform::Create();
-        const double matrix[16]{static_cast<double>(scale), 0.0, 0.0, static_cast<double>(offset),
-                                0.0, static_cast<double>(scale), 0.0, static_cast<double>(offset),
-                                0.0, 0.0, static_cast<double>(scale), static_cast<double>(offset),
-                                0.0, 0.0, 0.0, 1.0};
+        const double matrix[16]{static_cast<double>(scale),
+                                0.0,
+                                0.0,
+                                static_cast<double>(offset),
+                                0.0,
+                                static_cast<double>(scale),
+                                0.0,
+                                static_cast<double>(offset),
+                                0.0,
+                                0.0,
+                                static_cast<double>(scale),
+                                static_cast<double>(offset),
+                                0.0,
+                                0.0,
+                                0.0,
+                                1.0};
         transform->setMatrix(matrix);
         const auto processor = resolved.impl().config()->getProcessor(
             OCIO::Context::Create(), transform, OCIO::TRANSFORM_DIR_FORWARD);

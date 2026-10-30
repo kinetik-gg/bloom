@@ -12,11 +12,72 @@
 #include <chrono>
 #include <limits>
 #include <new>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
 
 namespace bloom::host {
+
+OutputMediaDisplayCommandV1::OutputMediaDisplayCommandV1(
+    std::shared_ptr<const output::PreparedOutputDisplayV1> display,
+    const runtime::EvaluationColorIntent& intent)
+    : display_(std::move(display)), workingColorSpaceId_(intent.workingColorSpaceId),
+      ocioConfigRevision_(intent.ocioConfigRevision), ocioConfigUri_(intent.ocioConfigUri) {
+    if (display_ == nullptr) {
+        throw std::invalid_argument("a media display command needs the export display");
+    }
+}
+
+std::shared_ptr<const runtime::PreparedGpuOcioCommand>
+OutputMediaDisplayCommandV1::command(GpuExportProvider& provider,
+                                     const runtime::GpuOcioCommandGeometry geometry,
+                                     const runtime::GpuOcioCancellation& cancel) {
+    const std::lock_guard lock(mutex_);
+    if (attempted_) {
+        return command_ != nullptr && command_->geometry().width == geometry.width &&
+                       command_->geometry().height == geometry.height
+                   ? command_
+                   : nullptr;
+    }
+    if (!provider.gpuDisplayPreparationAvailable()) {
+        // The bootstrap may still publish the shared OCIO context; try again on a later frame.
+        unavailableReason_ = "GPU colour preparation is unavailable on this provider";
+        return nullptr;
+    }
+    const runtime::EvaluationColorIntent intent{.workingColorSpaceId = workingColorSpaceId_,
+                                                .ocioConfigRevision = ocioConfigRevision_,
+                                                .ocioConfigUri = ocioConfigUri_};
+    auto config = output::resolveOutputDisplayConfigV1(intent);
+    if (!config) {
+        attempted_ = true;
+        unavailableReason_ = "the output OCIO config did not resolve";
+        return nullptr;
+    }
+    auto prepared = provider.prepareGpuMediaDisplayCommand(*config, display_->displayName(),
+                                                           display_->viewName(), geometry, cancel);
+    if (cancel && cancel()) {
+        return nullptr;
+    }
+    attempted_ = true;
+    if (!prepared.hasValue()) {
+        unavailableReason_ = "GPU display preparation failed: " + prepared.diagnostic;
+        return nullptr;
+    }
+    command_ = std::move(prepared.command);
+    unavailableReason_.clear();
+    return command_;
+}
+
+core::Sha256Digest OutputMediaDisplayCommandV1::commandIdentity() const {
+    const std::lock_guard lock(mutex_);
+    return command_ != nullptr ? command_->identity() : core::Sha256Digest{};
+}
+
+std::string OutputMediaDisplayCommandV1::unavailableReason() const {
+    const std::lock_guard lock(mutex_);
+    return unavailableReason_;
+}
 
 namespace {
 
@@ -347,6 +408,17 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 : (requestedCommand != nullptr ? requestedCommand : canonicalCommand);
         auto plan = state_->request.plan;
         auto evaluation = state_->request.evaluation;
+        // The media display command rides the same combined readback when no canonical PNG
+        // command exists and the frame is the full composition extent.
+        auto mediaDisplay = state_->request.mediaDisplay;
+        if (mediaDisplay != nullptr &&
+            (outputColorCommand != nullptr || forceCpuFallback ||
+             preset == output::OutputPresetV1::PngRgba8SrgbV1 || plan == nullptr ||
+             evaluation.roi.has_value() ||
+             !std::holds_alternative<runtime::CompositionFormatResolution>(
+                 evaluation.resolution))) {
+            mediaDisplay.reset();
+        }
         const bool useRootPixelCapacity = state_->request.useRootPixelCapacity;
         auto assetBaseDirectory = state_->request.assetBaseDirectory;
         auto fallbackEvaluator = state_->request.fallbackEvaluator;
@@ -361,7 +433,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
              assetBaseDirectory = std::move(assetBaseDirectory),
              fallbackEvaluator = std::move(fallbackEvaluator), resolved, preset, ledger,
              gpuProvider = std::move(gpuProvider), processingPolicy = std::move(processingPolicy),
-             forceCpuFallback, outputColorCommand = std::move(outputColorCommand)](
+             forceCpuFallback, outputColorCommand = std::move(outputColorCommand),
+             mediaDisplay = std::move(mediaDisplay)](
                 runtime::TaskContext& context) mutable -> runtime::TaskResult<BuildOutcomeV1> {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -379,6 +452,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 // silently substitute for the display transform the caller asked to run.
                 OutputAnalysisAttemptGpuProvenanceV1 gpuProvenance;
                 output::OutputAnalysisAttemptGpuDisplayV1 gpuDisplay;
+                output::OutputAnalysisAttemptGpuMediaDisplayV1 gpuMediaDisplay;
                 std::shared_ptr<render::GpuProcessingPhaseLease> hostPhase;
                 std::shared_ptr<const runtime::ProcessFrame> evaluatedFrame;
                 const auto admissionFailure =
@@ -405,6 +479,15 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                     evaluation.pixelStorageByteLimit =
                         static_cast<std::size_t>(std::min<std::uint64_t>(
                             *capacity.hostCapacityBytes, std::numeric_limits<std::size_t>::max()));
+                }
+                std::shared_ptr<const runtime::PreparedGpuOcioCommand> mediaDisplayCommand;
+                if (gpuProvider != nullptr && mediaDisplay != nullptr) {
+                    mediaDisplayCommand = mediaDisplay->command(
+                        *gpuProvider, {plan->format().width(), plan->format().height()},
+                        [&context] { return context.isCancellationRequested(); });
+                    if (mediaDisplayCommand != nullptr) {
+                        outputColorCommand = mediaDisplayCommand;
+                    }
                 }
                 if (gpuProvider != nullptr && !forceCpuFallback) {
                     auto evaluator = gpuProvider->evaluator();
@@ -443,6 +526,24 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                                 gpuOutcome.frame != nullptr
                                     ? gpuOutcome.frame->processImage().descriptor()
                                     : nullptr;
+                            if (mediaDisplayCommand != nullptr && descriptor != nullptr &&
+                                gpuOutcome.encodedArm ==
+                                    runtime::GpuOutputColorArm::ProcessEffect &&
+                                gpuOutcome.outputCommandIdentity ==
+                                    mediaDisplayCommand->identity()) {
+                                const auto extent = descriptor->dataWindow().extent();
+                                if (static_cast<std::size_t>(extent.width()) * extent.height() ==
+                                    gpuOutcome.encodedEffectRgba32f.size()) {
+                                    gpuMediaDisplay.pixels =
+                                        std::move(gpuOutcome.encodedEffectRgba32f);
+                                    gpuMediaDisplay.width = extent.width();
+                                    gpuMediaDisplay.height = extent.height();
+                                    gpuMediaDisplay.commandIdentity =
+                                        gpuOutcome.outputCommandIdentity;
+                                    gpuMediaDisplay.displayDigest =
+                                        mediaDisplay->display().digest();
+                                }
+                            }
                             if (gpuOutcome.encodedArm == runtime::GpuOutputColorArm::DisplayRgba8 &&
                                 !gpuOutcome.encodedDisplayRgba8.empty() && descriptor != nullptr &&
                                 resolved->color.display.identity != nullptr) {
@@ -603,6 +704,10 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 if (gpuDisplay.isPresent()) {
                     gpuDisplay.processPixelDigest = identityResult.identity()->processPixelDigest();
                 }
+                if (gpuMediaDisplay.isPresent()) {
+                    gpuMediaDisplay.processPixelDigest =
+                        identityResult.identity()->processPixelDigest();
+                }
 
                 if (gpuProvider) {
                     // Analysis and identity preparation can outlive the sampled root's freshness
@@ -639,6 +744,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                      .target = resolved->target,
                      .display = resolved->color.display,
                      .gpuDisplay = std::move(gpuDisplay),
+                     .gpuMediaDisplay = std::move(gpuMediaDisplay),
                      .processingPolicy = processingPolicy,
                      .capacityRefresh =
                          [provider = gpuProvider](const runtime::CancellationToken& cancellation) {

@@ -277,4 +277,56 @@ Result<FrameProduct> prepareMediaRgba16V1(const render::Rgba32fImage& image, Rat
     result.planes.push_back(std::move(plane));
     return result;
 }
+Result<FrameProduct>
+prepareMediaRgba16FromDisplayV1(const std::span<const render::Rgba32f> pixels,
+                                const std::uint32_t width, const std::uint32_t height,
+                                const Rational pts,
+                                const platform::ProcessCancellation& cancellation) {
+    if (!valid(pts) || width == 0 || height == 0 || width > Limits::dimension ||
+        height > Limits::dimension ||
+        pixels.size() != static_cast<std::size_t>(width) * static_cast<std::size_t>(height) ||
+        pixels.size() > Limits::pixels)
+        return Unavailable{Error::InvalidValue, "Display payload geometry differs from the frame"};
+    FrameProduct result;
+    result.format = PixelFormat::Rgba16;
+    result.pts = pts;
+    result.colour = {1, 13, 0, 2};
+    CpuPlane plane;
+    plane.width = width;
+    plane.height = height;
+    plane.stride = width * 8U;
+    plane.bytes.resize(pixels.size() * 8U);
+    // Same clamp and round-half-up as the CPU reference: floor(clamp(v, 0, 1) * 65535 + 0.5).
+    const auto quantize = [](const double value) {
+        return static_cast<std::uint16_t>(std::floor(std::clamp(value, 0.0, 1.0) * 65535.0 + 0.5));
+    };
+    for (std::uint32_t row = 0; row < height; ++row) {
+        if (cancellation && cancellation())
+            return Unavailable{Error::Cancelled, "Output preparation cancelled"};
+        const auto source = pixels.subspan(static_cast<std::size_t>(row) * width, width);
+        auto* destination = plane.bytes.data() + static_cast<std::size_t>(row) * plane.stride;
+        for (std::uint32_t column = 0; column < width; ++column) {
+            const auto& pixel = source[column];
+            const float alpha = pixel.alpha();
+            // The ProcessEffect wrapper copies transparent pixels through unchanged; like the CPU
+            // reference they encode as transparent black.
+            const bool transparent = alpha == 0.0F;
+            const auto straight = [&](const float channel) {
+                return transparent ? 0.0 : static_cast<double>(channel / alpha);
+            };
+            const std::array<std::uint16_t, 4> samples{
+                quantize(straight(pixel.red())), quantize(straight(pixel.green())),
+                quantize(straight(pixel.blue())), quantize(static_cast<double>(alpha))};
+            for (std::size_t channel = 0; channel < samples.size(); ++channel) {
+                destination[column * 8U + channel * 2U] =
+                    static_cast<std::byte>(samples[channel] & 255U);
+                destination[column * 8U + channel * 2U + 1U] =
+                    static_cast<std::byte>(samples[channel] >> 8U);
+            }
+        }
+    }
+    plane.digest = digestBytes(plane.bytes);
+    result.planes.push_back(std::move(plane));
+    return result;
+}
 } // namespace bloom::output

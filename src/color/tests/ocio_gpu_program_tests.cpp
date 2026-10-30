@@ -168,6 +168,30 @@ void testAcesDisplayExtraction(Expectations& expectations) {
                             "display extraction is deterministic for one display/view");
     }
 
+    // The media-delivery form of the same display/view: identical generated transform body, but a
+    // float ProcessEffect stage and its own semantics id, so its content identity never aliases the
+    // packed RGBA8 program.
+    const auto effect =
+        bloom::color::buildOcioGpuProgramForDisplayEffect(*resolved, entry->display, entry->view);
+    expectations.expect(effect.succeeded() && effect.program() != nullptr,
+                        "the ACES display/view extracts as a float display effect");
+    if (effect.program() != nullptr && program.program() != nullptr) {
+        const auto& desc = *effect.program();
+        expectations.expect(desc.stage == bloom::render::OcioGpuProgramStage::ProcessEffect &&
+                                desc.semanticsId == bloom::color::kOcioGpuDisplayEffectSemanticsId,
+                            "the display effect carries the ProcessEffect stage and its semantics");
+        expectations.expect(desc.shaderText == program.program()->shaderText &&
+                                desc.contentIdentity != program.program()->contentIdentity,
+                            "the display effect runs the same body under a distinct identity");
+        expectations.expect(bloom::render::validateOcioGpuProgram(desc, {}) ==
+                                OcioGpuProgramError::None,
+                            "the display effect satisfies the default resource limits");
+    }
+    expectations.expect(
+        bloom::color::buildOcioGpuProgramForDisplayEffect(*resolved, "No Such Display", entry->view)
+                .error() == OcioGpuProgramError::InvalidRequest,
+        "an unenumerated display effect is a typed refusal");
+
     const auto withTexture = firstDisplayProgramWithTexture(*resolved);
     expectations.expect(withTexture.succeeded(),
                         "at least one ACES display/view preserves OCIO LUT textures");
