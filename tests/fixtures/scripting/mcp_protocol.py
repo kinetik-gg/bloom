@@ -299,6 +299,14 @@ class Protocol(unittest.TestCase):
         self.assertEqual(image['mimeType'], 'image/png')
         self.assertTrue(base64.b64decode(image['data']).startswith(b'\x89PNG'))
         self.assertTrue(capture['structuredContent']['inline'])
+        # Capture is the still route: the same frame rendered as a PNG is byte-identical.
+        with tempfile.TemporaryDirectory(prefix='bloom-mcp-capture-') as directory:
+            still = pathlib.Path(directory) / 'still.png'
+            rendered = exchange([INIT, READY, tool(2, 'render', {
+                'composition': 1, 'frame': 0, 'preset': 'PngRgba8SrgbV1',
+                'destination': str(still)})])
+            self.assertFalse(rendered[-1]['result']['isError'], rendered[-1])
+            self.assertEqual(base64.b64decode(image['data']), still.read_bytes())
 
     def test_hostile_requests(self):
         hostile = [
