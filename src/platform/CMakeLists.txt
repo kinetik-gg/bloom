@@ -49,6 +49,15 @@ else()
     target_sources(bloom_platform PRIVATE font_catalog_unavailable.cpp staged_artifact_unsupported.cpp)
 endif()
 
+# ADR 0034: loopback sockets and owner-only secrets, split by backend like the staged-artifact
+# provider (POSIX on Linux and macOS, Winsock 2 and DACLs on Windows).
+if(WIN32)
+    target_sources(bloom_platform PRIVATE loopback_listener_windows.cpp owner_only_secret_windows.cpp)
+    target_link_libraries(bloom_platform PRIVATE ws2_32 advapi32 bcrypt)
+else()
+    target_sources(bloom_platform PRIVATE loopback_listener_posix.cpp owner_only_secret_posix.cpp)
+endif()
+
 target_sources(
     bloom_platform
     PUBLIC
@@ -97,6 +106,31 @@ if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
         NAME bloom.platform.cache_directory
         COMMAND bloom_platform_cache_directory_test
         LABELS unit platform cache
+    )
+endif()
+
+if(BUILD_TESTING)
+    include(BloomTesting)
+    # ADR 0034: on all three platforms.
+    add_executable(bloom_platform_loopback_listener_test tests/loopback_listener_tests.cpp)
+    target_link_libraries(bloom_platform_loopback_listener_test PRIVATE bloom_platform)
+    if(WIN32)
+        target_link_libraries(bloom_platform_loopback_listener_test PRIVATE ws2_32)
+    endif()
+    bloom_enable_warnings(bloom_platform_loopback_listener_test)
+    bloom_add_test(
+        NAME bloom.platform.loopback-listener
+        COMMAND bloom_platform_loopback_listener_test
+        LABELS unit platform mcp
+        TIMEOUT 60
+    )
+    add_executable(bloom_platform_owner_only_secret_test tests/owner_only_secret_tests.cpp)
+    target_link_libraries(bloom_platform_owner_only_secret_test PRIVATE bloom_platform)
+    bloom_enable_warnings(bloom_platform_owner_only_secret_test)
+    bloom_add_test(
+        NAME bloom.platform.owner-only-secret
+        COMMAND bloom_platform_owner_only_secret_test
+        LABELS unit platform mcp
     )
 endif()
 
