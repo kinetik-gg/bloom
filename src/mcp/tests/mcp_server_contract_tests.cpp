@@ -71,7 +71,6 @@ static_assert(mcp::toolName(mcp::McpTool::Events) == "events");
 static_assert(mcp::toolName(mcp::McpTool::Capture) == "capture");
 static_assert(mcp::toolName(mcp::McpTool::ExportConfirmReplace) == "export.confirm-replace");
 static_assert(mcp::toolName(mcp::McpTool::ExportScript) == "export.script");
-static_assert(static_cast<std::size_t>(mcp::McpTool::ViewerSet) + 1 == mcp::kMcpToolCount);
 static_assert(mcp::toolName(mcp::McpTool::ProjectSaveAs) == "project.save-as");
 static_assert(mcp::toolName(mcp::McpTool::EditorReveal) == "editor.reveal");
 static_assert(mcp::toolName(mcp::McpTool::ViewerSet) == "viewer.set");
@@ -79,6 +78,11 @@ static_assert(mcp::toolUsesLiveUi(mcp::McpTool::ProjectOpen));
 static_assert(!mcp::toolUsesLiveUi(mcp::McpTool::ExportScript));
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProjectOpen));
 static_assert(mcp::uiRefusalCode(mcp::McpUiRefusal::UnsavedChanges) == "bloom.mcp.unsaved-changes");
+static_assert(mcp::toolName(mcp::McpTool::ProjectSetColorSettings) == "project.set-color-settings");
+static_assert(static_cast<std::size_t>(mcp::McpTool::ProjectSetColorSettings) + 1 ==
+              mcp::kMcpToolCount);
+// Project colour settings are project session state, not a document command.
+static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProjectSetColorSettings));
 static_assert(mcp::toolExecution(mcp::McpTool::Render) == mcp::McpToolExecution::Task);
 static_assert(mcp::toolExecution(mcp::McpTool::Capture) == mcp::McpToolExecution::Task);
 static_assert(mcp::toolExecution(mcp::McpTool::ExportWait) == mcp::McpToolExecution::Task);

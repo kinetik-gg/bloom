@@ -374,6 +374,28 @@ void projectItems() {
     expect(!empty.succeeded(), "an empty delete is refused");
 }
 
+void colorSettings() {
+    Fixture fixture;
+    const auto revision = fixture.session->snapshot().revision();
+    auto aces = fixture.session->setColorSettings("aces", std::string("ACEScg"));
+    expect(aces.code == "updated" && aces.settings &&
+               aces.settings->processColorSpaceId == "ACEScg",
+           "the project switches to ACES with ACEScg");
+    expect(fixture.session->setColorSettings("aces", std::nullopt).code == "no-change",
+           "an omitted working space keeps the project's");
+    expect(fixture.session->setColorSettings("neutral", std::string("ACEScg")).code ==
+               "invalid-settings",
+           "a working space the configuration does not offer is refused");
+    expect(fixture.session->setColorSettings("srgb", std::nullopt).code == "invalid-config",
+           "an unknown configuration is refused");
+    auto neutral = fixture.session->setColorSettings("neutral", std::nullopt);
+    expect(neutral.code == "updated" && neutral.settings &&
+               neutral.settings->processColorSpaceId == "lin_rec709_scene",
+           "neutral takes its only working space");
+    expect(fixture.session->snapshot().revision() == revision,
+           "colour settings are not a document edit");
+}
+
 void descriptions() {
     const auto registry = scripting::OperationRegistry::builtIn();
     for (const auto* id :
@@ -401,6 +423,7 @@ int main() {
     nodeOperations();
     parameterOperations();
     projectItems();
+    colorSettings();
     descriptions();
     if (failures != 0) {
         std::cerr << failures << " parity operation check(s) failed\n";

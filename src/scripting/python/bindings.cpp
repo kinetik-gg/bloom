@@ -42,6 +42,8 @@ void bindHost(nb::module_& module) {
         .def("transact", &NativeHost::transact)
         .def("history", &NativeHost::history)
         .def("save", &NativeHost::save)
+        .def("set_color_settings", &NativeHost::setColorSettings, nb::arg("config"),
+             nb::arg("working_space") = nb::none())
         .def("render", &NativeHost::render)
         .def("events", &NativeHost::events)
         .def("tasks", &NativeHost::tasks)

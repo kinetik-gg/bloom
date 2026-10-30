@@ -1,5 +1,7 @@
 #include <bloom/scripting/session.hpp>
 
+#include <bloom/host/project_color_choice.hpp>
+
 #include <bloom/scripting/render.hpp>
 
 #include <fstream>
@@ -160,6 +162,46 @@ SessionRenderSourceSnapshot Session::renderSourceSnapshot() const {
     const auto* settings = session_->colorSettings();
     return {snapshot(), displayPath_.parent_path(),
             settings ? std::optional<document::ColorSettings>(*settings) : std::nullopt};
+}
+
+SessionColorSettingsResult
+Session::setColorSettings(const std::string_view config,
+                          std::optional<std::string> workingColorSpaceId) {
+    const auto choice = host::parseProjectColorConfig(config);
+    if (!choice)
+        return {"invalid-config", R"(Expected config "neutral", "aces" or "current")",
+                std::nullopt};
+    auto current = renderSourceSnapshot().colorSettings;
+    if (!current)
+        return {"unavailable", "This session has no project colour settings", std::nullopt};
+    auto resolved =
+        host::resolveProjectColorSettings(*current, *choice, std::move(workingColorSpaceId));
+    if (!resolved.settings)
+        return {"invalid-settings", std::move(resolved.reason), current};
+    host::ProjectSessionColorSettingsStatus status;
+    if (binding_) {
+        if (!binding_->setColorSettings)
+            return {"unavailable",
+                    "The live application does not accept colour settings from scripts yet",
+                    current};
+        status = binding_->setColorSettings(*resolved.settings);
+    } else {
+        status = session_->setColorSettings(*resolved.settings);
+    }
+    const auto after = renderSourceSnapshot().colorSettings;
+    switch (status) {
+    case host::ProjectSessionColorSettingsStatus::Updated:
+        return {"updated", "The project colour settings changed", after};
+    case host::ProjectSessionColorSettingsStatus::NoChange:
+        return {"no-change", "The project already uses these colour settings", after};
+    case host::ProjectSessionColorSettingsStatus::ReadOnly:
+        return {"read-only", "The project is read-only", after};
+    case host::ProjectSessionColorSettingsStatus::InvalidSettings:
+        return {"invalid-settings", "The colour settings are not valid", after};
+    case host::ProjectSessionColorSettingsStatus::InvalidSession:
+        break;
+    }
+    return {"unavailable", "The project session is not available", after};
 }
 
 host::ProjectSessionStateSnapshot Session::state() const {

@@ -23,6 +23,7 @@ target_sources(
         export_capacity_wait.cpp
         output_analysis_attempt_runner.cpp
         output_analysis_attempt_color_private.cpp
+        project_color_choice.cpp
         project_session.cpp
         project_session_creation.cpp
         publication_coordinator.cpp
@@ -50,6 +51,7 @@ target_sources(
             include/bloom/host/sequence_export_runner.hpp
             include/bloom/host/font_catalogue.hpp
             include/bloom/host/output_analysis_attempt_runner.hpp
+            include/bloom/host/project_color_choice.hpp
             include/bloom/host/project_session.hpp
             include/bloom/host/publication_coordinator.hpp
             include/bloom/host/save_publication.hpp

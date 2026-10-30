@@ -121,6 +121,25 @@ class ParityOperations(unittest.TestCase):
         refused = self.server.transact([{'op': 'bloom.layer.delete', 'args': {'layers': layers}}])
         self.assertFalse(refused['succeeded'], 'deleting deleted layers is refused')
 
+    def test_project_color_settings(self):
+        revision = self.server.revision()
+        aces = self.server.tool('project.set-color-settings',
+                                {'config': 'aces', 'workingSpace': 'ACEScg'})
+        self.assertTrue(aces['succeeded'], aces)
+        self.assertEqual((aces['code'], aces['config'], aces['workingSpace']),
+                         ('updated', 'aces', 'ACEScg'))
+        again = self.server.tool('project.set-color-settings', {'config': 'aces'})
+        self.assertEqual(again['code'], 'no-change', 'the working space stays when omitted')
+        refused = self.server.tool('project.set-color-settings',
+                                   {'config': 'neutral', 'workingSpace': 'ACEScg'})
+        self.assertFalse(refused['succeeded'])
+        self.assertEqual(refused['code'], 'invalid-settings')
+        neutral = self.server.tool('project.set-color-settings', {'config': 'neutral'})
+        self.assertEqual((neutral['config'], neutral['workingSpace']),
+                         ('neutral', 'lin_rec709_scene'))
+        self.assertEqual(self.server.revision(), revision,
+                         'colour settings are not a document edit and make no history step')
+
     def test_parity_operations_are_described(self):
         records = self.server.tool('query', {'kind': 'operations'})['records']
         described = {record['id']: record['description'] for record in records}

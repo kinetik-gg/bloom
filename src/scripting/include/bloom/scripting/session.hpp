@@ -104,6 +104,24 @@ struct SessionBinding final {
     platform::StagedArtifactCoordinator* artifacts = nullptr;
     // Capture both values together so project replacement/Save As cannot mix their authority.
     std::function<SessionRenderSourceSnapshot()> renderSourceSnapshot{};
+    // Project Settings > Colour on the owner's project session (not a command: not undoable,
+    // marks the project dirty). Absent while the live host has not wired it; the change is then
+    // refused as unavailable.
+    std::function<host::ProjectSessionColorSettingsStatus(document::ColorSettings)>
+        setColorSettings{};
+};
+
+// What Session::setColorSettings did. `code` is "updated", "no-change", "invalid-config",
+// "invalid-settings", "read-only" or "unavailable"; `settings` is the project's colour settings
+// afterwards when they are readable.
+struct SessionColorSettingsResult final {
+    std::string code;
+    std::string message;
+    std::optional<document::ColorSettings> settings;
+
+    [[nodiscard]] bool succeeded() const noexcept {
+        return code == "updated" || code == "no-change";
+    }
 };
 
 class Session final {
@@ -165,6 +183,12 @@ class Session final {
     [[nodiscard]] SessionSaveResult saveAs(const std::filesystem::path& path);
     [[nodiscard]] const std::filesystem::path& displayPath() const noexcept { return displayPath_; }
     [[nodiscard]] SessionRenderSourceSnapshot renderSourceSnapshot() const;
+    // Project Settings > Colour, exactly as the dialog applies it (host/project_color_choice.hpp):
+    // `config` is "neutral", "aces" or "current"; an omitted working space keeps the project's when
+    // the configuration stays, else takes the configuration's default. Not undoable; it marks the
+    // project dirty and changes how every composition renders.
+    [[nodiscard]] SessionColorSettingsResult
+    setColorSettings(std::string_view config, std::optional<std::string> workingColorSpaceId);
 
     [[nodiscard]] commands::CommandStack* commandStack() noexcept;
     [[nodiscard]] document::Document* document() noexcept;

@@ -18,6 +18,7 @@ target_sources(
         streamable_http.cpp
         tool_schemas.cpp
         tools_document.cpp
+        tools_project.cpp
         tools_export.cpp
         tools_render.cpp
         tools_session.cpp

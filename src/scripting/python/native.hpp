@@ -36,6 +36,9 @@ class NativeHost final {
                                     std::uint64_t revision);
     [[nodiscard]] nb::dict history(bool redo);
     void save(const std::string& path);
+    // Project Settings > Colour (Session::setColorSettings): not undoable, marks the project dirty.
+    [[nodiscard]] nanobind::dict setColorSettings(const std::string& config,
+                                                  std::optional<std::string> workingSpace);
     [[nodiscard]] nb::dict render(std::uint64_t composition, std::uint64_t first,
                                   std::uint64_t last, bool range, const std::string& preset,
                                   const std::string& destination, std::uint64_t cancellationTask);

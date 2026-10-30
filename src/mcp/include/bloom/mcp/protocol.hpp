@@ -79,13 +79,16 @@ enum class McpTool : std::uint8_t {
     CompositionActivate = 28,
     Transport = 29,
     ViewerSet = 30,
+    // Project Settings > Colour (not undoable; marks the project dirty).
+    ProjectSetColorSettings = 31,
 };
 
-inline constexpr std::size_t kMcpToolCount = 31;
+inline constexpr std::size_t kMcpToolCount = 32;
 
 // The wire name. MCP tool names allow [A-Za-z0-9_.-]; the export.* names are ADR 0033's session
 // call names verbatim.
 [[nodiscard]] constexpr std::string_view toolName(const McpTool tool) {
+    // clang-format off
     constexpr std::array<std::string_view, kMcpToolCount> names{
         "query",
         "transact",
@@ -118,7 +121,9 @@ inline constexpr std::size_t kMcpToolCount = 31;
         "composition.activate",
         "transport",
         "viewer.set",
+        "project.set-color-settings",
     };
+    // clang-format on
     return names[static_cast<std::size_t>(tool)];
 }
 
@@ -149,7 +154,8 @@ enum class McpToolExecution : std::uint8_t { Inline = 0, Task = 1 };
 // Whether a tool works on the application window rather than the project: it runs on the owner
 // thread through McpLiveUiPort without a session lease, so it works while a project opens.
 [[nodiscard]] constexpr bool toolUsesLiveUi(const McpTool tool) {
-    return static_cast<std::uint8_t>(tool) >= static_cast<std::uint8_t>(McpTool::ProjectSave);
+    return static_cast<std::uint8_t>(tool) >= static_cast<std::uint8_t>(McpTool::ProjectSave) &&
+           static_cast<std::uint8_t>(tool) <= static_cast<std::uint8_t>(McpTool::ViewerSet);
 }
 
 // ---------------------------------------------------------------------------------------------

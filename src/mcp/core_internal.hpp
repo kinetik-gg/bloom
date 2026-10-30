@@ -179,6 +179,8 @@ struct TransientResult final {
 [[nodiscard]] core::RationalTime frameOrSecondsArgument(yyjson_val* value,
                                                         const document::Snapshot& snapshot,
                                                         std::uint64_t composition);
+[[nodiscard]] yyjson_mut_val* colorSettingsTool(McpServerCore::State& core, Json& out,
+                                                McpCall& call, yyjson_val* arguments);
 [[nodiscard]] yyjson_mut_val* toolList(Json& out);
 
 } // namespace bloom::mcp

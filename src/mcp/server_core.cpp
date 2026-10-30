@@ -11,6 +11,7 @@
 namespace bloom::mcp {
 namespace {
 
+// clang-format off
 constexpr std::array<McpTool, kMcpToolCount> kTools{
     McpTool::Query,
     McpTool::Transact,
@@ -43,7 +44,9 @@ constexpr std::array<McpTool, kMcpToolCount> kTools{
     McpTool::CompositionActivate,
     McpTool::Transport,
     McpTool::ViewerSet,
+    McpTool::ProjectSetColorSettings,
 };
+// clang-format on
 
 std::optional<McpTool> toolFromName(const std::string_view name) {
     for (const auto tool : kTools) {
@@ -511,6 +514,9 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                         break;
                     case McpTool::Capture:
                         value = captureTool(state, out, call, arguments);
+                        break;
+                    case McpTool::ProjectSetColorSettings:
+                        value = colorSettingsTool(state, out, call, arguments);
                         break;
                     default:
                         value = exportSessionTool(state, out, call, *tool, arguments);
