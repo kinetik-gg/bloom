@@ -110,6 +110,13 @@ struct EvaluationRequest final {
     // Final CPU boundaries reject unavailable/changed media instead of preview placeholders.
     // Also forces fresh source revalidation when handed an explicitly Retained preview request.
     bool requireVerifiedMediaSources = false;
+    // The frame belongs to a linear pass over a range (an export), which owns this object and
+    // shares it with every frame it evaluates. Reusable caches then retain only entries that recur
+    // within the pass (static layers, held or looped sources): a key is stored the second time it
+    // is offered, so per-frame footage decodes and results stream through instead of filling
+    // memory. Null for viewer, RAM Preview and other interactive requests. Never affects pixels or
+    // cache identity.
+    std::shared_ptr<LinearPassRetention> linearPass = nullptr;
     // Optional final-output ownership for a CPU export. Intermediate reference images keep their
     // normal allocation path; only the completed process image is copied into this rooted phase
     // before publication. It affects storage ownership, never pixel or cache identity.

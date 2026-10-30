@@ -702,7 +702,17 @@ selection reuses them after the usual identity observation and reads nothing its
 stay outstanding, which is what a network share needs: on an SMB share measured at 61-66 MB/s with
 one reader, four and eight concurrent readers reached 75-82 MB/s. Read-ahead never evicts; a file
 that does not fit the cache's free budget, or one already cached, queued or in flight, is skipped.
-Destroying the evaluator cancels outstanding captures and joins the workers.
+Destroying the evaluator cancels outstanding captures and joins the workers. Export frames do not
+read ahead (see the linear-pass retention below).
+
+**Linear-pass retention.** An export run owns one `runtime::LinearPassRetention` and carries it on
+every frame's `EvaluationRequest::linearPass`. Each store into the shared operation cache (decoded
+media, source revisions, operation and value results) and into the prepared-upload subset receives
+that pass explicitly; a keyed entry is retained only the second time the pass offers it, so
+frame-unique footage and results stream through while static layers and held or looped sources stay
+cached. The pass remembers a bounded set of key hashes (metadata only) and is thread-safe across the
+frames in flight; each run starts with an empty one. Viewer, playback and RAM Preview requests carry
+no pass and retain as before. The pass never changes pixels or cache identity.
 
 `EvaluationRequest::mediaSourceRevisionPolicy` defaults to `Revalidate`: source verification
 precedes CPU operation memoization and GPU prepared-upload lookup, including nested evaluation. A

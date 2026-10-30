@@ -67,7 +67,8 @@ imageSequenceReadAheadTargets(const CompiledImageSource& source, core::RationalT
     const EvaluationColorIntent& colorIntent = EvaluationColorIntent::LinearRec709Scene,
     OperationCache* revisionCache = nullptr,
     MediaSourceRevisionPolicy revisionPolicy = MediaSourceRevisionPolicy::Revalidate,
-    std::size_t hostByteBudget = media::kMaxImageStorageBytes, bool allowRevisionInsertion = true);
+    std::size_t hostByteBudget = media::kMaxImageStorageBytes, bool allowRevisionInsertion = true,
+    LinearPassRetention* linearPass = nullptr);
 // CACHE-1: how evaluateImageSource() may use the evaluator's shared memory cache for an
 // already-verified, immutable native decoded still-image. This governs only the source decode
 // entry; derived operation memoization is gated separately by the evaluator's own `cache` pointer.
@@ -98,7 +99,8 @@ evaluateImageSource(const ImageSourceSelection& selection,
                     double verticalScale, std::size_t budget, OperationCache* memoryCache,
                     ImageSourceMemoryCacheAccess memoryAccess, const CancellationToken& cancel,
                     media::cache::MediaDiskCache* diskCache = nullptr,
-                    media::ImageDecodeStatistics* decodeStatistics = nullptr);
+                    media::ImageDecodeStatistics* decodeStatistics = nullptr,
+                    LinearPassRetention* linearPass = nullptr);
 
 // Decode-only factoring for the GPU media colour split. The connected evaluateImageSource() path
 // is unchanged; these two functions expose its halves so the GPU path can decode RAW (no OCIO

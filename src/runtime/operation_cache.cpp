@@ -126,6 +126,24 @@ std::optional<OperationCacheValue> OperationCache::find(const std::string& conte
     ++statistics_.hits;
     return entry.value;
 }
+bool LinearPassRetention::offer(const std::string_view key, const bool prepared) {
+    const auto hash = std::hash<std::string_view>{}(key) ^ std::hash<bool>{}(prepared);
+    const std::lock_guard lock(mutex_);
+    if (offered_.contains(hash))
+        return true;
+    try {
+        if (order_.size() >= kRememberedKeys) {
+            offered_.erase(order_.front());
+            order_.pop_front();
+        }
+        offered_.insert(hash);
+        order_.push_back(hash);
+    } catch (const std::bad_alloc&) {
+        // Remembering is best effort; this offer is still deferred.
+    }
+    return false;
+}
+
 void OperationCache::insertLocked(std::unique_ptr<Entry>& entry) {
     const bool prepared = entry->kind == OperationCacheEntryKind::PreparedUpload;
     try {
@@ -179,7 +197,8 @@ void OperationCache::insertLocked(std::unique_ptr<Entry>& entry) {
 }
 void OperationCache::store(std::string content, const document::Revision revision,
                            OperationCacheValue value, const OperationCacheEntryKind kind,
-                           const std::optional<std::uint64_t> decodedMediaGeneration) {
+                           const std::optional<std::uint64_t> decodedMediaGeneration,
+                           LinearPassRetention* const linearPass) {
     // Prepared admission needs its explicit owner and subset policy, not this ordinary API.
     if (kind == OperationCacheEntryKind::PreparedUpload)
         throw std::invalid_argument("prepared entries require storePreparedUpload");
@@ -240,6 +259,11 @@ void OperationCache::store(std::string content, const document::Revision revisio
             return;
         if (entry->bytes > accounting_->budget || index_.contains({entry->content, false}))
             return;
+        // A linear pass retains only what recurs: the first offer of a key is not stored.
+        if (linearPass && !linearPass->offer(entry->content, false)) {
+            ++statistics_.linearPassDeferrals;
+            return;
+        }
         ++accessEpoch_;
         entry->protectedUntil = kind == OperationCacheEntryKind::DecodedMedia
                                     ? accessEpoch_ + kDecodedMediaGraceAccesses
@@ -541,7 +565,8 @@ void OperationCache::promoteCandidateLocked() {
     restoreCandidate();
 }
 void OperationCache::storePreparedUpload(std::string content,
-                                         std::shared_ptr<const render::Rgba32fImage> image) {
+                                         std::shared_ptr<const render::Rgba32fImage> image,
+                                         LinearPassRetention* const linearPass) {
     if (!image || image->pixels().empty())
         return;
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
@@ -584,6 +609,10 @@ void OperationCache::storePreparedUpload(std::string content,
         if (preparedCandidate_)
             return;
         const auto found = index_.find({entry->content, true});
+        if (found == index_.end() && linearPass && !linearPass->offer(entry->content, true)) {
+            ++accounting_->preparedStatistics.linearPassDeferrals;
+            return;
+        }
         if (found != index_.end() && (*found->second)->value.image == entry->value.image) {
             touch(found->second);
             return; // Same immutable backing is already retained, not a replacement.

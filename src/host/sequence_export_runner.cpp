@@ -124,6 +124,9 @@ struct detail::SequenceExportWorkV1 {
     // reused by every frame's CPU fallback. Released with the work on the retirement owner.
     std::shared_ptr<const runtime::CpuCompositionEvaluator> fallbackEvaluator =
         std::make_shared<const runtime::CpuCompositionEvaluator>();
+    // The range is one linear pass: shared caches retain only what recurs between its frames.
+    std::shared_ptr<runtime::LinearPassRetention> linearPass =
+        std::make_shared<runtime::LinearPassRetention>();
     explicit SequenceExportWorkV1(SequenceExportRequestV1 r,
                                   std::shared_ptr<output::ExportResourceLedgerV1> lifetime)
         : request(std::move(r)), ledgerLifetime(std::move(lifetime)) {}
@@ -814,7 +817,8 @@ struct SequenceExportRunnerV1::State {
                            .quality = runtime::EvaluationQuality::Reference,
                            .colorIntent = work->colorIntent(),
                            .pixelStorageByteLimit = 0,
-                           .bypassLookNodes = work->request.bypassLookNodes},
+                           .bypassLookNodes = work->request.bypassLookNodes,
+                           .linearPass = work->linearPass},
             .assetBaseDirectory = work->request.assetBaseDirectory,
             .fallbackEvaluator = work->fallbackEvaluator,
             .targetPath = work->request.range.destination,

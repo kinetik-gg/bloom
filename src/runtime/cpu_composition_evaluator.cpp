@@ -1491,6 +1491,7 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                            {},
                                            {}};
     valueMemoization.pass = hasPostImageValues ? ValueGraphPass::PreImage : ValueGraphPass::All;
+    valueMemoization.linearPass = request.linearPass.get();
     auto valueGraph = evaluateValueGraph(plan->valueOperations(), plan->valueOutputCount(),
                                          request.time, plan->format().frameRate(),
                                          ValueGraphCurves{plan->scalarCurves(), plan->vec2Curves(),
@@ -2273,7 +2274,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
                         : request.mediaSourceRevisionPolicy,
-                    remainingPixelBudget(), !planBypass);
+                    remainingPixelBudget(), !planBypass, request.linearPass.get());
                 if (selectedImage->cancelled)
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedImage->available)
@@ -2298,7 +2299,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
                         : request.mediaSourceRevisionPolicy,
-                    remainingPixelBudget(), !planBypass);
+                    remainingPixelBudget(), !planBypass, request.linearPass.get());
                 if (selectedShuffle->cancelled)
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedShuffle->available)
@@ -2323,7 +2324,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
                         : request.mediaSourceRevisionPolicy,
-                    remainingPixelBudget(), !planBypass);
+                    remainingPixelBudget(), !planBypass, request.linearPass.get());
                 if (selectedCryptomatte->cancelled)
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedCryptomatte->available)
@@ -3100,7 +3101,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             auto image = detail::evaluateImageSource(
                                 *selectedImage, resolved.imageDescriptor, resolved.horizontalScale,
                                 resolved.verticalScale, remainingPixelBudget(), imageMemoryCache,
-                                imageMemoryAccess, cancellation, diskCache);
+                                imageMemoryAccess, cancellation, diskCache, nullptr,
+                                request.linearPass.get());
                             if (image.cancelled) {
                                 operationCancelled = true;
                                 return;
@@ -4115,7 +4117,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         key.bytes(), plan->sourceRevision(),
                         {.image = index == request.output.value() ? processImage : slots[index],
                          .values = {},
-                         .bounds = bounds[index]});
+                         .bounds = bounds[index]},
+                        OperationCacheEntryKind::Operation, {}, request.linearPass.get());
             }
             releaseInputs(index);
         }
@@ -4134,6 +4137,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                   {},
                                                   {}};
             postMemoization.pass = ValueGraphPass::PostImage;
+            postMemoization.linearPass = request.linearPass.get();
             postMemoization.initialOutputs = frameResolved.valueOutputs;
             postMemoization.evaluatedBounds = bounds;
             auto postValues =

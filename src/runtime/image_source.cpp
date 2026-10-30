@@ -119,7 +119,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                   document::FrameRate rate, const std::filesystem::path& base,
                   const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                   OperationCache* revisionCache, const MediaSourceRevisionPolicy revisionPolicy,
-                  const std::size_t hostByteBudget, const bool allowRevisionInsertion) {
+                  const std::size_t hostByteBudget, const bool allowRevisionInsertion,
+                  LinearPassRetention* const linearPass) {
     ImageSourceSelection selected;
     if (!source.asset) {
         selected.warning = "Image asset is missing; choose an asset or relink in Assets";
@@ -185,7 +186,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                                   .values = {},
                                   .bounds = {},
                                   .sourceRevision = selected.sourceRevision},
-                                 OperationCacheEntryKind::DecodedMedia, revisionGeneration);
+                                 OperationCacheEntryKind::DecodedMedia, revisionGeneration,
+                                 linearPass);
     }
     const auto input = document::effectiveAssetInputColor(asset.interpretation, source.colorSpace,
                                                           source.inputColorSpaceId);
@@ -297,7 +299,8 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
     const ImageSourceSelection& selected, render::Rgba32fImageDescriptor composition,
     double horizontalScale, double verticalScale, std::size_t budget, OperationCache* memoryCache,
     ImageSourceMemoryCacheAccess memoryAccess, const CancellationToken& cancel,
-    media::cache::MediaDiskCache* diskCache, media::ImageDecodeStatistics* decodeStatistics) {
+    media::cache::MediaDiskCache* diskCache, media::ImageDecodeStatistics* decodeStatistics,
+    LinearPassRetention* const linearPass) {
     if (decodeStatistics)
         *decodeStatistics = {};
     if (!selected.available)
@@ -331,7 +334,7 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
         if (memoryAccess == ImageSourceMemoryCacheAccess::ReadWrite && memoryCache != nullptr)
             memoryCache->store(selected.cacheKey, document::Revision{},
                                {.image = image, .values = {}, .bounds = {}},
-                               OperationCacheEntryKind::DecodedMedia);
+                               OperationCacheEntryKind::DecodedMedia, {}, linearPass);
     }
     auto resampled =
         resampleDecodedImage(*image, composition, horizontalScale, verticalScale, budget, cancel);

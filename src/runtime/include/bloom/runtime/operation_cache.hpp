@@ -7,6 +7,7 @@
 #include <bloom/runtime/video_source_report.hpp>
 
 #include <cstdint>
+#include <deque>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -14,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace bloom::media {
@@ -47,6 +49,8 @@ struct OperationCacheAccessStatistics final {
     std::uint64_t allocationFailures = 0;
     // Entries dropped by a memory-pressure trim, as opposed to ordinary budget eviction.
     std::uint64_t pressureDrops = 0;
+    // Stores a linear pass deferred because their key had not been offered before in the pass.
+    std::uint64_t linearPassDeferrals = 0;
 
     friend bool operator==(const OperationCacheAccessStatistics&,
                            const OperationCacheAccessStatistics&) = default;
@@ -66,6 +70,25 @@ struct OperationCacheValue final {
     std::shared_ptr<const media::ImageSourceRevision> sourceRevision{};
 };
 
+// Owned by one linear pass over a range (an export run) and carried by every frame it evaluates
+// (EvaluationRequest::linearPass). A reusable-cache store made for the pass is retained only when
+// its key was already offered earlier in the same pass, so frame-unique footage decodes and
+// results stream through while static layers, held frames and looped sources stay cached. It
+// remembers a bounded number of key hashes (metadata only, a few hundred KiB) and is thread-safe:
+// a pass evaluates several frames at once.
+class LinearPassRetention final {
+  public:
+    static constexpr std::size_t kRememberedKeys = 16384;
+    // True when `key` was offered before within this pass; otherwise remembers it and returns
+    // false. A hash collision only retains an entry, never changes pixels or cache identity.
+    [[nodiscard]] bool offer(std::string_view key, bool prepared);
+
+  private:
+    std::mutex mutex_;
+    std::unordered_set<std::size_t> offered_;
+    std::deque<std::size_t> order_;
+};
+
 // Owned by the evaluator session. Concurrent preview/export tasks share this bounded LRU.
 class OperationCache final {
   public:
@@ -76,7 +99,8 @@ class OperationCache final {
                                                           document::Revision revision);
     void store(std::string content, document::Revision revision, OperationCacheValue value,
                OperationCacheEntryKind kind = OperationCacheEntryKind::Operation,
-               std::optional<std::uint64_t> decodedMediaGeneration = {});
+               std::optional<std::uint64_t> decodedMediaGeneration = {},
+               LinearPassRetention* linearPass = nullptr);
     void setByteBudget(std::size_t budget);
     [[nodiscard]] std::size_t byteBudget() const;
     [[nodiscard]] std::size_t retainedBytes() const;
@@ -114,8 +138,9 @@ class OperationCache final {
     // most one already-produced image may wait for an evicted entry's actual worker retirement;
     // that candidate remains fully charged and is promoted by the next lookup/store after capacity
     // returns. Further candidates are refused until the slot clears.
-    void storePreparedUpload(std::string content,
-                             std::shared_ptr<const render::Rgba32fImage> image);
+    // A store made for a linear pass (`linearPass`) is retained only when its key recurs in it.
+    void storePreparedUpload(std::string content, std::shared_ptr<const render::Rgba32fImage> image,
+                             LinearPassRetention* linearPass = nullptr);
     void clearPreparedUploads();
     // Irreversible producer close, serialized with insertion; binding remains rooted.
     void closePreparedUploads();

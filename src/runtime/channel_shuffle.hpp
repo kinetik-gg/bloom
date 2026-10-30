@@ -60,14 +60,16 @@ selectChannelSetSources(const CompiledChannelExpression& expression, core::Ratio
                         document::FrameRate rate, const std::filesystem::path& base,
                         const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                         OperationCache* revisionCache, MediaSourceRevisionPolicy revisionPolicy,
-                        std::size_t hostByteBudget, bool allowRevisionInsertion);
+                        std::size_t hostByteBudget, bool allowRevisionInsertion,
+                        LinearPassRetention* linearPass = nullptr);
 
 [[nodiscard]] ChannelShuffleSelection
 selectChannelShuffle(const CompiledChannelShuffle& shuffle, core::RationalTime time,
                      document::FrameRate rate, const std::filesystem::path& base,
                      const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                      OperationCache* revisionCache, MediaSourceRevisionPolicy revisionPolicy,
-                     std::size_t hostByteBudget, bool allowRevisionInsertion);
+                     std::size_t hostByteBudget, bool allowRevisionInsertion,
+                     LinearPassRetention* linearPass = nullptr);
 
 // The full-resolution gathered image in the anchor source's frame. With `convert` the RGB triple is
 // converted by the colour source's input processor (the CPU reference); without it the image stays

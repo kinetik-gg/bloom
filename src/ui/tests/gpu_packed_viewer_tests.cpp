@@ -222,6 +222,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             preparationWidth = ui::RamPreviewPipeline::kMaxInFlight;
         } else if (argument == "--width-capacity") {
             preparationWidth = 0;
+        } else if (argument == "--width") {
+            // Measurement: an explicit RAM-fill width (frames in flight).
+            if (++index >= argc)
+                return 2;
+            preparationWidth = static_cast<std::size_t>(std::max(1, std::atoi(argv[index])));
         } else if (argument == "--footage-2k") {
             gFootage2k = true;
         } else if (argument == "--quarter") {

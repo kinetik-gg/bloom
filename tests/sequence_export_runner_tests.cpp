@@ -23,6 +23,9 @@
 #include <bloom/output/media_output.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/memory_headroom.hpp>
+#include <bloom/runtime/memory_pressure_monitor.hpp>
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
@@ -387,7 +390,7 @@ struct Fixture {
         request.worker.launched = [&](auto value) { pid.store(value); };
         host::SequenceExportRunnerV1 runner(scheduler, compiler, publications, artifacts, ledger,
                                             std::move(request), *retirement);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(240);
         bool injected = false;
         while (!runner.result() && std::chrono::steady_clock::now() < deadline) {
             runner.poll();
@@ -944,10 +947,112 @@ void testRejectedRetirementWithLiveEncoder(Fixture& f, const std::filesystem::pa
           "rejected retirement provider retires");
 }
 
+// Streaming invariant (owner, 2026-10-31): rendering is never limited by memory. A run holds only
+// its frames in flight plus reusable cache within the headroom; every finished frame is encoded and
+// released. An animated solid makes every frame's result unique, and the export's float pixel bytes
+// are four times the asserted bound. Two runs:
+// - `starved`: the headroom leaves reusable caches no room; the export still completes.
+// - otherwise the default headroom: the export is a linear pass, so the single-use frames do not
+//   fill the reusable caches (their retained bytes stay flat) and resident-set growth stays inside
+//   the bound.
+void testExportStreamsWithBoundedMemory(const std::filesystem::path& directory,
+                                        const bool starved) {
+    constexpr std::uint64_t mib = 1024ULL * 1024;
+    constexpr std::uint64_t bound = 1024 * mib;
+    constexpr std::uint64_t retainedBound = 64 * mib;
+    constexpr std::uint32_t width = 1024, height = 512, frames = 512;
+    const auto duration = core::RationalTime::fromInteger(frames / 24 + 1);
+    Fixture f(directory);
+    auto project = document::makeNewProject(
+        "Streaming", "Long", duration, need(document::CompositionFormat::create(width, height)));
+    document::Document document(std::move(project.project));
+    {
+        commands::CommandStack stack(document);
+        const auto apply = [&]<typename T, typename... Args>(Args&&... args) {
+            commands::Transaction transaction("Streaming fixture", document.snapshot().revision());
+            transaction.emplace<T>(project.initialCompositionId, std::forward<Args>(args)...);
+            auto result = stack.execute(std::move(transaction));
+            check(result.changed(), "streaming: fixture command");
+            return result;
+        };
+        const auto solid = apply.operator()<commands::AddSolidLayer>(
+            "Moving", core::Color4d{0.25, 0.5, 0.75, 1}, document::Vec2d{512, 256});
+        const auto position = need(
+            solid.outputId<document::ParameterId>(commands::kAddSolidLayerPositionParameterOutput));
+        const auto animation =
+            apply.operator()<commands::CreateAnimationForParameter>(position, core::RationalTime{});
+        const auto curve =
+            need(animation.outputId<document::AnimationCurveId>(commands::kAnimationCurveOutput));
+        (void)apply.operator()<commands::InsertVec2Keyframe>(
+            curve, need(core::RationalTime::create(frames - 1, 24)), document::Vec2d{1024, 512});
+    }
+    const std::uint64_t pixelBytes = std::uint64_t{frames} * width * height * 16;
+    check(pixelBytes >= 4 * bound, "streaming: the output is at least four times the bound");
+    auto& ledger = runtime::processMemoryBudgetLedger();
+    const auto machine = runtime::machineMemorySample();
+    const auto available = machine.availableBytes.value_or(0);
+    // Starved: the headroom is everything but 256 MiB of available memory.
+    if (starved)
+        ledger.setRamHeadroom(available > 256 * mib ? available - 256 * mib : 0);
+    const auto retainedBaseline = ledger.poll(machine).retainedBytes;
+    runtime::releaseFreedHostMemory();
+    const auto baseline = runtime::processResidentBytes();
+    std::atomic<std::size_t> peak{baseline.value_or(0)};
+    std::atomic<std::size_t> retainedPeak{retainedBaseline};
+    std::atomic<bool> sampling{true};
+    std::thread sampler([&] {
+        for (unsigned tick = 0; sampling.load(); ++tick) {
+            if (const auto now = runtime::processResidentBytes())
+                peak.store(std::max(peak.load(), *now));
+            if (tick % 10 == 0)
+                retainedPeak.store(
+                    std::max(retainedPeak.load(),
+                             ledger.poll(runtime::machineMemorySample()).retainedBytes));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    });
+    host::SequenceExportRequestV1 request{
+        .composition = {document.snapshot(), project.initialCompositionId},
+        .range = {directory / (starved ? "streaming-starved.mov" : "streaming.mov"), 0, frames - 1,
+                  document::FrameRate::framesPerSecond24(), duration},
+        .bwfDescription = {},
+        .assetBaseDirectory = {},
+        .worker = {}};
+    request.preset = output::OutputPresetV1::ProResMovV1;
+    request.audio = false;
+    const auto started = std::chrono::steady_clock::now();
+    const auto result = f.run(std::move(request));
+    const auto seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    sampling = false;
+    sampler.join();
+    ledger.setRamHeadroom(runtime::defaultRamHeadroomBytes());
+    const std::string label = starved ? "streaming (starved): " : "streaming: ";
+    check(result.published() && result.encodedFrames == frames,
+          label + "the long export completes: " +
+              (result.failure ? result.failure->detail : std::string()));
+    const auto retainedGrowth =
+        retainedPeak.load() > retainedBaseline ? retainedPeak.load() - retainedBaseline : 0;
+    const auto growth =
+        baseline && peak.load() > *baseline ? peak.load() - *baseline : std::size_t{0};
+    std::cout << "STREAMING_RSS starved=" << starved << " frames=" << frames
+              << " seconds=" << seconds << " outputPixelMiB=" << pixelBytes / mib
+              << " baselineMiB=" << baseline.value_or(0) / mib << " peakGrowthMiB=" << growth / mib
+              << " cacheRetainedGrowthMiB=" << retainedGrowth / mib << '\n';
+    if (baseline)
+        check(growth < bound, label + "resident-set growth stays inside the bound while the "
+                                      "output is four times larger");
+    if (!starved)
+        check(retainedGrowth < retainedBound,
+              label + "single-use frames do not fill the reusable caches");
+}
+
 GpuProofOutcome tests(const std::filesystem::path& directory, const bool requireDevice,
                       const std::filesystem::path& proofDirectory) {
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
+    testExportStreamsWithBoundedMemory(directory, false);
+    testExportStreamsWithBoundedMemory(directory, true);
     Fixture f(directory);
     std::filesystem::path cpuProResPath;
     for (const auto preset :

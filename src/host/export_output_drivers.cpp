@@ -654,7 +654,8 @@ class ImageDriver final : public DriverBase {
                            .quality = runtime::EvaluationQuality::Reference,
                            .colorIntent = input_.colorIntent,
                            .pixelStorageByteLimit = 0,
-                           .bypassLookNodes = !input_.output.record.settings.bakeLook},
+                           .bypassLookNodes = !input_.output.record.settings.bakeLook,
+                           .linearPass = linearPass_},
             .assetBaseDirectory = input_.assetBaseDirectory,
             .targetPath = frame.target,
             .overwritePolicy = input_.output.refuseExisting
@@ -1032,6 +1033,9 @@ class ImageDriver final : public DriverBase {
     std::shared_ptr<const output::OutputAnalysisAttemptV1> pendingRepublish_;
     bool republishing_ = false;
     std::shared_ptr<OutputMediaDisplayCommandV1> mediaDisplay_;
+    // The image sequence is one linear pass: shared caches retain only what recurs between frames.
+    std::shared_ptr<runtime::LinearPassRetention> linearPass_ =
+        std::make_shared<runtime::LinearPassRetention>();
     std::shared_ptr<std::shared_ptr<OutputMediaDisplayCommandV1>> mediaDisplaySlot_ =
         std::make_shared<std::shared_ptr<OutputMediaDisplayCommandV1>>();
     OutputAnalysisCapacityWaitV1 capacity_;
