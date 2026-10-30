@@ -224,7 +224,7 @@ struct DesktopRoot final {
     std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy =
         std::make_shared<runtime::GpuProcessingPhasePolicy>(32, retirementOwner(), view);
     std::uint64_t serial = 0;
-    DesktopRoot() { policy->setHeadroom(runtime::MemoryHeadroom{}); }
+    DesktopRoot() { policy->setHeadroom({.ramBytes = 2ULL << 30U, .vramBytes = 2ULL << 30U}); }
 
     void deliverHostSample() {
         runtime::MemoryBudgetState sample;
