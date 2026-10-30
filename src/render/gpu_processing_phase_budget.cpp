@@ -46,12 +46,17 @@ GpuProcessingPhaseLease::~GpuProcessingPhaseLease() {
     if (id_ == 0) {
         return;
     }
+    releaseLocked();
+    state_->changed.notify_all();
+}
+
+void GpuProcessingPhaseLease::releaseLocked() noexcept {
     const std::lock_guard lock(state_->mutex);
     auto& counters = state_->counters;
     counters.hostReservedBytes -= remainingHostBytes_;
     counters.totalHostClaimBytes -= remainingHostBytes_;
-    counters.deviceReservedBytes -= remainingDeviceBytes_;
-    counters.totalDeviceClaimBytes -= remainingDeviceBytes_;
+    counters.deviceReservedBytes -= deviceClaimBytes_;
+    counters.totalDeviceClaimBytes -= deviceClaimBytes_;
     --counters.admittedPhases;
     incrementSaturating(counters.admissionRevision);
     if (unproven_) {
@@ -129,16 +134,54 @@ std::uint64_t GpuProcessingPhaseLease::revisionAfterOwnRelease() const noexcept 
                                                                            : admissionRevision_ + 1;
 }
 
+bool GpuProcessingPhaseLease::drawDeviceLocked(const std::uint64_t bytes) noexcept {
+    auto& counters = state_->counters;
+    if (bytes > remainingDeviceBytes_)
+        return false;
+    const auto fromClaim = std::min(bytes, deviceClaimBytes_);
+    const auto growth = bytes - fromClaim;
+    if (growth != 0 &&
+        (!counters.deviceCapacityBytes ||
+         growth > remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes)))
+        return false;
+    remainingDeviceBytes_ -= bytes;
+    deviceClaimBytes_ -= fromClaim;
+    counters.deviceReservedBytes -= fromClaim;
+    counters.totalDeviceClaimBytes += growth;
+    return true;
+}
+
+void GpuProcessingPhaseLease::returnDeviceLocked(const std::uint64_t bytes) noexcept {
+    remainingDeviceBytes_ += bytes;
+    const auto refill = std::min(bytes, deviceNeedBytes_ - deviceClaimBytes_);
+    deviceClaimBytes_ += refill;
+    state_->counters.deviceReservedBytes += refill;
+    state_->counters.totalDeviceClaimBytes -= bytes - refill;
+}
+
 bool GpuProcessingPhaseLease::finishSourcePreparation(
     const std::uint64_t retainedSourceBytes) noexcept {
     const std::lock_guard lock(state_->mutex);
-    if (id_ == 0 || unproven_ || sourcePreparationFinished_ || retainedSourceBytes > sourceBytes_ ||
-        remainingUploadBytes_ != sourceBytes_)
+    if (id_ == 0 || unproven_ || sourcePreparationFinished_ ||
+        retainedSourceBytes > sourceCeilingBytes_ || remainingUploadBytes_ != sourceCeilingBytes_)
         return false;
-    // S/C/U protected preparation before actual source sizes were known. Only actual S survives.
-    // Uploads start after this handoff; their actual backing is admitted separately, so alignment
-    // and memory-type requirements never need an invented estimate here. Admission proved 3*S fits.
-    const auto released = 3 * sourceBytes_ - retainedSourceBytes;
+    // S/C/U protected preparation at the stated need before actual source sizes were known. Only
+    // the actual retained sources survive; sources beyond the stated need already exist in memory
+    // and are charged as they are. Uploads start after this handoff; their actual backing is
+    // admitted separately against live capacity.
+    const auto claimed = 3 * sourceBytes_;
+    if (retainedSourceBytes > claimed) {
+        const auto growth = retainedSourceBytes - claimed;
+        sourcePreparationFinished_ = true;
+        remainingHostBytes_ += growth;
+        hostBytes_ += growth;
+        state_->counters.hostReservedBytes += growth;
+        state_->counters.totalHostClaimBytes += growth;
+        state_->counters.peakHostReservedBytes =
+            std::max(state_->counters.peakHostReservedBytes, state_->counters.hostReservedBytes);
+        return true;
+    }
+    const auto released = claimed - retainedSourceBytes;
     if (released > remainingHostBytes_)
         return false;
     sourcePreparationFinished_ = true;
@@ -388,39 +431,45 @@ GpuProcessingPhaseBudget::GpuProcessingPhaseBudget(
 void GpuProcessingPhaseBudget::setHostCapacity(
     const std::optional<std::uint64_t> bytes, const bool ready,
     const std::chrono::steady_clock::time_point validUntil) noexcept {
-    const std::lock_guard lock(state_->mutex);
-    const auto beforeBytes = state_->counters.hostCapacityBytes;
-    const bool beforeReady = state_->counters.hostReady;
-    if (bytes) {
-        state_->counters.hostCapacityBytes = bytes;
+    {
+        const std::lock_guard lock(state_->mutex);
+        const auto beforeBytes = state_->counters.hostCapacityBytes;
+        const bool beforeReady = state_->counters.hostReady;
+        if (bytes) {
+            state_->counters.hostCapacityBytes = bytes;
+        }
+        state_->counters.hostReady = ready && bytes.has_value();
+        state_->hostValidUntil = validUntil;
+        if (beforeBytes != state_->counters.hostCapacityBytes ||
+            beforeReady != state_->counters.hostReady)
+            incrementSaturating(state_->counters.admissionRevision);
     }
-    state_->counters.hostReady = ready && bytes.has_value();
-    state_->hostValidUntil = validUntil;
-    if (beforeBytes != state_->counters.hostCapacityBytes ||
-        beforeReady != state_->counters.hostReady)
-        incrementSaturating(state_->counters.admissionRevision);
+    state_->changed.notify_all();
 }
 void GpuProcessingPhaseBudget::setSampledHostCapacity(
     const std::optional<std::uint64_t> bytes, const bool ready,
     const std::chrono::steady_clock::time_point validUntil, const std::uint64_t creditBytes,
     const std::uint64_t retiredBytesAtSample) noexcept {
-    const std::lock_guard lock(state_->mutex);
-    const auto beforeBytes = state_->counters.hostCapacityBytes;
-    const bool beforeReady = state_->counters.hostReady;
-    const auto& backing = state_->rootedHostBacking;
-    const auto retired =
-        backing.retiredBytesSaturated || backing.retiredMaterializedBytes < retiredBytesAtSample
-            ? creditBytes
-            : std::min(creditBytes, backing.retiredMaterializedBytes - retiredBytesAtSample);
-    state_->hostBackingCreditRemaining = creditBytes - retired;
-    if (bytes) {
-        state_->counters.hostCapacityBytes = *bytes > retired ? *bytes - retired : 0;
+    {
+        const std::lock_guard lock(state_->mutex);
+        const auto beforeBytes = state_->counters.hostCapacityBytes;
+        const bool beforeReady = state_->counters.hostReady;
+        const auto& backing = state_->rootedHostBacking;
+        const auto retired =
+            backing.retiredBytesSaturated || backing.retiredMaterializedBytes < retiredBytesAtSample
+                ? creditBytes
+                : std::min(creditBytes, backing.retiredMaterializedBytes - retiredBytesAtSample);
+        state_->hostBackingCreditRemaining = creditBytes - retired;
+        if (bytes) {
+            state_->counters.hostCapacityBytes = *bytes > retired ? *bytes - retired : 0;
+        }
+        state_->counters.hostReady = ready && bytes.has_value();
+        state_->hostValidUntil = validUntil;
+        if (beforeBytes != state_->counters.hostCapacityBytes ||
+            beforeReady != state_->counters.hostReady)
+            incrementSaturating(state_->counters.admissionRevision);
     }
-    state_->counters.hostReady = ready && bytes.has_value();
-    state_->hostValidUntil = validUntil;
-    if (beforeBytes != state_->counters.hostCapacityBytes ||
-        beforeReady != state_->counters.hostReady)
-        incrementSaturating(state_->counters.admissionRevision);
+    state_->changed.notify_all();
 }
 void GpuProcessingPhaseBudget::tightenHostCapacity(
     const std::optional<std::uint64_t> upperBound, const bool closeReadiness,
@@ -441,16 +490,46 @@ void GpuProcessingPhaseBudget::tightenHostCapacity(
 }
 void GpuProcessingPhaseBudget::setDeviceCapacity(const std::optional<std::uint64_t> bytes,
                                                  const bool ready) noexcept {
-    const std::lock_guard lock(state_->mutex);
-    const auto beforeBytes = state_->counters.deviceCapacityBytes;
-    const bool beforeReady = state_->counters.deviceReady;
-    if (bytes) {
-        state_->counters.deviceCapacityBytes = bytes;
+    {
+        const std::lock_guard lock(state_->mutex);
+        const auto beforeBytes = state_->counters.deviceCapacityBytes;
+        const bool beforeReady = state_->counters.deviceReady;
+        if (bytes) {
+            state_->counters.deviceCapacityBytes = bytes;
+        }
+        state_->counters.deviceReady = ready && bytes.has_value();
+        if (beforeBytes != state_->counters.deviceCapacityBytes ||
+            beforeReady != state_->counters.deviceReady)
+            incrementSaturating(state_->counters.admissionRevision);
     }
-    state_->counters.deviceReady = ready && bytes.has_value();
-    if (beforeBytes != state_->counters.deviceCapacityBytes ||
-        beforeReady != state_->counters.deviceReady)
+    state_->changed.notify_all();
+}
+void GpuProcessingPhaseBudget::shiftHostCapacity(const std::uint64_t add,
+                                                 const std::uint64_t subtract) noexcept {
+    {
+        const std::lock_guard lock(state_->mutex);
+        auto& capacity = state_->counters.hostCapacityBytes;
+        if (!capacity || add == subtract)
+            return;
+        const auto raised = *capacity > std::numeric_limits<std::uint64_t>::max() - add
+                                ? std::numeric_limits<std::uint64_t>::max()
+                                : *capacity + add;
+        capacity = raised > subtract ? raised - subtract : 0;
         incrementSaturating(state_->counters.admissionRevision);
+    }
+    state_->changed.notify_all();
+}
+bool GpuProcessingPhaseBudget::waitForRevisionChange(
+    const std::uint64_t seen, const std::chrono::steady_clock::time_point deadline) const {
+    std::unique_lock lock(state_->mutex);
+    for (;;) {
+        if (state_->counters.admissionRevision != seen)
+            return true;
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline)
+            return false;
+        state_->changed.wait_until(lock, std::min(deadline, now + std::chrono::milliseconds(20)));
+    }
 }
 GpuProcessingPhaseSnapshot GpuProcessingPhaseBudget::snapshot() const noexcept {
     const std::lock_guard lock(state_->mutex);
@@ -508,54 +587,82 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
                 .lease = {},
                 .admissionRevision = counters.admissionRevision};
     }
+    // A need that cannot fit even an otherwise empty root is true exhaustion. A need that fits the
+    // capacity but not what other admitted work holds right now waits for a release.
+    const auto waiting = [&](const GpuProcessingPhaseDomain domain) {
+        return GpuProcessingPhaseGrant{.status = GpuProcessingPhaseAdmission::AwaitingCapacity,
+                                       .domain = domain,
+                                       .lease = {},
+                                       .admissionRevision = counters.admissionRevision};
+    };
     if (counters.admittedPhases >= counters.requestCapacity) {
-        return refused(GpuProcessingPhaseDomain::RequestCount);
+        return waiting(GpuProcessingPhaseDomain::RequestCount);
     }
     if (state_->nextId == 0) {
         return {.status = GpuProcessingPhaseAdmission::SerialExhausted, .domain = {}, .lease = {}};
     }
+    const std::uint64_t sourceNeed = request.sourceFree ? 0 : request.minimumSourceBytes;
+    const auto max = std::numeric_limits<std::uint64_t>::max();
+    if (sourceNeed > (max - request.fixedHostBytes) / 3) {
+        return refused(GpuProcessingPhaseDomain::Host);
+    }
+    const std::uint64_t hostNeed = request.fixedHostBytes + 3 * sourceNeed;
+    if (hostNeed > *counters.hostCapacityBytes) {
+        return refused(GpuProcessingPhaseDomain::Host);
+    }
     const std::uint64_t hostRemaining =
         remaining(*counters.hostCapacityBytes, counters.totalHostClaimBytes);
-    if (request.fixedHostBytes > hostRemaining) {
-        return refused(GpuProcessingPhaseDomain::Host);
+    if (hostNeed > hostRemaining) {
+        return waiting(GpuProcessingPhaseDomain::Host);
     }
-    const std::uint64_t sourceRoom = (hostRemaining - request.fixedHostBytes) / 3;
-    const std::uint64_t sourceBytes =
-        request.sourceFree ? 0 : std::min(request.requestedSourceBytes, sourceRoom);
-    if (sourceBytes < request.minimumSourceBytes ||
-        (!request.sourceFree && request.requestedSourceBytes != 0 && sourceBytes == 0)) {
-        return refused(GpuProcessingPhaseDomain::Host);
+    // The source ceiling is the room left after this phase's own claim; it is not claimed.
+    const std::uint64_t sourceCeiling =
+        request.sourceFree ? 0
+                           : std::max(sourceNeed, std::min(request.requestedSourceBytes,
+                                                           hostRemaining - hostNeed + sourceNeed));
+    // A phase that asks for sources needs at least one byte of room for them.
+    if (!request.sourceFree && request.requestedSourceBytes != 0 && sourceCeiling == 0) {
+        return hostNeed >= *counters.hostCapacityBytes ? refused(GpuProcessingPhaseDomain::Host)
+                                                       : waiting(GpuProcessingPhaseDomain::Host);
     }
     std::uint64_t executorBytes = 0;
+    std::uint64_t deviceNeed = 0;
     if (request.native) {
-        const std::uint64_t deviceRemaining =
-            remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes);
-        if (request.deviceWorkingBytes > deviceRemaining) {
+        if (request.deviceWorkingBytes > max - request.minimumExecutorBytes) {
             return refused(GpuProcessingPhaseDomain::Device);
         }
-        const std::uint64_t executorRoom = deviceRemaining - request.deviceWorkingBytes;
-        // The requested executor bytes are a ceiling, not a need: a GPU scene asks for the whole
-        // device by default. Granting the whole remaining room to one phase starved every
-        // concurrent native phase (a Viewer request beside a RAM-preview fill was refused "does
-        // not fit the current device-memory capacity" with most of the device free). A ceiling
-        // grant therefore leaves half of the remaining room for concurrent phases, never granting
-        // less than the request's stated minimum (its known live-image peak).
-        const std::uint64_t share = std::max(request.minimumExecutorBytes, executorRoom / 2);
-        executorBytes = std::min({request.requestedExecutorBytes, executorRoom, share});
-        if (executorBytes < request.minimumExecutorBytes ||
-            (request.requestedExecutorBytes != 0 && executorBytes == 0)) {
+        deviceNeed = request.deviceWorkingBytes + request.minimumExecutorBytes;
+        if (deviceNeed > *counters.deviceCapacityBytes) {
             return refused(GpuProcessingPhaseDomain::Device);
+        }
+        const std::uint64_t deviceRemaining =
+            remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes);
+        if (deviceNeed > deviceRemaining) {
+            return waiting(GpuProcessingPhaseDomain::Device);
+        }
+        // The requested executor size is a ceiling: the phase may allocate up to it while live
+        // capacity allows, but claims only its stated minimum (its live-image peak) up front.
+        executorBytes = std::max(
+            request.minimumExecutorBytes,
+            std::min(request.requestedExecutorBytes, deviceRemaining - request.deviceWorkingBytes));
+        if (request.requestedExecutorBytes != 0 && executorBytes == 0) {
+            return deviceNeed >= *counters.deviceCapacityBytes
+                       ? refused(GpuProcessingPhaseDomain::Device)
+                       : waiting(GpuProcessingPhaseDomain::Device);
         }
     }
     // Division/subtraction bounds above prove these additions cannot overflow capacity.
-    lease->hostBytes_ = request.fixedHostBytes + 3 * sourceBytes;
+    lease->hostBytes_ = hostNeed;
     lease->remainingHostBytes_ = lease->hostBytes_;
     lease->remainingOutputHostBytes_ = request.fixedHostBytes - request.processingHostScratchBytes;
     lease->remainingProcessingHostScratchBytes_ = request.processingHostScratchBytes;
-    lease->remainingUploadBytes_ = sourceBytes;
+    lease->remainingUploadBytes_ = sourceCeiling;
     lease->deviceBytes_ = request.native ? request.deviceWorkingBytes + executorBytes : 0;
     lease->remainingDeviceBytes_ = lease->deviceBytes_;
-    lease->sourceBytes_ = sourceBytes;
+    lease->deviceClaimBytes_ = deviceNeed;
+    lease->deviceNeedBytes_ = deviceNeed;
+    lease->sourceBytes_ = sourceNeed;
+    lease->sourceCeilingBytes_ = sourceCeiling;
     lease->executorBytes_ = executorBytes;
     lease->id_ = state_->nextId;
     lease->admissionRevision_ = counters.admissionRevision;
@@ -563,8 +670,8 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
         state_->nextId == std::numeric_limits<std::uint64_t>::max() ? 0 : state_->nextId + 1;
     counters.hostReservedBytes += lease->hostBytes_;
     counters.totalHostClaimBytes += lease->hostBytes_;
-    counters.deviceReservedBytes += lease->deviceBytes_;
-    counters.totalDeviceClaimBytes += lease->deviceBytes_;
+    counters.deviceReservedBytes += lease->deviceClaimBytes_;
+    counters.totalDeviceClaimBytes += lease->deviceClaimBytes_;
     ++counters.admittedPhases;
     counters.peakHostReservedBytes =
         std::max(counters.peakHostReservedBytes, counters.hostReservedBytes);

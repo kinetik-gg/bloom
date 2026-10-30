@@ -199,7 +199,7 @@ void moveAdoptPublishAndCopy() {
                budget.snapshot().admissionRevision == revision,
            "published host storage survives independently of phase count/device reservation");
     auto competing = budget.reserve({.fixedHostBytes = 257, .sourceFree = true, .native = false});
-    expect(competing.status == GpuProcessingPhaseAdmission::BudgetRefused,
+    expect(competing.status == GpuProcessingPhaseAdmission::AwaitingCapacity,
            "new phase admission includes retained owned payload in the unified total");
     auto firstAlias =
         std::make_shared<const PreparedReferenceDisplayBuffer>(std::move(*adopted.value()));
@@ -345,8 +345,8 @@ void capacityFailureWatermark() {
         expect(storage.hasValue(), "capacity failure follows actual provisional pixel allocation");
         const auto refusal =
             budget.reserve({.fixedHostBytes = 1, .sourceFree = true, .native = false});
-        expect(refusal.status == GpuProcessingPhaseAdmission::BudgetRefused,
-               "a genuine typed capacity refusal occurs after provisional allocation");
+        expect(refusal.status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+               "a genuine typed capacity wait occurs after provisional allocation");
         phase.reset();
         expect(budget.snapshot().admittedPhases == 2,
                "provisional allocation keeps its exact origin phase alive for failed cleanup");

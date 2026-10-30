@@ -85,7 +85,11 @@ NativeImageStorageToken::reserve(const std::shared_ptr<GpuProcessingPhaseLease>&
                                                ? counters.admissionRevision
                                                : counters.admissionRevision + 1};
     };
-    if (bytes > phase->remainingDeviceBytes_)
+    if (bytes > phase->remainingDeviceBytes_ ||
+        (bytes > phase->deviceClaimBytes_ &&
+         (!counters.deviceCapacityBytes ||
+          bytes - phase->deviceClaimBytes_ >
+              remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes))))
         return refuse(GpuProcessingPhaseAdmission::BudgetRefused, GpuProcessingPhaseDomain::Device);
     if (!identity.deviceLocal) {
         if (counters.hostReady && now > state.hostValidUntil) {
@@ -101,8 +105,7 @@ NativeImageStorageToken::reserve(const std::shared_ptr<GpuProcessingPhaseLease>&
     }
     // Native ownership replaces admitted device debit; supplemental nonlocal host is NEW credit.
     // Checked subtraction above bounds both additions; no cross-heap half-transaction can escape.
-    phase->remainingDeviceBytes_ -= bytes;
-    counters.deviceReservedBytes -= bytes;
+    static_cast<void>(phase->drawDeviceLocked(bytes));
     counters.ownedNativeImageBytes += bytes;
     ++counters.ownedNativeImages;
     if (!identity.deviceLocal) {
@@ -128,8 +131,7 @@ bool NativeImageStorageToken::reconcile(const std::uint64_t actual,
         counters.totalDeviceClaimBytes -= returned;
         counters.ownedPresentationImageBytes -= returned;
     } else {
-        origin_->remainingDeviceBytes_ += returned;
-        counters.deviceReservedBytes += returned;
+        origin_->returnDeviceLocked(returned);
     }
     counters.ownedNativeImageBytes -= returned;
     if (!identity_.deviceLocal) {
@@ -173,8 +175,7 @@ bool NativeImageStorageToken::releaseFailedAttemptAfterBackingDestroyed(
         auto& counters = state_->counters;
         counters.ownedNativeImageBytes -= bytes_;
         --counters.ownedNativeImages;
-        counters.deviceReservedBytes += bytes_;
-        phase->remainingDeviceBytes_ += bytes_;
+        phase->returnDeviceLocked(bytes_);
         if (!identity_.deviceLocal) {
             counters.ownedNonlocalNativeHostBytes -= bytes_;
             counters.totalHostClaimBytes -= bytes_;
@@ -209,8 +210,7 @@ void NativeImageStorageToken::reset() noexcept {
             incrementSaturating(counters.admissionRevision);
         } else if (published_) {
             if (liveOrigin && liveOrigin->state_ == state_ && liveOrigin->id_ == originId_) {
-                liveOrigin->remainingDeviceBytes_ += bytes_;
-                counters.deviceReservedBytes += bytes_;
+                liveOrigin->returnDeviceLocked(bytes_);
             } else {
                 counters.totalDeviceClaimBytes -= bytes_;
             }
@@ -218,8 +218,7 @@ void NativeImageStorageToken::reset() noexcept {
             // replenished. Only explicit proved failed-attempt cleanup suppresses that event.
             incrementSaturating(counters.admissionRevision);
         } else {
-            origin_->remainingDeviceBytes_ += bytes_;
-            counters.deviceReservedBytes += bytes_;
+            origin_->returnDeviceLocked(bytes_);
         }
         if (!identity_.deviceLocal) {
             counters.ownedNonlocalNativeHostBytes -= bytes_;

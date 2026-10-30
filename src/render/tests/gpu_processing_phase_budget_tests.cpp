@@ -111,13 +111,15 @@ void sizingAndLifetime() {
     full.requestedExecutorBytes = gib;
     full.minimumExecutorBytes = 4 * fullPixels * 16;
     auto grant = budget.reserve(full);
-    // A ceiling grant keeps half of the remaining device room for concurrent phases.
-    const auto executorShare =
-        std::max(full.minimumExecutorBytes, (gib - full.deviceWorkingBytes) / 2);
-    require(grant.lease && grant.lease->sourceByteLimit() == 0 &&
-                grant.lease->hostBytes() == full.fixedHostBytes &&
-                grant.lease->deviceBytes() == full.deviceWorkingBytes + executorShare,
-            "1080p source-free envelope admits without whole-domain reservation");
+    // The executor ceiling is the live room; only working + minimum executor bytes are claimed.
+    require(
+        grant.lease && grant.lease->sourceByteLimit() == 0 &&
+            grant.lease->hostBytes() == full.fixedHostBytes && grant.lease->deviceBytes() == gib &&
+            grant.lease->deviceClaimBytes() ==
+                full.deviceWorkingBytes + full.minimumExecutorBytes &&
+            budget.snapshot().totalDeviceClaimBytes ==
+                full.deviceWorkingBytes + full.minimumExecutorBytes,
+        "1080p source-free envelope claims its need and keeps the room as an unclaimed ceiling");
     auto alias = grant.lease;
     grant.lease->markUnproven();
     alias->markUnproven();
@@ -131,10 +133,9 @@ void sizingAndLifetime() {
             "last alias releases retained unproven reservation");
     full.sourceFree = false;
     auto media = budget.reserve(full);
-    const auto sourceRoom = (gib - full.fixedHostBytes) / 3;
-    require(media.lease && media.lease->sourceByteLimit() == sourceRoom &&
-                media.lease->sourceByteLimit() > gib / 4 && media.lease->hostBytes() <= gib,
-            "media source beyond a quarter admits within the exact paired host remainder");
+    require(media.lease && media.lease->sourceByteLimit() == gib - full.fixedHostBytes &&
+                media.lease->hostBytes() == full.fixedHostBytes,
+            "the media source ceiling is the whole remaining host room and is not claimed");
     media.lease.reset();
     GpuProcessingPhaseBudget concurrent(2);
     concurrent.setHostCapacity(1000, true);
@@ -149,8 +150,9 @@ void sizingAndLifetime() {
     require(first.lease && first.lease->executorByteLimit() == 500,
             "executor beyond a quarter admits when actual device capacity fits");
     auto held = concurrent.reserve(fitting);
-    require(!held.lease && held.domain == GpuProcessingPhaseDomain::Device,
-            "held device claims refuse a second phase that would overcommit");
+    require(!held.lease && held.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                held.domain == GpuProcessingPhaseDomain::Device,
+            "held device claims make a second phase that would overcommit wait");
     first.lease.reset();
     held = concurrent.reserve(fitting);
     require(held.lease != nullptr, "retired claims restore paired admission");
@@ -220,8 +222,10 @@ void finishedPreparationReleasesDecodeScratch() {
     GpuProcessingPhaseBudget budget;
     budget.setHostCapacity(1000, true);
     budget.setDeviceCapacity(1000, true);
-    auto grant = budget.reserve(
-        {.fixedHostBytes = 100, .requestedSourceBytes = 300, .deviceWorkingBytes = 1000});
+    auto grant = budget.reserve({.fixedHostBytes = 100,
+                                 .requestedSourceBytes = 300,
+                                 .minimumSourceBytes = 300,
+                                 .deviceWorkingBytes = 1000});
     require(grant.lease && budget.snapshot().totalHostClaimBytes == 1000,
             "preparation initially protects its full decode/conversion/upload overlap");
     const NativeBufferStorageIdentity identity{
@@ -260,8 +264,10 @@ void finishedPreparationReleasesDecodeScratch() {
                 budget.snapshot().totalDeviceClaimBytes == 0 &&
                 budget.snapshot().admittedPhases == 0,
             "trimmed phase and actual allocations retire with exact conservation");
-    grant = budget.reserve(
-        {.fixedHostBytes = 100, .requestedSourceBytes = 300, .deviceWorkingBytes = 1000});
+    grant = budget.reserve({.fixedHostBytes = 100,
+                            .requestedSourceBytes = 300,
+                            .minimumSourceBytes = 300,
+                            .deviceWorkingBytes = 1000});
     require(grant.lease && grant.lease->finishSourcePreparation(20),
             "a second preparation can release unused scratch");
     const auto watermark = grant.lease->revisionAfterOwnRelease();
@@ -324,8 +330,14 @@ void ceilingRequestsShareDevice() {
     auto heavy = ceiling;
     heavy.minimumExecutorBytes = gib;
     heavy.requestedExecutorBytes = gib;
-    require(budget.reserve(heavy).domain == GpuProcessingPhaseDomain::Device,
-            "a minimum that does not fit the remaining device room is still refused");
+    const auto waiting = budget.reserve(heavy);
+    require(waiting.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                waiting.domain == GpuProcessingPhaseDomain::Device,
+            "a minimum that fits the device but not the held claims waits for a release");
+    heavy.minimumExecutorBytes = gib + 1;
+    heavy.requestedExecutorBytes = gib + 1;
+    require(budget.reserve(heavy).status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "a minimum larger than the whole device is refused");
 }
 
 void contention() {
@@ -366,9 +378,15 @@ void contention() {
         }
     }
     const auto snapshot = budget.snapshot();
-    require(accepted == 2 && snapshot.hostReservedBytes == 140 &&
-                snapshot.deviceReservedBytes == 60 && snapshot.budgetRefusals == contenders - 2,
-            "competing requests never acquire a partial or over-capacity pair");
+    std::size_t waiting = 0;
+    for (const auto& grant : grants) {
+        if (grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity) {
+            ++waiting;
+        }
+    }
+    require(accepted == 2 && waiting == contenders - 2 && snapshot.hostReservedBytes == 140 &&
+                snapshot.deviceReservedBytes == 60 && snapshot.budgetRefusals == 0,
+            "competing requests never acquire a partial or over-capacity pair; the rest wait");
     for (auto& grant : grants) {
         grant.lease.reset();
     }

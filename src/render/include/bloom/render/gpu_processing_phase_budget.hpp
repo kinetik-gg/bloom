@@ -24,7 +24,9 @@ class ProcessingHostStorageToken;
 // be mutated through this public surface and cannot be confused after root-address reuse.
 using GpuProcessingRootIdentity = std::shared_ptr<const detail::GpuProcessingPhaseBudgetState>;
 
-// A conservative quota for simultaneous processing phases, not physical allocation accounting.
+// Admission of simultaneous processing phases against measured capacity. Each phase claims its
+// stated need (fixed output/metadata, 3x the minimum source bytes, device working bytes plus the
+// minimum executor bytes); requested source/executor values are ceilings that are not claimed.
 // Runtime owns process/device sampling and injects resolved capacity; this class performs no I/O.
 struct GpuProcessingPhaseRequest final {
     std::uint64_t fixedHostBytes = 0;
@@ -47,7 +49,8 @@ enum class GpuProcessingPhaseAdmission {
     AllocationFailure,
     SerialExhausted,
 };
-enum class GpuProcessingPhaseDomain { None, Host, Device, RequestCount };
+// Viewer: an export or background phase yields to a waiting or active Viewer (ADR 0033 s.9).
+enum class GpuProcessingPhaseDomain { None, Host, Device, RequestCount, Viewer };
 
 struct NativePresentationStorageRefusal final {
     GpuProcessingPhaseAdmission status = GpuProcessingPhaseAdmission::InvalidRequest;
@@ -131,10 +134,16 @@ class GpuProcessingPhaseLease final {
     [[nodiscard]] GpuProcessingRootIdentity rootIdentity() const noexcept { return state_; }
     [[nodiscard]] std::uint64_t hostBytes() const noexcept { return hostBytes_; }
     [[nodiscard]] std::uint64_t deviceBytes() const noexcept { return deviceBytes_; }
-    [[nodiscard]] std::uint64_t sourceByteLimit() const noexcept { return sourceBytes_; }
-    // Existing source estimate separately protects S, C and occupied upload U, each sourceBytes.
-    [[nodiscard]] std::uint64_t uploadByteLimit() const noexcept { return sourceBytes_; }
+    // Ceiling for retained decoded sources: the room available at admission. Only the stated
+    // need (3 * sourceClaimBytes) is claimed; growth beyond it is reconciled at the handoff.
+    [[nodiscard]] std::uint64_t sourceByteLimit() const noexcept { return sourceCeilingBytes_; }
+    [[nodiscard]] std::uint64_t sourceClaimBytes() const noexcept { return sourceBytes_; }
+    // Logical upload occupancy ceiling; uploads acquire their actual host backing separately.
+    [[nodiscard]] std::uint64_t uploadByteLimit() const noexcept { return sourceCeilingBytes_; }
+    // Device ceiling: the live room at admission. Only working + minimum executor bytes are
+    // claimed up front; native allocations beyond that claim are admitted against live capacity.
     [[nodiscard]] std::uint64_t executorByteLimit() const noexcept { return executorBytes_; }
+    [[nodiscard]] std::uint64_t deviceClaimBytes() const noexcept { return deviceClaimBytes_; }
     // After the complete scene has finished CPU preparation, retain its actual decoded backing.
     // Future native upload buffers acquire their actual host bytes at allocation, within the
     // original upload ceiling. Spent decode/conversion scratch must not block native execution.
@@ -149,6 +158,12 @@ class GpuProcessingPhaseLease final {
     void proveRetiredAfterDeviceIdle() noexcept;
 
   private:
+    // Callers hold state_->mutex. A draw first consumes this phase's unallocated device claim;
+    // any remainder is a new claim admitted against the live device capacity. A return puts the
+    // bytes back into this phase's claim, so the root total is unchanged.
+    [[nodiscard]] bool drawDeviceLocked(std::uint64_t bytes) noexcept;
+    void releaseLocked() noexcept;
+    void returnDeviceLocked(std::uint64_t bytes) noexcept;
     friend class GpuProcessingPhaseBudget;
     friend class PackedHostStorageAuthority;
     friend class NativeImageStorageToken;
@@ -171,7 +186,12 @@ class GpuProcessingPhaseLease final {
     std::uint64_t deviceBytes_ = 0;
     std::uint64_t remainingDeviceBytes_ = 0;
     std::uint64_t sourceBytes_ = 0;
+    std::uint64_t sourceCeilingBytes_ = 0;
     std::uint64_t executorBytes_ = 0;
+    // Unallocated device bytes this phase holds in totalDeviceClaimBytes, at most its admitted
+    // need. Allocations beyond the need are separate live claims, returned to the root on release.
+    std::uint64_t deviceClaimBytes_ = 0;
+    std::uint64_t deviceNeedBytes_ = 0;
     bool unproven_ = false;
     bool sourcePreparationFinished_ = false;
 };
@@ -284,6 +304,13 @@ class GpuProcessingPhaseBudget final {
     void tightenHostCapacity(std::optional<std::uint64_t> upperBound, bool closeReadiness,
                              std::chrono::steady_clock::time_point validUntil) noexcept;
     void setDeviceCapacity(std::optional<std::uint64_t> bytes, bool ready) noexcept;
+    // Moves a known host capacity by a preference change (headroom), keeping readiness/expiry.
+    void shiftHostCapacity(std::uint64_t add, std::uint64_t subtract) noexcept;
+    // Blocks until the admission revision differs from `seen` (a release, a capacity change) or
+    // the deadline passes. Returns true when it changed. Releases from storage tokens are seen
+    // within one short slice even when they do not notify.
+    [[nodiscard]] bool waitForRevisionChange(std::uint64_t seen,
+                                             std::chrono::steady_clock::time_point deadline) const;
     [[nodiscard]] GpuProcessingPhaseSnapshot snapshot() const noexcept;
     [[nodiscard]] RootedHostBackingSnapshot rootedHostBackingSnapshot() const noexcept;
     [[nodiscard]] GpuProcessingRootIdentity rootIdentity() const noexcept { return state_; }

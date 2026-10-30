@@ -116,9 +116,9 @@ void promotedPrefixFailureAndExternalRelease() {
     require(ownPrefix.token && token(ownPrefix).promote() && ownScratch.token,
             "per-image prefix promoted while unrelated scratch stays provisional");
     auto refused = budget.reserve(request());
-    require(refused.status == GpuProcessingPhaseAdmission::BudgetRefused &&
+    require(refused.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
                 refused.domain == GpuProcessingPhaseDomain::RequestCount,
-            "real typed later refusal after provisional allocation and prefix promotion");
+            "real typed later wait after provisional allocation and prefix promotion");
     const auto watermark = phase.lease->revisionAfterOwnRelease();
     const auto revision = budget.snapshot().admissionRevision;
     // Neutral control proof: the caller asserts backing is gone and no external/cache holder.

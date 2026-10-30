@@ -2,12 +2,15 @@
 
 #include <bloom/render/gpu_processing_phase_budget.hpp>
 
+#include <condition_variable>
 #include <limits>
 #include <mutex>
 
 namespace bloom::render::detail {
 struct GpuProcessingPhaseBudgetState final {
     mutable std::mutex mutex;
+    // Signalled after phase releases and capacity changes (outside `mutex`).
+    mutable std::condition_variable changed;
     GpuProcessingPhaseSnapshot counters;
     RootedHostBackingSnapshot rootedHostBacking;
     // The current host-capacity sample may include this much rooted backing credit. It is

@@ -103,6 +103,7 @@ void reservedScratchSurvivesSaturatedCapacity() {
     auto admitted = budget.reserve({.fixedHostBytes = 80,
                                     .processingHostScratchBytes = 64,
                                     .requestedSourceBytes = 1000,
+                                    .minimumSourceBytes = 306,
                                     .sourceFree = false,
                                     .native = false});
     require(admitted.lease != nullptr,

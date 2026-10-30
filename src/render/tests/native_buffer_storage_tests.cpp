@@ -259,8 +259,9 @@ void maximumMediaPartition() {
     empty(budget);
     media.minimumSourceBytes = sourceRoom;
     auto boundary = budget.reserve(media);
-    require(boundary.lease && boundary.lease->sourceByteLimit() == sourceRoom &&
-                boundary.lease->uploadByteLimit() == sourceRoom &&
+    // The unclaimed ceiling also covers the rounding remainder left after the claim.
+    require(boundary.lease && boundary.lease->sourceByteLimit() >= sourceRoom &&
+                boundary.lease->uploadByteLimit() == boundary.lease->sourceByteLimit() &&
                 boundary.lease->hostBytes() == fixed + 3 * sourceRoom &&
                 budget.snapshot().totalHostClaimBytes == fixed + 3 * sourceRoom,
             "exact UINT64 boundary F+3L is representable without wrapping");

@@ -113,11 +113,21 @@ NativeBufferStorageGrant NativeBufferStorageToken::reserveInPartition(
     };
     if (bytes > phase->remainingDeviceBytes_)
         return refuse(GpuProcessingPhaseDomain::Device);
+    if (bytes > phase->deviceClaimBytes_ &&
+        (!counters.deviceCapacityBytes ||
+         bytes - phase->deviceClaimBytes_ >
+             remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes)))
+        return refuse(GpuProcessingPhaseDomain::Device);
     if ((upload && bytes > phase->remainingUploadBytes_) ||
         (!upload && !processing && !identity.deviceLocal &&
          bytes > phase->remainingOutputHostBytes_))
         return refuse(GpuProcessingPhaseDomain::Host);
-    const bool supplementalHost = processing || (upload && phase->sourcePreparationFinished_);
+    // Processing buffers and finished-preparation uploads acquire their actual nonlocal backing
+    // against live capacity. An earlier upload uses the phase's own claimed host room when it
+    // fits and otherwise acquires live capacity the same way.
+    const bool supplementalHost =
+        processing || (upload && (phase->sourcePreparationFinished_ ||
+                                  (!identity.deviceLocal && bytes > phase->remainingHostBytes_)));
     if (supplementalHost && !identity.deviceLocal) {
         auto& state = *phase->state_;
         if (counters.hostReady && now > state.hostValidUntil) {
@@ -135,8 +145,8 @@ NativeBufferStorageGrant NativeBufferStorageToken::reserveInPartition(
     // transfer protected host debit. No half-transaction escapes on refusal.
     if (upload)
         phase->remainingUploadBytes_ -= bytes;
-    phase->remainingDeviceBytes_ -= bytes;
-    counters.deviceReservedBytes -= bytes;
+    // Checked above: the draw consumes the phase claim, then live device room.
+    static_cast<void>(phase->drawDeviceLocked(bytes));
     counters.ownedNativeBufferBytes += bytes;
     ++counters.ownedNativeBuffers;
     if (!identity.deviceLocal) {
@@ -150,9 +160,11 @@ NativeBufferStorageGrant NativeBufferStorageToken::reserveInPartition(
         }
         counters.ownedNonlocalNativeBufferHostBytes += bytes;
     }
+    NativeBufferStorageToken token(phase, bytes, identity, upload, processing);
+    token.supplementalHost_ = supplementalHost;
     return {.status = GpuProcessingPhaseAdmission::Accepted,
             .domain = GpuProcessingPhaseDomain::None,
-            .token = NativeBufferStorageToken(phase, bytes, identity, upload, processing)};
+            .token = std::move(token)};
 }
 
 bool NativeBufferStorageToken::reconcile(const std::uint64_t actual,
@@ -171,8 +183,7 @@ bool NativeBufferStorageToken::reconcile(const std::uint64_t actual,
         counters.totalDeviceClaimBytes -= returned;
         counters.ownedPresentationBufferBytes -= returned;
     } else {
-        origin_->remainingDeviceBytes_ += returned;
-        counters.deviceReservedBytes += returned;
+        origin_->returnDeviceLocked(returned);
     }
     counters.ownedNativeBufferBytes -= returned;
     if (!identity_.deviceLocal) {
@@ -231,8 +242,7 @@ bool NativeBufferStorageToken::releaseFailedAttemptAfterBackingDestroyed(
         auto& counters = state_->counters;
         counters.ownedNativeBufferBytes -= bytes_;
         --counters.ownedNativeBuffers;
-        phase->remainingDeviceBytes_ += bytes_;
-        counters.deviceReservedBytes += bytes_;
+        phase->returnDeviceLocked(bytes_);
         if (!identity_.deviceLocal) {
             counters.ownedNonlocalNativeBufferHostBytes -= bytes_;
             counters.totalHostClaimBytes -= bytes_;
@@ -265,8 +275,7 @@ void NativeBufferStorageToken::reset() noexcept {
             incrementSaturating(counters.admissionRevision);
         } else if (published_) {
             if (liveOrigin && liveOrigin->state_ == state_ && liveOrigin->id_ == originId_) {
-                liveOrigin->remainingDeviceBytes_ += bytes_;
-                counters.deviceReservedBytes += bytes_;
+                liveOrigin->returnDeviceLocked(bytes_);
             } else {
                 counters.totalDeviceClaimBytes -= bytes_;
             }
@@ -274,8 +283,7 @@ void NativeBufferStorageToken::reset() noexcept {
         } else {
             if (upload_)
                 origin_->remainingUploadBytes_ += bytes_;
-            origin_->remainingDeviceBytes_ += bytes_;
-            counters.deviceReservedBytes += bytes_;
+            origin_->returnDeviceLocked(bytes_);
         }
         if (!identity_.deviceLocal) {
             if (supplementalHost_) {
