@@ -2,7 +2,10 @@
 
 #include <array>
 #include <bloom/ui/timeline_editor.hpp>
+#include <cstdint>
 #include <functional>
+#include <map>
+#include <set>
 
 class QLabel;
 class QMouseEvent;
@@ -22,12 +25,12 @@ class KLabel;
 // parameters. It is the node's identity rather than its display name, which two nodes may share.
 [[nodiscard]] QString upstreamGroupKey(document::NodeId nodeId);
 
-[[nodiscard]] std::vector<TimelineLayerEntry>
-timelinePropertyEntries(const CompositionSession& session,
-                        const std::vector<TimelineLayerEntry>& layers,
-                        const std::set<document::LayerId>& expanded,
-                        const std::set<std::pair<document::LayerId, QString>>& collapsedGroups = {},
-                        const std::set<document::ParameterId>& expandedParameters = {});
+[[nodiscard]] std::vector<TimelineLayerEntry> timelinePropertyEntries(
+    const CompositionSession& session, const std::vector<TimelineLayerEntry>& layers,
+    const std::set<document::LayerId>& expanded,
+    const std::set<std::pair<document::LayerId, QString>>& collapsedGroups = {},
+    const std::set<document::ParameterId>& expandedParameters = {},
+    const std::map<document::LayerId, std::set<document::ParameterId>>& revealed = {});
 
 class TimelinePropertyRow final : public QWidget {
   public:
@@ -35,13 +38,18 @@ class TimelinePropertyRow final : public QWidget {
     void bind(const TimelineLayerEntry& entry);
     std::function<void(document::LayerId, QString)> toggleGroup;
     std::function<void(document::ParameterId)> toggleParameter;
+    // #401 test seam: how many times any property row has re-read its values.
+    [[nodiscard]] static std::uint64_t bindCount() noexcept;
 
   protected:
-    // ADR 0028: pressing a Masks-group row selects that mask for the Viewer.
+    // Pressing the row's own background selects the row (TimelineLayerStack::selectRow).
     void mousePressEvent(QMouseEvent* event) override;
 
   private:
     void commitValues(std::size_t index);
+    void scheduleRefresh();
+    bool refreshPending_ = false;
+    static inline std::uint64_t bindCount_ = 0;
     void bindDriven(bool driven);
     CompositionSession& session_;
     TimelineLayerEntry entry_;

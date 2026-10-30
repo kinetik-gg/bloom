@@ -13,9 +13,12 @@
 
 #include "composition_editor_support.hpp"
 #include "timeline_key_time.hpp"
+#include "timeline_layer_fields.hpp"
+#include "timeline_layer_labels.hpp"
 #include "timeline_layer_timing_gesture.hpp"
 #include "timeline_matte_cell.hpp"
 #include "timeline_property_rows.hpp"
+#include "timeline_reveal.hpp"
 
 #include <bloom/runtime/layer_time_projection.hpp>
 #include <bloom/ui/composition_authoring.hpp>
@@ -29,6 +32,7 @@
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/split_handle.hpp>
 #include <bloom/ui/kit/surfaces.hpp>
+#include <bloom/ui/kit/swatch_button.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <bloom/commands/layer_time_operations.hpp>
@@ -41,6 +45,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QContextMenuEvent>
+#include <QCursor>
 #include <QEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
@@ -91,8 +96,12 @@ namespace {
 // also the x origin of the ruler, of every lane, and of the work-area strip.
 constexpr int kCellGap = kit::px(kit::Spacing::XS);
 constexpr int kToggleCellWidth = kit::px(kit::Size::ToggleCell);
+// Video, Audio, Solo and Lock (After Effects' A/V Features), then the Label square.
 constexpr int kToggleCellCount = 4;
+constexpr int kLabelCellIndex = kToggleCellCount;
 constexpr int kToggleColumnWidth = kit::px(kit::Size::TimelineToggleColumn);
+// The switch cells after the name: Shy (After Effects' Switches column).
+constexpr int kSwitchColumnWidth = kit::px(kit::Size::TimelineSwitchColumn);
 constexpr int kNameCellMinWidth = kit::px(kit::Size::TimelineNameMin);
 constexpr int kColumnWidth = kit::px(kit::Size::TimelineColumn);
 // Blending, Parent and (ADR 0028) Matte.
@@ -115,7 +124,8 @@ constexpr int kScrollGutterWidth = kit::px(kit::Size::ScrollBarTrack);
     return kToggleStripX + index * (kToggleCellWidth + kCellGap);
 }
 [[nodiscard]] int nameCellWidth(const int width) {
-    return std::max(kNameCellMinWidth, width - kNameCellX - kRightColumnCount * kColumnWidth);
+    return std::max(kNameCellMinWidth,
+                    width - kNameCellX - kSwitchColumnWidth - kRightColumnCount * kColumnWidth);
 }
 // ---------------------------------------------------------------------------------------------
 // Visibility, audio, solo and lock share the same cell geometry in headings and rows.
@@ -147,6 +157,11 @@ QString toggleToolTip(const int index) {
     return {};
 }
 
+QString labelToolTip() { return TimelineEditor::tr("Label: click for the label menu"); }
+QString shyToolTip() {
+    return TimelineEditor::tr("Shy: hidden from the layer list while Hide Shy Layers is on");
+}
+
 // The tooltip for whatever cell `x` lands in, or an empty string for the cells that need none.
 [[nodiscard]] QString cellToolTipAt(const int x) {
     for (int index = 0; index < kToggleCellCount; ++index) {
@@ -155,6 +170,8 @@ QString toggleToolTip(const int index) {
             return toggleToolTip(index);
         }
     }
+    if (x >= toggleCellX(kLabelCellIndex) && x < toggleCellX(kLabelCellIndex) + kToggleCellWidth)
+        return labelToolTip();
     return {};
 }
 
@@ -368,7 +385,30 @@ class TimelineLayerRow final : public kit::KRow {
             connect(toggle, &QToolButton::clicked, this,
                     [this, index] { activateAt(toggleCellX(index) + kToggleCellWidth / 2); });
         }
-        setCells(cells, nullptr, {blending_, parentDropdown_, matteDropdown_}, nullptr, kCellGap);
+        // The Label square: the layer's label colour (its kind colour when it has none); a click
+        // opens the label menu under it.
+        label_ = new kit::KSwatchButton(this);
+        label_->setObjectName(QStringLiteral("timelineLayerLabel"));
+        label_->setToolTip(labelToolTip());
+        label_->setAccessibleName(TimelineEditor::tr("Label"));
+        retainSize(*label_);
+        cells.append(label_);
+        connect(label_, &QToolButton::clicked, this, [this] {
+            if (!binding_ && layerId_ && openLabelMenu)
+                openLabelMenu(*layerId_, label_);
+        });
+        shy_ = new kit::KIconToggle(kit::IconId::Shy, this);
+        shy_->setProperty("layerSwitch", true);
+        shy_->setObjectName(QStringLiteral("timelineLayerShy"));
+        shy_->setToolTip(shyToolTip());
+        shy_->setAccessibleName(TimelineEditor::tr("Shy"));
+        retainSize(*shy_);
+        connect(shy_, &QToolButton::clicked, this, [this] {
+            if (!binding_ && layerId_ && toggleShy)
+                toggleShy(*layerId_);
+        });
+        setCells(cells, nullptr, {blending_, parentDropdown_, matteDropdown_}, nullptr, kCellGap,
+                 {shy_});
         disclosureButton()->setAccessibleName(TimelineEditor::tr("Expand layer properties"));
         connect(disclosureButton(), &QToolButton::clicked, this,
                 [this] { activateAt(kNameCellX + kit::px(kit::Spacing::S) + kCellGap); });
@@ -387,6 +427,10 @@ class TimelineLayerRow final : public kit::KRow {
             (void)session_->setLayerBlendMode(*layerId_, *mode);
         });
     }
+
+    // The stack's label menu and Shy commands, called with the layer the row is bound to now.
+    std::function<void(document::LayerId, QWidget*)> openLabelMenu;
+    std::function<void(document::LayerId)> toggleShy;
 
     // Rebind the same controls when scrolling; signal-blocked projection never authors edits.
     void bind(const TimelineLayerEntry& entry, const bool selected, const int rowIndex) {
@@ -465,6 +509,16 @@ class TimelineLayerRow final : public kit::KRow {
                                             : index != 1 && !collapsedImage_);
             toggle->setGlyph(toggleIcon(index));
         }
+        label_->setVisible(!collapsedImage_);
+        label_->setSwatch(entry.labelColor.isValid() ? entry.labelColor
+                                                     : kit::color(entry.clipColor));
+        label_->setEnabled(layer != nullptr);
+        {
+            const QSignalBlocker blocker(shy_);
+            shy_->setVisible(!collapsedImage_);
+            shy_->setChecked(layer && layer_fields::shy(*session_, entry.layerId));
+            shy_->setEnabled(layer != nullptr);
+        }
         binding_ = false;
         update();
     }
@@ -488,6 +542,11 @@ class TimelineLayerRow final : public kit::KRow {
     }
 
   private:
+    static void retainSize(QWidget& widget) {
+        auto policy = widget.sizePolicy();
+        policy.setRetainSizeWhenHidden(true);
+        widget.setSizePolicy(policy);
+    }
     // Reuse the stack's command path for pointer and keyboard activation. Coordinates are
     // resolved on click so a pooled row always acts on its current binding.
     void activateAt(int x) {
@@ -499,6 +558,8 @@ class TimelineLayerRow final : public kit::KRow {
         QApplication::sendEvent(parentWidget(), &event);
     }
     std::array<kit::KIconToggle*, kToggleCellCount> toggles_{};
+    kit::KSwatchButton* label_ = nullptr;
+    kit::KIconToggle* shy_ = nullptr;
     CompositionSession* session_ = nullptr;
     std::optional<document::LayerId> layerId_;
     bool enabled_ = true, solo_ = false, locked_ = false;
@@ -532,6 +593,24 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
         glyph->setAttribute(Qt::WA_TransparentForMouseEvents);
         glyphs.append(glyph);
     }
+    // Above the Label squares: the label filter (Accent while it hides any label). Above the Shy
+    // switches: the master Shy toggle (Accent while shy layers are hidden).
+    labelFilter_ = new kit::KIconToggle(kit::IconId::LabelFilter, row);
+    labelFilter_->setObjectName(QStringLiteral("timelineLabelFilterButton"));
+    labelFilter_->setToolTip(tr("Show only layers with the chosen labels"));
+    labelFilter_->setAccessibleName(tr("Label filter"));
+    glyphs.append(labelFilter_);
+    connect(labelFilter_, &QToolButton::clicked, this, [this] {
+        // The button shows the filter's state, not its own click; the menu changes the state.
+        labelFilter_->setChecked(labelFilterActive_);
+        Q_EMIT labelFilterRequested(labelFilter_->mapToGlobal(QPoint(0, labelFilter_->height())));
+    });
+    hideShy_ = new kit::KIconToggle(kit::IconId::Shy, row);
+    hideShy_->setObjectName(QStringLiteral("timelineHideShyToggle"));
+    hideShy_->setToolTip(tr("Hide Shy Layers"));
+    hideShy_->setAccessibleName(tr("Hide Shy Layers"));
+    connect(hideShy_, &QToolButton::toggled, this,
+            [this](const bool checked) { Q_EMIT hideShyToggled(checked); });
     auto* name = new QWidget(row);
     auto* nameLayout = new QHBoxLayout(name);
     nameLayout->setContentsMargins(kit::px(kit::Spacing::XS), 0, kit::px(kit::Spacing::XS), 0);
@@ -542,7 +621,12 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
     auto* blendingLabel = new kit::KLabel(tr("Blending"), row);
     auto* parentLabel = new kit::KLabel(tr("Parent"), row);
     auto* matteLabel = new kit::KLabel(tr("Matte"), row);
-    row->setCells(glyphs, name, {blendingLabel, parentLabel, matteLabel}, nullptr, kCellGap);
+    // Each heading starts where its dropdowns' values start (a Dense dropdown's text inset), so
+    // "Blending" stands over "Normal" and keeps clear of the Shy toggle before it.
+    for (auto* heading : {blendingLabel, parentLabel, matteLabel})
+        heading->setIndent(kit::px(kit::Spacing::ControlInset) + kit::px(kit::Spacing::XS));
+    row->setCells(glyphs, name, {blendingLabel, parentLabel, matteLabel}, nullptr, kCellGap,
+                  {hideShy_});
     blendingLabel->setFixedWidth(
         std::max(kit::px(kit::Size::DropdownWidth), blending->sizeHint().width()));
     delete blending;
@@ -552,6 +636,17 @@ TimelineColumnHeaders::TimelineColumnHeaders(QWidget* parent) : QWidget(parent) 
 }
 
 QString TimelineColumnHeaders::toolTipAtX(const int x) { return cellToolTipAt(x); }
+
+void TimelineColumnHeaders::setLabelFilterActive(const bool active) {
+    labelFilterActive_ = active;
+    const QSignalBlocker blocker(labelFilter_);
+    labelFilter_->setChecked(active);
+}
+
+void TimelineColumnHeaders::setHideShy(const bool hide) {
+    const QSignalBlocker blocker(hideShy_);
+    hideShy_->setChecked(hide);
+}
 
 bool TimelineColumnHeaders::event(QEvent* event) {
     if (event->type() == QEvent::ToolTip) {
@@ -677,6 +772,9 @@ void TimelineLayerStack::clearPooledRows() {
     dragRow_ = -1;
     insertionRow_ = -1;
     currentRow_ = -1;
+    hoveredRow_ = -1;
+    selectedRow_.reset();
+    setRowStates(-1, {});
     updateRenameGeometry();
     update();
 }
@@ -687,7 +785,13 @@ void TimelineLayerStack::relayoutRows() {
         std::clamp(scrollOffset_ / kTimelineRowHeight, 0, std::max(0, rowCount() - 1));
     const int needed = std::clamp(rowCount() - first, 0, viewportRows);
     while (static_cast<int>(rowPool_.size()) < needed) {
-        rowPool_.push_back(new TimelineLayerRow(session_, this));
+        auto* row = new TimelineLayerRow(session_, this);
+        row->openLabelMenu = [this](document::LayerId layer, QWidget* anchor) {
+            openLabelMenu(layer, anchor);
+        };
+        row->toggleShy = [this](document::LayerId layer) { toggleShy(layer); };
+        row->installEventFilter(this);
+        rowPool_.push_back(row);
     }
     while (static_cast<int>(propertyPool_.size()) < needed) {
         propertyPool_.push_back(nullptr);
@@ -706,6 +810,7 @@ void TimelineLayerStack::relayoutRows() {
         if (entry.rowKind == TimelineLayerEntry::Kind::Layer) {
             if (property)
                 property->hide();
+            ++work_.layerRowBinds;
             row->bind(entry,
                       entry.imageNodeId.isValid()
                           ? session_.selectedNodes().contains(entry.imageNodeId)
@@ -723,6 +828,7 @@ void TimelineLayerStack::relayoutRows() {
                 property->toggleGroup = [this](document::LayerId layer, const QString& group) {
                     emit groupExpansionRequested(layer, group);
                 };
+                property->installEventFilter(this);
             }
             property->bind(entry);
             property->setGeometry(0, rowTop(index), width(), kTimelineRowHeight);
@@ -730,6 +836,89 @@ void TimelineLayerStack::relayoutRows() {
         }
     }
     updateRenameGeometry();
+    if (underMouse())
+        setHoveredRow((mapFromGlobal(QCursor::pos()).y() + scrollOffset_) / kTimelineRowHeight);
+    updateRowStates();
+}
+
+TimelineLayerStack::RowKey TimelineLayerStack::rowKey(const TimelineLayerEntry& entry) {
+    return {entry.layerId,   entry.rowKind, entry.parameterId,
+            entry.component, entry.group,   entry.maskId};
+}
+
+bool TimelineLayerStack::rowHighlighted(const int row) const {
+    if (row < 0 || row >= rowCount() || !selectedRow_)
+        return false;
+    const auto& entry = entries_[static_cast<std::size_t>(row)];
+    return entry.rowKind != TimelineLayerEntry::Kind::Layer && *selectedRow_ == rowKey(entry) &&
+           session_.selection() == selectionAtSelect_;
+}
+
+void TimelineLayerStack::selectRow(const int row) {
+    if (row < 0 || row >= rowCount())
+        return;
+    const auto entry = entries_[static_cast<std::size_t>(row)];
+    if (entry.rowKind == TimelineLayerEntry::Kind::Layer) {
+        selectedRow_.reset();
+        setCurrentRow(row);
+        return;
+    }
+    if (entry.maskId.isValid())
+        session_.selectMask(entry.layerId, entry.maskId);
+    if (entry.rowKind == TimelineLayerEntry::Kind::Group) {
+        if (!entry.maskId.isValid())
+            session_.selectLayer(entry.layerId);
+    } else {
+        // A property row selects itself and every key it shows (all of a vector's components on
+        // its parameter row, the one component on a component row).
+        std::vector<KeyframeSelection> keys;
+        for (const auto& key : timeline_reveal::rowKeys(session_, entry))
+            keys.push_back(key.key);
+        if (!keys.empty())
+            session_.selectKeyframes(keys);
+        else if (!entry.maskId.isValid())
+            session_.selectParameter(entry.parameterId);
+    }
+    selectedRow_ = rowKey(entry);
+    selectionAtSelect_ = session_.selection();
+    updateRowStates();
+}
+
+void TimelineLayerStack::setHoveredRow(const int row) {
+    const int next = row >= 0 && row < rowCount() ? row : -1;
+    if (next == hoveredRow_)
+        return;
+    hoveredRow_ = next;
+    updateRowStates();
+}
+
+void TimelineLayerStack::leaveEvent(QEvent* event) {
+    setHoveredRow(-1);
+    kit::KListSurface::leaveEvent(event);
+}
+
+// One hover step and one selected-row wash for every row kind: a layer row (KRow) paints its own,
+// and the column paints them under the group and property rows, which paint no background.
+void TimelineLayerStack::updateRowStates() {
+    if (hoveredRow_ >= rowCount())
+        hoveredRow_ = -1;
+    for (auto* row : rowPool_)
+        if (row->isVisible())
+            row->setHovered((row->y() + scrollOffset_) / kTimelineRowHeight == hoveredRow_);
+    std::vector<int> selected;
+    const int first = std::max(0, scrollOffset_ / kTimelineRowHeight);
+    const int last = std::min(rowCount() - 1, (scrollOffset_ + height()) / kTimelineRowHeight);
+    for (int row = first; row <= last; ++row)
+        if (rowHighlighted(row))
+            selected.push_back(row);
+    const bool changed = selected != selectedRows();
+    setRowStates(hoveredRow_ >= 0 && entries_[static_cast<std::size_t>(hoveredRow_)].rowKind !=
+                                         TimelineLayerEntry::Kind::Layer
+                     ? hoveredRow_
+                     : -1,
+                 std::move(selected));
+    if (changed)
+        Q_EMIT rowHighlightsChanged();
 }
 
 void TimelineLayerStack::resizeEvent(QResizeEvent* event) {
@@ -752,8 +941,12 @@ void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
     }
     const auto& entry = entries_[static_cast<std::size_t>(index)];
     const auto id = entry.layerId;
-    if (entry.rowKind != TimelineLayerEntry::Kind::Layer)
+    if (entry.rowKind != TimelineLayerEntry::Kind::Layer) {
+        selectRow(index);
+        event->accept();
         return;
+    }
+    selectedRow_.reset();
     if (entry.imageNodeId.isValid()) {
         const auto* merge = session_.composition()->graph().merge(entry.imageNodeId);
         if (merge && event->position().x() >= kToggleStripX &&
@@ -896,6 +1089,17 @@ void TimelineLayerStack::mouseReleaseEvent(QMouseEvent* event) {
     (void)session_.executeTransaction(std::move(transaction));
 }
 bool TimelineLayerStack::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::Enter || event->type() == QEvent::Leave) {
+        auto* row = qobject_cast<QWidget*>(watched);
+        if (row != nullptr && row->parentWidget() == this && row != renameEditor_ &&
+            row != insertion_ && row != labelPickerAnchor_) {
+            const int index = (row->y() + scrollOffset_) / kTimelineRowHeight;
+            if (event->type() == QEvent::Enter)
+                setHoveredRow(index);
+            else if (hoveredRow_ == index)
+                setHoveredRow(-1);
+        }
+    }
     if (watched == labelPicker_ && event->type() == QEvent::Hide && labelPickerOpen_) {
         labelPickerOpen_ = false;
         commitLabelColor();
@@ -939,7 +1143,7 @@ void TimelineLayerStack::renameLayer(const document::LayerId layerId) {
     const auto found = std::ranges::find(entries_, layerId, &TimelineLayerEntry::layerId);
     if (found == entries_.end())
         return;
-    const auto originalName = mediaLayerDisplayName(session_, layerId);
+    const auto originalName = layer_fields::displayName(session_, layerId);
     auto* field = new kit::KLineEdit(originalName, this);
     renameEditor_ = field;
     renamingLayer_ = layerId;
@@ -995,7 +1199,8 @@ void TimelineLayerStack::mouseDoubleClickEvent(QMouseEvent* event) {
         event->position().x() < kNameCellX + nameCellWidth(width()))
         renameLayer(entries_[static_cast<std::size_t>(row)].layerId);
 }
-void TimelineLayerStack::openLabelColorPicker(const int row, const document::LayerId layer) {
+void TimelineLayerStack::openLabelColorPicker(const int row,
+                                              std::vector<document::LayerId> layers) {
     if (row < 0 || row >= rowCount())
         return;
     const auto& entry = entries_[static_cast<std::size_t>(row)];
@@ -1010,7 +1215,7 @@ void TimelineLayerStack::openLabelColorPicker(const int row, const document::Lay
         labelPickerAnchor_->setAttribute(Qt::WA_TransparentForMouseEvents);
     }
     labelPickerComposition_ = session_.compositionId();
-    labelPickerLayer_ = layer;
+    labelPickerLayers_ = std::move(layers);
     labelPickerInitial_ =
         entry.labelColor.isValid() ? entry.labelColor : kit::color(entry.clipColor);
     labelPickerCancelled_ = false;
@@ -1030,12 +1235,47 @@ void TimelineLayerStack::commitLabelColor() {
     if (chosen.rgb() == labelPickerInitial_.rgb())
         return;
     commands::Transaction transaction("Set Layer Label Color", session_.snapshot().revision());
-    transaction.emplace<commands::SetLayerLabelColor>(
-        labelPickerComposition_, labelPickerLayer_,
-        std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(chosen.red()),
-                                    static_cast<std::uint8_t>(chosen.green()),
-                                    static_cast<std::uint8_t>(chosen.blue())});
+    for (const auto layer : labelPickerLayers_)
+        transaction.emplace<commands::SetLayerLabelColor>(
+            labelPickerComposition_, layer,
+            std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(chosen.red()),
+                                        static_cast<std::uint8_t>(chosen.green()),
+                                        static_cast<std::uint8_t>(chosen.blue())});
     (void)session_.executeTransaction(std::move(transaction));
+}
+
+// A switch or label edit on a selected layer applies to the whole selection, as in After
+// Effects; on any other layer it applies to that layer alone.
+std::vector<document::LayerId>
+TimelineLayerStack::actionLayers(const document::LayerId layer) const {
+    if (!isLayerSelected(session_, layer))
+        return {layer};
+    std::vector<document::LayerId> layers;
+    for (const auto& entry : entries_)
+        if (entry.rowKind == TimelineLayerEntry::Kind::Layer && entry.layerId.isValid() &&
+            isLayerSelected(session_, entry.layerId))
+            layers.push_back(entry.layerId);
+    return layers;
+}
+
+void TimelineLayerStack::openLabelMenu(const document::LayerId layer, QWidget* anchor) {
+    const auto found = std::ranges::find(entries_, layer, &TimelineLayerEntry::layerId);
+    if (found == entries_.end())
+        return;
+    const int row = static_cast<int>(found - entries_.begin());
+    const auto layers = actionLayers(layer);
+    auto* menu = kit::makeMenu(this);
+    menu->setObjectName(QStringLiteral("timelineLayerLabelMenu"));
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    layer_labels::populateLabelMenu(*menu, session_, layers, layer,
+                                    [this, row, layers] { openLabelColorPicker(row, layers); });
+    QWidget* origin = anchor != nullptr ? anchor : this;
+    menu->popup(origin->mapToGlobal(QPoint(0, origin->height())));
+}
+
+void TimelineLayerStack::toggleShy(const document::LayerId layer) {
+    if (layer_fields::setShy(session_, actionLayers(layer), !layer_fields::shy(session_, layer)))
+        Q_EMIT shyChanged();
 }
 
 void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
@@ -1084,30 +1324,10 @@ void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
                 [this, layerId, mode] { (void)session_.setLayerBlendMode(layerId, mode); });
     }
     auto* colors = menu->addMenu(tr("Label Color"));
-    const auto setColor = [this, compositionId, revision,
-                           layerId](std::optional<std::array<std::uint8_t, 3>> color) {
-        commands::Transaction transaction("Set Layer Label Color", revision);
-        transaction.emplace<commands::SetLayerLabelColor>(compositionId, layerId, color);
-        (void)session_.executeTransaction(std::move(transaction));
-    };
-    connect(colors->addAction(tr("Kind Default")), &QAction::triggered, this,
-            [setColor] { setColor(std::nullopt); });
-    int number = 0;
-    for (const auto token :
-         {kit::Color::Label1, kit::Color::Label2, kit::Color::Label3, kit::Color::Label4,
-          kit::Color::Label5, kit::Color::Label6, kit::Color::Label7, kit::Color::Label8}) {
-        const auto color = kit::color(token);
-        QPixmap swatch(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium));
-        swatch.fill(color);
-        auto* action = colors->addAction(QIcon(swatch), tr("Label %1").arg(++number));
-        connect(action, &QAction::triggered, this, [setColor, color] {
-            setColor(std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(color.red()),
-                                                 static_cast<std::uint8_t>(color.green()),
-                                                 static_cast<std::uint8_t>(color.blue())});
-        });
-    }
-    connect(colors->addAction(tr("Custom…")), &QAction::triggered, this,
-            [this, row, layerId] { openLabelColorPicker(row, layerId); });
+    const auto labelLayers = actionLayers(layerId);
+    layer_labels::populateLabelMenu(
+        *colors, session_, labelLayers, layerId,
+        [this, row, labelLayers] { openLabelColorPicker(row, labelLayers); });
     connect(menu->addAction(tr("Split at Playhead")), &QAction::triggered, this,
             [this, compositionId, layerId, revision] {
                 commands::Transaction transaction("Split Layer at Playhead", revision);
@@ -1298,7 +1518,7 @@ void TimelineLaneRegion::setEntries(std::vector<TimelineLayerEntry> entries) {
     if (graphView_)
         graphView_->setEntries(entries_);
     syncKeyframeSurfaces();
-    update();
+    syncRowHighlights();
 }
 
 void TimelineLaneRegion::syncKeyframeSurfaces() {
@@ -1310,6 +1530,27 @@ void TimelineLaneRegion::syncKeyframeSurfaces() {
         if (graphEditor_)
             graphView_->raise();
     }
+}
+
+void TimelineLaneRegion::setRowHighlight(std::function<bool(int)> highlighted) {
+    rowHighlighted_ = std::move(highlighted);
+    syncRowHighlights();
+}
+
+// A clicked property row's lane is a key lane (TimelineKeyframeRow), which paints itself; it takes
+// the same wash through its "rowSelected" property. Only the rows that change repaint.
+void TimelineLaneRegion::syncRowHighlights() {
+    if (keyframePanel_ != nullptr)
+        for (auto* row :
+             keyframePanel_->findChildren<QWidget*>(QStringLiteral("timelineKeyframeRow"))) {
+            const bool highlighted =
+                rowHighlighted_ && rowHighlighted_((row->y() + scrollOffset_) / kTimelineRowHeight);
+            if (row->property("rowSelected").toBool() != highlighted) {
+                row->setProperty("rowSelected", highlighted);
+                row->update();
+            }
+        }
+    update();
 }
 
 void TimelineLaneRegion::setGraphEditorEnabled(const bool enabled) {
@@ -1327,7 +1568,7 @@ void TimelineLaneRegion::setScrollOffset(const int offset) {
     scrollOffset_ = offset;
     if (keyframePanel_)
         keyframePanel_->setGridEntries(entries_, scrollOffset_);
-    update();
+    syncRowHighlights();
 }
 
 void TimelineEditor::setKeyframesVisible(const bool visible) {
@@ -1569,8 +1810,10 @@ std::vector<core::RationalTime> TimelineLaneRegion::computeKeySummaryTimes(int r
 }
 
 void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event)
     QPainter painter(this);
+    // #401: a playback tick dirties only the playhead's two strips, so per-row work (the content
+    // extent, the waveform, the key summary) runs only for bars the dirty region crosses.
+    const QRect dirty = event->rect();
     painter.fillRect(rect(), kit::color(kit::Color::SurfaceSunken));
     if (graphEditor_) {
         // In graph mode this region owns nothing but the backdrop: the curve view covers it and
@@ -1601,11 +1844,14 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
         const bool selected = entry.layerId.isValid()
                                   ? isLayerSelected(session_, entry.layerId)
                                   : session_.selectedNodes().contains(sourceNodeId);
-        if (selected && entry.rowKind == TimelineLayerEntry::Kind::Layer) {
+        if ((selected && entry.rowKind == TimelineLayerEntry::Kind::Layer) ||
+            (rowHighlighted_ && rowHighlighted_(row))) {
             paintSelectedRowFill(painter, top, width());
         }
         paintRowSeparator(painter, top, width());
-        if (const auto bar = clipBarRect(row)) {
+        if (const auto bar = clipBarRect(row);
+            bar && bar->adjusted(-kit::px(kit::Spacing::S), 0, kit::px(kit::Spacing::S), 0)
+                       .intersects(dirty)) {
             painter.setRenderHint(QPainter::Antialiasing, true);
             const auto fill =
                 entry.labelColor.isValid() ? entry.labelColor : kit::color(entry.clipColor);
@@ -1937,11 +2183,13 @@ int TimelineEditor::propertyNameIndent() {
 
 int TimelineEditor::layerColumnWidth() { return kLayerColumnWidthPx; }
 
-// task TL-FIX2: the floor a dragged split can shrink the layer table to -- the same four toggle
-// cells, the name column at its own documented minimum, and both 100px dropdown columns, still all
-// visible. Below this the table would have to start hiding columns, which dragging never does.
+// task TL-FIX2: the floor a dragged split can shrink the layer table to -- the leading switch
+// strip, the name column at its own documented minimum, the Shy switch and the three dropdown
+// columns, still all visible. Below this the table would have to start hiding columns, which
+// dragging never does.
 int TimelineEditor::minLayerColumnWidth() const noexcept {
-    return kToggleColumnWidth + kNameCellMinWidth + kRightColumnCount * kColumnWidth;
+    return kToggleColumnWidth + kNameCellMinWidth + kSwitchColumnWidth +
+           kRightColumnCount * kColumnWidth;
 }
 
 TimelineEditor::TimelineEditor(CompositionSession& session,
@@ -1999,6 +2247,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         minLayerColumnWidth(),
         settings.value(QLatin1StringView(kLayerColumnWidthSetting), layerColumnWidth()).toInt());
     graphEditor_ = settings.value(QStringLiteral("timeline/graph-editor"), false).toBool();
+    hideShyLayers_ = settings.value(QStringLiteral("timeline/hide-shy-layers"), false).toBool();
     if (graphEditor_)
         keyframesVisible_ = false;
     keyframesAction_->setChecked(keyframesVisible_);
@@ -2032,6 +2281,19 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     columnHeaderLayout->setContentsMargins(0, 0, 0, 0);
     columnHeaderLayout->setSpacing(0);
     columnHeaders_ = new TimelineColumnHeaders(columnHeaderRow);
+    columnHeaders_->setHideShy(hideShyLayers_);
+    connect(columnHeaders_, &TimelineColumnHeaders::hideShyToggled, this,
+            &TimelineEditor::setHideShyLayers);
+    connect(columnHeaders_, &TimelineColumnHeaders::labelFilterRequested, this,
+            [this](const QPoint globalPosition) {
+                auto* menu = kit::makeMenu(this);
+                menu->setObjectName(QStringLiteral("timelineLabelFilterMenu"));
+                menu->setAttribute(Qt::WA_DeleteOnClose);
+                layer_labels::populateLabelFilterMenu(
+                    *menu, labelFilter_,
+                    [this](std::set<int> labels) { setLabelFilter(std::move(labels)); });
+                menu->popup(globalPosition);
+            });
     scrollBar_ = new QScrollBar(Qt::Vertical, this);
     scrollBar_->setObjectName("timelineVerticalScrollBar");
     scrollBar_->setAccessibleName(tr("Layer stack scroll"));
@@ -2062,7 +2324,11 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     lanes_->setSnappingEnabled(snapping_);
     setGraphEditorEnabled(graphEditor_);
     const auto toggleExpansion = [this](document::LayerId layer) {
-        if (!expandedLayers_.erase(layer))
+        // A revealed layer's twirl closes it and drops the reveal, as in After Effects; the next
+        // twirl shows every property again.
+        if (revealed_.erase(layer) > 0)
+            expandedLayers_.erase(layer);
+        else if (!expandedLayers_.erase(layer))
             expandedLayers_.insert(layer);
         rebuild();
     };
@@ -2084,8 +2350,15 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
         expandedLayers_.clear();
         expandedParameters_.clear();
         collapsedGroups_.clear();
+        revealed_.clear();
+        labelFilter_.clear();
+        columnHeaders_->setLabelFilterActive(false);
         rebuild();
     });
+    connect(stack_, &TimelineLayerStack::shyChanged, this, &TimelineEditor::rebuild);
+    lanes_->setRowHighlight([this](const int row) { return stack_->rowHighlighted(row); });
+    connect(stack_, &TimelineLayerStack::rowHighlightsChanged, lanes_,
+            &TimelineLaneRegion::syncRowHighlights);
     stack_->addAction(deleteLayerAction_);
     lanes_->addAction(deleteLayerAction_);
     auto* bodyGutter = new QWidget(body);
@@ -2151,12 +2424,33 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     connect(&session_, &CompositionSession::historyChanged, this,
             &TimelineEditor::updateHistoryActions);
 
+    createTimelineKeys();
     rebuild();
     updateHistoryActions();
 }
 
+void TimelineEditor::setHideShyLayers(const bool hide) {
+    hideShyLayers_ = hide;
+    columnHeaders_->setHideShy(hide);
+    QSettings().setValue(QStringLiteral("timeline/hide-shy-layers"), hide);
+    rebuild();
+}
+
+void TimelineEditor::setLabelFilter(std::set<int> labels) {
+    labelFilter_ = std::move(labels);
+    columnHeaders_->setLabelFilterActive(!labelFilter_.empty());
+    rebuild();
+}
+
 void TimelineEditor::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
+    // The Timeline's keys also answer when no widget in the window holds focus (see eventFilter).
+    if (window() != keyWindow_) {
+        if (keyWindow_)
+            keyWindow_->removeEventFilter(this);
+        keyWindow_ = window();
+        keyWindow_->installEventFilter(this);
+    }
     refreshHeaderMenus();
     const QSettings settings;
     const int width = settings.contains(QLatin1StringView(kLayerColumnWidthSetting))
@@ -2219,7 +2513,8 @@ void TimelineEditor::rebuild() {
                     return input && input->stackNodeId == session_.timelineMerge()->nodeId() &&
                            input->slotId == entry.slotId;
                 });
-                if (edge == edges.end())
+                if (edge == edges.end() ||
+                    (!labelFilter_.empty() && !labelFilter_.contains(layer_labels::kKindDefault)))
                     continue;
                 const auto* node = composition->graph().findNode(edge->source.nodeId);
                 if (!node)
@@ -2234,9 +2529,16 @@ void TimelineEditor::rebuild() {
                      .imageNodeId = node->id});
                 continue;
             }
+            // The master Shy toggle and the label filter take rows out of the list only; the
+            // layers still render (layout state, never part of the render).
+            if (hideShyLayers_ && layer_fields::shy(session_, entry.layerId))
+                continue;
+            if (!labelFilter_.empty() && !labelFilter_.contains(layer_labels::filterKey(
+                                             layer_labels::labelOf(session_, entry.layerId))))
+                continue;
             entries.push_back({.layerId = entry.layerId,
                                .slotId = entry.slotId,
-                               .name = mediaLayerDisplayName(session_, entry.layerId),
+                               .name = layer_fields::displayName(session_, entry.layerId),
                                .kind = layerKind(session_, entry.layerId),
                                .clipColor = layerClipColorToken(session_, entry.layerId)});
             if (const auto* source = directSourceNode(session_, entry.layerId);
@@ -2282,7 +2584,7 @@ void TimelineEditor::rebuild() {
         }
     }
     entries = timelinePropertyEntries(session_, entries, expandedLayers_, collapsedGroups_,
-                                      expandedParameters_);
+                                      expandedParameters_, revealed_);
     stack_->setEntries(entries);
     lanes_->setEntries(std::move(entries));
     updateScrollRange();

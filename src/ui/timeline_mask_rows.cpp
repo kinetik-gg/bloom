@@ -3,8 +3,11 @@
 #include "layer_mask_support.hpp"
 
 #include <QCoreApplication>
+#include <bloom/document/layer_masks.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
+
+#include <algorithm>
 
 namespace bloom::ui {
 
@@ -12,23 +15,34 @@ QString maskGroupKey() { return QCoreApplication::translate("TimelineMaskRows", 
 
 void appendMaskEntries(const CompositionSession& session, const TimelineLayerEntry& layer,
                        const std::set<std::pair<document::LayerId, QString>>& collapsedGroups,
-                       std::vector<TimelineLayerEntry>& rows) {
+                       std::vector<TimelineLayerEntry>& rows,
+                       const std::set<document::ParameterId>* reveal) {
     const auto* composition = session.composition();
     const auto* boundary = composition ? composition->graph().findLayer(layer.layerId) : nullptr;
     if (boundary == nullptr || boundary->masks.empty())
+        return;
+    if (reveal != nullptr &&
+        std::ranges::none_of(boundary->masks, [&](const document::LayerMask& mask) {
+            return std::ranges::any_of(document::layerMaskParameters(mask), [&](const auto& item) {
+                return reveal->contains(item.first);
+            });
+        }))
         return;
     auto group = layer;
     group.rowKind = TimelineLayerEntry::Kind::Group;
     group.depth = 1;
     group.name = maskGroupKey();
     group.group = maskGroupKey();
-    group.expanded = !collapsedGroups.contains({layer.layerId, group.group});
+    group.expanded = reveal != nullptr || !collapsedGroups.contains({layer.layerId, group.group});
     rows.push_back(group);
     if (!group.expanded)
         return;
     const auto parameterRow = [&](const document::LayerMask& mask, const document::ParameterId id,
                                   const std::string_view role, QString name, const int depth) {
+        if (reveal != nullptr && !reveal->contains(id))
+            return;
         auto entry = layer;
+        entry.group = maskGroupKey();
         entry.rowKind = TimelineLayerEntry::Kind::Parameter;
         entry.depth = depth;
         entry.name = std::move(name);

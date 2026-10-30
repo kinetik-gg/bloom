@@ -590,6 +590,10 @@ target_sources(
         timeline_mask_rows.cpp
         timeline_matte_cell.cpp
         timeline_editor_menus.cpp
+        timeline_editor_keys.cpp
+        timeline_layer_fields.cpp
+        timeline_layer_labels.cpp
+        timeline_reveal.cpp
         timeline_layer_drop.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp

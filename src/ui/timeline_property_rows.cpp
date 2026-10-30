@@ -1,14 +1,16 @@
 #include "timeline_property_rows.hpp"
 #include "node_editor_items.hpp"
 #include "numeric_field_projection.hpp"
-#include "value_presentation.hpp"
 #include "properties_registry_row.hpp"
 #include "properties_value_edits.hpp"
 #include "timeline_mask_rows.hpp"
+#include "value_presentation.hpp"
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayoutItem>
+#include <QMouseEvent>
 #include <QStackedLayout>
+#include <QTimer>
 #include <QVariant>
 #include <algorithm>
 #include <bloom/document/project.hpp>
@@ -21,6 +23,7 @@
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <limits>
+#include <map>
 #include <memory>
 
 namespace bloom::ui {
@@ -158,35 +161,50 @@ QString upstreamGroupKey(const document::NodeId nodeId) {
     return QStringLiteral("upstream-%1").arg(nodeId.value());
 }
 
-std::vector<TimelineLayerEntry>
-timelinePropertyEntries(const CompositionSession& session,
-                        const std::vector<TimelineLayerEntry>& layers,
-                        const std::set<document::LayerId>& expanded,
-                        const std::set<std::pair<document::LayerId, QString>>& collapsedGroups,
-                        const std::set<document::ParameterId>& expandedParameters) {
+std::vector<TimelineLayerEntry> timelinePropertyEntries(
+    const CompositionSession& session, const std::vector<TimelineLayerEntry>& layers,
+    const std::set<document::LayerId>& expanded,
+    const std::set<std::pair<document::LayerId, QString>>& collapsedGroups,
+    const std::set<document::ParameterId>& expandedParameters,
+    const std::map<document::LayerId, std::set<document::ParameterId>>& revealed) {
     std::vector<TimelineLayerEntry> rows;
     const auto* composition = session.composition();
     if (!composition)
         return rows;
     for (auto layer : layers) {
-        layer.expanded = !layer.imageNodeId.isValid() && expanded.contains(layer.layerId);
+        const auto revealFound = revealed.find(layer.layerId);
+        // After Effects' property reveal (A, P, S, R, T, U, UU, M, E): only these parameters show,
+        // every group they sit in opens, and Object/Transform rows stand directly under the layer.
+        const auto* reveal = revealFound == revealed.end() ? nullptr : &revealFound->second;
+        layer.expanded =
+            !layer.imageNodeId.isValid() && (expanded.contains(layer.layerId) || reveal != nullptr);
         rows.push_back(layer);
         if (!layer.expanded)
             continue;
         bool groupOpen = true;
+        bool flattened = false;
+        QString groupKey;
+        std::optional<TimelineLayerEntry> pendingGroup;
         // `key` is what the collapse set remembers; `title` is what the row shows. They are the
         // same string for the three built-in groups and differ for an upstream one (task DRIVE-1),
         // whose title is a node's display name -- which two nodes may share -- while its key is the
-        // node's own identity and therefore never collides.
-        const auto group = [&](const QString& key, const QString& title = {}) {
+        // node's own identity and therefore never collides. Under a reveal a heading waits for its
+        // first revealed row, so a group with nothing revealed never shows.
+        const auto group = [&](const QString& key, const QString& title = {},
+                               const bool flattenable = false) {
             auto entry = layer;
             entry.rowKind = TimelineLayerEntry::Kind::Group;
             entry.depth = 1;
             entry.name = title.isEmpty() ? key : title;
             entry.group = key;
-            groupOpen = !collapsedGroups.contains({layer.layerId, key});
+            groupKey = key;
+            groupOpen = reveal != nullptr || !collapsedGroups.contains({layer.layerId, key});
+            flattened = reveal != nullptr && flattenable;
             entry.expanded = groupOpen;
-            rows.push_back(entry);
+            if (reveal != nullptr)
+                pendingGroup = flattened ? std::nullopt : std::optional(entry);
+            else
+                rows.push_back(entry);
         };
         const auto add = [&](document::NodeId nodeId, std::string_view role, const QString& name) {
             if (!groupOpen)
@@ -197,9 +215,16 @@ timelinePropertyEntries(const CompositionSession& session,
             for (const auto& binding : node->parameters) {
                 if (binding.role != role)
                     continue;
+                if (reveal != nullptr && !reveal->contains(binding.parameterId))
+                    continue;
+                if (pendingGroup) {
+                    rows.push_back(*pendingGroup);
+                    pendingGroup.reset();
+                }
                 auto entry = layer;
                 entry.rowKind = TimelineLayerEntry::Kind::Parameter;
-                entry.depth = 2;
+                entry.depth = flattened ? 1 : 2;
+                entry.group = groupKey;
                 entry.name = name;
                 entry.role = binding.role;
                 entry.parameterId = binding.parameterId;
@@ -223,7 +248,7 @@ timelinePropertyEntries(const CompositionSession& session,
                     for (int index = 0; index < count; ++index) {
                         auto child = entry;
                         child.rowKind = TimelineLayerEntry::Kind::Component;
-                        child.depth = 3;
+                        child.depth = entry.depth + 1;
                         child.component = color ? colorNames[static_cast<std::size_t>(index)]
                                                 : vectorNames[static_cast<std::size_t>(index)];
                         child.name = componentLabel(static_cast<std::size_t>(index), color);
@@ -234,17 +259,17 @@ timelinePropertyEntries(const CompositionSession& session,
             }
         };
         if (const auto boundary = session.boundaryNodeForLayer(layer.layerId)) {
-            group(QObject::tr("Object"));
+            group(QObject::tr("Object"), {}, true);
             add(*boundary, document::kOpacityParameterRole, QObject::tr("Opacity"));
             add(*boundary, document::kBlendModeParameterRole, QObject::tr("Blending"));
-            group(QObject::tr("Transform"));
+            group(QObject::tr("Transform"), {}, true);
             add(*boundary, document::kPositionParameterRole, QObject::tr("Position"));
             add(*boundary, document::kAnchorParameterRole, QObject::tr("Anchor"));
             add(*boundary, document::kScaleParameterRole, QObject::tr("Scale"));
             add(*boundary, document::kRotationParameterRole, QObject::tr("Rotation"));
         }
         // ADR 0028: the layer's masks, between its own rows and its source's.
-        appendMaskEntries(session, layer, collapsedGroups, rows);
+        appendMaskEntries(session, layer, collapsedGroups, rows, reveal);
         if (const auto source = session.directSourceNodeForLayer(layer.layerId)) {
             const auto* node = composition->graph().findNode(*source);
             bool heading = false;
@@ -425,7 +450,7 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
     properties::bindValueEdit(session_, *color_, [this] { return entry_.parameterId; });
     connect(&session_, &CompositionSession::liveValueChanged, this, [this] {
         if (!binding_ && entry_.parameterId.isValid())
-            bind(entry_);
+            scheduleRefresh();
     });
     // Task DRIVE-1's read-only display for a driven parameter. It occupies the value columns the
     // editors would have, so a driven row is the same row with a different thing in it.
@@ -452,8 +477,8 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
             jumpToPropertiesNode(session_, driver->sourceNodeId, this);
     });
     connect(&session_, &CompositionSession::drivenValuesChanged, this, [this] {
-        if (isVisible() && session_.driverBindingFor(entry_.parameterId) != nullptr)
-            bind(entry_);
+        if (session_.driverBindingFor(entry_.parameterId) != nullptr)
+            scheduleRefresh();
     });
     auto* row = new kit::KPropertyRow(label_, indicator,
                                       {diamond_, cells_[0], cells_[1], cells_[2], cells_[3],
@@ -496,13 +521,28 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
         else
             (void)session_.setParameterValue(parameter, value, tr("Set Color"));
     });
-    connect(&session_, &CompositionSession::currentTimeChanged, this, [this] {
-        if (isVisible())
+    connect(&session_, &CompositionSession::currentTimeChanged, this,
+            &TimelinePropertyRow::scheduleRefresh);
+}
+
+// #401: the playhead, a live value and a driven value can all change in one playback tick. A row
+// re-reads its values at most once per event-loop turn, and only while it is on screen: a pooled
+// row the layer stack has hidden does no per-tick work at all (it is re-bound when it is shown).
+void TimelinePropertyRow::scheduleRefresh() {
+    if (refreshPending_ || !isVisible() || !entry_.parameterId.isValid())
+        return;
+    refreshPending_ = true;
+    QTimer::singleShot(0, this, [this] {
+        refreshPending_ = false;
+        if (isVisible() && !binding_)
             bind(entry_);
     });
 }
 
+std::uint64_t TimelinePropertyRow::bindCount() noexcept { return bindCount_; }
+
 void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
+    ++bindCount_;
     binding_ = true;
     entry_ = entry;
     setProperty("parameterId",
@@ -682,9 +722,9 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
 }
 
 void TimelinePropertyRow::mousePressEvent(QMouseEvent* event) {
-    if (entry_.maskId.isValid())
-        session_.selectMask(entry_.layerId, entry_.maskId);
-    QWidget::mousePressEvent(event);
+    // The layer stack owns what a click on any row selects (TimelineLayerStack::selectRow): the
+    // press goes on to it, mapped into its coordinates.
+    event->ignore();
 }
 
 void TimelinePropertyRow::bindDriven(const bool driven) {

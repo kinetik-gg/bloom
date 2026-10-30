@@ -1046,6 +1046,14 @@ target_link_libraries(bloom_timeline_row_controls_test PRIVATE bloom_ui bloom_ru
 bloom_enable_warnings(bloom_timeline_row_controls_test)
 bloom_add_test(NAME bloom.ui.timeline-row-controls COMMAND bloom_timeline_row_controls_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Lane T2: the Timeline layer table -- labels, switches, sizing, expanded rows, After Effects'
+# Timeline keys, names that follow their source, and #401's per-tick cost.
+add_executable(bloom_timeline_layer_table_test timeline_layer_table_tests.cpp)
+target_include_directories(bloom_timeline_layer_table_test PRIVATE ..)
+target_link_libraries(bloom_timeline_layer_table_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_timeline_layer_table_test)
+bloom_add_test(NAME bloom.ui.timeline-layer-table COMMAND bloom_timeline_layer_table_test LABELS ui integration kit TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Task FIX2, deliverable 1: the owner's "values in nodes parameters are not workable", driven
 # through real pointer and key events on the production canvas. Its own executable for the same
 # reason node_card_tests.cpp is -- and deliberately separate from node_production_wiring_tests.cpp,

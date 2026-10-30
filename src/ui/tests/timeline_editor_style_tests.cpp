@@ -556,9 +556,10 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     expectations.expect(ui::TimelineEditor::layerColumnWidth() ==
                             ui::kit::px(ui::kit::Size::TimelineToggleColumn) +
                                 ui::kit::px(ui::kit::Size::TimelineNameDefault) +
+                                ui::kit::px(ui::kit::Size::TimelineSwitchColumn) +
                                 3 * ui::kit::px(ui::kit::Size::TimelineColumn),
-                        "the default left column is the exact toggle/name/blending/parent/matte "
-                        "sum");
+                        "the default left column is the exact toggle/name/shy/blending/parent/"
+                        "matte sum");
     expectations.expect(area->findChild<ui::kit::KDropdown*>("timelineCompositionSelector") ==
                                 nullptr &&
                             area->findChild<QAction*>("timelineKeyframesAction") != nullptr &&

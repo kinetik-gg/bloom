@@ -221,13 +221,20 @@ class TimelineKeyframeRow final : public QWidget {
         : QWidget(parent), session_(session), label_(std::move(label)), curveId_(curveId) {
         setFixedHeight(kKeyframeRowHeight);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        connect(&session_, &CompositionSession::currentTimeChanged, this, [this] { update(); });
+        // #401: a key lane under the Timeline's row grid repaints with the playhead only while
+        // the grid shows it (TimelineKeyframePanel::setGridEntries), never once per lane per tick.
+        connect(&session_, &CompositionSession::currentTimeChanged, this, [this] {
+            if (followsPlayhead_)
+                update();
+        });
         // The row set is memoized (TimelineKeyframePanel::rebuild()), so this row instance
         // typically survives a selection change or a document edit that leaves its own curve
         // intact -- it must repaint itself on both rather than rely on being recreated.
         connect(&session_, &CompositionSession::selectionChanged, this, [this] { update(); });
         connect(&session_, &CompositionSession::snapshotChanged, this, [this] { update(); });
     }
+
+    void setFollowsPlayhead(const bool follows) noexcept { followsPlayhead_ = follows; }
 
     void setComponent(std::optional<document::AnimationComponent> component) {
         component_ = component;
@@ -250,8 +257,11 @@ class TimelineKeyframeRow final : public QWidget {
         Q_UNUSED(event)
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        // Property lanes share the layer rows' flat surface and window-background separator.
+        // Property lanes share the layer rows' flat surface and window-background separator, and
+        // the one selected-row wash while the layer table's row for this lane is selected.
         painter.fillRect(rect(), kit::color(kit::Color::Surface));
+        if (property("rowSelected").toBool())
+            kit::paintSelectedRow(painter, QRectF(rect()), kit::Color::Surface, false);
         kit::applyHairlinePen(painter, kit::color(kit::Color::Background));
         painter.drawLine(QPointF(0.0, height() - 0.5), QPointF(width(), height() - 0.5));
 
@@ -511,6 +521,7 @@ class TimelineKeyframeRow final : public QWidget {
     }
 
   private:
+    bool followsPlayhead_ = true;
     void endDrag() {
         dragging_ = false;
         pressedKeyId_.reset();
@@ -1107,6 +1118,8 @@ void TimelineKeyframePanel::setGridEntries(const std::vector<TimelineLayerEntry>
     for (std::size_t i = 0; i < rows_.size(); ++i) {
         const QRect geometry(0, indices[i] * kTimelineRowHeight - scrollOffset, width(),
                              kTimelineRowHeight);
+        // #401: only a lane inside the viewport repaints with the playhead.
+        rows_[i]->setFollowsPlayhead(geometry.bottom() >= 0 && geometry.top() < height());
         rows_[i]->setComponent(gridComponents_[i]);
         rows_[i]->setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(
                                                  gridParameters_[i].value())));
