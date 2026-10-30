@@ -28,6 +28,11 @@ namespace bloom::ui::kit {
 
 [[nodiscard]] QColor hoverFillFor(const QColor& resting);
 [[nodiscard]] QColor pressedFillFor(const QColor& resting);
+// A canvas stroke colour brought forward (a hovered or selected-endpoint link): the colour
+// lightened by the kLinkActiveLightness token, so no caller adjusts a colour by hand.
+[[nodiscard]] QColor emphasizedStrokeFor(const QColor& resting);
+// The scrim a canvas tool draws over the area it is not editing: Background at kDimOverlayOpacity.
+[[nodiscard]] QColor canvasDimColor();
 
 // The outline a filled canvas glyph (a keyframe) strokes with: its fill taken two steps down the
 // same pressed relation, so the edge reads on the fill without a hand-picked darker shade.

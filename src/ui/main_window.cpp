@@ -104,7 +104,7 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
             &MainWindow::updateDisplayedViewer);
     setObjectName("bloomMainWindow");
     setWindowTitle("Bloom");
-    resize(1600, 1000);
+    resize(kit::px(kit::Size::MainWindowWidth), kit::px(kit::Size::MainWindowHeight));
 
     createChrome();
     createEditorLayout(editorRegistry);

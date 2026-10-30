@@ -47,8 +47,6 @@
 #include <QApplication>
 #include <QContextMenuEvent>
 #include <QDialog>
-#include <QDialogButtonBox>
-#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QImage>

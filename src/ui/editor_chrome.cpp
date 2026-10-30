@@ -9,6 +9,7 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/surfaces.hpp>
 #include <numeric>
 #include <set>
 namespace bloom::ui {
@@ -77,18 +78,14 @@ QMenu* EditorChromeRowSpec::addMenu(const QString& title) {
 }
 namespace {
 using Group = EditorChromeGroup;
-class ChromeRow final : public QWidget {
+class ChromeRow final : public kit::KSurface {
   public:
     ChromeRow(const EditorChromeRowSpec& spec, QWidget* parent, bool footer)
-        : QWidget(parent), entries_(spec.entries),
+        : kit::KSurface(parent, kit::Color::Surface), entries_(spec.entries),
           padding_(footer ? kit::px(kit::Spacing::ChromePadding) : 0) {
         setObjectName(spec.objectName);
         setFixedHeight(kit::px(footer ? kit::Size::FooterRow : kit::Size::Control));
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        setAutoFillBackground(true);
-        auto colors = palette();
-        colors.setColor(QPalette::Window, kit::color(kit::Color::Surface));
-        setPalette(colors);
         // A priority row (groups, ranks, compact forms) has its own layout; a plain row keeps the
         // measure-only menu collapse every other panel uses.
         prioritized_ = std::ranges::any_of(entries_, [](const auto& entry) {

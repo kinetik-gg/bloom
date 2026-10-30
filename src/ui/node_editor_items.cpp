@@ -1027,7 +1027,7 @@ void NodeEdgeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWi
     const QColor base = kit::color(socketColorToken(output_.kind));
     painter->setRenderHint(QPainter::Antialiasing);
     painter->setBrush(Qt::NoBrush);
-    painter->setPen(QPen(emphasized ? base.lighter(kit::kLinkActiveLightness) : base,
+    painter->setPen(QPen(emphasized ? kit::emphasizedStrokeFor(base) : base,
                          kit::kNodeLinkWidth, Qt::SolidLine, Qt::RoundCap));
     painter->drawPath(path());
 }

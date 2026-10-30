@@ -79,6 +79,14 @@ QColor pressedFillFor(const QColor& resting) {
     return result;
 }
 
+QColor emphasizedStrokeFor(const QColor& resting) { return resting.lighter(kLinkActiveLightness); }
+
+QColor canvasDimColor() {
+    QColor dim = color(Color::Background);
+    dim.setAlphaF(static_cast<float>(kDimOverlayOpacity));
+    return dim;
+}
+
 QColor edgeInkFor(const QColor& fill) { return pressedFillFor(pressedFillFor(fill)); }
 
 Color surfaceForState(const Color resting, const State state) {

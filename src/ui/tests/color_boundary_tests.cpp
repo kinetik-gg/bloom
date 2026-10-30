@@ -1,4 +1,4 @@
-#include "../asset_thumbnail_display.hpp"
+#include "asset_thumbnail_display.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_frame.hpp>
 #include <bloom/commands/command_stack.hpp>

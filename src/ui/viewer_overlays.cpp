@@ -118,7 +118,7 @@ void paintSafeAreas(QPainter& painter, const QRectF& displayRect,
 }
 
 void paintCentreCross(QPainter& painter, const QRectF& displayRect) {
-    QPen pen(kit::color(kit::Color::Accent), 1.0, Qt::DashLine);
+    QPen pen(kit::color(kit::Color::Accent), kit::kHairlineWidth, Qt::DashLine);
     pen.setCosmetic(true);
     painter.setPen(pen);
     painter.drawLine(QPointF(displayRect.center().x(), displayRect.top()),
@@ -128,7 +128,7 @@ void paintCentreCross(QPainter& painter, const QRectF& displayRect) {
 }
 
 void paintThirds(QPainter& painter, const QRectF& displayRect) {
-    QPen pen(kit::color(kit::Color::Muted), 1.0, Qt::DashLine);
+    QPen pen(kit::color(kit::Color::Muted), kit::kHairlineWidth, Qt::DashLine);
     pen.setCosmetic(true);
     painter.setPen(pen);
     for (const qreal fraction : {1.0 / 3.0, 2.0 / 3.0}) {
@@ -206,7 +206,7 @@ void paintPixelGrid(QPainter& painter, const QRectF& displayRect, const QSize co
                                static_cast<int>(std::ceil((displayRect.bottom()) / scaleY)));
     painter.save();
     painter.setClipRect(displayRect);
-    QPen pen(kit::color(kit::Color::Border), 1.0);
+    QPen pen(kit::color(kit::Color::Border), kit::kHairlineWidth);
     pen.setCosmetic(true);
     painter.setPen(pen);
     for (int x = firstX; x <= lastX; ++x) {

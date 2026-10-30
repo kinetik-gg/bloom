@@ -9,12 +9,12 @@
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/surfaces.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <QAbstractButton>
-#include <QDialogButtonBox>
 #include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -119,12 +119,12 @@ QScrollArea* PreferencesWindow::wrapPage(QWidget* content, const QString& object
     scroll->setObjectName(objectName);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setWidget(content);
     // A page is a Properties panel body: the panel Background behind Properties sections.
-    content->setAutoFillBackground(true);
-    auto palette = content->palette();
-    palette.setColor(QPalette::Window, kit::color(kit::Color::Background));
-    content->setPalette(palette);
+    auto* surface = new kit::KSurface(nullptr, kit::Color::Background);
+    auto* surfaceLayout = new QVBoxLayout(surface);
+    surfaceLayout->setContentsMargins(0, 0, 0, 0);
+    surfaceLayout->addWidget(content);
+    scroll->setWidget(surface);
     return scroll;
 }
 
@@ -217,7 +217,6 @@ PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreference
     categoryRail_->setFrameShape(QFrame::NoFrame);
     categoryRail_->setMouseTracking(true);
     categoryRail_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    categoryRail_->setStyleSheet(QStringLiteral("QListView { background: transparent; }"));
     categoryRail_->viewport()->setAutoFillBackground(false);
     categoryRail_->setItemDelegate(new RailDelegate(categoryRail_));
     sidebarLayout->addWidget(categoryRail_, 1);

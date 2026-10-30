@@ -183,6 +183,9 @@ enum class Size : int {
     NodeSocketDot = 8,
     NodeLinkHandleMin = 32,
     NodeColumnGap = 80,
+    // The main window's first-show size.
+    MainWindowWidth = 1600,
+    MainWindowHeight = 1000,
     NodeRowGap = 24,
     NodeRerouteDot = 10,
     SelectionEdge = 2,

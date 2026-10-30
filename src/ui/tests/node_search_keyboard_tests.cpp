@@ -1,4 +1,4 @@
-#include "../node_editor_add.hpp"
+#include "node_editor_add.hpp"
 #include "node_interaction_test_support.hpp"
 #include <QAbstractItemModel>
 #include <QAction>

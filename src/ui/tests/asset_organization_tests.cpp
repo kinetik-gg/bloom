@@ -1,4 +1,4 @@
-#include "../asset_input_picker_guard.hpp"
+#include "asset_input_picker_guard.hpp"
 #include "asset_drop.hpp"
 #include "assets_editor_internal.hpp"
 #include <QAbstractButton>

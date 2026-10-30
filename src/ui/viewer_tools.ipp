@@ -346,7 +346,7 @@ void ViewerEditor::paintRoi(QPainter& painter) const {
     QPainterPath dim;
     dim.addRect(mapping->displayRect);
     dim.addRect(screen->intersected(mapping->displayRect));
-    painter.fillPath(dim, QColor(0, 0, 0, 150));
+    painter.fillPath(dim, kit::canvasDimColor());
     QPen pen(kit::color(kit::Color::Accent), kit::px(kit::Size::Hairline));
     pen.setCosmetic(true);
     painter.setPen(pen);

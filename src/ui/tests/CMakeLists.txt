@@ -1401,6 +1401,7 @@ set_tests_properties(bloom.ui.media-window.dpr1 PROPERTIES
     LABELS "ui;media;capture" TIMEOUT 60)
 
 add_executable(bloom_color_boundary_test color_boundary_tests.cpp)
+target_include_directories(bloom_color_boundary_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_color_boundary_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_color_boundary_test)
 foreach(scale IN ITEMS 1 1.25 1.5 2)
