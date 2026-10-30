@@ -114,8 +114,10 @@ def find_loader(build_dir, explicit):
     cache = build_dir / "CMakeCache.txt"
     if cache.is_file():
         found = re.search(r"BLOOM_DEPENDENCY_PREFIX:\w+=(.+)", cache.read_text())
-        if found and (Path(found.group(1)) / "lib/libvulkan.so.1").is_file():
-            return Path(found.group(1)) / "lib/libvulkan.so.1"
+        if found:
+            for name in ("lib/libvulkan.so.1", "lib/libvulkan.1.dylib", "bin/vulkan-1.dll"):
+                if (Path(found.group(1)) / name).is_file():
+                    return Path(found.group(1)) / name
     raise SystemExit("cannot find the bundled Vulkan loader; pass --loader")
 
 
@@ -157,8 +159,31 @@ def process_tree(root_pid):
     return tree
 
 
+try:
+    import psutil  # optional: process sampling on macOS and Windows
+except ImportError:
+    psutil = None
+
+
 def tree_usage(root_pid):
-    """(cpu seconds, rss bytes) summed over a process tree."""
+    """(cpu seconds, rss bytes) summed over a process tree; (None, None) when unmeasurable."""
+    if psutil is not None:
+        try:
+            root = psutil.Process(root_pid)
+            processes = [root] + root.children(recursive=True)
+        except psutil.Error:
+            return None, None
+        cpu = rss = 0
+        for process in processes:
+            try:
+                times = process.cpu_times()
+                cpu += times.user + times.system
+                rss += process.memory_info().rss
+            except psutil.Error:
+                continue
+        return cpu, rss
+    if not Path("/proc/self/stat").exists():
+        return None, None
     ticks = os.sysconf("SC_CLK_TCK")
     page = os.sysconf("SC_PAGE_SIZE")
     cpu = rss = 0
@@ -215,11 +240,13 @@ class Sampler:
     def window(self, start=None, end=None):
         rows = [s for s in self.samples if (start is None or s[0] >= start) and
                 (end is None or s[0] <= end)]
-        result = {"peakTreeRssBytes": max((s[3] for s in self.samples), default=0)}
+        result = {"peakTreeRssBytes": max((s[3] for s in self.samples if s[3] is not None),
+                                          default=None)}
         gpu = [s[1] for s in rows if s[1] is not None]
         if gpu:
             result["gpuBusyPercent"] = round(sum(gpu) / len(gpu), 1)
             result["gpuBusyPeakPercent"] = max(gpu)
+        rows = [s for s in rows if s[2] is not None]
         if len(rows) >= 2 and rows[-1][0] > rows[0][0]:
             result["cpuCoresBusy"] = round((rows[-1][2] - rows[0][2]) / (rows[-1][0] - rows[0][0]),
                                            2)
@@ -229,7 +256,13 @@ class Sampler:
 
 
 def drop_page_cache(paths):
-    """Cold start: drop the footage from the OS page cache (posix_fadvise DONTNEED)."""
+    """Cold start: drop the footage from the OS page cache (posix_fadvise DONTNEED).
+
+    Returns False where the platform has no such call (macOS, Windows): the run is then
+    recorded with coldDropped=false and is not a true cold read.
+    """
+    if not hasattr(os, "posix_fadvise"):
+        return False
     for path in paths:
         try:
             descriptor = os.open(path, os.O_RDONLY)
@@ -239,6 +272,7 @@ def drop_page_cache(paths):
             os.posix_fadvise(descriptor, 0, 0, os.POSIX_FADV_DONTNEED)
         finally:
             os.close(descriptor)
+    return True
 
 
 def media_files(root, entry):
@@ -305,6 +339,7 @@ def export_measure(args, project, job, frames, log):
               "secondsPerFrame": round(wall / frames, 4) if frames else None}
     result.update(sampler.window())
     result["peakRssBytes"] = result.pop("peakTreeRssBytes")
+    result["peakRssScope"] = "process tree (sampled every 200 ms)"
     events = re.search(r'^(\{"lastSequence".*\})$', output, re.MULTILINE)
     if events:
         for event in json.loads(events.group(1)).get("events", []):
@@ -448,15 +483,11 @@ def command_run(args):
     caches = args.cache or caches
     exports = () if args.no_export else (args.export or exports)
     root = bench_media.media_root(args.media_root).resolve()
-    build_dir = Path(args.build_dir).resolve()
-    args.bloom_cli = build_dir / "apps/bloom-cli/bloom-cli"
-    args.harness = build_dir / "src/ui/tests/bloom_ui_gpu_packed_viewer_test"
+    build_dir = prepare_binaries(args)
     for binary in (args.bloom_cli, args.harness):
         if not binary.is_file():
             raise SystemExit(f"missing {binary}; build bloom-cli and "
                              "bloom_ui_gpu_packed_viewer_test first")
-    args.loader = find_loader(build_dir, args.loader)
-    args.lock = GpuLock(args.gpu_lock_file)
     manifest = json.loads(Path(args.manifest).read_text())
     selected = list(select_assets(manifest, args))
     if not selected:
@@ -504,14 +535,15 @@ def command_run(args):
         print(f"{item['assetId']} {item['variant']}", flush=True)
         for resolution in resolutions:
             for cache in caches:
-                if cache == "cold":
-                    drop_page_cache(files)
+                dropped = drop_page_cache(files) if cache == "cold" else None
                 values = harness_measure(args, item["project"], resolution, False, log)
-                record(item, "fill", {"resolution": resolution, "cache": cache, **values})
+                record(item, "fill", {"resolution": resolution, "cache": cache,
+                                      "coldDropped": dropped, **values})
         if playback and not args.no_playback:
-            drop_page_cache(files)
+            dropped = drop_page_cache(files)
             values = harness_measure(args, item["project"], "Full", True, log)
-            record(item, "playback", {"resolution": "Full", "cache": "cold", **values})
+            record(item, "playback", {"resolution": "Full", "cache": "cold",
+                                      "coldDropped": dropped, **values})
         if item["variant"] in export_variants and (export_formats is None or
                                                    entry["format"] in export_formats):
             for export in exports:
@@ -553,10 +585,15 @@ def report_comparison(comparison):
           f"{len(comparison['improvements'])} improvement(s)")
 
 
+def executable(path):
+    windows = path.with_suffix(".exe")
+    return windows if not path.is_file() and windows.is_file() else path
+
+
 def prepare_binaries(args):
     build_dir = Path(args.build_dir).resolve()
-    args.bloom_cli = build_dir / "apps/bloom-cli/bloom-cli"
-    args.harness = build_dir / "src/ui/tests/bloom_ui_gpu_packed_viewer_test"
+    args.bloom_cli = executable(build_dir / "apps/bloom-cli/bloom-cli")
+    args.harness = executable(build_dir / "src/ui/tests/bloom_ui_gpu_packed_viewer_test")
     args.loader = find_loader(build_dir, args.loader)
     args.lock = GpuLock(args.gpu_lock_file)
     return build_dir

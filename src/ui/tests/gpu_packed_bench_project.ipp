@@ -12,7 +12,19 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <psapi.h>
+#pragma comment(lib, "psapi.lib")
+#else
 #include <sys/resource.h>
+#endif
 
 #include <iomanip>
 #include <set>
@@ -41,9 +53,20 @@ std::chrono::seconds gBenchTimeout{1800};
 }
 
 [[nodiscard]] std::uint64_t benchPeakRssBytes() {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (!::GetProcessMemoryInfo(::GetCurrentProcess(), &counters, sizeof(counters)))
+        return 0;
+    return static_cast<std::uint64_t>(counters.PeakWorkingSetSize);
+#else
     rusage usage{};
     ::getrusage(RUSAGE_SELF, &usage);
+#if defined(__APPLE__)
+    return static_cast<std::uint64_t>(usage.ru_maxrss); // macOS reports bytes
+#else
     return static_cast<std::uint64_t>(usage.ru_maxrss) * 1024ULL; // Linux reports KiB
+#endif
+#endif
 }
 
 // Wall-clock epoch seconds, so the runner can align its GPU/CPU samples to the measured window.
@@ -53,12 +76,24 @@ std::chrono::seconds gBenchTimeout{1800};
 }
 
 [[nodiscard]] double benchProcessCpuSeconds() {
+#if defined(_WIN32)
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (!::GetProcessTimes(::GetCurrentProcess(), &created, &exited, &kernel, &user))
+        return 0.0;
+    const auto seconds = [](const FILETIME& value) {
+        const auto ticks = (static_cast<std::uint64_t>(value.dwHighDateTime) << 32U) |
+                           value.dwLowDateTime;
+        return static_cast<double>(ticks) / 1e7; // 100 ns units
+    };
+    return seconds(kernel) + seconds(user);
+#else
     rusage usage{};
     ::getrusage(RUSAGE_SELF, &usage);
     const auto seconds = [](const timeval& value) {
         return static_cast<double>(value.tv_sec) + static_cast<double>(value.tv_usec) / 1e6;
     };
     return seconds(usage.ru_utime) + seconds(usage.ru_stime);
+#endif
 }
 
 struct BenchPlayback {
