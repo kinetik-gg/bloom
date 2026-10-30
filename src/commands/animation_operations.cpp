@@ -1828,7 +1828,8 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                     if (!id)
                         return exhaustedIds();
                     curve.keyframes.push_back({*id, paste.time, *value, paste.interpolation,
-                                               paste.outgoingHandle, paste.incomingHandle, paste.easing});
+                                               paste.outgoingHandle, paste.incomingHandle,
+                                               paste.easing});
                     return OperationResult::applied();
                 } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     const auto* value = std::get_if<double>(&paste.value);
@@ -1844,7 +1845,8 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                     if (!id)
                         return exhaustedIds();
                     curve.keyframes.push_back({*id, paste.time, *value, paste.interpolation,
-                                               paste.outgoingHandle, paste.incomingHandle, paste.easing});
+                                               paste.outgoingHandle, paste.incomingHandle,
+                                               paste.easing});
                     return OperationResult::applied();
                 } else if (paste.component.has_value()) {
                     auto* component = curve.component(*paste.component);
@@ -1864,7 +1866,8 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                     if (!id)
                         return exhaustedIds();
                     component->keyframes.push_back({*id, paste.time, *value, paste.interpolation,
-                                                    paste.outgoingHandle, paste.incomingHandle, paste.easing});
+                                                    paste.outgoingHandle, paste.incomingHandle,
+                                                    paste.easing});
                     return OperationResult::applied();
                 } else if constexpr (std::is_same_v<Curve, document::Vec2AnimationCurve>) {
                     const auto* value = std::get_if<document::Vec2d>(&paste.value);
