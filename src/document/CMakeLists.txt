@@ -16,6 +16,7 @@ target_sources(
         layer_stack.cpp
         new_project.cpp
         parameter.cpp
+        parameter_enums.cpp
         parameter_presentation.cpp
         shape.cpp
         persisted_text.cpp
@@ -46,6 +47,7 @@ target_sources(
             include/bloom/document/layer_time.hpp
             include/bloom/document/new_project.hpp
             include/bloom/document/parameter.hpp
+            include/bloom/document/parameter_enums.hpp
             include/bloom/document/parameter_presentation.hpp
             include/bloom/document/shape.hpp
             include/bloom/document/persisted_text.hpp
