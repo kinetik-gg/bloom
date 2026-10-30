@@ -136,7 +136,7 @@ dialog's, so every dialog answers them the same way:
 | --- | --- |
 | `Return` / `Enter` | Presses the focused button-row button, else the default button (Accept, or the safe action of a destructive prompt). Refused while that button is disabled: nothing closes, and the refused field is shown (its tab first) and focused. A field that uses Return itself keeps it: a multi-line field's newline, a value field opening or committing its editor |
 | `Ctrl+Return` / `Ctrl+Enter` (`Cmd` on macOS) | Always presses Accept, from any field, including a multi-line field and an open value-field editor, which commits what was typed first. Refused while the dialog is invalid |
-| `Escape` | Rejects the dialog. When a field's own editor is open (a value field being typed into, an open dropdown or colour picker popup) the first Escape belongs to that field and the dialog stays; the next Escape rejects |
+| `Escape` | Rejects the dialog. When a field's own editor is open (a value field being typed into, an open dropdown or color picker popup) the first Escape belongs to that field and the dialog stays; the next Escape rejects |
 
 A value the dialog refuses keeps its accept button disabled and says why under its own field; a
 prompt never closes and reopens to refuse.
@@ -537,9 +537,9 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | Drag row | Reorder stable slots at the insertion indicator |
 | Double-click name | Inline rename in the name label's bounds; Return, Escape, Tab or focus loss commits changed text once, unchanged text creates no transaction, an empty name is refused with its reason |
 | Right-click row | Duplicate, Delete, Rename, Blending, Label Color, Split at Playhead |
-| Click a row's Label square | The label menu under it: Kind Default, Label 1 to Label 8, Custom… and Select Label Group. On a selected layer it labels every selected layer (one undoable step) |
+| Click a row's Label square | The label menu under it: Default, Label 1 to Label 8, Custom… and Select Label Group. On a selected layer it labels every selected layer (one undoable step) |
 | Label menu → Select Label Group | Selects every layer of the composition with that layer's label |
-| Click the header's label filter | Its menu: All Labels, then Kind Default, Label 1 to Label 8 and Custom, each checkable; the list shows only layers with a checked label (none checked: every layer). Panel state, cleared on a composition change |
+| Click the header's label filter | Its menu: All Labels, then Default, Label 1 to Label 8 and Custom, each checkable; the list shows only layers with a checked label (none checked: every layer). Panel state, cleared on a composition change |
 | Click a row's Shy switch | Marks the layer shy, or not (the selected layers when it is one of them) |
 | Click the header's Shy toggle (Hide Shy Layers) | Hides shy layers from the layer list and shows them again; they still render. Per composition, persisted with the workspace UI state in `timeline/hide-shy-layers/<id>` (not in the project) |
 | Click a group, parameter or component row | Selects it: a group selects its layer; a parameter or component row selects every key it shows (or the parameter, with none). It keeps the selected-row wash, in both halves, while that selection stands |
@@ -645,7 +645,7 @@ path where a window manager claims Alt-drag. Its object names are `layerStartFra
 Bar magnetic targets are other layers' in/out points, the playhead and work-area edges. A guide
 marks the chosen target. Empty lane space retains ruler scrubbing. Visibility, audio, solo and lock
 cells commit their boundary commands. The label menu (the Label square or Right-click → Label
-Color) offers Kind Default, eight presets, Custom… (the kit colour picker popup under the row,
+Color) offers Default, eight presets, Custom… (the kit color picker popup under the row,
 committing one Set Layer Label Color step when it closes with a new colour; Escape keeps the old
 one) and Select Label Group; the current label is checked. Name editing consumes text/navigation keys before
 Timeline commands. Parenting remains separate work.

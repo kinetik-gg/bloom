@@ -228,7 +228,7 @@ void testLabels() {
     expect(menu != nullptr, "clicking the square opens the label menu");
     expect(menu && actionNamed(*menu, TimelineEditor::tr("Select Label Group")) != nullptr &&
                actionNamed(*menu, TimelineEditor::tr("Label 8")) != nullptr &&
-               actionNamed(*menu, TimelineEditor::tr("Kind Default")) != nullptr,
+               actionNamed(*menu, TimelineEditor::tr("Default")) != nullptr,
            "the label menu lists the existing label colours and Select Label Group");
     if (menu)
         actionNamed(*menu, TimelineEditor::tr("Label 3"))->trigger();

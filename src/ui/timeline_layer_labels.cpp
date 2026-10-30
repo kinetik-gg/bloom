@@ -53,7 +53,7 @@ int filterKey(const Label& label) {
 
 QString filterKeyName(const int key) {
     if (key == kKindDefault)
-        return tr("Kind Default");
+        return tr("Default");
     if (key == kCustom)
         return tr("Custom");
     return tr("Label %1").arg(key);
@@ -85,7 +85,7 @@ void populateLabelMenu(QMenu& menu, CompositionSession& session,
             transaction.emplace<commands::SetLayerLabelColor>(compositionId, layer, label);
         (void)session.executeTransaction(std::move(transaction));
     };
-    auto* kindDefault = menu.addAction(tr("Kind Default"));
+    auto* kindDefault = menu.addAction(tr("Default"));
     kindDefault->setCheckable(true);
     kindDefault->setChecked(!current.has_value());
     QObject::connect(kindDefault, &QAction::triggered, &menu, [apply] { apply(std::nullopt); });

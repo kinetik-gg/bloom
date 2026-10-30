@@ -5,7 +5,7 @@
 //
 // A label is the layer's stored label colour, or none (the kind default the clip bar falls back
 // to). Two layers are in the same label group when they store the same label. The filter groups
-// labels by their menu entry: Kind Default, Label 1 to Label 8, and Custom for any other colour.
+// labels by their menu entry: Default, Label 1 to Label 8, and Custom for any other colour.
 
 #include <bloom/document/ids.hpp>
 
@@ -42,7 +42,7 @@ inline constexpr int kCustom = kPresetCount + 1;
 void selectLabelGroup(CompositionSession& session, document::LayerId layer);
 
 // The label menu for `layers` (one undoable step for all of them), with `anchor`'s label checked:
-// Kind Default, Label 1 to Label 8, Custom… (which calls `custom`), then Select Label Group for
+// Default, Label 1 to Label 8, Custom… (which calls `custom`), then Select Label Group for
 // `anchor`'s label.
 void populateLabelMenu(QMenu& menu, CompositionSession& session,
                        const std::vector<document::LayerId>& layers, document::LayerId anchor,
