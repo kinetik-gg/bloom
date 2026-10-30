@@ -46,20 +46,20 @@ class ParityOperations(unittest.TestCase):
     def test_layer_operations(self):
         root = pathlib.Path(self.directory.name)
         still = write_png(root / 'still.png')
-        imported = bloom.ops.asset.import_([str(still)], str(root))
+        imported = bloom.ops.asset.import_((str(still),), str(root))
         asset = outputs(imported, 'asset')[0]
-        added = bloom.ops.layer.add_from_assets(assets=[asset], time=0)
+        added = bloom.ops.layer.add_from_assets(assets=(asset,), time=0)
         layers = outputs(added, 'layer')
         self.assertEqual(layer_ids(), layers)
 
-        copy = outputs(bloom.ops.layer.duplicate(layers=layers), 'layer')
+        copy = outputs(bloom.ops.layer.duplicate(layers=tuple(layers)), 'layer')
         self.assertEqual(layer_ids(), sorted(layers + copy))
         bloom.transactions.undo()
         self.assertEqual(layer_ids(), layers, 'undo removes the copy')
         bloom.transactions.redo()
         self.assertEqual(layer_ids(), sorted(layers + copy), 'redo restores it')
 
-        bloom.ops.layer.delete(layers=copy)
+        bloom.ops.layer.delete(layers=tuple(copy))
         self.assertEqual(layer_ids(), layers)
         bloom.transactions.undo()
         self.assertEqual(layer_ids(), sorted(layers + copy), 'undo restores the deleted layer')
@@ -69,7 +69,7 @@ class ParityOperations(unittest.TestCase):
     def test_node_source_from_asset(self):
         root = pathlib.Path(self.directory.name)
         still = write_png(root / 'node.png')
-        asset = outputs(bloom.ops.asset.import_([str(still)], str(root)), 'asset')[0]
+        asset = outputs(bloom.ops.asset.import_((str(still),), str(root)), 'asset')[0]
         composition = bloom.data.snapshot()['compositions'][0]
         before = len(composition['nodes'])
         node = outputs(bloom.ops.node.add_asset_source(asset, position=(40, 0)), 'node')
@@ -91,8 +91,8 @@ class ParityOperations(unittest.TestCase):
     def test_new_composition_from_assets_and_delete(self):
         root = pathlib.Path(self.directory.name)
         still = write_png(root / 'plate.png', width=64, height=32)
-        asset = outputs(bloom.ops.asset.import_([str(still)], str(root)), 'asset')[0]
-        created = bloom.ops.composition.add_from_assets([asset])
+        asset = outputs(bloom.ops.asset.import_((str(still),), str(root)), 'asset')[0]
+        created = bloom.ops.composition.add_from_assets((asset,))
         composition = outputs(created, 'composition')[0]
         record = next(c for c in bloom.data.snapshot()['compositions'] if c['id'] == composition)
         self.assertEqual((record['width'], record['height']), (64, 32), 'sized from the footage')
@@ -100,7 +100,7 @@ class ParityOperations(unittest.TestCase):
         bloom.transactions.undo()
         self.assertNotIn(composition, [c['id'] for c in bloom.data.snapshot()['compositions']])
         bloom.transactions.redo()
-        bloom.ops.asset.delete_items([asset], compositions=[composition])
+        bloom.ops.asset.delete_items((asset,), compositions=(composition,))
         snapshot = bloom.data.snapshot()
         self.assertNotIn(composition, [c['id'] for c in snapshot['compositions']])
         bloom.transactions.undo()
