@@ -831,6 +831,18 @@ emitInterpolation(EmitState& state,
         return state.ok(state.writer.stringValue("linear"));
     case bloom::document::KeyframeInterpolation::EaseInOut:
         return state.ok(state.writer.stringValue("ease-in-out"));
+    case bloom::document::KeyframeInterpolation::Sine:
+    case bloom::document::KeyframeInterpolation::Quad:
+    case bloom::document::KeyframeInterpolation::Cubic:
+    case bloom::document::KeyframeInterpolation::Quart:
+    case bloom::document::KeyframeInterpolation::Quint:
+    case bloom::document::KeyframeInterpolation::Expo:
+    case bloom::document::KeyframeInterpolation::Circ:
+    case bloom::document::KeyframeInterpolation::Back:
+    case bloom::document::KeyframeInterpolation::Bounce:
+    case bloom::document::KeyframeInterpolation::Elastic:
+        return state.ok(
+            state.writer.stringValue(bloom::document::keyframeInterpolationToken(interpolation)));
     }
     return false;
 }

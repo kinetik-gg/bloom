@@ -499,7 +499,8 @@ int main() {
     Expectations expectations;
     // Task S5 moved this 1 -> 2: EaseInOut lets sampling produce a value no version-1 sampler
     // could, and the Color4 curve table added a third sampled value kind.
-    expectations.expect(runtime::kAnimationSamplingSemanticsVersion == 2,
+    // Easing equations moved it 2 -> 3; every version-2 key still samples bit-for-bit.
+    expectations.expect(runtime::kAnimationSamplingSemanticsVersion == 3,
                         "animation sampling semantics are explicitly versioned");
     testSampling(expectations);
     testBorrowedDocumentSampling(expectations);

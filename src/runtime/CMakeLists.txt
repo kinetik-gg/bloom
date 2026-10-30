@@ -103,6 +103,7 @@ target_sources(
         layer_parent_transform.hpp
         operation_key.hpp
         animation_sampling.cpp
+        keyframe_easing.cpp
         cpu_composition_evaluator.cpp
         cpu_composition_resolution.hpp
         layer_bounds_query.cpp
@@ -205,6 +206,7 @@ target_sources(
         FILES
             include/bloom/runtime/operation_cache.hpp
             include/bloom/runtime/animation_sampling.hpp
+            include/bloom/runtime/keyframe_easing.hpp
             include/bloom/runtime/audio_stream_key.hpp
             include/bloom/runtime/video_source_report.hpp
             include/bloom/runtime/cpu_composition_evaluator.hpp
