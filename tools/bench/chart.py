@@ -91,7 +91,9 @@ VIDEO_VARIANTS = {
                      "bt709", "iec61966-2-1", "mov", "sdr"),
     "prores_4444": (["-c:v", "prores_ks", "-profile:v", "4", "-alpha_bits", "16"],
                     "yuva444p10le", "bt709", "tv", "bt709", "iec61966-2-1", "mov", "sdr"),
-    "dnxhr_hqx": (["-c:v", "dnxhd", "-profile:v", "dnxhr_hqx"], "yuv422p10le", "bt709", "tv",
+    # The dnxhd encoder's per-thread contexts exceed 20 GB at 8K with one thread per core.
+    "dnxhr_hqx": (["-c:v", "dnxhd", "-profile:v", "dnxhr_hqx", "-threads", "4"], "yuv422p10le",
+                  "bt709", "tv",
                   "bt709", "iec61966-2-1", "mov", "sdr"),
 }
 # H.264 is not produced at 8K (level 6.2 decoders are rare; same rule as the footage tier).
@@ -527,7 +529,7 @@ def write_frames(out_root, tier, frames, formats, videos):
     for name in formats:
         (base / name).mkdir(parents=True, exist_ok=True)
     static, _ = build_static(width, height)
-    for frame in range(frames):
+    for frame in range(frames if formats else 0):
         chart = frame_chart(static, frame)
         stem = f"chart_{tier}"
         number = f"{frame + 1:04d}"
@@ -557,6 +559,8 @@ def main():
     parser.add_argument("--tiers", default=",".join(TIERS))
     parser.add_argument("--frames", type=int, default=FRAMES)
     parser.add_argument("--no-video", action="store_true")
+    parser.add_argument("--videos", help="comma-separated video variants (default: all)")
+    parser.add_argument("--no-images", action="store_true", help="write video only")
     parser.add_argument("--preview", action="store_true",
                         help="write one 1080p frame as PNG8/PNG16/EXR into --out")
     parser.add_argument("--write-truth", action="store_true",
@@ -577,10 +581,11 @@ def main():
         return
     if args.out:
         for tier in [t for t in args.tiers.split(",") if t]:
-            videos = [] if args.no_video else [v for v in VIDEO_VARIANTS
+            wanted = args.videos.split(",") if args.videos else list(VIDEO_VARIANTS)
+            videos = [] if args.no_video else [v for v in wanted
                                                if v not in VIDEO_SKIP.get(tier, set())]
-            write_frames(args.out, tier, min(args.frames, FRAMES), ("png16", "exr_float_zip"),
-                         videos)
+            write_frames(args.out, tier, min(args.frames, FRAMES),
+                         () if args.no_images else ("png16", "exr_float_zip"), videos)
 
 
 if __name__ == "__main__":
