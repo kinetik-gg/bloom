@@ -1079,6 +1079,18 @@ rotation/scale. This includes rotated, mirrored and non-uniformly scaled ancesto
 shear. See [Transform Parenting](layer-graph-model.md#transform-parenting). Pointer updates derive
 values from the frozen bases and total displacement, never rounded intermediate edits.
 
+The graph editor's key and handle drags use the same channel without a gesture-local copy of the
+curve: each pointer move builds the exact transaction the release will commit (`MoveKeyframes` and
+`SetKeyframeValues`, `SetKeyframeHandles`, or a copy-drag's `PasteKeyframes`) and hands it to
+`CompositionSession::previewKeyframeTransaction()`, which applies it to a scratch
+`Draft::isolatedFrom()` of the live snapshot that no document owns. The previewed curves are what the
+graph draws; `effective*Value()` samples them, so the timeline and Properties readouts follow; and
+one override per previewed parameter at the playhead rides `valueEditOverrides()`, so the Viewer
+renders the drag as an interactive edit. A refused or locked edit previews nothing. More than eight
+previewed parameters leave the Viewer on the committed frame until release. The release clears the
+preview and commits that same transaction as one Undo entry; a revision change, Escape or a rebind
+discards it.
+
 The preview channel is session-only and reusable by future shape/text interactions:
 
 ```text

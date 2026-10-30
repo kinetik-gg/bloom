@@ -851,17 +851,18 @@ void testGraphEditorKeyframeSeams() {
     require(copied.size() == 1 && copied.front().outgoingHandle == shaped,
             "selected key data carries the handles, so copy/paste reproduces the curve shape");
 
-    require(session.resetSelectedKeyframeHandles(), "Reset Handles applies to the selection");
+    require(session.easeSelectedKeyframes(false, true),
+            "Easy Ease Out applies to the selection");
     const auto* reset = session.composition()->animationCurves().findScalar(curveId);
     require(reset != nullptr &&
                 document::isDefaultKeyframeHandle(reset->keyframes[0].outgoingHandle),
-            "and returns the handle to the default that IS the canonical ease");
+            "and gives the leaving side 33.33% influence at zero speed: the default handle");
     require(session.undo() && session.composition()
                                       ->animationCurves()
                                       .findScalar(curveId)
                                       ->keyframes[0]
                                       .outgoingHandle == shaped,
-            "the reset is one undoable step");
+            "the Easy Ease is one undoable step");
 }
 
 } // namespace

@@ -658,7 +658,8 @@ void testTimelineHeaderMenus(Expectations& expectations) {
     QCoreApplication::processEvents();
     auto* overflow = area->findChild<QToolButton*>("timelineHeaderOverflowButton");
     expectations.expect(overflow->isVisible() && overflow->menu()->actions().size() == 4,
-                        "a narrow header collapses all four menus into the overflow popup");
+                        "a narrow header collapses Add, View, Select and the graph toggle into "
+                        "the overflow popup");
     finishFixture(fixture);
 }
 

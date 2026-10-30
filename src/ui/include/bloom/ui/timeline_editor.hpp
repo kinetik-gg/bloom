@@ -19,6 +19,7 @@
 #include <QString>
 #include <QWidget>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -170,6 +171,9 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     [[nodiscard]] std::vector<document::LayerId> keyTargetLayers() const;
     bool eventFilter(QObject* watched, QEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    // The hosted header's split never reaches past the panel: below the layer table's own minimum
+    // width the header keeps its menus, the graph toggle and Fullscreen inside the visible panel.
+    void resizeEvent(QResizeEvent* event) override;
     void updateScrollRange();
     // #380: where an Assets or file drop at `position` lands (timeline_layer_drop.cpp): a row in
     // the layer stack, a row and a time over the lanes, otherwise on top at the playhead.
@@ -202,6 +206,10 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     QAction* keyframesAction_ = nullptr;
     QAction* graphAction_ = nullptr;
     QAction* snapAction_ = nullptr;
+    // T1: the right pane's keyframes/graph switch (Shift+F3, After Effects) behind the header
+    // toggle beside Fullscreen, and Easy Ease / In / Out (F9, Shift+F9, Ctrl+Shift+F9).
+    QAction* graphPaneAction_ = nullptr;
+    std::array<QAction*, 3> easeActions_{};
     QWidget* footerLeft_ = nullptr;
     bool timecodeFormat_ = false;
     bool keyframesVisible_ = true;
@@ -398,6 +406,8 @@ class TimelineLaneRegion final : public QWidget {
     void setGraphEditorEnabled(bool enabled);
     [[nodiscard]] bool graphEditorEnabled() const noexcept { return graphEditor_; }
     [[nodiscard]] TimelineGraphView* graphViewForTest() const noexcept { return graphView_; }
+    // The timeline's Easy Ease actions, handed to the graph view for its key menu.
+    void setGraphEaseActions(const std::array<QAction*, 3>& actions);
     // A drop from Assets or the file manager (#380): the Accent time marker
     // (`timelineDropTimeMarker`) where the layers would start and the insertion line
     // (`timelineDropRowLine`) above `row` (-1: none). nullopt time hides the marker.
@@ -447,6 +457,7 @@ class TimelineLaneRegion final : public QWidget {
     QWidget* keyframeArea_ = nullptr;
     TimelineKeyframePanel* keyframePanel_ = nullptr;
     TimelineGraphView* graphView_ = nullptr;
+    std::array<QAction*, 3> graphEaseActions_{};
     struct RangeDrag {
         document::LayerId layer;
         document::Revision revision;

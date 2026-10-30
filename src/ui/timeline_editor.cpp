@@ -1508,6 +1508,7 @@ void TimelineLaneRegion::setEntries(std::vector<TimelineLayerEntry> entries) {
         keyframePanel_->setGeometry(rect());
         graphView_ = new TimelineGraphView(session_, ruler_, this);
         graphView_->setSnappingEnabled(snapping_);
+        graphView_->setEaseActions(graphEaseActions_);
         graphView_->setGeometry(rect());
         graphView_->setVisible(graphEditor_);
     }
@@ -1554,6 +1555,12 @@ void TimelineLaneRegion::syncRowHighlights() {
     update();
 }
 
+void TimelineLaneRegion::setGraphEaseActions(const std::array<QAction*, 3>& actions) {
+    graphEaseActions_ = actions;
+    if (graphView_ != nullptr)
+        graphView_->setEaseActions(actions);
+}
+
 void TimelineLaneRegion::setGraphEditorEnabled(const bool enabled) {
     if (graphEditor_ == enabled)
         return;
@@ -1587,7 +1594,12 @@ void TimelineEditor::setGraphEditorEnabled(const bool enabled) {
         setKeyframesVisible(false);
     graphEditor_ = enabled;
     graphAction_->setChecked(enabled);
+    if (graphPaneAction_ != nullptr)
+        graphPaneAction_->setChecked(enabled);
     QSettings().setValue(QStringLiteral("timeline/graph-editor"), enabled);
+    // The graph's value gutter is kept clear before frame 0 on the one shared time axis.
+    if (ruler_ != nullptr)
+        ruler_->setLeadingInset(enabled ? kit::px(kit::Size::GraphValueAxis) : 0);
     if (lanes_ != nullptr)
         lanes_->setGraphEditorEnabled(enabled);
 }
@@ -2209,7 +2221,9 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     layout->setSpacing(0);
 
     createHeaderMenus();
-    chrome_.splitPosition = [this] { return layerColumnWidth_; };
+    chrome_.splitPosition = [this] {
+        return width() > 0 ? std::min(layerColumnWidth_, width()) : layerColumnWidth_;
+    };
     chrome_.maximizeInLeadingHeader = true;
     chrome_.hosted = [this] {
         headerFallback_->hide();
@@ -2322,6 +2336,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     lanes_ = new TimelineLaneRegion(session_, *ruler_, *scrollBar_, body);
     lanes_->setKeyframesVisible(keyframesVisible_);
     lanes_->setSnappingEnabled(snapping_);
+    lanes_->setGraphEaseActions(easeActions_);
     setGraphEditorEnabled(graphEditor_);
     const auto toggleExpansion = [this](document::LayerId layer) {
         // A revealed layer's twirl closes it and drops the reveal, as in After Effects; the next
@@ -2451,6 +2466,12 @@ void TimelineEditor::setLabelFilter(std::set<int> labels) {
     labelFilter_ = std::move(labels);
     columnHeaders_->setLabelFilterActive(!labelFilter_.empty());
     rebuild();
+}
+
+void TimelineEditor::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    if (chrome_.refreshSplit)
+        chrome_.refreshSplit();
 }
 
 void TimelineEditor::showEvent(QShowEvent* event) {

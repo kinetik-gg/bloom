@@ -290,11 +290,32 @@ class CompositionSession final : public QObject {
     // to Ease In-Out and refuses the final key's outgoing and the first key's incoming handle.
     [[nodiscard]] bool setKeyframeHandles(std::vector<commands::KeyframeHandleEdit> edits,
                                           document::Revision revision);
-    // "Reset Handles" over the current selection: every selected key's handles return to their
-    // defaults, which ARE the canonical Ease In-Out shape -- so the reset also settles the affected
-    // segments on that mode. A key that owns no segment at all (the only key of its curve) is
-    // skipped rather than refused.
-    [[nodiscard]] bool resetSelectedKeyframeHandles();
+    // After Effects' Easy Ease (F9), Easy Ease In (Shift+F9) and Easy Ease Out (Ctrl+Shift+F9)
+    // over the current selection, as ONE commands::ApplyEasyEase transaction: each eased side of a
+    // selected key takes 33.33% influence and zero speed on a Bezier segment, and the side of that
+    // segment which is not eased keeps its speed (docs/architecture/animation-and-time.md,
+    // "Easy Ease").
+    [[nodiscard]] bool easeSelectedKeyframes(bool easeIn, bool easeOut);
+    // The graph editor's live drag (T1): the transaction a key or handle drag WOULD commit, applied
+    // to a scratch draft of the live snapshot and never published. Until clearKeyframePreview(),
+    // every reader of a parameter's effective value sees the previewed curves -- the Viewer through
+    // valueEditOverrides(), the timeline and Properties readouts through effective*Value() -- and
+    // valueEditActive() is true, so the preview controller renders it as an interactive edit. No
+    // command, revision or history entry exists until the caller commits the same edit on release.
+    // A transaction the command layer would refuse, or one touching a locked layer, previews
+    // nothing and returns false.
+    [[nodiscard]] bool previewKeyframeTransaction(const commands::Transaction& transaction);
+    void clearKeyframePreview();
+    [[nodiscard]] bool keyframePreviewActive() const noexcept { return keyframePreview_.has_value(); }
+    // The previewed record of `curveId`, or null when no preview is active or it leaves that curve
+    // untouched. A paste preview's new keys carry ids the real paste will allocate afresh.
+    [[nodiscard]] const document::AnimationCurveRecord*
+    keyframePreviewCurve(document::AnimationCurveId curveId) const noexcept;
+    // Bumped on every preview change, so a view caching a compiled curve can tell two previews of
+    // one revision apart.
+    [[nodiscard]] std::uint64_t keyframePreviewGeneration() const noexcept {
+        return keyframePreviewGeneration_;
+    }
     [[nodiscard]] bool pasteKeyframes(const std::vector<commands::KeyframePaste>& keys,
                                       document::Revision revision);
     [[nodiscard]] bool deleteSelectedKeyframes();
@@ -814,6 +835,12 @@ class CompositionSession final : public QObject {
     // so the three typed accessors cannot disagree about a driven or missing source.
     [[nodiscard]] std::optional<ParameterSample>
     effectiveParameterValue(const document::ParameterRecord* parameter) const;
+    // sampleParameterValue() over an explicit curve store: the live composition's, or the keyframe
+    // preview's scratch copy of it.
+    [[nodiscard]] std::optional<ParameterSample>
+    sampleParameterValueIn(const document::AnimationCurveStore& curves,
+                           const document::ParameterRecord& parameter,
+                           core::RationalTime time) const;
     // The key (if any) sitting at EXACTLY `time` on the parameter's curve. The gesture's whole
     // three-way branch turns on this one question.
     [[nodiscard]] std::optional<document::KeyframeId>
@@ -969,6 +996,16 @@ class CompositionSession final : public QObject {
         bool text = false;
     };
     std::optional<ValueEdit> valueEdit_;
+    struct KeyframePreview final {
+        document::Revision revision;
+        core::RationalTime time;
+        document::Draft draft;
+        std::vector<document::AnimationCurveId> curves;
+        std::vector<runtime::SnapshotParameterOverride> overrides;
+    };
+    std::optional<KeyframePreview> keyframePreview_;
+    std::uint64_t keyframePreviewGeneration_ = 0;
+    [[nodiscard]] const document::AnimationCurveStore* keyframePreviewCurves() const noexcept;
     // Task DRIVE-1's shared driver resolution. The evaluator is created on the first refresh that
     // finds a driven parameter and never before, so a composition with no drivers -- every existing
     // test fixture among them -- pays nothing at all for the capability. `drivenRequest_` is the

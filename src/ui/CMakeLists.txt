@@ -605,7 +605,9 @@ target_sources(
         timeline_layer_drop.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp
+        timeline_graph_input.cpp
         timeline_graph_math.cpp
+        timeline_graph_menu.cpp
         timeline_graph_view.cpp
         timeline_keyframe_gestures.cpp
         timeline_work_area.cpp

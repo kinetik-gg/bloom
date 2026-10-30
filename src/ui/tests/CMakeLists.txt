@@ -1370,6 +1370,16 @@ target_compile_definitions(bloom_review_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_review_capture)
 
+# Lane T1 Graph Editor review captures (a tool, not a test): bloom_timeline_graph_capture <dir>,
+# once per QT_SCALE_FACTOR.
+add_executable(bloom_timeline_graph_capture timeline_graph_capture.cpp)
+target_include_directories(bloom_timeline_graph_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_timeline_graph_capture PRIVATE bloom_ui bloom_runtime_compiler
+    Qt6::Test)
+target_compile_definitions(bloom_timeline_graph_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_timeline_graph_capture)
+
 add_executable(bloom_popup_capture popup_capture.cpp)
 target_link_libraries(bloom_popup_capture PRIVATE bloom_ui_kit)
 bloom_enable_warnings(bloom_popup_capture)
