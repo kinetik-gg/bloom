@@ -23,14 +23,10 @@ QString ViewerEditor::analysisSettingsPrefix() const {
     return QStringLiteral("viewer/analysis/default/");
 }
 
-QString ViewerEditor::displayViewSettingsKey() const {
+QString ViewerEditor::displayViewConfigRevision() const {
     const auto digest =
         session_.colorSettings().ocioConfig.expectedRevision.digest.toLowercaseHex();
-    const auto revision = QString::fromLatin1(digest.data(), static_cast<int>(digest.size()));
-    for (const auto* ancestor = parentWidget(); ancestor; ancestor = ancestor->parentWidget())
-        if (const auto* area = qobject_cast<const EditorArea*>(ancestor))
-            return QStringLiteral("viewer/display-view/%1/%2").arg(revision).arg(area->areaId());
-    return QStringLiteral("viewer/display-view/%1/default").arg(revision);
+    return QString::fromLatin1(digest.data(), static_cast<int>(digest.size()));
 }
 
 QString ViewerEditor::lookSettingsKey() const {
