@@ -18,6 +18,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/node_editor.hpp>
 
@@ -74,6 +75,7 @@ int main(int argc, char** argv) {
     if (capture)
         qputenv("QT_SCALE_FACTOR", argv[2]);
     QApplication app(argc, argv);
+    ui::kit::installKinetikTheme(app);
     auto project = document::makeNewProject("Fields", "Main", core::RationalTime::fromInteger(10));
     document::Document document(std::move(project.project));
     commands::CommandStack stack(document);

@@ -204,6 +204,10 @@ QString displayTypeName(const std::string_view typeId) {
         name.remove(0, 6);
     }
     name.replace('-', ' ');
+    // A camelCase role ("verticalAlignment", "inputColorSpaceId") reads as words.
+    for (qsizetype index = name.size() - 1; index > 0; --index)
+        if (name[index].isUpper() && name[index - 1].isLower())
+            name.insert(index, QLatin1Char(' '));
     bool first = true;
     for (auto& character : name) {
         if (first)

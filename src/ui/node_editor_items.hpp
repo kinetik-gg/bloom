@@ -1910,6 +1910,9 @@ class NodeItem final : public QGraphicsObject {
         const QFontMetricsF valueMetrics(kit::font(kit::TypeRole::Value));
 
         qreal labelColumn = kit::px(kit::Size::PropertiesLabelWidth);
+        // The longest label of this node sets the column, up to twice the Properties label width,
+        // so a row label does not elide at the card's default width.
+        const qreal labelColumnCap = 2.0 * kit::px(kit::Size::PropertiesLabelWidth);
         qreal controlColumn = 0.0;
         qreal rowHeight = 0.0;
         const qreal diamondSpan =
@@ -1935,6 +1938,7 @@ class NodeItem final : public QGraphicsObject {
             rowHeight = std::max(rowHeight, valueMetrics.height());
         }
         rowHeight = kit::px(kit::Size::PropertyRow);
+        labelColumn = std::min(std::ceil(labelColumn), labelColumnCap);
 
         const auto rowCount =
             static_cast<qreal>(valueRows_.size() - (imageRange_ && !imageSequence_ ? 1 : 0) +
@@ -2007,8 +2011,9 @@ class NodeItem final : public QGraphicsObject {
         rowHeight_ = rowHeight;
 
         qreal y = parameterRowsTop_;
-        const auto placeRow = [this, rowHeight](QWidget* field, qreal top) {
+        const auto placeRow = [this, rowHeight, labelColumn](QWidget* field, qreal top) {
             auto* row = propertyRows_.at(field);
+            row->setLabelWidth(static_cast<int>(labelColumn));
             row->resize(static_cast<int>(std::floor(width_ - (kCardPadding + kCardPadding))),
                         kit::px(kit::Size::PropertyRow));
             positionProxy(row, kCardPadding, top);
