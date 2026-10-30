@@ -162,6 +162,11 @@ struct PipelineQualificationV1 {
     friend bool operator==(const PipelineQualificationV1&,
                            const PipelineQualificationV1&) = default;
 };
+struct ColourTags {
+    // Original H.273 code points; -1 means absent. No inferred color interpretation.
+    std::int32_t primaries = -1, transfer = -1, matrix = -1, range = -1;
+    friend bool operator==(const ColourTags&, const ColourTags&) = default;
+};
 struct MediaQcEvidenceV1 {
     Digest artifact, snapshot, preset, pipeline, execution;
     std::string tool, version, profile, coverage;
@@ -175,12 +180,10 @@ struct MediaQcEvidenceV1 {
     bool appleAuthorized = false, deliveryQualified = false;
     std::string implementationNote;
     std::uint32_t maximumError = 0, meanError = 0;
+    // Issue #369: the colour tags and "<container>/<codec>" read back from the reopened artifact.
+    ColourTags colourTags;
+    std::string container;
     friend bool operator==(const MediaQcEvidenceV1&, const MediaQcEvidenceV1&) = default;
-};
-struct ColourTags {
-    // Original H.273 code points; -1 means absent. No inferred color interpretation.
-    std::int32_t primaries = -1, transfer = -1, matrix = -1, range = -1;
-    friend bool operator==(const ColourTags&, const ColourTags&) = default;
 };
 struct StreamDescriptor {
     std::uint32_t id = 0;

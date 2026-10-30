@@ -316,8 +316,8 @@ std::uint64_t workerAddressSpace() {
 struct HardwareMiss final {};
 // Bounded software decoder parallelism. Frame threads keep extra reference and output frames in
 // flight, so the count is sized against half of this worker's address space (sized per stream by
-// the host, issue #352) as well as the machine. Intra-only codecs use slice threads: a random-access request then waits for one
-// frame rather than for a pipeline of following frames.
+// the host, issue #352) as well as the machine. Intra-only codecs use slice threads: a
+// random-access request then waits for one frame rather than for a pipeline of following frames.
 void configureThreads(AVCodecContext& codec, const AVCodecParameters& p) {
     const auto* desc = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(p.format));
     const std::uint64_t sampleBytes = desc && desc->comp[0].depth > 8 ? 2U : 1U;
@@ -754,8 +754,7 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
             const auto* first = avformat_index_get_entry(input.format->streams[request.stream], 0);
             require(first != nullptr &&
                         av_seek_frame(input.format, static_cast<int>(request.stream),
-                                      std::min(start, first->timestamp),
-                                      AVSEEK_FLAG_BACKWARD) >= 0,
+                                      std::min(start, first->timestamp), AVSEEK_FLAG_BACKWARD) >= 0,
                     "Cannot seek video", Error::Unavailable);
             avcodec_flush_buffers(input.codec);
             cursor.eof = false;
@@ -803,20 +802,20 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
         // before it), so composition time maps to source time by timestamp, not packet count.
         std::int64_t target = 0;
         if (cursor.provisional) {
-            require(request.frame < cursor.provisionalFrames,
-                    "Frame is outside the video duration", Error::Unavailable);
+            require(request.frame < cursor.provisionalFrames, "Frame is outside the video duration",
+                    Error::Unavailable);
             const auto offset = av_rescale_q(static_cast<std::int64_t>(request.frame),
                                              av_inv_q(rate), stream.time_base);
             require(offset >= 0 && start <= std::numeric_limits<std::int64_t>::max() - offset,
                     "Frame timestamp overflow", Error::Oversized);
             target = start + offset;
         } else if (!cursor.variable) {
-            require(request.frame < cursor.timestamps.size(),
-                    "Frame is outside the video duration", Error::Unavailable);
+            require(request.frame < cursor.timestamps.size(), "Frame is outside the video duration",
+                    Error::Unavailable);
             target = cursor.timestamps[request.frame];
         } else {
-            const auto slot = av_rescale_q(static_cast<std::int64_t>(request.frame),
-                                           av_inv_q(rate), stream.time_base);
+            const auto slot = av_rescale_q(static_cast<std::int64_t>(request.frame), av_inv_q(rate),
+                                           stream.time_base);
             require(slot >= 0 && start <= std::numeric_limits<std::int64_t>::max() - slot,
                     "Frame timestamp overflow", Error::Oversized);
             const auto time = start + slot;
@@ -832,8 +831,8 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
         // A provisional seek by decode time can land after the target on a reordered stream:
         // seek again earlier by a doubling distance before giving up on the assumption.
         bool seeked = false;
-        std::int64_t backoff = std::max<std::int64_t>(
-            1, av_rescale_q(16, av_inv_q(rate), stream.time_base));
+        std::int64_t backoff =
+            std::max<std::int64_t>(1, av_rescale_q(16, av_inv_q(rate), stream.time_base));
         unsigned attempts = 0;
         const auto seekTo = [&](const std::int64_t timestamp) {
             cursor.position.reset();
@@ -886,9 +885,8 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
                     ++attempts;
                     av_frame_unref(input.frame);
                     seekTo(std::max(start, target - backoff));
-                    backoff = backoff > std::numeric_limits<std::int64_t>::max() / 2
-                                  ? backoff
-                                  : backoff * 2;
+                    backoff = backoff > std::numeric_limits<std::int64_t>::max() / 2 ? backoff
+                                                                                     : backoff * 2;
                     continue;
                 }
                 throw ProvisionalMiss{};
@@ -1088,15 +1086,76 @@ std::unique_ptr<Input> openInput(const CallRequest& request) {
     return input;
 }
 } // namespace
-bool hardwareEncodeAvailable() {
-    const auto* codec = avcodec_find_encoder_by_name("h264_vaapi");
+namespace {
+// Opens `name` on `node` with a tiny NV12 VA-API frame pool. Success means the driver exposes the
+// encode entry point, not merely the device.
+bool vaapiEncoderOpens(const char* name, const std::string& node) {
+    const auto* codec = avcodec_find_encoder_by_name(name);
     if (codec == nullptr)
         return false;
     AVBufferRef* device = nullptr;
-    const auto status =
-        av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_VAAPI, "/dev/dri/renderD128", nullptr, 0);
+    if (av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_VAAPI, node.c_str(), nullptr, 0) < 0)
+        return false;
+    AVBufferRef* frames = av_hwframe_ctx_alloc(device);
+    AVCodecContext* context = avcodec_alloc_context3(codec);
+    bool opened = false;
+    if (frames != nullptr && context != nullptr) {
+        auto* framesContext = reinterpret_cast<AVHWFramesContext*>(frames->data);
+        framesContext->format = AV_PIX_FMT_VAAPI;
+        framesContext->sw_format = AV_PIX_FMT_NV12;
+        framesContext->width = 64;
+        framesContext->height = 64;
+        framesContext->initial_pool_size = 2;
+        if (av_hwframe_ctx_init(frames) >= 0) {
+            context->width = 64;
+            context->height = 64;
+            context->time_base = {1, 24};
+            context->framerate = {24, 1};
+            context->pix_fmt = AV_PIX_FMT_VAAPI;
+            context->hw_frames_ctx = av_buffer_ref(frames);
+            opened = avcodec_open2(context, codec, nullptr) >= 0;
+        }
+    }
+    avcodec_free_context(&context);
+    av_buffer_unref(&frames);
     av_buffer_unref(&device);
-    return status >= 0;
+    return opened;
+}
+} // namespace
+bool probeVaapiEncode() {
+    std::vector<std::string> nodes;
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator("/dev/dri", error))
+        if (entry.path().filename().string().starts_with("renderD"))
+            nodes.push_back(entry.path().string());
+    std::ranges::sort(nodes);
+    std::string text = "bloom-vaapi-probe-v1\n";
+    for (const auto& node : nodes) {
+        if (node.find_first_of(" \n") != std::string::npos)
+            continue;
+        text += node + (vaapiEncoderOpens("h264_vaapi", node) ? " 1" : " 0") +
+                (vaapiEncoderOpens("hevc_vaapi", node) ? " 1" : " 0") + "\n";
+    }
+    return std::fwrite(text.data(), 1, text.size(), stdout) == text.size() &&
+           std::fflush(stdout) == 0;
+}
+bool hardwareEncodeAvailable() {
+    if (avcodec_find_encoder_by_name("h264_vaapi") == nullptr &&
+        avcodec_find_encoder_by_name("hevc_vaapi") == nullptr)
+        return false;
+    // #369: any render node, not only the first; the encode request names the probed node.
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator("/dev/dri", error)) {
+        if (!entry.path().filename().string().starts_with("renderD"))
+            continue;
+        AVBufferRef* device = nullptr;
+        const auto status = av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_VAAPI,
+                                                   entry.path().c_str(), nullptr, 0);
+        av_buffer_unref(&device);
+        if (status >= 0)
+            return true;
+    }
+    return false;
 }
 } // namespace bloom::media::ffmpeg
 #include "ffmpeg_provider_decode.ipp"

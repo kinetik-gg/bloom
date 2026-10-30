@@ -27,6 +27,8 @@ PreparedOutputDisplayV1::prepare(const runtime::EvaluationColorIntent& intent,
     auto result = std::shared_ptr<PreparedOutputDisplayV1>(new PreparedOutputDisplayV1());
     result->processor_ =
         std::make_shared<const color::PreparedCpuDisplayProcessorHandle>(std::move(*handle));
+    result->display_ = std::string(display);
+    result->view_ = std::string(view);
     result->description_ = "display: " + std::string(display) + "; view: " + std::string(view);
     const auto hex = revision.toLowercaseHex();
     result->description_ += "; OCIO: " + std::string(hex.data(), hex.size());
@@ -34,6 +36,24 @@ PreparedOutputDisplayV1::prepare(const runtime::EvaluationColorIntent& intent,
     (void)hasher.update(result->processor_->identity().canonicalBytes());
     result->digest_ = hasher.finalize();
     return result;
+}
+OutputColourTagsV1 outputColourTagsV1(const std::string_view display) noexcept {
+    const auto has = [display](const std::string_view text) {
+        return display.find(text) != std::string_view::npos;
+    };
+    // H.273: primaries 1 BT.709, 9 BT.2020, 12 P3-D65; transfer 1 BT.709, 13 sRGB, 16 PQ,
+    // 18 HLG; matrix 1 BT.709, 9 BT.2020 non-constant.
+    if (has("2100") && has("PQ"))
+        return {9, 16, 9, 1};
+    if (has("2100") && has("HLG"))
+        return {9, 18, 9, 1};
+    if (has("P3-D65") || has("Display P3"))
+        return {12, has("1886") || has("Gamma 2.6") ? 1 : 13, 1, 1};
+    if (has("1886") || has("Rec.709") || has("BT.709") || has("Rec709"))
+        return {1, 1, 1, 1};
+    if (has("sRGB"))
+        return {1, 13, 1, 1};
+    return {2, 2, 1, 1};
 }
 std::uint64_t outputLookEffectCountV1(const runtime::CompiledCompositionPlan& plan) noexcept {
     std::uint64_t result = 0;

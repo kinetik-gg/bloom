@@ -24,6 +24,10 @@ enum class OutputPresetV1 : std::uint8_t {
     DnxhrMxfV1 = 5,
     PcmWavV1 = 6,
     H264MovV1 = 7,
+    // Issue #369 (ADR 0033): H.264 in MP4, and hardware-only HEVC in MOV and MP4.
+    H264Mp4V1 = 8,
+    HevcMovV1 = 9,
+    HevcMp4V1 = 10,
 };
 
 enum class OutputFacetIdV1 : std::uint8_t {

@@ -27,5 +27,8 @@ class Encoder final {
 };
 [[nodiscard]] provider::Payload call(const provider::CallRequest& request, bool hardware = false);
 [[nodiscard]] bool hardwareEncodeAvailable();
+// `--probe-vaapi`: prints "bloom-vaapi-probe-v1" and one "<render node> <h264> <hevc>" line per
+// VA-API render node (1 when the encode entry point opens) to stdout, then the worker exits.
+[[nodiscard]] bool probeVaapiEncode();
 [[nodiscard]] bool generateFixtures(const std::string& directory);
 } // namespace bloom::media::ffmpeg

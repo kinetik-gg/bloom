@@ -45,6 +45,8 @@ int main(int argc, char** argv) {
     std::string openh264Digest;
     for (int i = 1; i < argc; ++i) {
         const auto argument = std::string_view(argv[i]);
+        if (argument == "--probe-vaapi" && argc == 2)
+            return ffmpeg::probeVaapiEncode() ? 0 : 11;
         if (argument == "--vaapi")
             hardware = true;
         else if (argument == "--vaapi-decode")

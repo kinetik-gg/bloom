@@ -3,6 +3,19 @@
 #include <limits>
 
 namespace bloom::media::provider {
+namespace {
+bool validCode(const std::int32_t code) { return code >= -1 && code <= 255; }
+} // namespace
+std::uint32_t containerChannelLimit(const std::string_view container,
+                                    const std::string_view audioCodec) noexcept {
+    if (audioCodec == "aac")
+        return 8;
+    if (container == "wav")
+        return Limits::channels;
+    if (container == "mxf")
+        return 16;
+    return Limits::channels;
+}
 bool valid(const EncodeSettingsV1& v) {
     return v.width > 0 && v.height > 0 && v.width <= Limits::dimension &&
            v.height <= Limits::dimension &&
@@ -10,7 +23,11 @@ bool valid(const EncodeSettingsV1& v) {
            v.rate.numerator > 0 && v.rate.numerator <= 1000000 && v.rate.denominator <= 1000000 &&
            v.frames <= Limits::indexEntries && v.audioSamples <= 86400ULL * Limits::sampleRate &&
            v.sampleRate > 0 && v.sampleRate <= Limits::sampleRate && v.channels > 0 &&
-           v.channels <= 8 && v.byteLimit > 0 && v.byteLimit <= Limits::exportBytes &&
+           v.channels <= containerChannelLimit(v.container, v.audioCodec) && v.byteLimit > 0 &&
+           v.byteLimit <= Limits::exportBytes && validCode(v.colour.primaries) &&
+           validCode(v.colour.transfer) && validCode(v.colour.matrix) &&
+           validCode(v.colour.range) && v.videoBitrateKbps <= 2'000'000 && v.threads <= 64 &&
+           v.vaapiDevice.size() <= 256 && wire::validText(v.vaapiDevice) &&
            v.bwfDescription.size() <= 256 && wire::validText(v.bwfDescription) &&
            !v.container.empty() && v.container.size() <= Limits::stringBytes &&
            wire::validText(v.container) && v.videoCodec.size() <= Limits::stringBytes &&
@@ -46,7 +63,7 @@ Result<Digest> digest(const EncodeSettingsV1& v) {
         return Unavailable{Error::InvalidValue, "Invalid encode settings"};
     wire::Writer w;
     w.text("EncodeSettingsV1");
-    w.number<std::uint16_t>(1);
+    w.number<std::uint16_t>(2);
     for (const auto* s : {&v.container, &v.videoCodec, &v.profile, &v.audioCodec})
         w.text(*s);
     w.number(v.width);
@@ -57,6 +74,9 @@ Result<Digest> digest(const EncodeSettingsV1& v) {
     w.number(v.sampleRate);
     w.number(v.channels);
     w.text(v.bwfDescription);
+    for (const auto code : {v.colour.primaries, v.colour.transfer, v.colour.matrix, v.colour.range})
+        w.number(static_cast<std::uint32_t>(code + 1));
+    w.number(v.videoBitrateKbps);
     w.enumeration(encodeDeterminism(v), 1, 4);
     w.hash(encodeTolerance(v));
     return digestBytes(w.bytes);

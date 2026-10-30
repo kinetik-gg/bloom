@@ -52,6 +52,16 @@ struct H264EncoderSupportV1 {
 // Whether a VA-API render node (/dev/dri/renderD*) exists. A filesystem probe: call it on a
 // worker, never on the UI thread.
 [[nodiscard]] bool vaapiRenderNodeAvailableV1();
+// VA-API render-node discovery (#369): the render node whose driver opens the H.264 encode entry
+// point (preferring one that also opens HEVC), probed through the supervised media worker so no
+// driver code loads into the application. Blocking: worker threads only. Empty on other
+// platforms or when no node encodes.
+struct VaapiEncodeProbeV1 {
+    std::string renderNode;
+    bool h264 = false;
+    bool hevc = false;
+};
+[[nodiscard]] VaapiEncodeProbeV1 probeVaapiEncodeV1(std::string workerExecutable = {});
 // Verifies the installed OpenH264 binary (a SHA-256 of the library): worker only.
 [[nodiscard]] H264RuntimeAvailabilityV1 verifyH264RuntimeV1();
 // Verifies and installs a downloaded OpenH264 binary (hash and copy): worker only, cancellable.

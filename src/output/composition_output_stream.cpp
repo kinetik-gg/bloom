@@ -296,6 +296,8 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
     try {
         MediaQcEvidenceV1 evidence;
         evidence.artifact = qc.artifact;
+        evidence.colourTags = qc.colour;
+        evidence.container = qc.container;
         evidence.artifactBytes = qc.bytes;
         evidence.snapshot = approval;
         evidence.approval = evidence.snapshot;

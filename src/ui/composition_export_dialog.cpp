@@ -66,7 +66,11 @@ constexpr int kReview = 102;
     switch (preset) {
     case output::OutputPresetV1::ProResMovV1:
     case output::OutputPresetV1::H264MovV1:
+    case output::OutputPresetV1::HevcMovV1:
         return QObject::tr("QuickTime movie (*.mov)");
+    case output::OutputPresetV1::H264Mp4V1:
+    case output::OutputPresetV1::HevcMp4V1:
+        return QObject::tr("MPEG-4 movie (*.mp4)");
     case output::OutputPresetV1::DnxhrMxfV1:
         return QObject::tr("MXF (*.mxf)");
     case output::OutputPresetV1::PcmWavV1:
@@ -114,7 +118,11 @@ QString compositionExportExtension(const output::OutputPresetV1 preset) {
     switch (preset) {
     case output::OutputPresetV1::ProResMovV1:
     case output::OutputPresetV1::H264MovV1:
+    case output::OutputPresetV1::HevcMovV1:
         return QStringLiteral(".mov");
+    case output::OutputPresetV1::H264Mp4V1:
+    case output::OutputPresetV1::HevcMp4V1:
+        return QStringLiteral(".mp4");
     case output::OutputPresetV1::DnxhrMxfV1:
         return QStringLiteral(".mxf");
     case output::OutputPresetV1::PcmWavV1:

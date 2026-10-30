@@ -227,6 +227,12 @@ QString outputPresetLabel(const output::OutputPresetV1 preset) {
         return QObject::tr("WAV / BWF audio");
     case output::OutputPresetV1::H264MovV1:
         return QObject::tr("H.264 MOV (review)");
+    case output::OutputPresetV1::H264Mp4V1:
+        return QObject::tr("H.264 MP4");
+    case output::OutputPresetV1::HevcMovV1:
+        return QObject::tr("HEVC MOV (hardware)");
+    case output::OutputPresetV1::HevcMp4V1:
+        return QObject::tr("HEVC MP4 (hardware)");
     }
     return presetDisplayName(preset);
 }

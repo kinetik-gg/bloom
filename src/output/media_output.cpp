@@ -1,7 +1,11 @@
 #include <algorithm>
+#include <array>
+#include <bloom/media/provider/encode_session.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/openh264_runtime.hpp>
 #include <bloom/output/media_output.hpp>
+#include <bloom/platform/process_supervisor.hpp>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <system_error>
@@ -41,6 +45,55 @@ bool vaapiRenderNodeAvailableV1() {
 #endif
     return false;
 }
+VaapiEncodeProbeV1 probeVaapiEncodeV1(std::string workerExecutable) {
+    VaapiEncodeProbeV1 result;
+#if defined(__linux__)
+    if (!vaapiRenderNodeAvailableV1())
+        return result;
+    platform::ProcessOptions options;
+    options.executable =
+        workerExecutable.empty() ? EncodeSessionV1::defaultWorker() : std::move(workerExecutable);
+    options.arguments = {"--probe-vaapi"};
+    auto launched = platform::ProcessSupervisor::launch(options);
+    auto* process = std::get_if<std::unique_ptr<platform::ProcessSupervisor>>(&launched);
+    if (process == nullptr || !*process)
+        return result;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    std::string text;
+    std::array<std::byte, 4096> buffer{};
+    while (text.size() < 65536) {
+        auto read = (*process)->read(buffer, deadline, {});
+        const auto* count = std::get_if<std::size_t>(&read);
+        if (count == nullptr || *count == 0)
+            break;
+        text.append(reinterpret_cast<const char*>(buffer.data()), *count);
+    }
+    const auto finished = (*process)->finish(deadline);
+    const auto* exit = std::get_if<int>(&finished);
+    if (exit == nullptr || *exit != 0 || !text.starts_with("bloom-vaapi-probe-v1\n"))
+        return result;
+    std::size_t at = text.find('\n') + 1;
+    while (at < text.size()) {
+        const auto end = text.find('\n', at);
+        if (end == std::string::npos)
+            break;
+        const auto line = std::string_view(text).substr(at, end - at);
+        at = end + 1;
+        if (line.size() < 5)
+            continue;
+        const bool h264 = line[line.size() - 3] == '1';
+        const bool hevc = line[line.size() - 1] == '1';
+        const auto node = std::string(line.substr(0, line.size() - 4));
+        if (!h264)
+            continue;
+        if (result.renderNode.empty() || (hevc && !result.hevc))
+            result = {node, h264, hevc};
+    }
+#else
+    (void)workerExecutable;
+#endif
+    return result;
+}
 H264RuntimeAvailabilityV1 locateH264RuntimeV1(const std::filesystem::path& file,
                                               const std::function<bool()>& cancelled) {
     const auto result = OpenH264Runtime().locate(file, cancelled);
@@ -66,7 +119,9 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
     const bool prores = preset == OutputPresetV1::ProResMovV1;
     const bool dnx = preset == OutputPresetV1::DnxhrMxfV1;
     const bool pcm = preset == OutputPresetV1::PcmWavV1;
-    const bool h264 = preset == OutputPresetV1::H264MovV1;
+    const bool h264 = preset == OutputPresetV1::H264MovV1 || preset == OutputPresetV1::H264Mp4V1;
+    const bool hevc = preset == OutputPresetV1::HevcMovV1 || preset == OutputPresetV1::HevcMp4V1;
+    const bool mp4 = preset == OutputPresetV1::H264Mp4V1 || preset == OutputPresetV1::HevcMp4V1;
 #if defined(__APPLE__)
     // The preset is ProRes regardless of which provider name the settings carry; the macOS
     // provider spells it "prores", while the shared EncodeSettingsV1 default remains "prores_ks".
@@ -74,11 +129,13 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
 #else
     const bool proresCodec = settings.videoCodec == "prores_ks";
 #endif
-    if ((!prores && !dnx && !pcm && !h264) || !valid(settings) ||
+    if ((!prores && !dnx && !pcm && !h264 && !hevc) || !valid(settings) ||
         (prores && (!proresCodec || settings.container != "mov")) ||
         (dnx && (settings.videoCodec != "dnxhd" || settings.container != "mxf")) ||
-        (h264 && (settings.videoCodec != "h264" || settings.container != "mov" ||
+        (h264 && (settings.videoCodec != "h264" || settings.container != (mp4 ? "mp4" : "mov") ||
                   settings.profile != "high")) ||
+        (hevc && (settings.videoCodec != "hevc" || settings.container != (mp4 ? "mp4" : "mov") ||
+                  (settings.profile != "main" && settings.profile != "main10"))) ||
         (pcm && (!settings.videoCodec.empty() || settings.container != "wav" ||
                  (settings.audioCodec != "pcm_s16le" && settings.audioCodec != "pcm_s24le"))))
         return Unavailable{Error::InvalidValue, "Preset and encode settings differ"};
@@ -94,6 +151,8 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
         result.implementationNote = kProResExportNote;
     if (h264)
         result.implementationNote = "Review deliverable — not for archival";
+    if (hevc)
+        result.implementationNote = "HEVC on VA-API hardware; not for archival";
     using F = OutputFacetIdV1;
     using S = OutputPreservationStateV1;
     const bool alpha =

@@ -13,7 +13,7 @@ using namespace media::provider;
 namespace {
 using Stage = SequenceExportStageV1;
 using Work = detail::SequenceExportWorkV1;
-const runtime::TaskOwner owner{runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(404)};
+// Every stage uses the request's owner (the export queue run's TaskOwner).
 void require(bool condition, const char* detail, Error code = Error::InvalidValue) {
     if (!condition)
         throw Unavailable{code, detail};
@@ -169,18 +169,29 @@ struct detail::SequenceExportWorkV1 {
             s.videoCodec = "prores";
             s.container = "mov";
             s.profile = request.profile.empty() ? "hq" : request.profile;
-        } else if (request.preset == output::OutputPresetV1::H264MovV1) {
+        } else if (request.preset == output::OutputPresetV1::H264MovV1 ||
+                   request.preset == output::OutputPresetV1::H264Mp4V1) {
             s.videoCodec = "h264";
-            s.container = "mov";
+            s.container = request.preset == output::OutputPresetV1::H264Mp4V1 ? "mp4" : "mov";
             s.profile = "high";
         } else {
             require(false, "This export preset needs the FFmpeg worker, unavailable on macOS",
                     Error::Unavailable);
         }
 #else
-        if (request.preset == output::OutputPresetV1::H264MovV1) {
+        if (request.preset == output::OutputPresetV1::HevcMovV1 ||
+            request.preset == output::OutputPresetV1::HevcMp4V1) {
+            // HEVC is hardware-only (ADR 0033): VA-API, never a software encoder.
+            require(request.hardware, "HEVC needs a VA-API render node with HEVC encode",
+                    Error::Unavailable);
+            s.videoCodec = "hevc";
+            s.container = request.preset == output::OutputPresetV1::HevcMp4V1 ? "mp4" : "mov";
+            s.profile = request.profile == "main10" ? "main10" : "main";
+            request.worker.vaapi = true;
+        } else if (request.preset == output::OutputPresetV1::H264MovV1 ||
+                   request.preset == output::OutputPresetV1::H264Mp4V1) {
             s.videoCodec = "h264";
-            s.container = "mov";
+            s.container = request.preset == output::OutputPresetV1::H264Mp4V1 ? "mp4" : "mov";
             s.profile = "high";
             request.worker.vaapi = request.hardware;
             if (!request.hardware) {
@@ -222,8 +233,21 @@ struct detail::SequenceExportWorkV1 {
                              static_cast<std::uint64_t>(s.rate.denominator) /
                              static_cast<std::uint64_t>(s.rate.numerator);
         }
+        // Issue #369: multithreaded encode (automatic thread count), the destination-derived
+        // byte limit, the requested bit rate, the probed render node and colour tags derived from
+        // the output colour intent.
+        s.threads = 0;
+        s.videoBitrateKbps = request.videoBitrateKbps.value_or(0);
+        s.vaapiDevice = request.vaapiDevice;
+        if (request.artifactByteLimit)
+            s.byteLimit =
+                std::min(s.byteLimit, std::max<std::uint64_t>(1, *request.artifactByteLimit));
         const auto display = output::PreparedOutputDisplayV1::prepare(
             colorIntent(), request.displayName, request.viewName);
+        if (display) {
+            const auto tags = output::outputColourTagsV1(display->displayName());
+            s.colour = {tags.primaries, tags.transfer, tags.matrix, tags.range};
+        }
         require(request.preset == output::OutputPresetV1::PcmWavV1 || display != nullptr,
                 "Output display processor unavailable", Error::Unavailable);
         analysis =
@@ -325,6 +349,12 @@ struct detail::SequenceExportWorkV1 {
         auto guardResult = FrameExportRequestAccessV1::claim(approved).tryEnterPublication();
         SequenceExportResultV1 outcome;
         outcome.evidence = std::move(evidence);
+        outcome.expectedColourTags =
+            settings().videoCodec.empty() ? ColourTags{} : settings().colour;
+        const auto& codec =
+            settings().videoCodec.empty() ? settings().audioCodec : settings().videoCodec;
+        outcome.expectedContainer =
+            settings().container + "/" + (codec == "prores_ks" ? std::string("prores") : codec);
         outcome.encodedFrames = encoded;
         outcome.gpuEvaluatedFrames = gpuEvaluatedFrames;
         outcome.gpuNativeDispatches = gpuNativeDispatches;
@@ -496,6 +526,8 @@ struct SequenceExportRunnerV1::State {
     std::optional<OutputAnalysisAttemptRunnerV1> attemptRunner;
     std::shared_ptr<const output::OutputAnalysisAttemptV1> pending;
     bool approved = false;
+    bool pauseRequested = false;
+    bool holding = false;
     std::uint64_t visibleEncoded = 0;
     std::optional<SequenceExportResultV1> outcome;
     State(runtime::TaskScheduler& s, PublicationCoordinator& p,
@@ -554,7 +586,8 @@ struct SequenceExportRunnerV1::State {
     }
     template <typename Callback> void submit(Stage next, Callback callback) {
         stage = next;
-        runtime::TaskRequest request("Export composition", owner, runtime::TaskPriority::Foreground,
+        runtime::TaskRequest request("Export composition", work->request.owner,
+                                     runtime::TaskPriority::Foreground,
                                      next == Stage::Compiling ? runtime::TaskExecutor::Cpu
                                                               : runtime::TaskExecutor::BlockingIo);
         auto submission = scheduler.submit<void>(
@@ -612,12 +645,12 @@ struct SequenceExportRunnerV1::State {
                            .quality = runtime::EvaluationQuality::Reference,
                            .colorIntent = work->colorIntent(),
                            .pixelStorageByteLimit = 0,
-                           .bypassLookNodes = false},
+                           .bypassLookNodes = work->request.bypassLookNodes},
             .assetBaseDirectory = work->request.assetBaseDirectory,
             .fallbackEvaluator = work->fallbackEvaluator,
             .targetPath = work->request.range.destination,
             .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
-            .owner = owner,
+            .owner = work->request.owner,
             .preset = preset,
             .gpuProvider = work->request.gpuProvider,
             .useRootPixelCapacity = true};
@@ -686,10 +719,24 @@ void SequenceExportRunnerV1::cancel() {
         state_->attemptRunner->requestCancellation();
     state_->task.cancel();
 }
+void SequenceExportRunnerV1::setPaused(const bool paused) { state_->pauseRequested = paused; }
+bool SequenceExportRunnerV1::pausedAtBoundary() const {
+    return state_->pauseRequested && state_->holding;
+}
 void SequenceExportRunnerV1::poll() {
     auto& s = *state_;
     if (s.stage == Stage::Complete)
         return;
+    if (s.holding) {
+        if (s.work->isCancelled()) {
+            s.holding = false;
+            s.fail({Error::Cancelled, "Composition export cancelled"});
+        } else if (!s.pauseRequested) {
+            s.holding = false;
+            s.nextAttempt();
+        }
+        return;
+    }
     if (s.stage == Stage::AwaitingApproval) {
         if (s.work->isCancelled())
             s.fail({Error::Cancelled, "Composition export cancelled"});
@@ -765,6 +812,10 @@ void SequenceExportRunnerV1::poll() {
         return;
     }
     s.visibleEncoded = s.work->encoded;
+    if (s.pauseRequested) {
+        s.holding = true;
+        return;
+    }
     s.nextAttempt();
 }
 SequenceExportStageV1 SequenceExportRunnerV1::stage() const { return state_->stage; }

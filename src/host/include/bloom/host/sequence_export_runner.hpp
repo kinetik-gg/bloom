@@ -18,7 +18,7 @@ reserveSequenceExportQueueV1(output::ExportResourceLedgerV1&, std::uint64_t byte
                              std::optional<std::uint64_t> explicitJobLimit,
                              std::shared_ptr<GpuExportProvider>, const runtime::CancellationToken&,
                              output::ExportResourceAdmissionStatusV1&) noexcept;
-}
+} // namespace detail
 class SequenceExportRunnerV1;
 
 // One export-specific cleanup worker, owned by the application or a headless caller. A runner
@@ -74,6 +74,17 @@ struct SequenceExportRequestV1 {
     // Explicit caller cap on the frame queue's initial byte envelope only. Decoded audio later
     // enters the sampled root separately; the provider's frame/extent/index limits still apply.
     std::optional<std::uint64_t> queueByteLimit = std::nullopt;
+    // ADR 0033: run the look-tagged effects bypassed (the VFX handoff policy).
+    bool bypassLookNodes = false;
+    // H.264/HEVC target bit rate; absent means the codec default.
+    std::optional<std::uint32_t> videoBitrateKbps = std::nullopt;
+    // Issue #369: the destination's free space minus the safety margin; the encoded artifact may
+    // not exceed it. Absent keeps the provider's ceiling.
+    std::optional<std::uint64_t> artifactByteLimit = std::nullopt;
+    // Issue #369: the VA-API render node the encoder probe found.
+    std::string vaapiDevice = {};
+    // The task owner every stage uses (the export queue's run owner).
+    runtime::TaskOwner owner{runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(404)};
     // Shared final-render provider for every frame of the sequence. Null creates one runner-owned,
     // disabled CPU provider with a worker-sampled processing root. The runner copies the exact
     // provider into every per-frame attempt; an injected application provider retains its shared
@@ -112,6 +123,10 @@ struct SequenceExportResultV1 {
     // Genuine native device ownership epoch observed on the GPU-evaluated frames (last nonzero
     // value; zero when no frame used a device). Diagnostics only.
     std::uint64_t gpuDeviceOwnershipEpoch = 0;
+    // Issue #369: what the output colour intent and preset asked the container to carry, for the
+    // ColourTags and Container checks against the reopened artifact (evidence).
+    media::provider::ColourTags expectedColourTags;
+    std::string expectedContainer;
     [[nodiscard]] bool published() const noexcept { return publication.targetWasPublished(); }
 };
 // Authoring-thread driver. poll() never blocks: it composes the existing attempt/approval stages.
@@ -128,6 +143,11 @@ class SequenceExportRunnerV1 final {
     SequenceExportRunnerV1& operator=(const SequenceExportRunnerV1&) = delete;
     void poll();
     void cancel();
+    // ADR 0033 pause: at the next frame boundary no further frame attempt starts. The encoder
+    // session, staged file and queue reservation stay held; no GPU phase is held while paused.
+    void setPaused(bool paused);
+    // True once a pause request has reached a frame boundary (nothing is in flight).
+    [[nodiscard]] bool pausedAtBoundary() const;
     [[nodiscard]] SequenceExportStageV1 stage() const;
     [[nodiscard]] const output::MediaOutputAnalysisV1* analysis() const;
     [[nodiscard]] std::optional<core::Sha256Digest> frameApprovalDigest() const;

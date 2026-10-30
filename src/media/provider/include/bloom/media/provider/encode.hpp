@@ -12,9 +12,24 @@ struct EncodeSettingsV1 {
     std::uint64_t frames = 1, audioSamples = 0;
     std::uint32_t sampleRate = 48000, channels = 2;
     std::string bwfDescription;
+    // Issue #369: the destination's free space minus a safety margin, bounded by the container.
     std::uint64_t byteLimit = Limits::exportBytes;
+    // Container colour tags written for the output colour intent (H.273 code points; the range
+    // uses FFmpeg's convention, 1 limited and 2 full). The matrix also selects the RGB -> YUV
+    // coefficients. The default is the legacy BT.709 limited-range tagging.
+    ColourTags colour{1, 1, 1, 1};
+    // Target video bit rate for H.264/HEVC; zero means the codec default.
+    std::uint32_t videoBitrateKbps = 0;
+    // Encoder threads; zero means automatic. Threading never changes decoded semantics beyond the
+    // tolerance profile; lossy codecs already claim DecodedSemanticTolerance.
+    std::uint32_t threads = 1;
+    // VA-API render node for hardware encode ("/dev/dri/renderD128" when empty).
+    std::string vaapiDevice;
     friend bool operator==(const EncodeSettingsV1&, const EncodeSettingsV1&) = default;
 };
+// Issue #369: each container's own audio channel limit, replacing the fixed 8-channel cap.
+[[nodiscard]] std::uint32_t containerChannelLimit(std::string_view container,
+                                                  std::string_view audioCodec) noexcept;
 struct EncodedChunkV1 {
     std::uint64_t offset = 0;
     Bytes bytes;
@@ -25,6 +40,9 @@ struct EncodeQcV1 {
     Digest artifact, firstFrame, lastFrame, audio;
     // Fixed point: maximum and mean absolute sample error in unsigned 16-bit units.
     std::uint32_t maximumError = 0, meanError = 0;
+    // Issue #369: read back from the reopened artifact.
+    ColourTags colour;
+    std::string container;
 };
 inline constexpr std::uint32_t kEncodeChunkBytes = 1024U * 1024U;
 inline constexpr std::string_view kVideoToleranceV1 =

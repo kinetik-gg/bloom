@@ -271,6 +271,11 @@ void settings(Writer& w, const EncodeSettingsV1& v) {
     w.number(v.channels);
     w.text(v.bwfDescription);
     w.number(v.byteLimit);
+    for (const auto code : {v.colour.primaries, v.colour.transfer, v.colour.matrix, v.colour.range})
+        w.number(static_cast<std::uint32_t>(code + 1));
+    w.number(v.videoBitrateKbps);
+    w.number(v.threads);
+    w.text(v.vaapiDevice);
 }
 EncodeSettingsV1 settings(Reader& r) {
     EncodeSettingsV1 v;
@@ -285,6 +290,11 @@ EncodeSettingsV1 settings(Reader& r) {
     v.channels = r.number<std::uint32_t>();
     v.bwfDescription = r.text();
     v.byteLimit = r.number<std::uint64_t>();
+    for (auto* code : {&v.colour.primaries, &v.colour.transfer, &v.colour.matrix, &v.colour.range})
+        *code = static_cast<std::int32_t>(r.number<std::uint32_t>()) - 1;
+    v.videoBitrateKbps = r.number<std::uint32_t>();
+    v.threads = r.number<std::uint32_t>();
+    v.vaapiDevice = r.text();
     require(valid(v));
     return v;
 }
@@ -299,6 +309,10 @@ void qc(Writer& w, const EncodeQcV1& v) {
     require(v.maximumError <= 65535 && v.meanError <= v.maximumError);
     w.number(v.maximumError);
     w.number(v.meanError);
+    for (const auto code : {v.colour.primaries, v.colour.transfer, v.colour.matrix, v.colour.range})
+        w.number(static_cast<std::uint32_t>(code + 1));
+    require(v.container.size() <= Limits::stringBytes);
+    w.text(v.container);
 }
 EncodeQcV1 qc(Reader& r) {
     EncodeQcV1 v;
@@ -310,6 +324,9 @@ EncodeQcV1 qc(Reader& r) {
         *d = r.hash();
     v.maximumError = r.number<std::uint32_t>();
     v.meanError = r.number<std::uint32_t>();
+    for (auto* code : {&v.colour.primaries, &v.colour.transfer, &v.colour.matrix, &v.colour.range})
+        *code = static_cast<std::int32_t>(r.number<std::uint32_t>()) - 1;
+    v.container = r.text();
     Writer validation;
     qc(validation, v);
     return v;

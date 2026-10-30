@@ -117,9 +117,34 @@ int videoProfile(const EncodeSettingsV1& s) {
         require(s.profile == "high", "H.264 profile unavailable", Error::Unavailable);
         return AV_PROFILE_H264_HIGH;
     }
+    if (s.videoCodec == "hevc") {
+        require(s.profile == "main" || s.profile == "main10", "HEVC profile unavailable",
+                Error::Unavailable);
+        return s.profile == "main10" ? AV_PROFILE_HEVC_MAIN_10 : AV_PROFILE_HEVC_MAIN;
+    }
     require(s.videoCodec == "tiff" && s.profile == "rgba16", "Video encoder unavailable",
             Error::Unavailable);
     return 0;
+}
+// The RGB -> YUV coefficients for the tagged matrix (#369): BT.2020 for matrix 9/10, otherwise
+// BT.709, which is also what an untagged or unknown matrix has always used.
+int swsMatrix(const EncodeSettingsV1& s) {
+    return s.colour.matrix == 9 || s.colour.matrix == 10 ? SWS_CS_BT2020 : SWS_CS_ITU709;
+}
+bool hardwareCodec(const EncodeSettingsV1& s) {
+    return s.videoCodec == "h264" || s.videoCodec == "hevc";
+}
+// "<container>/<codec>" of a reopened artifact. MOV and MP4 share one demuxer; the major brand
+// tells them apart ("qt  " for QuickTime).
+std::string containerToken(const AVFormatContext& format, const AVCodecParameters& codec) {
+    std::string container = format.iformat ? format.iformat->name : "";
+    if (container.starts_with("mov")) {
+        const auto* brand = av_dict_get(format.metadata, "major_brand", nullptr, 0);
+        container = brand && std::string_view(brand->value) == "qt  " ? "mov" : "mp4";
+    } else if (container.starts_with("mxf")) {
+        container = "mxf";
+    }
+    return container + "/" + avcodec_get_name(codec.codec_id);
 }
 } // namespace
 struct Encoder::State {
@@ -171,7 +196,8 @@ struct Encoder::State {
         track.codec = avcodec_alloc_context3(codec);
         require(track.codec && track.frame && track.packet, "Encoder allocation", Error::Oversized);
         auto& c = *track.codec;
-        c.thread_count = 1;
+        c.thread_count =
+            video && settings.videoCodec != "tiff" ? static_cast<int>(settings.threads) : 1;
         c.flags |= AV_CODEC_FLAG_BITEXACT;
         if (format && (format->oformat->flags & AVFMT_GLOBALHEADER))
             c.flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -182,11 +208,10 @@ struct Encoder::State {
                            static_cast<int>(settings.rate.numerator)};
             c.framerate = av_inv_q(c.time_base);
             c.profile = videoProfile(settings);
-            c.pix_fmt = settings.videoCodec == "tiff"
-                            ? AV_PIX_FMT_RGBA64LE
-                            : settings.videoCodec == "h264" && hardware ? AV_PIX_FMT_VAAPI
-                            : settings.videoCodec == "h264" ? AV_PIX_FMT_YUV420P
-                                                             : AV_PIX_FMT_YUV422P10LE;
+            c.pix_fmt = settings.videoCodec == "tiff"         ? AV_PIX_FMT_RGBA64LE
+                        : hardwareCodec(settings) && hardware ? AV_PIX_FMT_VAAPI
+                        : settings.videoCodec == "h264"       ? AV_PIX_FMT_YUV420P
+                                                              : AV_PIX_FMT_YUV422P10LE;
             if (settings.videoCodec == "prores_ks" && c.profile >= 4)
                 c.pix_fmt = AV_PIX_FMT_YUVA444P10LE;
             if (settings.videoCodec == "dnxhd") {
@@ -196,23 +221,29 @@ struct Encoder::State {
                 if (c.profile == 0)
                     c.bit_rate = 120000000;
             }
-            if (settings.videoCodec == "h264") {
-                c.bit_rate = 30000000;
+            if (hardwareCodec(settings)) {
+                c.bit_rate = settings.videoBitrateKbps != 0
+                                 ? std::int64_t{settings.videoBitrateKbps} * 1000
+                                 : (settings.videoCodec == "hevc" ? 20000000 : 30000000);
                 c.rc_min_rate = c.bit_rate;
                 c.rc_max_rate = c.bit_rate;
-                c.gop_size = static_cast<int>(std::max<std::int64_t>(
-                    1, settings.rate.numerator / settings.rate.denominator));
+                c.gop_size = static_cast<int>(
+                    std::max<std::int64_t>(1, settings.rate.numerator / settings.rate.denominator));
                 c.max_b_frames = 0;
                 if (hardware) {
+                    const auto device = settings.vaapiDevice.empty()
+                                            ? std::string("/dev/dri/renderD128")
+                                            : settings.vaapiDevice;
                     require(av_hwdevice_ctx_create(&c.hw_device_ctx, AV_HWDEVICE_TYPE_VAAPI,
-                                                   "/dev/dri/renderD128", nullptr, 0) >= 0,
+                                                   device.c_str(), nullptr, 0) >= 0,
                             "VA-API device unavailable", Error::Unavailable);
                     track.hardwareFrames = av_hwframe_ctx_alloc(c.hw_device_ctx);
                     require(track.hardwareFrames, "VA-API frame context unavailable",
                             Error::Unavailable);
                     auto* frames = reinterpret_cast<AVHWFramesContext*>(track.hardwareFrames->data);
                     frames->format = AV_PIX_FMT_VAAPI;
-                    frames->sw_format = AV_PIX_FMT_NV12;
+                    frames->sw_format =
+                        settings.profile == "main10" ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
                     frames->width = c.width;
                     frames->height = c.height;
                     frames->initial_pool_size = 4;
@@ -221,10 +252,17 @@ struct Encoder::State {
                     c.hw_frames_ctx = av_buffer_ref(track.hardwareFrames);
                 }
             }
-            c.color_primaries = AVCOL_PRI_BT709;
-            c.color_trc = AVCOL_TRC_BT709;
-            c.colorspace = AVCOL_SPC_BT709;
-            c.color_range = AVCOL_RANGE_MPEG;
+            // #369: tags from the output colour intent instead of a fixed BT.709.
+            const auto tag = [](const std::int32_t code, const int unspecified) {
+                return code < 0 ? unspecified : code;
+            };
+            c.color_primaries = static_cast<AVColorPrimaries>(
+                tag(settings.colour.primaries, AVCOL_PRI_UNSPECIFIED));
+            c.color_trc = static_cast<AVColorTransferCharacteristic>(
+                tag(settings.colour.transfer, AVCOL_TRC_UNSPECIFIED));
+            c.colorspace =
+                static_cast<AVColorSpace>(tag(settings.colour.matrix, AVCOL_SPC_UNSPECIFIED));
+            c.color_range = static_cast<AVColorRange>(tag(settings.colour.range, AVCOL_RANGE_MPEG));
             c.sample_aspect_ratio = {1, 1};
         } else {
             require(name == "pcm_s16le" || name == "pcm_s24le" || name == "aac",
@@ -255,19 +293,22 @@ struct Encoder::State {
                     "Encoder metadata failure");
         }
         if (video) {
-            track.frame->format = track.hardwareFrames ? AV_PIX_FMT_NV12 : c.pix_fmt;
+            track.frame->format =
+                track.hardwareFrames
+                    ? reinterpret_cast<AVHWFramesContext*>(track.hardwareFrames->data)->sw_format
+                    : c.pix_fmt;
             track.frame->width = c.width;
             track.frame->height = c.height;
             require(av_frame_get_buffer(track.frame, 32) >= 0, "Encode frame allocation",
                     Error::Oversized);
-            track.scale =
-                sws_getContext(c.width, c.height, AV_PIX_FMT_RGBA64LE, c.width, c.height,
-                               static_cast<AVPixelFormat>(track.frame->format),
-                               SWS_BICUBIC | SWS_BITEXACT, nullptr, nullptr, nullptr);
+            track.scale = sws_getContext(c.width, c.height, AV_PIX_FMT_RGBA64LE, c.width, c.height,
+                                         static_cast<AVPixelFormat>(track.frame->format),
+                                         SWS_BICUBIC | SWS_BITEXACT, nullptr, nullptr, nullptr);
             require(track.scale, "Output pixel conversion unavailable", Error::Unavailable);
             if (settings.videoCodec != "tiff") {
-                const auto* coefficients = sws_getCoefficients(SWS_CS_ITU709);
-                require(sws_setColorspaceDetails(track.scale, coefficients, 1, coefficients, 0, 0,
+                const auto* coefficients = sws_getCoefficients(swsMatrix(settings));
+                require(sws_setColorspaceDetails(track.scale, coefficients, 1, coefficients,
+                                                 c.color_range == AVCOL_RANGE_JPEG ? 1 : 0, 0,
                                                  1 << 16, 1 << 16) >= 0,
                         "Output range conversion unavailable");
             }
@@ -281,15 +322,17 @@ struct Encoder::State {
     }
     void open() {
         require(valid(settings), "Invalid encode settings", Error::InvalidValue);
-        if (settings.videoCodec == "hevc" || settings.videoCodec == "h265")
+        // HEVC is hardware-only (ADR 0033): there is no software HEVC encoder in the intake.
+        if ((settings.videoCodec == "hevc" && !hardware) || settings.videoCodec == "h265")
             throw Unavailable{Error::Unavailable, "codec.hevc.software-encoder-not-intaken"};
         if (settings.videoCodec == "tiff") {
             require(settings.container == "tiff" && settings.frames == 1 &&
                         settings.audioCodec.empty(),
                     "TIFF is a single image product", Error::Unavailable);
         } else {
-            require(settings.container == "mov" || settings.container == "mxf" ||
-                        settings.container == "matroska" || settings.container == "wav",
+            require(settings.container == "mov" || settings.container == "mp4" ||
+                        settings.container == "mxf" || settings.container == "matroska" ||
+                        settings.container == "wav",
                     "Muxer unavailable", Error::Unavailable);
             require(settings.container != "wav" || settings.videoCodec.empty(),
                     "WAV cannot carry video", Error::Unavailable);
@@ -309,9 +352,10 @@ struct Encoder::State {
                 av_dict_set(&format->metadata, "description", settings.bwfDescription.c_str(), 0);
         }
         if (!settings.videoCodec.empty())
-            openTrack(videoTrack, settings.videoCodec == "h264"
-                                       ? (hardware ? "h264_vaapi" : "libopenh264")
-                                                                  : settings.videoCodec,
+            openTrack(videoTrack,
+                      settings.videoCodec == "h264"   ? (hardware ? "h264_vaapi" : "libopenh264")
+                      : settings.videoCodec == "hevc" ? "hevc_vaapi"
+                                                      : settings.videoCodec,
                       true);
         if (!settings.audioCodec.empty())
             openTrack(audioTrack, settings.audioCodec, false);
@@ -435,10 +479,12 @@ struct Encoder::State {
         const auto cleanup =
             std::unique_ptr<SwsContext, decltype(&sws_freeContext)>(scale, sws_freeContext);
         if (settings.videoCodec != "tiff") {
-            const auto* coefficients = sws_getCoefficients(SWS_CS_ITU709);
-            require(sws_setColorspaceDetails(scale, coefficients, 0, coefficients, 1, 0, 1 << 16,
-                                             1 << 16) >= 0,
-                    "Reopen range conversion unavailable");
+            const auto* coefficients = sws_getCoefficients(swsMatrix(settings));
+            require(
+                sws_setColorspaceDetails(scale, coefficients,
+                                         videoTrack.codec->color_range == AVCOL_RANGE_JPEG ? 1 : 0,
+                                         coefficients, 1, 0, 1 << 16, 1 << 16) >= 0,
+                "Reopen range conversion unavailable");
         }
         std::uint8_t* data[4]{reinterpret_cast<std::uint8_t*>(rgba.data()), nullptr, nullptr,
                               nullptr};
@@ -545,6 +591,11 @@ struct Encoder::State {
         const auto& stream = *input.format->streams[0];
         require(stream.codecpar->codec_id == videoTrack.codec->codec_id,
                 "Reopened video codec differs");
+        // #369: what the container actually declares, for the ColourTags and Container checks.
+        const auto& parameters = *stream.codecpar;
+        qc.colour = {parameters.color_primaries, parameters.color_trc, parameters.color_space,
+                     parameters.color_range};
+        qc.container = containerToken(*input.format, parameters);
         decoder(input, stream, nullptr);
         bool eof = false;
         while (next(input, 0, eof)) {
@@ -575,6 +626,8 @@ struct Encoder::State {
         openInput(input, reader);
         const unsigned index = settings.videoCodec.empty() ? 0U : 1U;
         const auto& stream = *input.format->streams[index];
+        if (settings.videoCodec.empty())
+            qc.container = containerToken(*input.format, *stream.codecpar);
         require(
             stream.codecpar->codec_id == audioTrack.codec->codec_id &&
                 stream.codecpar->sample_rate == static_cast<int>(settings.sampleRate) &&

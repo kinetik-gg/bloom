@@ -180,5 +180,9 @@ void write(Writer& w, const MediaQcEvidenceV1& v) {
     require(v.maximumError <= 65535 && v.meanError <= v.maximumError);
     w.number(v.maximumError);
     w.number(v.meanError);
+    for (const auto code :
+         {v.colourTags.primaries, v.colourTags.transfer, v.colourTags.matrix, v.colourTags.range})
+        w.number(static_cast<std::uint32_t>(code + 1));
+    w.text(v.container);
 }
 } // namespace bloom::media::provider::wire
