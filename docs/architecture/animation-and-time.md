@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-10-25
+Updated: 2026-10-31
 
 ## Geometry and transform levels
 
@@ -556,12 +556,11 @@ never described as a retained prefix.
 revision.** `CompositionSession::snapshot()` and `snapshotChanged()` remain the live document and UI
 truth: every applied command advances them. Beside them the session retains
 `evaluationSnapshot()`, the newest genuine snapshot whose render-relevant content the preview has
-evaluated, and publishes `evaluationChanged()` only when it actually moves. A command whose own
-result metadata proves it changed no rendered pixel -- the three card-layout commands, `MoveNodes`,
-`SetNodeCollapsed` and `SetNodeWidth`, and only those -- leaves `evaluationSnapshot()` on the
-previous genuine snapshot, so the prepared frame, the frame-cache key and the compiled plan keep one
-real revision instead of one per drag. Every other command, an unknown or unclassified one included,
-advances `evaluationSnapshot()` to live, so the default stays conservative. The retained snapshot is
+evaluated, and publishes `evaluationChanged()` only when it actually moves. A command whose result
+proves it changed no rendered pixel (`CommandResult::renderAffecting == false`) leaves
+`evaluationSnapshot()` on the previous genuine snapshot, so the prepared frame, the frame-cache key,
+the compiled plan and the operation cache keep one real revision instead of one per drag. Every
+other command advances `evaluationSnapshot()` to live. The retained snapshot is
 never a re-stamped revision: it is one the session actually read from the document, and nested-plan
 `sourceRevision` and `ProcessFrameIdentity` keep naming it. A cache entry becomes unreachable when
 the session no longer accepts its own revision for its own time, and is pruned then -- never by a
@@ -575,6 +574,34 @@ re-decoding it, but never inserts a source entry on a miss, and derived operatio
 overridden plans, gesture frame-cache insertion, and disk-cache reads and writes stay bypassed. An
 explicit evaluation bypass (`request.bypassOperationCache`, distinct from the preview frame-cache
 refresh described here) disables even that read-only reuse.
+
+**Which edits are render-neutral (#399).** The command stack does not take an operation's word for
+it. After applying a transaction it compares the project before and after through the document's
+one field classification, `document::sameEvaluationInputs()`
+(`src/document/include/bloom/document/evaluation_inputs.hpp`), and a transaction that changed no
+evaluation input is render-neutral whatever its operations declared. Moving, collapsing or resizing
+a node card, framing nodes in a group and the group's name, padding or color, a layer's name, label
+color and lock, a mask's name, composition name, folder, work area, safe areas, timecode display
+and viewer background, the project name, asset names, folders, tags and order, and the export queue
+are presentation: saved, undoable and dirtying, but invisible to the plan and to every cache. Undo
+and redo replay the impact stored with the history entry, so they are neutral too. Selection,
+current time and panel state are session state and never reach the document at all. The comparison
+runs on shared immutable storage first, so an edit pays only for the composition it touched. The
+proof also checks declarations the other way: a transaction whose operations all declared
+themselves render-neutral but which changed an evaluation input fails closed to a whole render.
+An operation that publishes its own finite footprint keeps it as published.
+
+A field is classified where it lives. Presentation collections (node groups, asset folders, the
+export queue, the project name) are skipped whole, so any field added to them -- a group frame
+color, for example -- is presentation by construction. Node layout is presentation except `muted`,
+which the compiler reads only through `document::nodeMuted()`, so a new card field such as a
+collapse state is presentation by construction too. Records that mix both kinds name their
+presentation fields in `evaluationView()`; every unnamed field, including one added later, stays an
+evaluation input, so a missed classification costs a re-render and never a stale frame. A name is
+presentation only while nothing evaluated refers to it: every evaluation reference in the document
+is by stable id, and text an evaluated node resolves by name (a channel expression naming a
+channel) is a parameter value and therefore an evaluation input. A feature that makes an evaluated
+value read a layer, node or group name must move that name into the evaluation inputs.
 
 **Time-indexed provenance, and two distinct signals.** TEMPORAL-2A replaced the single retained
 snapshot with `evaluationSnapshotForTime(t)`: a sorted, full-cover list of spans, each naming the
