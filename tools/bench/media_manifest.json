@@ -1,0 +1,732 @@
+{
+ "manifestVersion": 1,
+ "mediaRootDefault": {
+  "env": "BLOOM_BENCH_MEDIA",
+  "relative": "bench-media"
+ },
+ "remoteObjectStorageUrl": null,
+ "assets": {
+  "720p/exr_float_zip": {
+   "type": "sequence",
+   "path": "720p/exr_float_zip/bench_720p_exr_float_zip.####.exr",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "exr": {
+    "channels": [
+     [
+      "A",
+      "FLOAT"
+     ],
+     [
+      "B",
+      "FLOAT"
+     ],
+     [
+      "G",
+      "FLOAT"
+     ],
+     [
+      "R",
+      "FLOAT"
+     ]
+    ],
+    "compression": "ZIP"
+   },
+   "height": 720,
+   "width": 1280,
+   "files": 240,
+   "bytes": 2000632088,
+   "sha256": "217405084e06375279ccec661d10bee4e070384b8021933ec909c50f166740b5",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "exr_float_zip"
+  },
+  "720p/exr_half_piz": {
+   "type": "sequence",
+   "path": "720p/exr_half_piz/bench_720p_exr_half_piz.####.exr",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "exr": {
+    "channels": [
+     [
+      "A",
+      "HALF"
+     ],
+     [
+      "B",
+      "HALF"
+     ],
+     [
+      "G",
+      "HALF"
+     ],
+     [
+      "R",
+      "HALF"
+     ]
+    ],
+    "compression": "PIZ"
+   },
+   "height": 720,
+   "width": 1280,
+   "files": 240,
+   "bytes": 586168804,
+   "sha256": "383ae850edf48c8b10c1b1287c768ddbf5a13bac63d3b4562a533c396b434406",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "exr_half_piz"
+  },
+  "720p/exr_multilayer": {
+   "type": "sequence",
+   "path": "720p/exr_multilayer/bench_720p_multilayer.####.exr",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "exr": {
+    "channels": [
+     [
+      "Composite.Combined.A",
+      "HALF"
+     ],
+     [
+      "Composite.Combined.B",
+      "HALF"
+     ],
+     [
+      "Composite.Combined.G",
+      "HALF"
+     ],
+     [
+      "Composite.Combined.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.A",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.B",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.G",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Combined.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.CryptoObject00.a",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject00.b",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject00.g",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject00.r",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.a",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.b",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.g",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.CryptoObject01.r",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Depth.Z",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Noisy Image.A",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Noisy Image.B",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Noisy Image.G",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Noisy Image.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.Normal.X",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Normal.Y",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.Normal.Z",
+      "FLOAT"
+     ],
+     [
+      "ViewLayer.bench_color.A",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_color.B",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_color.G",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_color.R",
+      "HALF"
+     ],
+     [
+      "ViewLayer.bench_id.X",
+      "FLOAT"
+     ]
+    ],
+    "compression": "ZIP"
+   },
+   "height": 720,
+   "width": 1280,
+   "files": 240,
+   "bytes": 3565070540,
+   "sha256": "4f2f395449fea509232f2fe32d5ea5cce2d5818cd26e4c8910888e5b51d8fffd",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "exr_multilayer"
+  },
+  "720p/png16": {
+   "type": "sequence",
+   "path": "720p/png16/bench_720p_png16.####.png",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "height": 720,
+   "png": {
+    "bitDepth": 16,
+    "channels": 4
+   },
+   "width": 1280,
+   "files": 240,
+   "bytes": 1094816351,
+   "sha256": "f788acf8d019698982da3255f2df6da8986eb5a63a469497c56809524c82f39d",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "png16"
+  },
+  "720p/png8": {
+   "type": "sequence",
+   "path": "720p/png8/bench_720p_png8.####.png",
+   "first": 1,
+   "frames": 240,
+   "contiguous": true,
+   "fps": 24,
+   "height": 720,
+   "png": {
+    "bitDepth": 8,
+    "channels": 4
+   },
+   "width": 1280,
+   "files": 240,
+   "bytes": 377049543,
+   "sha256": "51556a5b57ea044cfa606e04a4daeac4f54df4eeb3c6cc8fe357529eb34a26a1",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "png8"
+  },
+  "720p/av1": {
+   "type": "video",
+   "path": "720p/video/bench_720p_av1.mp4",
+   "fps": 24,
+   "width": 1280,
+   "height": 720,
+   "frames": 240,
+   "video": {
+    "codec_name": "av1",
+    "profile": "Main",
+    "pix_fmt": "yuv420p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 6232038,
+   "sha256": "8c8b1bb47085f3980690b24589da63f0b5ea93fdbdfc6da04af6ce94446a097b",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "av1"
+  },
+  "720p/dnxhr_hqx": {
+   "type": "video",
+   "path": "720p/video/bench_720p_dnxhr_hqx.mov",
+   "fps": 24,
+   "width": 1280,
+   "height": 720,
+   "frames": 240,
+   "video": {
+    "codec_name": "dnxhd",
+    "profile": "DNXHR HQX",
+    "pix_fmt": "yuv422p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 97322245,
+   "sha256": "9ef849d2a9da06085675773f448f834f20dff4633c190fde0485108a22ad1f73",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "dnxhr_hqx"
+  },
+  "720p/h264": {
+   "type": "video",
+   "path": "720p/video/bench_720p_h264.mp4",
+   "fps": 24,
+   "width": 1280,
+   "height": 720,
+   "frames": 240,
+   "video": {
+    "codec_name": "h264",
+    "profile": "High",
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 9861881,
+   "sha256": "b44fc496ad8bf414ec2cc6df206aaf2a3f83e02445cb218bd0bc73063ee2a0af",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "h264"
+  },
+  "720p/hevc10": {
+   "type": "video",
+   "path": "720p/video/bench_720p_hevc10.mp4",
+   "fps": 24,
+   "width": 1280,
+   "height": 720,
+   "frames": 240,
+   "video": {
+    "codec_name": "hevc",
+    "profile": "Main 10",
+    "pix_fmt": "yuv420p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 7215360,
+   "sha256": "6d0a10673f991c85964b54bf17cd9ab63eff5fb127029c581cc30cf12c78839a",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "hevc10"
+  },
+  "720p/prores422hq": {
+   "type": "video",
+   "path": "720p/video/bench_720p_prores422hq.mov",
+   "fps": 24,
+   "width": 1280,
+   "height": 720,
+   "frames": 240,
+   "video": {
+    "codec_name": "prores",
+    "profile": "HQ",
+    "pix_fmt": "yuv422p10le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 107095679,
+   "sha256": "94275ad0e01bcd75c9dabf3bc4d9bfb4a722d525a32d436516bf7e32860027d2",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "prores422hq"
+  },
+  "720p/prores4444": {
+   "type": "video",
+   "path": "720p/video/bench_720p_prores4444.mov",
+   "fps": 24,
+   "width": 1280,
+   "height": 720,
+   "frames": 240,
+   "video": {
+    "codec_name": "prores",
+    "profile": "4444",
+    "pix_fmt": "yuva444p12le",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": null
+   },
+   "files": 1,
+   "bytes": 382059837,
+   "sha256": "6505f72982168a6e567222a6679b026264dca8899ed354fd7a35706c8ae4127d",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "prores4444"
+  },
+  "720p/vp9": {
+   "type": "video",
+   "path": "720p/video/bench_720p_vp9.webm",
+   "fps": 24,
+   "width": 1280,
+   "height": 720,
+   "frames": 240,
+   "video": {
+    "codec_name": "vp9",
+    "profile": "Profile 0",
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "24/1",
+    "color_primaries": "bt709",
+    "color_transfer": "bt709",
+    "color_space": "bt709",
+    "color_range": "tv",
+    "chroma_location": "left"
+   },
+   "files": 1,
+   "bytes": 5485125,
+   "sha256": "6b2b8a7cc96c58b012917bb3080a8785a003ca72842b4a950d90d8e9dd6b3502",
+   "kind": "footage",
+   "tier": "720p",
+   "format": "vp9"
+  }
+ },
+ "generator": {
+  "scene": "tools/bench/blender_scene.py",
+  "blenderSeries": "4.5 LTS",
+  "renderSettings": {
+   "engine": "CYCLES",
+   "device": "GPU (OptiX)",
+   "samples": 128,
+   "adaptiveThreshold": 0.02,
+   "denoiser": "OPENIMAGEDENOISE (GPU)",
+   "maxBounces": 6,
+   "seed": 1729,
+   "animatedSeed": false,
+   "viewTransform": "Standard",
+   "filmTransparent": true,
+   "passes": [
+    "Combined",
+    "Depth",
+    "Normal",
+    "CryptoObject (4 levels)",
+    "AOV bench_color",
+    "AOV bench_id",
+    "Noisy Image"
+   ],
+   "multilayer": "OPEN_EXR_MULTILAYER half ZIP (depth, normal, Cryptomatte, value AOV float)",
+   "flat": {
+    "png8": "PNG RGBA 8-bit, compression 15",
+    "png16": "PNG RGBA 16-bit, compression 15",
+    "exr_half_piz": "OpenEXR RGBA half PIZ",
+    "exr_float_zip": "OpenEXR RGBA float ZIP"
+   },
+   "frameNumbering": "1-based, 4 digits"
+  },
+  "tiers": {
+   "720p": {
+    "width": 1280,
+    "height": 720,
+    "frames": 240,
+    "images": [
+     "png8",
+     "png16",
+     "exr_half_piz",
+     "exr_float_zip",
+     "exr_multilayer"
+    ],
+    "videos": [
+     "h264",
+     "hevc10",
+     "prores422hq",
+     "prores4444",
+     "dnxhr_hqx",
+     "av1",
+     "vp9"
+    ]
+   },
+   "1080p": {
+    "width": 1920,
+    "height": 1080,
+    "frames": 240,
+    "images": [
+     "png8",
+     "png16",
+     "exr_half_piz",
+     "exr_float_zip",
+     "exr_multilayer"
+    ],
+    "videos": [
+     "h264",
+     "hevc10",
+     "prores422hq",
+     "prores4444",
+     "dnxhr_hqx",
+     "av1",
+     "vp9"
+    ]
+   },
+   "2160p": {
+    "width": 3840,
+    "height": 2160,
+    "frames": 240,
+    "images": [
+     "png8",
+     "png16",
+     "exr_half_piz",
+     "exr_float_zip",
+     "exr_multilayer"
+    ],
+    "videos": [
+     "h264",
+     "hevc10",
+     "prores422hq",
+     "prores4444",
+     "dnxhr_hqx",
+     "av1",
+     "vp9"
+    ]
+   },
+   "4320p": {
+    "width": 7680,
+    "height": 4320,
+    "frames": 48,
+    "images": [
+     "png16",
+     "exr_half_piz",
+     "exr_multilayer"
+    ],
+    "videos": [
+     "prores4444",
+     "hevc10"
+    ]
+   }
+  },
+  "videoEncodes": {
+   "h264": {
+    "file": "h264.mp4",
+    "alpha": false,
+    "pixFmt": "yuv420p",
+    "args": [
+     "-c:v",
+     "libx264",
+     "-preset",
+     "medium",
+     "-crf",
+     "18",
+     "-profile:v",
+     "high"
+    ],
+    "tags": [
+     "-color_primaries",
+     "bt709",
+     "-color_trc",
+     "bt709",
+     "-colorspace",
+     "bt709",
+     "-color_range",
+     "tv"
+    ]
+   },
+   "hevc10": {
+    "file": "hevc10.mp4",
+    "alpha": false,
+    "pixFmt": "yuv420p10le",
+    "args": [
+     "-c:v",
+     "libx265",
+     "-preset",
+     "medium",
+     "-crf",
+     "20",
+     "-profile:v",
+     "main10",
+     "-tag:v",
+     "hvc1"
+    ],
+    "tags": [
+     "-color_primaries",
+     "bt709",
+     "-color_trc",
+     "bt709",
+     "-colorspace",
+     "bt709",
+     "-color_range",
+     "tv"
+    ]
+   },
+   "prores422hq": {
+    "file": "prores422hq.mov",
+    "alpha": false,
+    "pixFmt": "yuv422p10le",
+    "args": [
+     "-c:v",
+     "prores_ks",
+     "-profile:v",
+     "3",
+     "-vendor",
+     "apl0"
+    ],
+    "tags": [
+     "-color_primaries",
+     "bt709",
+     "-color_trc",
+     "bt709",
+     "-colorspace",
+     "bt709",
+     "-color_range",
+     "tv"
+    ]
+   },
+   "prores4444": {
+    "file": "prores4444.mov",
+    "alpha": true,
+    "pixFmt": "yuva444p10le",
+    "args": [
+     "-c:v",
+     "prores_ks",
+     "-profile:v",
+     "4",
+     "-alpha_bits",
+     "16",
+     "-vendor",
+     "apl0"
+    ],
+    "tags": [
+     "-color_primaries",
+     "bt709",
+     "-color_trc",
+     "bt709",
+     "-colorspace",
+     "bt709",
+     "-color_range",
+     "tv"
+    ]
+   },
+   "dnxhr_hqx": {
+    "file": "dnxhr_hqx.mov",
+    "alpha": false,
+    "pixFmt": "yuv422p10le",
+    "args": [
+     "-c:v",
+     "dnxhd",
+     "-profile:v",
+     "dnxhr_hqx"
+    ],
+    "tags": [
+     "-color_primaries",
+     "bt709",
+     "-color_trc",
+     "bt709",
+     "-colorspace",
+     "bt709",
+     "-color_range",
+     "tv"
+    ]
+   },
+   "av1": {
+    "file": "av1.mp4",
+    "alpha": false,
+    "pixFmt": "yuv420p10le",
+    "args": [
+     "-c:v",
+     "libsvtav1",
+     "-preset",
+     "8",
+     "-crf",
+     "30"
+    ],
+    "tags": [
+     "-color_primaries",
+     "bt709",
+     "-color_trc",
+     "bt709",
+     "-colorspace",
+     "bt709",
+     "-color_range",
+     "tv"
+    ]
+   },
+   "vp9": {
+    "file": "vp9.webm",
+    "alpha": false,
+    "pixFmt": "yuv420p",
+    "args": [
+     "-c:v",
+     "libvpx-vp9",
+     "-crf",
+     "31",
+     "-b:v",
+     "0",
+     "-row-mt",
+     "1",
+     "-deadline",
+     "good",
+     "-cpu-used",
+     "4"
+    ],
+    "tags": [
+     "-color_primaries",
+     "bt709",
+     "-color_trc",
+     "bt709",
+     "-colorspace",
+     "bt709",
+     "-color_range",
+     "tv"
+    ]
+   }
+  },
+  "chart": "tools/bench/chart.py (procedural; truth in tools/bench/chart_truth.json)"
+ },
+ "provenance": {
+  "render": "Blender 4.5.15 LTS, Cycles OptiX + OIDN, RTX 5080 16 GB (Linux, driver 595)",
+  "encoder": "ffmpeg version n9.0.2 Copyright (c) 2000-2026 the FFmpeg developers"
+ },
+ "totals": {
+  "assets": 12,
+  "bytes": 8239009491
+ }
+}
