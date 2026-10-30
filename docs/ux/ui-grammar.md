@@ -1283,7 +1283,7 @@ without its reason in the tooltip and under the control.
 | `mcpCopyConfigButton`, `mcpCopyConfigMenu`, `mcpCopyConfig_<kind>_<token|placeholder>` | copy client config, four kinds by two disclosures |
 | `mcpClientsList`, `mcpClientsHeader`, `mcpClientRow`, `mcpClientName`, `mcpClientVersion`, `mcpClientSince`, `mcpClientLastActivity`, `mcpClientInFlight`, `mcpClientLastTool`, `mcpNoClients`, `mcpProjectLine` | connected clients |
 | `mcpActivityList` | activity, appended with `activity(afterId)`; a compile failure an agent edit caused is added in the error tone (`McpServerAdapter::noteCompileFailure`) |
-| `windowMcpServerAction`, `windowStatusBarMcp`, `preferencesMcpLink` | Window menu action, status bar indicator (shown only while running or failed), Preferences link |
+| `windowStatusBarMcp`, `preferencesMcpLink` | Status bar indicator (shown only while running or failed), Preferences link |
 
 Narrow panels hide the clients columns in this order: last tool, in flight, version.
 

@@ -312,7 +312,6 @@ void menusAndAssets(TestContext& context) {
     for (auto* area : host->findChildren<EditorArea*>())
         shown = shown || area->editorId() == "bloom.export";
     context.expect(shown, "adding a job from the menu shows the Export panel");
-    context.expect(fixture.window->windowExportAction()->isEnabled(), "Window > Export is enabled");
     // The Assets composition row offers it too.
     auto* assets = fixture.window->findChild<AssetsEditor*>();
     context.expect(assets != nullptr, "the window has an Assets editor");

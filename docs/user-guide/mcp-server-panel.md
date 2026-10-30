@@ -1,8 +1,8 @@
 # MCP Server panel
 
 The MCP Server panel starts and stops Bloom's built-in MCP server, so an agent or tool on your
-machine can read and edit the open project. Open it from Window > MCP Server, or click the MCP
-indicator in the status bar. The server is off until you start it. Nothing the panel does changes
+machine can read and edit the open project. Open it by choosing **MCP Server** in any panel's editor
+picker, or click the MCP indicator in the status bar. The server is off until you start it. Nothing the panel does changes
 your project or enters the undo history.
 
 ## Start and stop

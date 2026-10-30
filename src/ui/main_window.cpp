@@ -797,12 +797,6 @@ void MainWindow::updateExportQueueActions() {
     addToExportQueueAction_->setEnabled(reason.isEmpty());
     addToExportQueueAction_->setToolTip(reason.isEmpty() ? tr("Add the composition to the export queue")
                                                          : reason);
-    if (windowExportAction_ != nullptr) {
-        windowExportAction_->setEnabled(exportQueue_ != nullptr);
-        windowExportAction_->setToolTip(exportQueue_ != nullptr
-                                            ? tr("Show the Export panel")
-                                            : tr("The export queue is not available"));
-    }
 }
 
 void MainWindow::revealExportPanel() {
@@ -988,18 +982,6 @@ void MainWindow::createWorkspaceActions() {
             [this] { workspaceHost_->toggleMaximizeActiveArea(); });
 
     windowMenu_->addSeparator();
-    // Panels that are not part of the first-run layout are opened (or shown) from here.
-    windowExportAction_ = windowMenu_->addAction(tr("Export"));
-    windowExportAction_->setObjectName(QStringLiteral("windowExportAction"));
-    windowExportAction_->setEnabled(false);
-    connect(windowExportAction_, &QAction::triggered, this, &MainWindow::revealExportPanel);
-
-    windowMenu_->addSeparator();
-    mcpServerAction_ = windowMenu_->addAction(tr("MCP Server"));
-    mcpServerAction_->setObjectName(QStringLiteral("windowMcpServerAction"));
-    mcpServerAction_->setEnabled(false);
-    mcpServerAction_->setToolTip(tr("The MCP server is not available in this build"));
-    connect(mcpServerAction_, &QAction::triggered, this, &MainWindow::revealMcpServerPanel);
     contextBarAction_ = windowMenu_->addAction(tr("Context Bar"));
     contextBarAction_->setObjectName(QStringLiteral("windowContextBarAction"));
     contextBarAction_->setCheckable(true);
@@ -1032,9 +1014,6 @@ void MainWindow::setMcpServer(McpServerAdapter* const adapter) {
     if (adapter != nullptr)
         connect(adapter, &McpServerAdapter::revealRequested, this,
                 &MainWindow::revealMcpServerPanel);
-    mcpServerAction_->setEnabled(adapter != nullptr);
-    mcpServerAction_->setToolTip(adapter != nullptr ? tr("Show the MCP Server panel")
-                                                    : tr("The MCP server is not available in this build"));
     statusStrip_->setMcpServer(adapter);
 }
 
