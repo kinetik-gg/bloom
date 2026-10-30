@@ -277,6 +277,26 @@ Result<FrameProduct> prepareMediaRgba16V1(const render::Rgba32fImage& image, Rat
     result.planes.push_back(std::move(plane));
     return result;
 }
+bool compositeFrameReuseEligibleV1(const OutputPresetV1 preset,
+                                   const std::string_view profile) noexcept {
+    switch (preset) {
+    case OutputPresetV1::H264MovV1:
+    case OutputPresetV1::H264Mp4V1:
+    case OutputPresetV1::HevcMovV1:
+    case OutputPresetV1::HevcMp4V1:
+    case OutputPresetV1::PngRgba8SrgbV1:
+        return true;
+    case OutputPresetV1::ProResMovV1:
+        return profile == "proxy" || profile == "lt" || profile == "standard" || profile == "hq";
+    case OutputPresetV1::DnxhrMxfV1:
+        return profile == "dnxhr_lb" || profile == "dnxhr_sq" || profile == "dnxhr_hq";
+    case OutputPresetV1::FlatExrRgba32fLinRec709SceneV1:
+    case OutputPresetV1::TiffRgba16SrgbV1:
+    case OutputPresetV1::PcmWavV1:
+        return false;
+    }
+    return false;
+}
 Result<FrameProduct>
 prepareMediaRgba16FromDisplayV1(const std::span<const render::Rgba32f> pixels,
                                 const std::uint32_t width, const std::uint32_t height,
@@ -296,9 +316,13 @@ prepareMediaRgba16FromDisplayV1(const std::span<const render::Rgba32f> pixels,
     plane.height = height;
     plane.stride = width * 8U;
     plane.bytes.resize(pixels.size() * 8U);
-    // Same clamp and round-half-up as the CPU reference: floor(clamp(v, 0, 1) * 65535 + 0.5).
-    const auto quantize = [](const double value) {
-        return static_cast<std::uint16_t>(std::floor(std::clamp(value, 0.0, 1.0) * 65535.0 + 0.5));
+    // Same clamp and round-half-up as the CPU reference: floor(clamp(v, 0, 1) * 65535 + 0.5). The
+    // operand is non-negative, so truncation is exactly floor without a libm call per sample.
+    const auto quantize = [](const double value) -> std::uint16_t {
+        if (!(value > 0.0))
+            return 0;
+        return value >= 1.0 ? std::uint16_t{65535}
+                            : static_cast<std::uint16_t>(value * 65535.0 + 0.5);
     };
     for (std::uint32_t row = 0; row < height; ++row) {
         if (cancellation && cancellation())

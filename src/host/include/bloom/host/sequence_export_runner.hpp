@@ -18,6 +18,10 @@ reserveSequenceExportQueueV1(output::ExportResourceLedgerV1&, std::uint64_t byte
                              std::optional<std::uint64_t> explicitJobLimit,
                              std::shared_ptr<GpuExportProvider>, const runtime::CancellationToken&,
                              output::ExportResourceAdmissionStatusV1&) noexcept;
+// Whether a cached composite frame can reach the encoder without the CPU display transform. A hit
+// skips evaluation, so its output colour needs a display-only GPU job over the cached image; the
+// export evaluator does not provide one, so no frame is reused and every frame is evaluated.
+[[nodiscard]] constexpr bool compositeFrameReuseAvailableV1() noexcept { return false; }
 // Frames analysed ahead of the ordered encoder for one sequence export: the capacity seam. At
 // least one; `cap` is an explicit caller ceiling (tests that need one frame at a time).
 [[nodiscard]] std::size_t sequenceExportFramesInFlightV1(const GpuExportProvider* provider,
@@ -96,6 +100,11 @@ struct SequenceExportRequestV1 {
     std::shared_ptr<GpuExportProvider> gpuProvider = nullptr;
     // Ceiling on frames analysed ahead of the ordered encoder; absent uses the capacity seam.
     std::optional<std::size_t> framesInFlight = std::nullopt;
+    // The output's "Use cached frames" setting. A frame is taken from the composite cache only when
+    // this is set, output::compositeFrameReuseEligibleV1 accepts the preset and profile, and the
+    // GPU display-only transform for a cached frame is available
+    // (detail::compositeFrameReuseAvailableV1); every other frame is evaluated.
+    bool useCachedFrames = false;
 };
 enum class SequenceExportStageV1 : std::uint8_t {
     Compiling,
@@ -135,6 +144,8 @@ struct SequenceExportResultV1 {
     std::uint64_t gpuDisplayFrames = 0;
     std::uint64_t cpuDisplayFrames = 0;
     std::string cpuDisplayReason;
+    // Frames taken from the composite cache instead of being evaluated (useCachedFrames).
+    std::uint64_t framesReused = 0;
     // Issue #369: what the output colour intent and preset asked the container to carry, for the
     // ColourTags and Container checks against the reopened artifact (evidence).
     media::provider::ColourTags expectedColourTags;

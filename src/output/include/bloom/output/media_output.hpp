@@ -80,6 +80,13 @@ analyzeMediaOutputV1(OutputPresetV1 preset, media::provider::EncodeSettingsV1 se
 prepareMediaRgba16V1(const render::Rgba32fImage& image, media::provider::Rational pts,
                      const platform::ProcessCancellation& cancellation = {},
                      const PreparedOutputDisplayV1* display = nullptr);
+// Whether an export of `preset` with codec `profile` may reuse a composite-cache frame
+// (premultiplied RGBA half in the working space) instead of evaluating: only outputs whose
+// quantization is coarser than half precision's error. H.264, HEVC, ProRes 422 (proxy, LT,
+// standard, HQ), 8-bit DNxHR (LB, SQ, HQ) and 8-bit PNG qualify; 16-bit TIFF, float EXR, ProRes
+// 4444/4444 XQ, DNxHR HQX/444 and audio-only outputs always render fresh.
+[[nodiscard]] bool compositeFrameReuseEligibleV1(OutputPresetV1 preset,
+                                                 std::string_view profile) noexcept;
 // The codec-boundary half of prepareMediaRgba16V1 for pixels the GPU already transformed to the
 // display: `displayAssociated` is the display-referred RGBA32F the export's display/view
 // ProcessEffect produced, still associated with the process alpha. Un-associates, clamps and

@@ -1152,8 +1152,23 @@ reference does after its display transform. The CPU reference display transform
 (`prepareMediaRgba16V1`) remains the reference and the explicit fallback for a frame without a
 matching payload; the result reports `gpuDisplayFrames` and `cpuDisplayFrames`, and the first CPU
 frame logs its reason. GPU parity against the CPU reference is measured in RGBA16 codes on Bloom
-Neutral and the ACES 1.0 SDR view; the tolerance is MEDIA_DISPLAY_TOLERANCE codes of 65535
-(binary32 GPU OCIO against the binary64 CPU reference).
+Neutral and the ACES 1.0 SDR view; the tolerance is 16 codes of 65535 (binary32 GPU OCIO against the
+binary64 CPU reference), and the measured difference on the export fixture is 0 on both.
+
+### Composite-cache reuse
+
+An output's "Use cached frames" setting lets an export take a frame from the scene-referred composite
+cache (premultiplied RGBA half in the working space, full resolution, Reference quality) instead of
+evaluating it. `output::compositeFrameReuseEligibleV1` admits only outputs whose quantization is
+coarser than half precision's error: H.264, HEVC, ProRes 422 (proxy, LT, standard, HQ), 8-bit DNxHR
+(LB, SQ, HQ) and 8-bit PNG. 16-bit TIFF, float EXR, ProRes 4444 and 4444 XQ, DNxHR HQX and 444, and
+audio-only outputs always render fresh. A reused frame's approval identity is computed over the
+widened half pixels, because those are the pixels that are encoded, so its process-pixel digest
+differs from a freshly evaluated frame's; the verification records it in
+`ExportDeviceProvenance::framesReused`. A hit skips evaluation, so its output colour needs a
+display-only GPU job over the cached image. The export evaluator does not provide one, so
+`detail::compositeFrameReuseAvailableV1()` is false and every frame is evaluated; the CPU display
+transform is never used to serve a hit.
 
 See [media I/O](media-io.md#time-based-export-media-4) for the resource, tolerance and QC records,
 and [Export](../user-guide/exporting-video.md) for artist-facing controls.
