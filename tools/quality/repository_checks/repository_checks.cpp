@@ -338,7 +338,7 @@ void appendRepositoryPolicyFindings(const Path& root, const std::span<const Path
 
 constexpr auto kKnownModules = std::to_array<std::string_view>(
     {"core", "platform", "document", "commands", "project", "render", "runtime", "media", "color",
-     "output", "host", "scripting"});
+     "output", "host", "scripting", "mcp"});
 constexpr auto kAllowedModuleDependencies =
     std::to_array<std::pair<std::string_view, std::string_view>>({
         {"platform", "core"},      {"document", "core"},      {"commands", "core"},
@@ -362,7 +362,10 @@ constexpr auto kAllowedModuleDependencies =
         {"host", "output"},        {"host", "platform"},      {"host", "project"},
         {"host", "runtime"},       {"scripting", "commands"}, {"scripting", "core"},
         {"scripting", "document"}, {"scripting", "host"},     {"scripting", "output"},
-        {"scripting", "platform"}, {"scripting", "runtime"},
+        {"scripting", "platform"}, {"scripting", "runtime"},  {"mcp", "core"},
+        {"mcp", "platform"},       {"mcp", "document"},       {"mcp", "commands"},
+        {"mcp", "runtime"},        {"mcp", "output"},         {"mcp", "host"},
+        {"mcp", "scripting"}, /* ADR 0034: MCP server core and host. */
     });
 
 [[nodiscard]] constexpr auto isAllowedDependency(const std::string_view module,

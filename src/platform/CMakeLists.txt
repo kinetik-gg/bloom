@@ -60,6 +60,8 @@ target_sources(
             include/bloom/platform/user_data_directory.hpp
             include/bloom/platform/font_catalog.hpp
             include/bloom/platform/staged_artifact.hpp
+            include/bloom/platform/loopback_listener.hpp
+            include/bloom/platform/owner_only_secret.hpp
 )
 
 target_compile_features(bloom_platform PUBLIC cxx_std_20)

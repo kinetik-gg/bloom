@@ -31,6 +31,7 @@ target_sources(
             include/bloom/scripting/events.hpp
             include/bloom/scripting/facade.hpp
             include/bloom/scripting/json_script.hpp
+            include/bloom/scripting/live_session_host.hpp
             include/bloom/scripting/operation_registry.hpp
             include/bloom/scripting/query.hpp
             include/bloom/scripting/render.hpp
