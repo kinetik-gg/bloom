@@ -26,6 +26,15 @@ folder, which contributes the media files below it, exactly as a folder dropped 
 scripted imports never show the import progress dialog. The run starts from a new in-memory session; use `new` or the facade's
 Save As operation when a durable project is required.
 
+Times follow one contract in `run` scripts, Python and MCP: an integer is a whole frame of the
+composition the operation edits, at its frame rate, and `[numerator, denominator]` is an exact time
+in seconds. `{"op": "bloom.composition.set-duration", "args": {"duration": 48}}` makes a 24 fps
+composition two seconds long. `bloom.parameter.set-source` reads `value` in the parameter's own
+kind -- a whole number or a member name such as `"screen"` for an enumeration, `true`/`false` for a
+Boolean -- and refuses a value out of range with what the parameter accepts. A refused step names
+the operation's index in its transaction and the reason; see
+[Using Bloom from an agent](mcp.md#edits-and-diagnostics).
+
 `bloom.layer.align-layers` and `bloom.layer.distribute-layers` work in `run` scripts as well. A
 headless session has no selection, so name the `layers`:
 

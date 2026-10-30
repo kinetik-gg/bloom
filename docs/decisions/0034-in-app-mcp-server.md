@@ -582,7 +582,16 @@ The owner accepted every default below on 2026-10-30.
    `${BLOOM_MCP_TOKEN}` placeholder.
 8. **Capture** renders final pixels at composition resolution through the export still route. It
    is embedded up to about 2.9 MiB of PNG and linked above that, with no downscaling.
-9. **No project open, close or save tools.**
+9. **Project lifecycle and window tools.** Reversed on 2026-10-30. The owner: "mcp should have
+   tools users can access ... mcp should be treated like our UI for agents." MCP now offers
+   `project.save`, `project.save-as`, `project.open`, `project.new` and `project.close`, which never
+   discard unsaved work silently (`bloom.mcp.unsaved-changes` unless the call passes
+   `discardChanges:true`, `bloom.mcp.jobs-running` unless it passes `stopJobs:true`), and the
+   live-only window tools `editor.reveal`, `selection.set`, `composition.activate`, `transport` and
+   `viewer.set`. The desktop binds them through `McpServerServiceDependencies::liveUi`
+   (`mcp::McpLiveUiPort`, `bloom/mcp/live_ui_port.hpp`), called on the UI thread; `bloom-mcp`
+   implements the project tools on its headless session and answers `bloom.mcp.not-live` for the
+   window tools. The original decision was "No project open, close or save tools."
 10. **The panel is the only editing surface** for these preferences; the Preferences window links
     to it.
 11. **Stopping the server or quitting stops MCP-started transient jobs** but never queue jobs

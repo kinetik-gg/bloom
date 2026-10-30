@@ -71,7 +71,36 @@ queue of 16 edits.
 
 Clients stay connected when you open or create a project. While a project is opening, calls answer
 `bloom.mcp.project-unavailable`; an `events` cursor from the old project reports `resetRequired`.
-The server never opens, closes, saves or creates projects: those questions are yours.
+
+### Projects and the application window
+
+An agent can save, open, create and close projects as you can from the File menu, and can act on
+the window the way you do: what is selected, which composition is active, the playhead and the
+Viewer. None of these is an undo step. The project tools never throw work away silently: Open,
+New and Close over unsaved changes answer `bloom.mcp.unsaved-changes` (naming the project) unless
+the call passes `discardChanges:true`, and while export jobs run they answer
+`bloom.mcp.jobs-running` unless it passes `stopJobs:true`.
+
+| Tool | Arguments | Notes |
+| --- | --- | --- |
+| `project.save` | none | `bloom.mcp.no-path` when the project was never saved; `bloom.mcp.read-only` for a read-only project. |
+| `project.save-as` | `path` (absolute, `.bloom`), optional `replace` | `bloom.mcp.destination-exists` unless `replace` is true; `bloom.mcp.path-invalid` for a relative path or a missing folder. |
+| `project.open` | `path`, optional `discardChanges`, `stopJobs` | Replaces the open project. |
+| `project.new` | optional `discardChanges`, `stopJobs` | An untitled project. |
+| `project.close` | optional `discardChanges`, `stopJobs` | The window shows an empty project. |
+| `editor.reveal` | `composition`, optional `time` | Shows the composition in the Viewer and moves the playhead. |
+| `selection.set` | `composition`, optional `layers`, `nodes`, `mode` (`set`, `add`, `remove`, `clear`) | Contextual `layer`, `layers` and `selection` arguments then default to it. |
+| `composition.activate` | `composition` | The Viewer, Timeline and contextual `composition` follow it. |
+| `transport` | `action` (`seek`, `play`, `stop`, `step-forward`, `step-backward`, `go-to-start`, `go-to-end`), `time` for `seek`, optional `composition` | `time` counts in the given composition, or the active one. |
+| `viewer.set` | any of `display`, `view`, `exposure` (stops), `channel` (`rgba`, `rgb`, `red`, `green`, `blue`, `alpha`), `zoom` (`"fit"`, `"actual-size"` or a factor, 1.0 is 100%) | Display settings only: they never reach a render or the project. |
+
+A successful project tool answers `{succeeded, event, path, projectName}` and records the event
+(`project.saved`, `project.opened`, `project.created` or `project.closed`) for the `events` tool and
+the MCP Server editor's activity list. The window tools work only with the in-app server:
+`bloom-mcp` implements the five project tools on its own session and answers `bloom.mcp.not-live`
+for the others. A window tool the application has not connected answers `bloom.mcp.ui-unbound`.
+Other refusals are `bloom.mcp.unknown-target`, `bloom.mcp.invalid-argument`, `bloom.mcp.busy` and
+`bloom.mcp.failed`, each with a message that says what to do.
 
 `render`, `export` and `capture` run as transient jobs of the export queue, with the same checks,
 verification and Viewer priority as the Export editor; they are never saved. Nothing replaces an
@@ -130,7 +159,7 @@ Use `tools/call` with `name` and `arguments`:
 | Tool | Arguments and result |
 | --- | --- |
 | `query` | `kind`: project, compositions, nodes, parameters, parameter, parameter-value, assets, operations or context; nodes and parameter kinds also need `composition`. The legacy `parameters` query returns full records. `parameters` with `pageSize` (1–64) and optional `cursor` returns bounded summaries and `nextCursor`; constant values are explicitly marked `valueOmitted`. `parameter` with `parameter` ID reads one full record, except a string over 128 KiB returns a summary. `parameter-value` with `parameter` ID and `expectedRevision` reads UTF-8 string chunks using optional byte `offset` and `limit` (4–131072). An operations record carries every argument's `kind`, `required`, `contextual`, `context` and `summary`, plus a pasteable `example` call. `context` returns the editor context contextual arguments fall back to: project, composition, selected nodes and layers, time, the Viewer's display and view, read-only state and `live` (false on stdio, which reports the session defaults). |
-| `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`. Returns one atomic command result, created IDs and structured diagnostics. Arguments the descriptor marks `contextual` may be omitted and are filled from the session (the live editor context in the desktop application). Coded failures carry `structuredContent.diagnostic` `{code, message}` with a `bloom.mcp.*` code. |
+| `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`. Returns one atomic command result, created IDs, structured diagnostics and `compileFailures` (see [Edits and diagnostics](#edits-and-diagnostics)). Arguments the descriptor marks `contextual` may be omitted and are filled from the session (the live editor context in the desktop application). Coded failures carry `structuredContent.diagnostic` `{code, message}` with a `bloom.mcp.*` code. |
 | `render` | `composition`, `frame` or inclusive `first`/`last`, `preset`, `destination`. Returns published frame count, preservation report, paths and SHA-256 file digests. |
 | `export` | Render arguments plus optional `profile`, `audio` and `sampleRate`. Uses the existing MEDIA-4 composition runner for ProRes preview, DNxHR and PCM output. |
 | `events` | `sinceRevision`, optionally `afterSequence`. Returns revision-inclusive events, a sequence cursor and `resetRequired` when retained history cannot cover the cursor. |
@@ -162,6 +191,48 @@ arrive as `bloom.scripting.operation-warning` diagnostics; when no layer can mov
 fails with the reasons. See [Scripting Bloom with Python](python.md#align-and-distribute) for the
 arguments.
 
+## Edits and diagnostics
+
+**Times.** Every time argument follows one contract, in `transact`, `editor.reveal`, `transport`,
+JSON scripts and Python alike: an integer is a whole frame of the composition the call works on, at
+its frame rate, and `[numerator, denominator]` is an exact time in seconds. At 24 fps,
+`{"duration": 48}` is two seconds and `{"time": [1, 2]}` is frame 12. When a transaction changes a
+composition's frame rate, later frame counts in it use the new rate.
+
+**Parameter values.** `bloom.parameter.set-source` takes `value` in the parameter's own kind: a
+number, `true`/`false` for a Boolean, text for a String, `[x, y]`, `[x, y, z]` or `[r, g, b, a]`,
+and for an Integer or enumeration a whole number or the member's name (`"screen"`, `"Ping-pong"`;
+case, spaces and hyphens do not matter). A value out of range is refused with what the parameter
+accepts, for example "Parameter 31 (points of node 7, bloom.shape) cannot take 2; it takes a whole
+number in 3..64." A Boolean parameter such as a shape's `fillEnabled` or `strokeEnabled` can be
+driven by a Boolean value node: `{"driverNode": <id>, "driverPort": "result"}` with
+`bloom.scalar-to-boolean`, for example. A driver naming an output the node does not have, or one of
+the wrong kind, is refused with the node's outputs. `bloom.animation.set-keyframe-at-time-for-parameter`
+on a constant parameter makes it animated in the same undo step, its constant becoming the first
+key.
+
+**Diagnostics.** A refused transaction applies nothing and lists why. Each diagnostic is
+`{code, operationIndex, operation?, path?, message}`: `operationIndex` is the 0-based place in
+`operations` of the operation that caused it (`null` for a stale revision or a history limit,
+which belong to the whole transaction). Codes are `bloom.scripting.command-rejected` (an operation
+refused), `bloom.scripting.validation-failed` (the edit would leave the project invalid; `path`
+names where), `bloom.scripting.stale-revision`, `bloom.scripting.history-limit` and
+`bloom.scripting.invalid-argument` (the registry refused an argument). An argument of the wrong
+JSON type is a protocol error whose message starts with `operations[<index>] (<op>)` and gives a
+working example.
+
+**Compile failures.** After a successful edit, every composition it touched is compiled (never
+rendered). `compileFailures` lists those that cannot render now:
+`[{composition, code, detail, subject: {composition, node, parameter}}]`, where `detail` is one
+plain sentence and `node`/`parameter` are `null` when the failure has no narrower subject. Each one
+is also recorded as a `composition.compile-failed` event. An empty list means every touched
+composition compiles.
+
+**Events.** Besides command events (`kind` `revision`, `history` or `rejected`), `events` reports
+`{kind, revision, message, composition?, subject?, path?, projectName?, sequence}` records for
+`composition.compile-failed`, `project.saved`, `project.opened`, `project.created` and
+`project.closed`.
+
 For a large parameter set, start with `{"kind":"parameters","composition":1,"pageSize":64}`.
 Repeat with its `nextCursor` until it is `null`. Each page includes `revision` and `totalRecords`;
 the cursor binds the server session, project, composition, revision and next record index. A
@@ -174,6 +245,17 @@ the same IDs and revision, starting at `offset:0` and advancing to each `nextOff
 silently shortened. An `expectedRevision` mismatch is an error.
 
 ## Output and cancellation
+
+`render` and `export` write to `destination`: a file path with the preset's extension (`.png`,
+`.exr`, `.tiff` or `.tif`, `.mov`, `.mxf`, `.wav`), a path without an extension (the preset's is
+added), or an existing folder (the file is then `frame.<ext>`, or `render.<ext>` for media). A
+range writes `<base>.NNNN.<ext>`; a still destination may instead carry one `####` or `{frame}`
+where the frame number goes (`seq.####.png` writes `seq.0000.png`, `seq.0001.png`, ...). A wrong
+extension is an argument error saying which one the preset needs. A request the export checks
+refuse (an existing file without `overwrite:"replace"`, for example) answers
+`bloom.mcp.preflight-blocked` with the reason; `bloom.mcp.export-unavailable` means export itself
+cannot run here, and "Export isn't available in this window yet." means the window has no export
+queue.
 
 Still presets are `PngRgba8SrgbV1`, `FlatExrRgba32fLinRec709SceneV1` and `TiffRgba16SrgbV1`. MEDIA-4
 presets are `ProResMovV1`, `DnxhrMxfV1` and `PcmWavV1`. ProRes output retains its existing
