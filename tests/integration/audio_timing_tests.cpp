@@ -12,6 +12,7 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <iostream>
@@ -333,6 +334,38 @@ void videoLoopModes() {
     }
 }
 
+// #400: the transport loop wraps inside the mixer, so a retimed (speed + PingPong) layer replays
+// exactly its remapped samples on every pass, from a start in the middle of the loop. The oracle
+// is the unlooped playback, which the cases above pin sample-exactly.
+void transportLoopRemapped() {
+    Fixture fixture;
+    const auto layer = fixture.addLayer(kAudioAsset);
+    fixture.run<commands::SetLayerTiming>(fixture.composition, layer, at(1), at(1), at(8),
+                                          *document::LayerSpeed::create(3, 2));
+    fixture.run<commands::SetLayerTimeModes>(fixture.composition, layer,
+                                             document::LayerTimeMode::Hold,
+                                             document::LayerTimeMode::PingPong);
+    const auto straight = playback(fixture, 0, 40);
+    auto backend = std::make_unique<media::audio::playback::NullBackend>();
+    auto* sink = backend.get();
+    media::audio::playback::AudioEngine engine(std::move(backend), {kRate, 1, 1024});
+    const auto clips = clipsFor(fixture.mix(at(20, kRate)), ramp());
+    expect(clips.size() == 1 && clips.front().mapTime, "the looped clip is time-mapped");
+    engine.replaceClips(clips);
+    // [1.5 s, 4.25 s) is samples 12..33: 22 samples a pass.
+    expect(engine.setLoopRange(media::audio::playback::LoopRange{at(3, 2), at(17, 4)}),
+           "transport loop accepted");
+    if (engine.play(at(20, kRate)) || engine.renderForTesting(22 * 3 + 14))
+        throw std::runtime_error("looped playback render");
+    std::vector<float> want;
+    for (std::int64_t n = 20; n < 20 + 22 * 3 + 14; ++n)
+        want.push_back(straight[static_cast<std::size_t>(n < 34 ? n : 12 + (n - 12) % 22)]);
+    expect(std::vector<float>(sink->captured().begin(), sink->captured().end()) == want,
+           "a retimed layer replays its exact remapped samples on every loop pass");
+    expect(std::count_if(want.begin(), want.end(), [](float v) { return v != 0.0F; }) > 10,
+           "the looped retimed layer is audible");
+}
+
 // The per-sample mapping allocates nothing: it runs on the mixer worker for every output sample.
 void mappingAllocatesNothing() {
     Fixture fixture;
@@ -368,6 +401,7 @@ int main() {
         layerSpeed();
         layerModes();
         videoLoopModes();
+        transportLoopRemapped();
         mappingAllocatesNothing();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
