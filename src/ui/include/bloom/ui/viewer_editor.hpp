@@ -418,6 +418,9 @@ class ViewerEditor final : public QWidget,
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void keyReleaseEvent(QKeyEvent* event) override;
+    [[nodiscard]] bool refreshAnchorDrag(QKeyEvent* event);
+    void refreshDrag(QPointF pointer, Qt::KeyboardModifiers modifiers);
     void resizeEvent(QResizeEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
 
@@ -606,6 +609,7 @@ class ViewerEditor final : public QWidget,
     CompositionSession& session_;
     CompositionPreviewController& previewController_;
     bool dragActive_ = false;
+    QPointF dragPointer_;
     std::optional<ViewerMapping> activeMapping_;
     std::optional<runtime::PreviewRequestIdentity> activeGestureIdentity_;
     QRectF activeGestureViewport_;

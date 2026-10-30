@@ -424,7 +424,10 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     // would give one key two owners.
     ramPreviewAction_ = compositionMenu.addAction("&RAM Preview");
     ramPreviewAction_->setObjectName("compositionRamPreviewAction");
-    ramPreviewAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space));
+    // Numpad 0 is After Effects' RAM Preview key. A keypad digit typed into a text or value field is
+    // text input, which Qt delivers as a ShortcutOverride to the field first, so it never fires here.
+    ramPreviewAction_->setShortcuts({QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space),
+                                     QKeySequence(Qt::KeypadModifier | Qt::Key_0)});
     ramPreviewAction_->setShortcutContext(Qt::WindowShortcut);
     ramPreviewAction_->setEnabled(ramPreview_ != nullptr);
     // Escape ends a run that is caching. Enabled only while one is, so Escape keeps meaning

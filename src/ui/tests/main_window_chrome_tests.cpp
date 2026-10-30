@@ -46,6 +46,8 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QJsonArray>
+#include <QLineEdit>
+#include <QKeyEvent>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeySequence>
@@ -372,6 +374,43 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
             "reset workspace: the timeline divider's persisted key matches its live value");
     } catch (const std::exception& error) {
         expectations.expect(false, std::string("reset workspace fixture: ") + error.what());
+    }
+}
+
+// Numpad 0 is the RAM Preview key (After Effects): a window shortcut on the Composition menu's
+// action, which a keypad digit typed into a text field overrides (it is text input there).
+void testNumpadZeroIsTheRamPreviewShortcut(Expectations& expectations) {
+    bool ok = false;
+    Fixture fixture(&ok);
+    expectations.expect(ok, "numpad shortcut editors registered");
+    MainWindow window(fixture.registry, fixture.compositionSession, fixture.projectHost);
+    auto* action = window.findChild<QAction*>(QStringLiteral("compositionRamPreviewAction"));
+    expectations.expect(action != nullptr, "the Composition menu owns the RAM Preview action");
+    if (action == nullptr)
+        return;
+    expectations.expect(action->shortcutContext() == Qt::WindowShortcut &&
+                            action->shortcuts().contains(
+                                QKeySequence(Qt::KeypadModifier | Qt::Key_0)) &&
+                            action->shortcuts().contains(
+                                QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space)),
+                        "Numpad 0 and Ctrl+Shift+Space are window shortcuts of one action");
+    auto* cancel = window.findChild<QAction*>(QStringLiteral("cancelRamPreviewAction"));
+    expectations.expect(cancel != nullptr && cancel->shortcut() == QKeySequence(Qt::Key_Escape) &&
+                            !cancel->isEnabled(),
+                        "Esc is the Cancel RAM Preview shortcut, armed only while a fill runs");
+    expectations.expect(!action->shortcuts().contains(QKeySequence(Qt::Key_0)),
+                        "the main-row 0 key is not a RAM Preview shortcut");
+    // Inside a text field the digit is text input: the field accepts the ShortcutOverride, so the
+    // window shortcut does not fire.
+    QLineEdit field;
+    field.show();
+    field.setFocus();
+    for (const auto modifiers : {Qt::KeypadModifier, Qt::NoModifier}) {
+        QKeyEvent override(QEvent::ShortcutOverride, Qt::Key_0, modifiers, QStringLiteral("0"));
+        override.ignore();
+        QCoreApplication::sendEvent(&field, &override);
+        expectations.expect(override.isAccepted(),
+                            "a zero typed into a text field is text input, not a shortcut");
     }
 }
 
@@ -1230,6 +1269,7 @@ int main(int argc, char** argv) {
     testLegacyLayoutMigration(expectations);
     testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(expectations);
     testMainWindowAlwaysBuildsNativeChrome(expectations);
+    testNumpadZeroIsTheRamPreviewShortcut(expectations);
     testWindowTitleIsJustTheDocumentTitle(expectations);
     testViewMenuItemsExistAndFire(expectations);
     testHelpMenuItemsExistAndFire(expectations);

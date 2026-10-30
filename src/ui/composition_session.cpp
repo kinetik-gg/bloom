@@ -36,6 +36,8 @@
 #include <utility>
 #include <vector>
 
+#include "viewer_axis_constraint.hpp"
+
 namespace bloom::ui {
 namespace {
 double* editedComponent(document::ParameterValue& value, document::AnimationComponent component);
