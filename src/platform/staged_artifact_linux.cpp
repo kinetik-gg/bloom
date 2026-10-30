@@ -312,7 +312,7 @@ struct InspectionResult final {
            isDirectory(currentStatus) && sameNativeIdentity(currentStatus, target.parentIdentity);
 }
 
-[[nodiscard]] std::optional<std::string> makeStageName() {
+[[nodiscard]] std::optional<std::string> makeStageName(const std::string_view leaf) {
     constexpr std::size_t nonceByteCount = 16;
     std::array<unsigned char, nonceByteCount> nonce{};
     std::size_t offset = 0;
@@ -330,7 +330,7 @@ struct InspectionResult final {
         offset += static_cast<std::size_t>(count);
     }
 
-    constexpr std::string_view prefix = ".bloom-stage-";
+    const auto prefix = stagedArtifactNamePrefix(static_cast<std::int64_t>(::getpid()), leaf);
     constexpr std::array<char, 16> hexadecimal = {'0', '1', '2', '3', '4', '5', '6', '7',
                                                   '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
     std::string result;
@@ -812,7 +812,7 @@ class LinuxCoordinator final : public StagedArtifactCoordinatorState {
             target.reset();
             constexpr std::size_t maximumAttempts = 32;
             for (std::size_t attempt = 0; attempt < maximumAttempts; ++attempt) {
-                auto stageName = makeStageName();
+                auto stageName = makeStageName(data.leaf);
                 if (!stageName.has_value()) {
                     return PlatformStageResult(StagedArtifactError::StageCreationFailed);
                 }

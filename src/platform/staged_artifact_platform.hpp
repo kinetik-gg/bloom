@@ -6,7 +6,28 @@
 #include <memory>
 #include <utility>
 
+#include <bloom/core/sha256.hpp>
+
+#include <string>
+#include <string_view>
+
 namespace bloom::platform::detail {
+
+// ADR 0033: staged files are named ".bloom-stage-<owner pid>-<target tag>-<nonce>" so a later run
+// can remove exactly the stale stages of one target whose owner process is gone.
+inline constexpr std::string_view kStagedArtifactPrefix = ".bloom-stage-";
+// The first 16 hexadecimal digits of the SHA-256 of the target's file name.
+[[nodiscard]] inline std::string stagedArtifactTargetTag(const std::string_view leaf) {
+    core::Sha256Hasher hasher;
+    (void)hasher.update(std::as_bytes(std::span(leaf.data(), leaf.size())));
+    const auto digest = hasher.finalize().toLowercaseHex();
+    return std::string(digest.data(), 16);
+}
+[[nodiscard]] inline std::string stagedArtifactNamePrefix(const std::int64_t pid,
+                                                          const std::string_view leaf) {
+    return std::string(kStagedArtifactPrefix) + std::to_string(pid) + "-" +
+           stagedArtifactTargetTag(leaf) + "-";
+}
 
 struct StagedArtifactTargetState {
     StagedArtifactTargetState() = default;

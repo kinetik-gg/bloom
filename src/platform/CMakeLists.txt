@@ -29,6 +29,7 @@ target_sources(
     bloom_platform
     PRIVATE
         cache_directory.cpp
+        destination_facts.cpp
         user_data_directory.cpp
         font_catalog.cpp
         staged_artifact.cpp
@@ -55,6 +56,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/platform/cache_directory.hpp
+            include/bloom/platform/destination_facts.hpp
             include/bloom/platform/user_data_directory.hpp
             include/bloom/platform/font_catalog.hpp
             include/bloom/platform/staged_artifact.hpp
