@@ -301,12 +301,8 @@ void liveSeams() {
            "project.set-color-settings reads back the working space id and label: " + result);
     result = server.call("project.set-color-settings", R"({"config":"neutral"})");
     expect(contains(result, R"("workingSpace":"lin_rec709_scene")") &&
-           contains(result,
-                    R"("workingSpaceLabel":"Linear Rec.709 (sRGB)") "),
-                                                                    "Bloom Neutral reads back "
-                                                                    "lin_rec709_scene labelled "
-                                                                    "Linear Rec.709 (sRGB): " +
-               result);
+               contains(result, R"json("workingSpaceLabel":"Linear Rec.709 (sRGB)")json"),
+           "Bloom Neutral reads back lin_rec709_scene labelled Linear Rec.709 (sRGB): " + result);
     result = server.call("events", R"({"sinceRevision":0})");
     expect(contains(result, R"("kind":"project.saved")"), "events list project.saved: " + result);
 }

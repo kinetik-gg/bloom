@@ -238,7 +238,9 @@ void testBlankNewProjectIsEmptyAndValid(Expectations& expectations,
         !state.dirty.value_or(true) && state.historySize == 0 && !state.canUndo && !state.canRedo,
         "a blank new project starts clean with zero history (no staged undo entry)");
     expectations.expect(session.colorSettings() != nullptr &&
-                            *session.colorSettings() == neutralColorSettings(),
+                            *session.colorSettings() ==
+                                bloom::document::makeBloomNeutralColorSettingsV1(
+                                    bloom::host::kBloomNeutralV1ConfigDigest),
                         "a blank project still carries its Bloom Neutral color settings");
     const auto snapshot = session.decodedSnapshot();
     expectations.expect(snapshot && snapshot.snapshot().project().compositions().empty(),
