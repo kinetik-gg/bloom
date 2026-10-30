@@ -718,6 +718,8 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         snapshot, identity, pixelStorageByteLimit, gpuAllowance, overrides, request.priority,
         request.owner, request.groupId, request.sourceVersion, request.coalescingKey);
     TaskRequest cpuRequest = request;
+    const bool fillWork = request.priority == TaskPriority::Foreground ||
+                          request.priority == TaskPriority::Background;
     try {
         // Rooted resident requests have not allocated pixels at queue admission. Their shared
         // processing phase admits host preparation and native backing before allocation. Charging
@@ -746,6 +748,13 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         }
         if (submission.status == TaskSubmissionStatus::ShuttingDown ||
             (submission.diagnostic && submission.diagnostic->defaultBudgetRetry)) {
+            core->finishRootAdmission({}, false);
+            return submission;
+        }
+        if (fillWork && submission.status == TaskSubmissionStatus::QueueFull) {
+            // RAM-preview and background fill wait as back-pressure: the caller resubmits when
+            // its own work lands. Rendering the frame on the CPU instead would be silent
+            // whole-frame CPU work on a GPU route.
             core->finishRootAdmission({}, false);
             return submission;
         }

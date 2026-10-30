@@ -154,8 +154,9 @@ void handleStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>& co
         eligible && core->qualification != nullptr &&
         gpuPreviewDisplaySelectsNative(*core->qualification, pixelCount,
                                        gpuPreviewDisplayHandoffOverheadMicros());
-    if (!eligible || !worthwhile ||
-        core->nativeReady.size() >= core->options.readyStageQueueCapacity) {
+    // A busy native display is back-pressure: eligible stages queue for it rather than taking the
+    // CPU display path.
+    if (!eligible || !worthwhile) {
         dispatchDisplayFallbackChild(core, stage);
         return;
     }

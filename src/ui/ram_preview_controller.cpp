@@ -373,6 +373,10 @@ void RamPreviewController::requestFrames() {
                 });
         }
         if (!submission.accepted()) {
+            // A full GPU queue is back-pressure, not a failure: every task completion re-drives
+            // advance(), so the fill resumes as soon as any queued work lands.
+            if (submission.status == runtime::TaskSubmissionStatus::QueueFull)
+                return;
             finish(Completion::Failed);
             return;
         }
