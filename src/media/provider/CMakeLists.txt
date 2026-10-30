@@ -52,7 +52,8 @@ if(BUILD_TESTING)
                    LABELS unit media security)
 endif()
 
-add_library(bloom_media_worker_host STATIC worker_pool.cpp encode_session.cpp ffmpeg_launch.cpp)
+add_library(bloom_media_worker_host STATIC worker_pool.cpp encode_session.cpp ffmpeg_launch.cpp
+            media_workers.cpp)
 target_link_libraries(bloom_media_worker_host PUBLIC bloom_media_provider bloom_platform_process
                       bloom_media_openh264_runtime bloom_runtime)
 bloom_enable_warnings(bloom_media_worker_host)

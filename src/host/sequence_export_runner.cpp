@@ -212,24 +212,9 @@ struct detail::SequenceExportWorkV1 {
         s.frames = total();
         s.sampleRate = request.sampleRate;
         s.bwfDescription = request.bwfDescription;
-#if defined(__APPLE__)
-        // macOS exports through the AVAssetWriter/VideoToolbox provider: MOV/MP4 video (ProRes or
-        // H.264) with PCM or AAC audio. WAV, MXF and TIFF need the FFmpeg worker and are refused
-        // here; outputPresetAvailabilityV1() reports them unavailable in the UI too.
-        if (request.preset == output::OutputPresetV1::ProResMovV1) {
-            s.videoCodec = "prores";
-            s.container = "mov";
-            s.profile = request.profile.empty() ? "hq" : request.profile;
-        } else if (request.preset == output::OutputPresetV1::H264MovV1 ||
-                   request.preset == output::OutputPresetV1::H264Mp4V1) {
-            s.videoCodec = "h264";
-            s.container = request.preset == output::OutputPresetV1::H264Mp4V1 ? "mp4" : "mov";
-            s.profile = "high";
-        } else {
-            require(false, "This export preset needs the FFmpeg worker, unavailable on macOS",
-                    Error::Unavailable);
-        }
-#else
+        // The encode provider is selected when the encoder begins (ADR 0035): the platform media
+        // framework first, then the bundled FFmpeg worker. Settings use the FFmpeg spellings; the
+        // session translates them for the provider that serves the attempt.
         if (request.preset == output::OutputPresetV1::HevcMovV1 ||
             request.preset == output::OutputPresetV1::HevcMp4V1) {
             // HEVC is hardware-only (ADR 0033): VA-API, never a software encoder.
@@ -245,7 +230,10 @@ struct detail::SequenceExportWorkV1 {
             s.container = request.preset == output::OutputPresetV1::H264Mp4V1 ? "mp4" : "mov";
             s.profile = "high";
             request.worker.vaapi = request.hardware;
-            if (!request.hardware) {
+            // Software H.264 needs Cisco's OpenH264 only where that is the platform's software
+            // encoder (Linux x86-64); macOS encodes H.264 with VideoToolbox.
+            if (!request.hardware &&
+                output::h264EncoderSupportV1().software == output::H264EncoderV1::OpenH264) {
                 const auto status = output::verifyH264RuntimeV1();
                 if (!status.installed) {
                     require(request.openh264Consent, "H.264 encoder not installed",
@@ -275,7 +263,6 @@ struct detail::SequenceExportWorkV1 {
             s.container = "wav";
             s.frames = 0;
         }
-#endif
         if (request.audio || request.preset == output::OutputPresetV1::PcmWavV1) {
             s.audioCodec = request.pcmCodec;
             require(s.sampleRate > 0 && s.sampleRate <= Limits::sampleRate,
@@ -304,18 +291,12 @@ struct detail::SequenceExportWorkV1 {
         analysis =
             std::make_unique<output::MediaOutputAnalysisV1>(checked(output::analyzeMediaOutputV1(
                 request.preset, std::move(s), display, output::outputLookEffectCountV1(*plan))));
-#if defined(__APPLE__)
-        if (request.preset == output::OutputPresetV1::H264MovV1 ||
-            request.preset == output::OutputPresetV1::ProResMovV1)
-            analysis->implementationNote += "; encoder=videotoolbox";
-#else
         if (request.preset == output::OutputPresetV1::H264MovV1) {
             analysis->implementationNote +=
                 request.hardware ? "; encoder=vaapi vaapi-runtime-unqualified"
                                  : "; encoder=openh264 " + request.worker.openh264Version +
                                        " sha256=" + request.worker.openh264Digest;
         }
-#endif
         if (!settings().videoCodec.empty() && analysis->display != nullptr)
             mediaDisplay =
                 std::make_shared<OutputMediaDisplayCommandV1>(analysis->display, colorIntent());
@@ -409,6 +390,12 @@ struct detail::SequenceExportWorkV1 {
         checkpoint();
         context.reportProgress({"Verifying composition", "Close and reopen", encoded, total()});
         const auto qc = checked(encoder->finish());
+        // Captured before the encoder is released below: the serving provider and why the
+        // providers ahead of it in the platform chain did not serve (ADR 0035).
+        const auto served = encoder->handshake();
+        const auto provenance = encoder->provenance();
+        if (provenance.fellBack())
+            std::cerr << "Bloom export: media provider " << provenance.diagnostic() << '\n';
         require(qc.frames == settings().frames && qc.audioSamples == settings().audioSamples &&
                     qc.bytes <= settings().byteLimit,
                 "Worker verification does not match approved stream layout",
@@ -466,7 +453,8 @@ struct detail::SequenceExportWorkV1 {
         }
         require(reopened.finalize() == qc.artifact && static_cast<bool>(lease.acceptVerification()),
                 "Staged artifact digest differs", Error::DigestMismatch);
-        auto evidence = checked(output::makeMediaQcEvidenceV1(*analysis, qc, approvals.finalize()));
+        auto evidence =
+            checked(output::makeMediaQcEvidenceV1(*analysis, qc, approvals.finalize(), &served));
         checkpoint();
         auto guardResult = FrameExportRequestAccessV1::claim(approved).tryEnterPublication();
         SequenceExportResultV1 outcome;
@@ -479,6 +467,7 @@ struct detail::SequenceExportWorkV1 {
             settings().container + "/" + (codec == "prores_ks" ? std::string("prores") : codec);
         outcome.encodedFrames = encoded;
         outcome.streamedPublication = streamed;
+        outcome.mediaProvider = provenance;
         outcome.gpuEvaluatedFrames = gpuEvaluatedFrames;
         outcome.gpuNativeDispatches = gpuNativeDispatches;
         outcome.gpuReadbacks = gpuReadbacks;
@@ -810,13 +799,7 @@ struct SequenceExportRunnerV1::State {
             return false;
         }
         // The per-frame preservation check compares the prepared float frame before encoding.
-#if defined(__APPLE__)
-        // The TIFF preset's adapter is unavailable on macOS (no FFmpeg worker), which made
-        // every video export unapprovable; use the always-available flat-EXR analyzer instead.
-        const auto preset = output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
-#else
         const auto preset = output::OutputPresetV1::TiffRgba16SrgbV1;
-#endif
         OutputAnalysisAttemptRequestV1 request{
             .plan = work->plan,
             .evaluation = {.time = *time,
