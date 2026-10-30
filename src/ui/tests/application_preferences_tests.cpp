@@ -115,8 +115,8 @@ void testHeadroomPreferences(Expectations& check) {
                      "garbage or overflowing headroom reads as the 2 GiB default");
     }
     settings.setValue(QStringLiteral("memory/ramHeadroomBytes"), QString::number(900 * gib));
-    check.expect(ui::loadApplicationPreferences(settings).ramHeadroomBytes == 256 * gib,
-                 "headroom above the maximum clamps to 256 GiB");
+    check.expect(ui::loadApplicationPreferences(settings).ramHeadroomBytes == 2 * gib,
+                 "headroom above the 256 GiB maximum reads as the default");
 
     settings.clear();
     settings.setValue(QStringLiteral("playback/operation-cache-bytes"), QStringLiteral("1024"));

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <bloom/ui/headroom_bytes.hpp>
+#include <bloom/runtime/memory_headroom.hpp>
 
 // The application's one typed owner of its global (user-wide, non-project) preferences.
 //
@@ -71,8 +71,8 @@ struct ApplicationPreferences final {
 
     // Memory and caches. Headroom is what Bloom leaves free for the rest of the computer (0 to 256
     // GiB each); Bloom uses everything else. Applied live on Apply and OK.
-    std::uint64_t ramHeadroomBytes = kHeadroomDefaultBytes;
-    std::uint64_t vramHeadroomBytes = kHeadroomDefaultBytes;
+    std::uint64_t ramHeadroomBytes = runtime::kDefaultMemoryHeadroomBytes;
+    std::uint64_t vramHeadroomBytes = runtime::kDefaultMemoryHeadroomBytes;
     bool mediaDiskCacheEnabled = true;
     std::string mediaDiskCacheDirectory;
     std::uint64_t mediaDiskCacheBudgetBytes = 0;

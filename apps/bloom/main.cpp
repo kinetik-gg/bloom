@@ -668,6 +668,16 @@ int main(int argc, char* argv[]) try {
     application.installEventFilter(&interactionSounds);
     QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window,
                      applyFeedbackPreferences);
+    // Memory headroom (RAM and VRAM left free for the system): the committed value reaches the
+    // processing policy on Apply and OK, and once now for the saved value.
+    const auto applyHeadroom = [processingPhasePolicy] {
+        const QSettings settings;
+        const auto preferences = bloom::ui::loadApplicationPreferences(settings);
+        processingPhasePolicy->setHeadroom({.ramBytes = preferences.ramHeadroomBytes,
+                                            .vramBytes = preferences.vramHeadroomBytes});
+    };
+    applyHeadroom();
+    QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window, applyHeadroom);
     QObject::connect(&window, &bloom::ui::MainWindow::soundTestRequested, &window,
                      [&uiFeedback](const bloom::ui::ApplicationPreferences& draft) {
                          uiFeedback.playTest(bloom::ui::feedbackSettingsFrom(draft));

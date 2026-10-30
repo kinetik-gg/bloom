@@ -41,7 +41,7 @@ folder and the reset button beside it returns to the default.
 computer; Bloom uses everything else for rendering and caching. Each is a size from 0 to 256 GiB and
 defaults to 2 GiB, so a busy render leaves room before the system runs short and crashes. They are
 stored as decimal byte strings under `memory/ramHeadroomBytes` and `memory/vramHeadroomBytes`; a
-missing, non-numeric or overflowing value reads as 2 GiB, and a number above 256 GiB reads as 256 GiB.
+missing, non-numeric, overflowing or above-256-GiB value reads as 2 GiB.
 The older `playback/operation-cache-bytes` and `playback/ram-preview-memory-bytes` preferences are
 no longer settings and are ignored.
 

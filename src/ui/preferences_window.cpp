@@ -544,12 +544,12 @@ QWidget* PreferencesWindow::buildMemoryPage() {
     const auto addHeadroomRow = [&](const QString& objectName, const QString& label,
                                     std::uint64_t ApplicationPreferences::*member) {
         auto* field = addValueFieldRow(memoryRows, content, objectName, label, 0.0,
-                                       static_cast<double>(kHeadroomMaximumBytes) / kBytesPerGiB,
+                                       static_cast<double>(runtime::kMaximumMemoryHeadroomBytes) / kBytesPerGiB,
                                        2, QStringLiteral("GiB"), false);
         field->setValue(static_cast<double>(draft_.*member) / kBytesPerGiB);
         connect(field, &kit::KValueField::valueChanged, this, [this, member](const double value) {
             draft_.*member =
-                std::min(budgetBytesFromGiB(value), kHeadroomMaximumBytes);
+                std::min(budgetBytesFromGiB(value), runtime::kMaximumMemoryHeadroomBytes);
             updateApplyEnabled();
         });
         refreshCallbacks_.push_back([this, field, member] {

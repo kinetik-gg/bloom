@@ -743,18 +743,10 @@ void MainWindow::showPreferences() {
                 saveApplicationPreferences(settings, preferences);
                 settings.sync();
                 applyPreferencesToOpenEditors(preferences);
-                applyHeadroom(preferences);
                 emit preferencesChanged();
             });
     connect(&dialog, &PreferencesWindow::soundTestRequested, this, &MainWindow::soundTestRequested);
     dialog.exec();
-}
-
-void MainWindow::applyHeadroom(const ApplicationPreferences&) {
-    // Engine seam: the runtime memory-headroom policy is not on this branch yet. When it lands,
-    // build a MemoryHeadroom from preferences.ramHeadroomBytes / vramHeadroomBytes (validated by
-    // parseHeadroomBytes in place of parseHeadroomText) and call
-    // GpuProcessingPhasePolicy::setHeadroom here.
 }
 
 void MainWindow::applyPreferencesToOpenEditors(const ApplicationPreferences& preferences) {
