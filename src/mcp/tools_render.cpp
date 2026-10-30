@@ -372,6 +372,8 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     auto* value = out.object();
     out.set(value, "publishedFrames", out.number(result.frames));
     out.set(value, "preservationReport", out.text(result.report));
+    out.set(value, "job", out.number(result.job));
+    out.set(value, "log", logEntries(out, result.log));
     auto* files = out.array();
     for (const auto& path : result.files) {
         auto* file = out.object();

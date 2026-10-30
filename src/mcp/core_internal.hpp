@@ -37,6 +37,10 @@ struct ToolFailure final : std::runtime_error {
     // The refusing collaborator's own code, e.g. the export queue's "PlatformNotSupported";
     // published as diagnostic.detail when present.
     std::string detail;
+    // A failed transient render, export or capture: its job id and the run's log (bounded),
+    // published as structuredContent.job and structuredContent.log.
+    std::optional<std::uint64_t> job;
+    std::shared_ptr<const std::vector<host::ExportLogEntry>> log;
 };
 
 // What one tools/call works against.
@@ -127,7 +131,12 @@ struct McpServerCore::State {
 [[nodiscard]] std::string base64(std::span<const std::byte> bytes);
 
 // ---- Transient export queue jobs (tools_export.cpp)
+// At most this many of a transient run's newest log entries are returned with its result.
+inline constexpr std::size_t kTransientLogEntries = 64;
+
 struct TransientResult final {
+    std::uint64_t job = 0;
+    std::vector<host::ExportLogEntry> log;
     std::uint64_t frames = 0;
     std::vector<std::filesystem::path> files;
     std::string report;
@@ -135,6 +144,8 @@ struct TransientResult final {
 // Submits a transient job on the export queue's owner thread, waits on the request worker
 // (reporting progress), stops the job when the request is cancelled, and acknowledges the result.
 // Throws ToolFailure on refusal, failure or cancellation.
+// export.log's entry rows; render, export and capture results reuse them.
+[[nodiscard]] yyjson_mut_val* logEntries(Json& out, const std::vector<host::ExportLogEntry>& entries);
 [[nodiscard]] TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                                               host::ExportTransientJobRequest request);
 // `path` as an export destination: absolute paths become external file URIs, relative paths stay

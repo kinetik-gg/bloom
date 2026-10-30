@@ -69,6 +69,10 @@ yyjson_mut_val* failureValue(Json& out, const ToolFailure& failure) {
     if (!failure.detail.empty())
         out.set(diagnostic, "detail", out.text(failure.detail));
     out.set(value, "diagnostic", diagnostic);
+    if (failure.job)
+        out.set(value, "job", out.number(*failure.job));
+    if (failure.log)
+        out.set(value, "log", logEntries(out, *failure.log));
     return value;
 }
 
