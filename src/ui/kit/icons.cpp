@@ -113,6 +113,7 @@ const auto& iconAssets() {
         {IconId::ExportPanel, QLatin1StringView("export")},
         {IconId::Shy, QLatin1StringView("ghost")},
         {IconId::LabelFilter, QLatin1StringView("funnel-simple")},
+        {IconId::GraphEditor, QLatin1StringView("chart-line")},
     });
     return entries;
 }

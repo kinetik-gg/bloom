@@ -91,6 +91,12 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     {Color::ComponentY, 0x8CC265U},
     {Color::ComponentZ, 0x7FC4F5U},
     {Color::ComponentW, 0xC9C9C9U},
+    // T1 single-value curves, in assignment order.
+    {Color::GraphCurve1, 0xF5C542U},
+    {Color::GraphCurve2, 0xD58BD0U},
+    {Color::GraphCurve3, 0x4FC7B8U},
+    {Color::GraphCurve4, 0xEE9A55U},
+    {Color::GraphCurve5, 0xA99BF0U},
 });
 
 // Darkest first. surfaceStep() walks exactly this ladder and nothing else.

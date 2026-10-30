@@ -185,6 +185,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/diamond.svg
         kit/third_party/phosphor-icons/regular/dots-three-vertical.svg
         kit/third_party/phosphor-icons/regular/eyedropper.svg
+        kit/third_party/phosphor-icons/regular/chart-line.svg
         kit/third_party/phosphor-icons/regular/selection.svg
         kit/third_party/phosphor-icons/regular/square-half.svg
         kit/third_party/phosphor-icons/regular/align-left.svg
@@ -269,6 +270,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/dots-three-vertical-bold.svg
         kit/third_party/phosphor-icons/bold/eye-bold.svg
         kit/third_party/phosphor-icons/bold/eyedropper-bold.svg
+        kit/third_party/phosphor-icons/bold/chart-line-bold.svg
         kit/third_party/phosphor-icons/bold/selection-bold.svg
         kit/third_party/phosphor-icons/bold/square-half-bold.svg
         kit/third_party/phosphor-icons/bold/align-left-bold.svg
@@ -340,6 +342,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/dots-three-vertical-fill.svg
         kit/third_party/phosphor-icons/fill/eye-fill.svg
         kit/third_party/phosphor-icons/fill/eyedropper-fill.svg
+        kit/third_party/phosphor-icons/fill/chart-line-fill.svg
         kit/third_party/phosphor-icons/fill/selection-fill.svg
         kit/third_party/phosphor-icons/fill/square-half-fill.svg
         kit/third_party/phosphor-icons/fill/align-left-fill.svg

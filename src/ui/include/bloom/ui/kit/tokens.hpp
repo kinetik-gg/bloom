@@ -102,7 +102,18 @@ enum class Color : std::uint8_t {
     ComponentY,
     ComponentZ,
     ComponentW,
+    // T1: the graph editor's single-value curve strokes. Each single-value curve on the canvas takes
+    // the next of these in curve order (cycling), so opacity beside rotation reads as two curves
+    // rather than one gold line twice. Gold, orchid, teal, orange, lavender: none is a component
+    // hue (red, green, sky blue), Accent, or another's neighbour.
+    GraphCurve1,
+    GraphCurve2,
+    GraphCurve3,
+    GraphCurve4,
+    GraphCurve5,
 };
+// How many GraphCurve tokens the single-value palette cycles through.
+inline constexpr int kGraphCurvePaletteSize = 5;
 
 // The four-step surface ladder, darkest first. "hover = surface + 1 step" and "pressed =
 // surface - 1 step" walk exactly this ladder; a raised surface (popup, dialog, drag) also steps up
