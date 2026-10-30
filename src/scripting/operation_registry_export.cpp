@@ -25,7 +25,8 @@ using document::ExportOutputId;
     return {.name = std::move(name),
             .kind = kind,
             .required = required,
-            .inExample = false,
+            // The shortest working call names every required argument.
+            .inExample = required,
             .context = context,
             .example = std::move(example),
             .summary = std::move(summary)};
@@ -319,7 +320,8 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
         });
     add("bloom.export.set-output-settings",
         {argument("output", ValueKind::Id, true, StableId{1}, "The output."),
-         argument("settings", ValueKind::String, true, R"({"format":"h264-mp4"})",
+         argument("settings", ValueKind::String, true,
+                  host::exportSettingsToJson(document::ExportOutputSettings{}),
                   "The document 1.29 settings object as JSON.")},
         [](const std::string& op, const Arguments& args) {
             const auto output = idArgument<ExportOutputId>(args, "output");
