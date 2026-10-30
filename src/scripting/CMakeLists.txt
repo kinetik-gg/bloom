@@ -19,6 +19,7 @@ target_sources(
     bloom_scripting
     PRIVATE
         json_script.cpp
+        live_session_host.cpp
         operation_registry.cpp
         operation_registry_alignment.cpp
         operation_values.hpp
@@ -54,6 +55,13 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_scripting_live_session_test)
     bloom_add_test(NAME bloom.scripting.live-session COMMAND bloom_scripting_live_session_test
         LABELS unit scripting host commands document)
+    # ADR 0034: the shared live session marshal (FIFO, bound, gestures, cancellation, revocation).
+    add_executable(bloom_scripting_live_session_host_test tests/live_session_host_tests.cpp)
+    target_link_libraries(bloom_scripting_live_session_host_test PRIVATE bloom_scripting)
+    bloom_enable_warnings(bloom_scripting_live_session_host_test)
+    bloom_add_test(NAME bloom.scripting.live-session-host
+        COMMAND bloom_scripting_live_session_host_test
+        LABELS unit scripting commands mcp TIMEOUT 120)
     add_executable(bloom_scripting_operation_schema_test tests/operation_schema_tests.cpp)
     target_link_libraries(bloom_scripting_operation_schema_test PRIVATE bloom_scripting)
     bloom_enable_warnings(bloom_scripting_operation_schema_test)

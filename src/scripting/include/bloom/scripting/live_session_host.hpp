@@ -123,6 +123,9 @@ struct LiveSessionCommitter final {
     std::function<SessionCommandResult(bool)> history;
     // True while an interactive gesture (drag, scrub-edit, text edit) is open.
     std::function<bool()> gestureOpen;
+    // The live document revision, so a revision-guarded history step (MCP `history` with
+    // expectedRevision) is checked on the owner thread in the same slice that applies it.
+    std::function<document::Revision()> revision;
 };
 
 // The calling request's cancellation and deadline, carried into the marshal so a queued commit
@@ -146,14 +149,27 @@ class LiveSessionLease final {
     [[nodiscard]] explicit operator bool() const noexcept { return session_ != nullptr; }
     [[nodiscard]] LiveSessionAvailability availability() const noexcept { return availability_; }
     [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
-    // The mirror as it was when the lease was taken.
+    // The mirror as it was when the lease was taken. Only for a bound lease (operator bool).
     [[nodiscard]] const LiveSessionState& state() const noexcept;
     // An attached session (Session::attach) for this generation: reads come from the mirror, and
     // execute()/undo()/redo() are queued commits under this lease's call control.
     [[nodiscard]] Session& session() const noexcept { return *session_; }
+    // The same session as a shared owner, for a client that binds it for the whole generation (the
+    // Python console). Its reads and commits stay governed by this lease's hold.
+    [[nodiscard]] std::shared_ptr<Session> sharedSession() const noexcept { return session_; }
     // state().context plus a layer-geometry provider that measures on the calling client thread.
     [[nodiscard]] OperationContext operationContext() const;
+    // The newest mirror of this lease's generation (published after the lease was taken), or null
+    // once the generation is revoked. state() stays the mirror as it was when the lease was taken.
+    [[nodiscard]] std::shared_ptr<const LiveSessionState> current() const;
     [[nodiscard]] bool revoked() const noexcept;
+    // Replaces the call control later commits through this lease carry. A long-lived lease (the
+    // Python console binds one per generation) gives each script its own cancellation. Call it on
+    // the client thread that commits through the lease.
+    void setControl(LiveCallControl control);
+    // A revision-guarded undo or redo: queued like any commit, and refused with a stale-revision
+    // result on the owner thread when the live revision is not `expectedRevision`.
+    [[nodiscard]] SessionCommandResult history(bool redo, document::Revision expectedRevision);
 
   private:
     struct Hold;
@@ -226,6 +242,12 @@ class LiveSessionHost final {
     [[nodiscard]] LiveSessionAvailability availability() const noexcept;
     [[nodiscard]] std::uint64_t generation() const noexcept;
     [[nodiscard]] std::size_t queuedCommits() const noexcept;
+    // The current generation's command event stream (null while no project is bound), so a client
+    // can follow command events from the moment a generation starts.
+    [[nodiscard]] std::shared_ptr<EventStream> events() const;
+    // True while the oldest queued commit is waiting for an open gesture to close; the owner
+    // drains again when the gesture ends.
+    [[nodiscard]] bool waitingForGesture() const noexcept;
 
   private:
     struct State;
