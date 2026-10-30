@@ -51,6 +51,15 @@ selects the machine-derived default, and **Custom** shows the value to enter. Se
 **Edit → Purge… → Purge media cache**, which clears the on-disk store and the applicable in-memory
 decoded media off the interface thread; the source files are never changed.
 
+## MCP server
+
+The in-app MCP server's port (`mcp/port`, default 6767), **Start when Bloom opens** (`mcp/autoStart`,
+off by default) and its access token are global preferences, kept per user and outside projects.
+They are edited only in the **MCP Server** editor, which this window links to rather than
+duplicating the controls; the port changes only while the server is stopped. The token is not in
+the settings store at all: it lives in an owner-only file in Bloom's user-data folder. See
+[Using Bloom from an agent](mcp.md).
+
 ## Project, session, and per-area state
 
 Not everything persisted is a global preference. This window deliberately excludes:

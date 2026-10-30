@@ -115,8 +115,9 @@ Platform/GPU capability -> project semantics
 | `src/media` | standards-backed image/media discovery, decode, metadata, and proxies |
 | `src/color` | qualified OCIO configuration resolution and Qt-free CPU display-processing adapters |
 | `src/output` | output analysis, still/video/audio adapter orchestration, offline export mixing, verification, and atomic publication requests |
-| `src/platform` | narrow filesystem, system, and packaging services with OS parity |
-| `src/scripting` | optional Python runtime, stable proxies, package/add-on lifecycle, and API bridge |
+| `src/platform` | narrow filesystem, system, and packaging services with OS parity, including loopback sockets and owner-only secret files (ADR 0034) |
+| `src/scripting` | optional Python runtime, stable proxies, package/add-on lifecycle, API bridge, and the shared live session host (`LiveSessionHost`) |
+| `src/mcp` | the one MCP server core (JSON-RPC, handshake, tools, projections), the stdio transport, Streamable HTTP framing and admission, and the in-app server service (ADR 0034); depends on scripting, host, output, runtime, commands, document, platform and core, and only `src/ui` and the apps link it |
 | `modules` | optional source-built pipeline modules that register coherent capabilities |
 
 `ProjectSession` belongs in `src/host` because it coordinates document, command history, persistence

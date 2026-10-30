@@ -141,3 +141,15 @@ than creating a second workspace mechanism.
 header/footer controls. It is offered by the panel switcher without changing the five-area default
 layout. Python-enabled builds attach it to the live host; other builds show an explicit unavailable
 state. See [Scripting Bloom with Python](../user-guide/python.md) for execution and undo behavior.
+
+## MCP Server editor
+
+`bloom.mcp-server` (display name **MCP Server**, ADR 0034) is a replaceable registered editor for the
+in-app MCP server. It holds no server state: every MCP Server editor and the status bar read one
+application-lifetime `McpServerAdapter`, which owns the `mcp::McpServerService`, drains it on the UI
+thread and emits one change signal per published snapshot. Closing, duplicating or swapping the
+editor leaves the server running. The editor issues the service's commands (Start, Stop, Port,
+Start when Bloom opens, Reveal, Copy, Regenerate, Copy client config) and shows each typed refusal's
+reason verbatim under the control it belongs to; port, auto-start and the token are preferences,
+never project state, and nothing the editor does enters the undo history. See
+[Using Bloom from an agent](../user-guide/mcp.md).

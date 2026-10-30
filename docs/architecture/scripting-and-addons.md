@@ -54,7 +54,8 @@ an advanced tier, not as the compatibility baseline every add-on must pay for.
 ADR 0022 is implemented by SCRIPT-0. The Qt-free `bloom::scripting` facade and `bloom-cli` are the
 reference host boundary for Python and MCP clients. The six contracts below are live in the
 headless build. SCRIPT-1 adds the optional nanobind package, CPython C API embedding and Qt-free
-stdio MCP transport; the live Script editor still needs its host adapter.
+stdio MCP transport. ADR 0034 moves the MCP server core into `src/mcp` and gives the Script editor
+and the in-app MCP server one live host (`LiveSessionHost`, below).
 
 Python consumes the same owned application boundaries as the UI and headless frontend:
 
@@ -183,6 +184,48 @@ A hung in-process Python script or native extension cannot be killed safely. Tru
 may require application termination when it refuses cooperative cancellation. Third-party work
 that needs hard cancellation belongs in an add-on process.
 
+## The Live Session Host
+
+`scripting::LiveSessionHost` (ADR 0034, `bloom/scripting/live_session_host.hpp`) is the live GUI
+session as off-thread clients see it. The Script editor and the in-app MCP server use the same
+instance, so they share one mirror, one commit queue of 16, one generation counter and one
+revocation rule.
+
+- **Owner side (UI thread).** The application-lifetime `ui::LiveSessionAdapter` publishes the mirror
+  (render source, editor context with selected nodes and layers, the Viewer's display and view, the
+  project path) on every snapshot, composition, selection, time, colour-settings and save change.
+  `CompositionSession::documentRebound` revokes the generation before any refresh can publish the
+  new document, and `ProjectHost::sessionReplaced` starts the next generation with a fresh command
+  event stream. The adapter drains at most one commit per event-loop slice through
+  `CompositionSession`, woken by `LiveCommitSubscription` from a stop-aware waiter thread rather than
+  a poll, and never while an interactive gesture (ADR 0017) is open: a held commit is retried when
+  the gesture ends.
+- **Client side (scripting thread, MCP request workers).** `acquire()` returns a lease on the
+  current generation: an attached `scripting::Session` whose reads come from the mirror and whose
+  `execute()`, `undo()` and `redo()` enqueue and wait. A lease's `history(redo, expectedRevision)`
+  checks the revision on the owner thread in the slice that applies it. Leases keep reading the
+  state they took after a replacement and refuse to commit.
+- **Ordering and withdrawal.** Commits apply in FIFO order and land in the undo history like a panel
+  edit, with the transaction's label. A commit still queued when its caller's stop token fires, its
+  deadline passes or its generation is revoked is withdrawn and never applied, with a stable code
+  (`bloom.live.cancelled`, `deadline-exceeded`, `gesture-open`, `project-replaced`, `queue-full`,
+  `shutting-down`). A commit that started applying finishes atomically.
+
+## MCP On The Live Session
+
+`src/mcp` owns the one MCP server core (`McpServerCore`: JSON-RPC, handshake, tool schemas, handlers
+and projections) and both transports: `serveStdio` for `bloom-mcp` and `McpServerService`, the
+in-app Streamable HTTP server on `127.0.0.1` (see [Using Bloom from an agent](../user-guide/mcp.md)).
+The core reads and commits through `McpSessionSource`, a typed choice between the headless session
+`bloom-mcp` owns and the desktop's `LiveSessionHost`; on the live host every `tools/call` takes its
+own lease with the request's stop token and the 30-second commit deadline. Contextual arguments
+fill from the live context exactly as in the Python console, and align and distribute measure
+geometry on the request worker. Export queue commands are owner-thread calls: on the live host the
+core hands them to `McpServerService::pump()` on the UI thread and waits on the queue's
+`ExportQueueSubscription`; render, export and capture are transient export queue jobs there.
+`bloom-mcp` keeps its scripting render path for `render`, `export` and `capture` and serves the
+`export.*` tools from a headless export queue over its own session.
+
 ## Binding Stack
 
 SCRIPT-1 uses nanobind 3.0.1 for the private `_bloom` extension and the CPython C API for
@@ -211,9 +254,11 @@ read as vectors and colours; and a time is a whole frame, a `Fraction`, a float 
 CLI and MCP clients apply identically. `Proxy.__repr__` reads `<Composition 1 'Composition 1'>` and
 `bloom.context` summarises project, composition, selection and time. `ui`, `addons`, `props` and contribution
 `types` are reserved stubs that raise `NotImplementedError` with ADR references. The registered Script editor uses kit controls and a shared interpreter owned by a scripting
-thread. A revocable live `SessionBinding` supplies immutable snapshots and plain context values;
-transactions and history calls queue to the UI thread. New/Open revokes the old generation before
-pending authoring work can execute. Native command events cross a lifetime-safe queue and Python
+thread. It reads and commits through the shared `scripting::LiveSessionHost` (see "The live
+session host" below): a lease per live generation supplies immutable snapshots and plain context
+values, transactions and history calls queue to the UI thread, and each script's commits carry
+that script's cancellation. New/Open revokes the old generation before pending authoring work can
+execute, and a withdrawn commit reaches Python as a failed result with its `bloom.live.*` code. Native command events cross a lifetime-safe queue and Python
 callbacks run only at the subscriber's pump. Render compilation and publication use one captured
 snapshot, its media base directory captured under the same lock, and the live host's
 publication/artifact coordinators. Every range frame retains that source context across Save As.

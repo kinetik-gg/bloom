@@ -144,6 +144,30 @@ Background work uses Bloom task and process services. Platform adapters normaliz
 exit status, path quoting, environment handling, and diagnostics. The UI thread never waits for an
 external process or a platform-specific GPU operation.
 
+## Loopback Sockets And Owner-only Secrets
+
+`src/platform` owns the only socket code in Bloom (ADR 0034, `bloom/platform/loopback_listener.hpp`)
+and the owner-only secret files (`bloom/platform/owner_only_secret.hpp`), split by backend like the
+staged-artifact provider.
+
+| Capability | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Loopback listener | POSIX, `SO_REUSEADDR`, `SOCK_CLOEXEC`, `MSG_NOSIGNAL` | POSIX, `SO_REUSEADDR`, `FD_CLOEXEC`, `SO_NOSIGPIPE` | Winsock 2, `SO_EXCLUSIVEADDRUSE`, non-inheritable sockets |
+| Port in use | `EADDRINUSE` | `EADDRINUSE` | `WSAEADDRINUSE`, or `WSAEACCES` under another process's exclusive bind |
+| Secret file | 0600 in a 0700 folder under the XDG data home | 0600 in a 0700 folder under Application Support | protected DACL for the current user under `%LOCALAPPDATA%` |
+| CSPRNG | `getrandom` | `getentropy` | `BCryptGenRandom` (system-preferred RNG) |
+
+A listener binds the literal IPv4 loopback address only; the API has no address parameter, so a
+wildcard or routable bind cannot be expressed. Binding is one synchronous system call, so a taken
+port is a typed `PortInUse` naming the port, and the boundary never tries another port. `wake()`
+and `close()` unblock a blocked `accept()`, `read()` or `write()` from any thread, and every
+blocking call takes a timeout and a stop token. Secret writes replace the file atomically (an
+owner-only temporary, flushed, then renamed), a file other users can access is reported as exposed
+and never returned, and no message carries the secret. Binding only the loopback address keeps the
+Windows Defender Firewall and the macOS application firewall from asking the artist to allow
+incoming connections. `bloom.platform.loopback-listener` and `bloom.platform.owner-only-secret`
+run on all three platforms.
+
 ## Build, Test, And Release Matrix
 
 CMake describes targets and feature discovery. Supported builds use the native production-quality

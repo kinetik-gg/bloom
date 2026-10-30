@@ -318,6 +318,15 @@ before QObject base destruction, without waiting for evaluation or GPU work. Sub
 startup failure follows an explicit application diagnostic/shutdown path. Failed queued dispatch
 clears pending state, closes the subscription and reports failure; no fast-poll fallback is added.
 
+Two work sources are not scheduler tasks, so the completion drain alone would never see them, and
+each has its own stop-aware waiter beside it (ADR 0034). The application-lifetime
+`LiveSessionAdapter` waits on `LiveCommitSubscription` and queues at most one UI drain that applies
+at most one live commit per event-loop slice. The application-lifetime `McpServerAdapter` waits on
+`McpServerService::subscribe()` (socket activity and request workers record facts there) and
+queues at most one UI drain that calls `pump()`; it also drains on `TaskUiBridge::resultsAvailable`
+for the token's blocking-I/O tasks. Both waiters stop and join on destruction without waiting for
+request work, and neither polls.
+
 Foreground preview, RAM/background completion and Viewer adjustment/probe/channel/CPU-fallback
 results consume this signal through typed handles. Qualified-display bootstrap, asset import,
 frame export and cache purge completion consumers also use it. RAM start submits its initial
@@ -474,6 +483,14 @@ Closing a panel cancels its scoped requests without joining workers. Closing a p
 late results from publishing. Application shutdown keeps processing UI events while it presents any
 required save/export decision; it does not freeze the event loop waiting for a join. No incomplete
 project write or final output is reported as successful.
+
+The in-app MCP server is a shutdown participant (ADR 0034). `McpServerService::beginShutdown()`
+acts as Stop with cause Shutdown and refuses every later command: the listener closes, every
+client session ends, in-flight requests are cancelled (a queued live commit is withdrawn, one
+already applying finishes atomically) and transient render, export and capture jobs stop; export
+queue jobs started with `export.start` belong to the Export editor and follow its rules. The
+coordinator keeps pumping until `quiescent()`. There is no prompt for MCP work: commits are atomic
+and transient jobs only ever wrote staged files.
 
 The implemented composition root intercepts both window-close and application-level quit, closes
 admission, cancels replaceable preview work, continues processing Qt events, and permits process

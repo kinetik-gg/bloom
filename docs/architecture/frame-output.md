@@ -1126,3 +1126,23 @@ contains look-tagged effects or explicitly bypasses them, its analysis record ap
 `BloomOutputLookV1\0`, a one-byte bypass flag and an unsigned big-endian 64-bit effect count
 (27 bytes total). The legacy no-look/default-policy record has no suffix. The 64×64 ACES handoff
 fixture pins the process record at 271 bytes and the analysis record at 1669 bytes.
+
+## Transient jobs from MCP
+
+The in-app MCP server (ADR 0034) keeps no render path of its own. On the live application its
+`render`, `export` and `capture` tools submit transient jobs through
+`ExportQueueService::submitTransient`: one composition, one range (a single frame for a still or a
+capture), one output and a destination. A transient job runs through the same `ExportJobRunner`,
+preflight, verification, strict Viewer GPU priority and publication as every other export, is never
+saved in the project and never enters undo, and leaves the queue snapshot once the tool has read its
+result (`acknowledgeTransient`). Nothing replaces an existing file silently: the tool's
+`overwrite` argument defaults to asking, which the run refuses for an existing destination. A
+cancelled request stops its job; stopping the server or quitting stops every MCP transient job and
+no queue job started with `export.start`. The request worker waits on `ExportQueueSubscription` and
+reports progress (frames completed of the total, "Waiting for the Viewer" with no estimate) when
+the request carried a progress token; queue commands themselves run on the UI thread through
+`McpServerService::pump()`. Capture is the still route at composition resolution with the Viewer's
+display and view, published into a per-user `mcp-captures` folder that keeps the newest 16, and
+embedded as an MCP image up to `kMcpInlineImageBytes`. MCP adds no operation, kernel, lowering or
+route to the GPU coverage contract. `bloom-mcp` on stdio keeps the scripting render path
+(`scripting::Render::run` and the sequence runner) for these three tools.
