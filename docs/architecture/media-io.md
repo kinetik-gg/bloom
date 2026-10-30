@@ -1735,7 +1735,8 @@ superbuild stub is not a runtime path and no Cisco binary is bundled.
 owns the codec clients, source-audio decoding and offline mix; host owns approvals and publication.
 The runner consumes SCRIPT-0's
 `FrameRangeRunnerV1::timeForFrame` mapping, then runs the existing per-frame analysis attempt and
-exact-digest approval on the authoring thread. One acknowledged frame slot provides back-pressure:
+exact-digest approval on the authoring thread, several frames ahead of one ordered encoder
+([frames in flight](frame-output.md#frames-in-flight)). One encoder slot provides back-pressure:
 the export ledger admits prepared pixels, transport copies and retained source audio before
 allocation. The worker retains only first/last frame references, codec buffers and bounded private
 file products. Audio uses the production `AudioEngine` mixer through its offline null-device pull,

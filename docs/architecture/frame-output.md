@@ -235,6 +235,27 @@ share it, but version 1 has no global identity cache, shared in-flight wait, or 
 deduplication. Scheduler coalescing may supersede obsolete attempts; it must not make independent
 consumers share cancellation or wait on one another.
 
+The digest above is the only definition; how it is computed is free. `core::Sha256Hasher` selects
+its compression rounds once per process: x86-64 SHA extensions or Armv8 SHA2 instructions when the
+processor has them, the portable FIPS 180-4 rounds otherwise. All three produce identical digests,
+and tests cross-check the accelerated rounds against the portable reference for every length up to
+several blocks and every update split. The preparer validates and serializes each 1024-pixel chunk
+branch-free (finite components, alpha in [0, 1], canonical transparent zero) so the compiler
+vectorizes it; an invalid pixel anywhere in the chunk fails the frame exactly as before.
+
+Full-frame digests on the export paths, and why each remains:
+
+| Digest | Owner | Why it is kept |
+| --- | --- | --- |
+| Process-pixel digest | this identity | approval digest and published identity |
+| Decoded video plane digests | media worker, verified at the host boundary | IPC integrity (ADR 0027) |
+| Encoded RGBA16 plane digest | host, verified by the worker | IPC integrity of every encoded frame |
+| Image and movie source content digests | media I/O source revisions | stale-source detection (ADR 0025) |
+| Staged artifact digests | staged publication | transfer and reopen verification |
+
+None is removed; every one runs on the accelerated rounds, and the process-pixel digest runs on the
+frame's own analysis worker while other frames of the same export evaluate and encode.
+
 ## Preservation And Loss Report
 
 Before a file task is admitted, the output adapter produces a deterministic `OutputAnalysis` with
@@ -1096,6 +1117,43 @@ approval. The composition driver uses SCRIPT-0's host frame-time mapping and pub
 closed, reopened and verified movie or WAV. PNG/EXR/TIFF share per-frame atomic publication.
 Default EXR records remain unchanged;
 explicit output transforms and look policies bind the additional evidence described below.
+
+### Frames in flight
+
+`SequenceExportRunnerV1` and the export queue's image-sequence driver keep several frames between
+evaluation and the encoder. Each frame's analysis attempt (decode and scene preparation on its own
+CPU worker, GPU evaluation, semantic identity, analysis) runs while earlier frames are approved,
+encoded and published. Frames still reach the encoder or publication strictly in order, one at a
+time; the first frame waits for the caller's approval and later frames are approved in order. The
+window depth comes from `detail::sequenceExportFramesInFlightV1`, the seam for the measured-capacity
+model (frames that fit in measured free memory minus the headroom preference); until that model is
+available it is a bounded default of four. A frame whose processing admission is refused while
+other frames hold memory shrinks the window, releases every later frame and starts again after an
+encode or publication has released a retained frame; with nothing else holding memory the refusal
+stops the export as before. Pause stops new frames from starting and reaches its boundary once the
+window has drained; cancellation cancels every in-flight attempt.
+
+The media worker acknowledges frames and audio blocks in order, but the host no longer waits for
+each acknowledgement before preparing the next product: a bounded number of acknowledgements stay
+unread, a refused product surfaces on the next call, and finish, read and close first collect all
+of them.
+
+### GPU output colour for media
+
+Video and TIFF delivery transform the process frame to the export's display/view on the GPU. The
+runner prepares the display/view once per range, on the first Evaluating worker after the provider's
+bootstrap, as an OCIO `ProcessEffect` command (`kOcioGpuDisplayEffectSemanticsId`, the same
+generated transform body as the RGBA8 display program, distinct identity) from the exact resolved
+config the CPU display uses. Each frame's one combined readback then transfers the process payload
+and the display-referred RGBA32F, which the attempt retains bound to the command identity, the
+display digest and the process-pixel digest. At the codec boundary
+`prepareMediaRgba16FromDisplayV1` only un-associates, clamps and quantizes, exactly as the CPU
+reference does after its display transform. The CPU reference display transform
+(`prepareMediaRgba16V1`) remains the reference and the explicit fallback for a frame without a
+matching payload; the result reports `gpuDisplayFrames` and `cpuDisplayFrames`, and the first CPU
+frame logs its reason. GPU parity against the CPU reference is measured in RGBA16 codes on Bloom
+Neutral and the ACES 1.0 SDR view; the tolerance is MEDIA_DISPLAY_TOLERANCE codes of 65535
+(binary32 GPU OCIO against the binary64 CPU reference).
 
 See [media I/O](media-io.md#time-based-export-media-4) for the resource, tolerance and QC records,
 and [Export](../user-guide/exporting-video.md) for artist-facing controls.
