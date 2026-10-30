@@ -1,78 +1,118 @@
 # Export
 
-Choose **File → Export Composition…**. The two deliverables at the top of the preset list produce
-an effects handoff and a review movie from the same composition. First and last frame select an
-inclusive composition range; the composition's frame rate sets the timing.
+Exports run from the **Export** panel, a queue saved in the project. Choose **Export → Add to
+Export Queue** (also on a composition row in Assets): Bloom adds a job for the composition and
+reveals the panel. A job renders one composition range to one or more outputs, one job at a time in
+queue order, in the background while you keep working.
 
-## VFX handoff
+## Jobs and outputs
 
-1. Use the ACES 1.3 CG config with ACEScg as the project or composition working space.
-2. Select **VFX handoff EXR (ACES2065-1, PIZ, 1001, ####)**.
-3. Set the range and a destination such as `shot.exr`. The preset fills **Output colour space**
-   with `ACES2065-1`, **Compression** with **PIZ**, **Start frame** with **1001**, **Padding**
-   with **4**, and **Pattern** with `<base>.####.<ext>`. You can edit these fields.
-4. Leave **Bake look-tagged effects** off. **Continue** opens the preservation report showing
-   **Look: OFF (handoff)** and **ACES2065-1; PIZ**. Check these before choosing **Export**.
-5. A 48-frame range produces `shot.1001.exr` through `shot.1048.exr`, containing premultiplied
-   32-bit float AP0 pixels. The look bypass applies only to this export.
+A new job renders the composition's work area (or the whole composition when it has none) to one
+**H.264 MP4** output at `Exports/{name}.mp4` beside the project. If H.264 cannot run on this
+computer, the output starts as **ProRes 422 HQ MOV** and the panel says why H.264 was not used. The
+default is never an image sequence and never the last preset you used. An unsaved project has no
+default destination; Start then says "Choose where to save this output".
 
-Start frame changes filenames, not which composition frames are rendered. Pattern accepts
-`<base>` for the destination basename, `<ext>` for its extension, `{name}` for the composition
-name, and exactly one `####` or `{frame}` for the padded number. Bloom rejects names that collide,
-fail to ascend, contain path separators or change the preset extension.
+Each job has a name, a range (**Work area**, **Composition**, **Custom** first and last frame, or a
+single **Frame**), an enabled flag for **Start All** and an optional label colour. Each output has
+a preset, its settings, a destination with an overwrite policy, an enabled flag and **Import into
+Assets after render**. Every edit is undoable and saved in the project. Run status, progress, ETA,
+logs and verification are not saved: a reopened project shows every job **Ready**. A running job
+cannot be edited ("Stop the job to change it; it keeps the settings it started with").
 
-## Review movie
+An image output writes one file per frame, or a single still when the range is one frame.
 
-1. With the same ACES composition, select **Review H.264 (Rec.709, look on)**.
-2. Choose the range, a `.mov` destination and whether to include audio. The preset uses
-   **Rec.1886 Rec.709 - Display / ACES 1.0 - SDR Video** with the look on.
-3. The dialog says which H.264 encoder this computer uses. On macOS it is Apple VideoToolbox and
-   there is nothing to install. On Linux, if Cisco OpenH264 is not installed yet, choose
-   **Install OpenH264…** and accept Cisco's binary licence: Bloom downloads Cisco OpenH264 2.6.0
-   only after consent and verifies its digest. **Locate Downloaded File…** verifies and copies a
-   download you already have (your file stays where it is); a busy bar and **Cancel** show while it
-   is checked. When a VA-API device is present, **Use hardware (VA-API)** selects the hardware
-   alternative; on Linux computers Cisco publishes no binary for, it is the only H.264 encoder and
-   stays on. No Cisco binary is bundled. **Continue** stays disabled, with the reason under the
-   field, until a destination, a valid range and an encoder are chosen.
-4. Choose **Continue**. Check the display/view pair and `look: baked (N look-tagged effects)` in
-   the approval prompt, then choose **Export**. The prompt does not stop Bloom while it waits; the
-   preset's id and the approval digest are in its tooltip.
+## Presets
 
-The review movie uses H.264 High, a 30 Mbps default target, 8-bit 4:2:0, a one-second GOP and
-Rec.709 limited-range tags. Look-tagged effects and the display transform are baked into the
-movie. It is a review deliverable, not an archival master. The Viewer look switch does not change
-either deliverable's export policy.
+Presets are listed in four groups:
 
-## Other presets
+- **Video**: H.264 MP4 (default), H.264 MOV, Review H.264 (Rec.709, look on), HEVC MP4 and MOV
+  (hardware), ProRes 422 Proxy, LT, 422, HQ, 4444 and 4444 XQ MOV, DNxHR HQ MXF.
+- **VFX / sequences**: VFX handoff EXR (ACES2065-1, PIZ, from 1001, `####`), OpenEXR, DPX, PNG
+  and TIFF sequences.
+- **Audio**: PCM WAV/BWF (RF64 when large).
+- **User**: your own presets, saved per computer outside any project.
 
-- **ProRes MOV (preview)** offers 422 Proxy, LT, 422, HQ, 4444 and 4444 XQ. Only the 4444 profiles
-  retain alpha. The dialog states: "Decoded/encoded by FFmpeg; not an Apple-authorized ProRes
-  implementation". These files have no Apple authorization or strict delivery qualification.
-- **DNxHR MXF** offers LB, SQ, HQ, HQX and 444. Unsupported dimensions, cadence or audio rates
-  produce an export error.
-- **PCM WAV / BWF** writes 16-bit or 24-bit PCM. The host API can supply a BWF description;
-  ordinary dialog exports write WAV. Large WAV files use RF64 automatically.
-- **TIFF and PNG sequences** bake the config's default display/view into straight-alpha 16-bit
-  and 8-bit samples, respectively. **OpenEXR sequence** defaults to unchanged working-space
-  float pixels and ZIP; its output colour space and compression remain editable.
-- **H.264 MOV (review)** uses the raw preset with the config's default display/view. Select the
-  named review deliverable above it for the explicit ACES Rec.709 display/view pair.
+Applying a preset copies its settings into the output, so a project exports the same way on a
+computer that lacks the user preset it came from. A preset that cannot run here stays listed with
+its reason and, where one exists, a remedy (**Install OpenH264**, **Locate OpenH264**, **Open
+Project Settings**, **Choose Software Encoder**).
 
-Opening H.264 and ProRes media never requires the Cisco binary. Bloom always starts the isolated
-worker with its private loader shim for decode and fixture generation; only H.264 software encode
-needs the verified Cisco library. If neither software nor VA-API encode is available, the dialog
-keeps the typed reason **H.264 encoder not installed**.
+- **H.264** uses Cisco OpenH264 after your consent (Bloom downloads Cisco OpenH264 2.6.0 only after
+  you accept Cisco's licence and verifies its digest; **Locate** verifies a download you already
+  have) or VA-API hardware. No Cisco binary is bundled. Opening H.264 media never needs it.
+- **HEVC** is hardware-only (VA-API). Without a VA-API render node that encodes HEVC, HEVC presets
+  say **HEVC needs a VA-API render node with HEVC encode** and cannot start.
+- **ProRes** is written by FFmpeg; it is not an Apple-authorized ProRes implementation.
+- The **VFX handoff** and **Review H.264** deliverables need the built-in ACES CG configuration
+  with a pinned revision.
+- **DPX** sequences are listed but not available in this build; the preset says so.
 
-Video presets can include the composition audio mix. The dialog shows the selected source sample
-rate; mixed-rate sources use the timeline mixer's resampling. WAV always includes audio.
-H.265 software export remains unavailable.
+MP4 movies carry AAC audio; MOV and MXF carry PCM. Movie containers are tagged from the output's
+colour intent: an sRGB display is tagged with the sRGB transfer, a Rec.1886/Rec.709 display with
+BT.709, P3 and Rec.2100 displays with their own code points.
 
-The status bar reports progress and offers **Cancel**. Movies and WAV files publish only after
-worker reopen verification and the staged-file digest check. Cancellation or worker failure
-leaves the destination unchanged. For image sequences, complete frames already published remain.
+## Destinations
 
-Worker exports currently run on Linux. On macOS and Windows, unavailable process providers show
-a reason; PNG and OpenEXR retain their supported paths. External File Transform LUT evaluation
-also requires the supported Linux helper. The [media I/O contract](../architecture/media-io.md#time-based-export-media-4)
-describes preservation bounds and platform fallbacks.
+A destination is relative to the project folder (moving a project with its renders keeps it
+working) or an absolute file. It may use `{name}` (composition name), `{job}` (job name), `{format}`
+(`mp4`, `prores`, `exr`, ...) and `{date}` (frozen when the job starts). A sequence's naming
+pattern also accepts `<base>`, `<ext>` and exactly one `####` or `{frame}`; **Start frame** changes
+file names, not which frames render. The panel shows the first and last file before you start.
+Unknown tokens, a name that becomes a folder, or a changed extension are refused.
+
+Before Start, Bloom checks each destination in the background ("Checking destination…"): whether
+its folder can be written (missing folders are created), how much space is free, and whether files
+already exist. A size estimate appears when the format's size can be estimated honestly; when the
+estimate does not fit the free space, Start is blocked.
+
+## Replacing files
+
+Each output's overwrite policy is **Ask before replacing** (the default), **Replace** or
+**Refuse**. When the destination exists, Ask blocks Start until you confirm replacing it for that
+output. The confirmation covers exactly the files that were checked; if they change before the
+export publishes, Bloom refuses to replace them. Files this session itself exported for the output
+need no confirmation on a re-run. Bloom never replaces a file silently.
+
+## Running
+
+**Start** and **Start All** queue jobs. **Pause** waits for the current frame to finish; **Stop**
+returns a waiting job to Ready, or stops a running one. A stopped movie or WAV leaves the destination
+unchanged; a stopped sequence keeps the frames it already published. **Retry** starts a finished
+job again. The Jobs panel shows a running export as one row with **Show in Export**.
+
+The Viewer always comes first. While you scrub, play or build a RAM preview, an export only uses
+spare GPU capacity and may wait in **Waiting for Viewer** with no ETA; it continues at full speed
+when the Viewer is idle. Waiting and paused time do not count toward the export's time limits.
+
+Quitting or closing the project while exports run asks "N exports are running. Stop them and
+quit?"; **Keep Exporting** is the default. Saving the project during an export is allowed.
+
+## Verification
+
+The old approval prompt is gone. Before Start each output shows its preset's expected
+preservation; each frame's analysis is accepted only when it fits that declaration. After
+publication each output shows its checks: reopen, frame count, timing, colour tags, container,
+audio, naming, artifact digest, publication and device provenance. A frame that had to be
+evaluated on the CPU reference path is a device-provenance warning, never shown as a GPU frame.
+
+**Import into Assets after render** adds the verified result to Assets (a movie as a video asset,
+a sequence as a sequence, a still as an image, a WAV as audio) with one undoable import. A file
+already in Assets is refreshed rather than duplicated. A failed import never fails the export; the
+panel reports it on the output.
+
+## Scripting and the command line
+
+`bloom-cli export --project shot.bloom --all` renders the saved queue headlessly and prints the
+verification and import results as JSON; `--job <id>` selects jobs, `--replace` confirms existing
+destinations, and `--save` writes asset imports back to the project. See
+[headless scripting](scripting.md) and [MCP](mcp.md). **Copy as command** on a job gives the same
+job as a script.
+
+## Platforms
+
+Export runs on Linux in this version. On macOS and Windows the queue, presets, saving and script
+edits work the same, and **Start**, **Start All**, **Retry** and `bloom-cli export` say "Export runs
+on Linux in this version". A project prepared there exports unchanged on Linux. The
+[media I/O contract](../architecture/media-io.md#time-based-export-media-4) describes preservation
+bounds.

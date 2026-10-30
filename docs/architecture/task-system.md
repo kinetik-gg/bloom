@@ -204,7 +204,9 @@ The initial scheduler has four semantic priority classes:
 
 Priority expresses user intent, not a dedicated thread per class. The scheduler may reserve
 capacity for interactive work, but it must also apply aging or fair sharing so continuous scrubbing
-does not starve an explicit export indefinitely.
+does not starve an explicit export indefinitely. When the Viewer or a RAM preview holds the shared
+processing root's capacity, an export frame waits at its boundary (`WaitingForViewer`, no estimate)
+and retries, instead of failing ([ADR 0033](../decisions/0033-export-queue.md), section 9).
 
 New interactive requests coalesce or supersede equivalent queued requests. For example, scrubbing
 through twenty times should not require evaluating nineteen frames the user no longer wants.
@@ -497,6 +499,30 @@ admission, cancels replaceable preview work, continues processing Qt events, and
 exit only after the bridge has published stable terminal snapshots and observed runtime quiescence.
 Panels never own that drain. Save/export resolution policy remains future work because those task
 kinds do not yet exist.
+
+## Export Queue Runs
+
+The export queue ([ADR 0033](../decisions/0033-export-queue.md)) is a task-system client owned by
+`host::ExportQueueService`. Every task a run submits uses `TaskOwner{TaskOwnerKind::Export, owner}`
+with one owner id and one `TaskGroupId` per run (`host::ExportRunLink`), so the Jobs panel collapses
+an Export-owned group into one row. That row reads its progress from the queue snapshot through
+`ExportQueueService::jobForTaskOwner()` and offers only **Show in Export**: cancel, pause and retry
+belong to the Export panel, and there is one progress source, the queue snapshot. Destination
+samples, user-preset reads and writes, encoder probes and asset-import preparation are blocking-I/O
+tasks; evaluation, encoding, verification and publication are the existing export tasks.
+
+`ExportQueueService::pump()` is the only snapshot publisher. In the desktop application one
+application-lifetime adapter calls it from `TaskUiBridge::resultsAvailable`, the same coalesced
+completion drain the preview, asset and cache-purge consumers use, and every export task's completion
+wakes that drain. Worker-thread clients (scripting and MCP waiters) use `ExportQueueSubscription`, the
+serial-wake shape of `TaskCompletionSubscription`; the UI thread never waits on it.
+
+Shutdown with exports: quitting, closing the project or opening another one with
+`activeJobCount() > 0` asks first. Confirming calls `beginShutdown(cause)`, keeps pumping until
+`quiescent()`, and then the existing `ApplicationShutdownCoordinator` retires the GPU export provider
+and the `SequenceExportRetirementOwnerV1`. A movie's destination is untouched by a stop or crash,
+because only a verified staged file is published; the next run of that output removes its stale
+staged files whose owner process is gone.
 
 ## Testing And Instrumentation
 

@@ -1,6 +1,8 @@
 # Bloom Project Format
 
-The current document schema is 1.28. It changes no member: it marks projects saved after ordinary
+The current document schema is 1.29. It adds the export queue: the required last project member
+`exportQueue` and the `exportJob`/`exportOutput` allocator namespaces (see "Export Queue In Document
+1.29"). Document 1.28 changed no member: it marks projects saved after ordinary
 and untagged SDR video in Auto began to be shown through the sRGB texture space (see "Video Colour
 Default In Document 1.28"). Document 1.27 added the optional composition `folder`, the Assets folder
 that holds a composition (see "Composition Folders In Document 1.27"), on top of the 1.26 Image
@@ -1383,9 +1385,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.28`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.29`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.28.schema.json` and `manifest-1.28.schema.json`; the
+The current artifacts are `document-1.29.schema.json` and `manifest-1.29.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1529,6 +1531,44 @@ it differs from the default (start 0, non-drop), so a composition without it kee
 The decoder reads it only at `1.26` or later, refuses a negative start as a domain violation, and
 preserves unknown trailing members like any composition attachment.
 
+## Export Queue In Document 1.29
+
+Document `1.29` persists the export queue ([ADR 0033](../decisions/0033-export-queue.md)): the jobs,
+their render settings and their outputs are project truth, edited only through undoable commands
+(`commands/export_queue_operations.hpp`) that never affect a rendered pixel. Run state (status,
+progress, ETA, logs, verification, replace confirmations) is runtime state owned by
+`host::ExportQueueService` and is never saved, so a reopened project shows every job Ready.
+
+`project` gains the required last member `exportQueue`: `{"jobs": [...]}` in run order (not sorted
+by id). `idAllocation.highestIssued` gains the required `exportJob` and `exportOutput` members after
+the optional `layerMask`. Ids are allocator-backed decimal strings, project-global per namespace, and
+never reused.
+
+| Object | Members in writer order |
+| --- | --- |
+| job | `id`, `composition`, `name`, `range`, `outputs`, `enabled`, optional `labelColor` |
+| range | `kind` (`"work-area"`, `"composition"`, `"custom"`, `"frame"`), `first`, and `last` only for `custom` (decimal strings) |
+| output | `id`, `preset`, `settings`, `destination`, `enabled`, `importIntoAssets` |
+| settings | `format`, `codecProfile`, optional `videoBitrateKbps`, `compression`, `outputColorSpace`, `display`, `view`, `bakeLook`, `includeAudio`, `audioSampleRate`, `encoder` (`"automatic"`, `"software"`, `"hardware"`), `naming` |
+| naming | optional `startFrame` (decimal string), `framePadding`, `pattern` |
+| destination | `portability` (`"project-relative"`, `"external"`), `path`, `overwrite` (`"ask"`, `"replace"`, `"refuse"`) |
+
+`labelColor` uses the layer label representation (three integers `0..255`). `format` is the closed
+1.29 vocabulary `png`, `exr`, `tiff`, `dpx`, `prores-mov`, `dnxhr-mxf`, `h264-mov`, `h264-mp4`,
+`hevc-mov`, `hevc-mp4`, `wav`; `codecProfile` is empty (the format default) or a token the format
+accepts (ProRes `proxy|lt|422|hq|4444|4444xq`, DNxHR `lb|sq|hq|hqx|444`, H.264 `high`, HEVC
+`main|main10`, DPX `10bit|16bit`, WAV `s16|s24`). The shapes are closed. Bounds: 1,024 jobs, 1 to 16
+outputs per job, 4 KiB per string, frame padding 1 to 12, one `####` or `{frame}` in a naming
+pattern. A job's composition must exist: deleting a composition removes its jobs in the same edit,
+and undo restores both. A project-relative destination is a relative path below the project folder;
+an external destination is an RFC 8089 file URI. Paths and patterns may contain the destination
+tokens `{name}`, `{job}`, `{format}` and `{date}` (expanded by `host::resolveDestination()`).
+
+The `1.28` → `1.29` step `migrateExportQueueV1_28` is self-contained and version-keyed: it appends
+`"exportQueue": {"jobs": []}` to `project` and `"exportJob": "0", "exportOutput": "0"` to
+`highestIssued`; its already-migrated guard refuses a file that already carries any of them. A
+migrated 1.28 project equals the same project saved at 1.29, with an empty queue.
+
 ## Video Colour Default In Document 1.28
 
 Document `1.28` changes no member ([ADR 0032](../decisions/0032-sdr-video-colour-default.md),
@@ -1593,14 +1633,15 @@ advances the version: every new member is optional, so no record is inserted or 
 
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.28.schema.json` and
-`manifest-1.28.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The current document and manifest schema artifacts are `document-1.29.schema.json` and
+`manifest-1.29.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
 The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
 likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
 defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step,
 1.20 → 1.21 LUT step, 1.21 → 1.22 locator version step, 1.22 → 1.23 layer-time step,
 1.23 → 1.24 layer-mask version step, 1.24 → 1.25 video-metadata step, 1.25 → 1.26 channel-set step,
-1.26 → 1.27 composition-folder version step and 1.27 → 1.28 video-colour-default version step.
+1.26 → 1.27 composition-folder version step, 1.27 → 1.28 video-colour-default version step and
+1.28 → 1.29 export-queue step.
 
 `AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
 interpretation, dimensions and organization envelope, with a closed `video` member before
