@@ -461,6 +461,12 @@ struct detail::SequenceExportWorkV1 {
         outcome.evidence = std::move(evidence);
         outcome.expectedColourTags =
             settings().videoCodec.empty() ? ColourTags{} : settings().colour;
+        // FFmpeg's MXF writes the matrix but neither the primaries nor the transfer, so a DNxHR
+        // MXF reopens with both unspecified; expect only what the container can declare.
+        if (settings().container == "mxf") {
+            outcome.expectedColourTags.primaries = 2;
+            outcome.expectedColourTags.transfer = 2;
+        }
         const auto& codec =
             settings().videoCodec.empty() ? settings().audioCodec : settings().videoCodec;
         outcome.expectedContainer =

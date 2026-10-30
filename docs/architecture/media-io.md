@@ -1963,7 +1963,9 @@ Issue #369 ships with the export queue ([ADR 0033](../decisions/0033-export-queu
   uses the probed node.
 - **Colour tags** come from the output colour intent: `output::outputColourTagsV1()` maps the
   resolved display to H.273 primaries, transfer and matrix (sRGB displays get the sRGB transfer,
-  Rec.1886/Rec.709 BT.709, P3 and Rec.2100 their own code points, unknown displays unspecified), and
+  Rec.1886/Rec.709 BT.709, P3 and Rec.2100 their own code points, unknown displays unspecified;
+  names match case-insensitively, so Bloom Neutral's `srgb_rec709_display` is tagged BT.709
+  primaries, sRGB transfer and BT.709 matrix, which it was not before the accuracy chart), and
   the matrix selects the RGB to YUV coefficients. `EncodeSettingsV1` is version 2 for this; the
   reopen reads the tags and `<container>/<codec>` back into `EncodeQcV1`/`MediaQcEvidenceV1` for the
   ColourTags and Container checks.

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <bloom/output/display_output.hpp>
 
 namespace bloom::output {
@@ -45,8 +46,14 @@ PreparedOutputDisplayV1::prepare(const runtime::EvaluationColorIntent& intent,
     return result;
 }
 OutputColourTagsV1 outputColourTagsV1(const std::string_view display) noexcept {
-    const auto has = [display](const std::string_view text) {
-        return display.find(text) != std::string_view::npos;
+    // Case-insensitive: Bloom Neutral names its display with an interchange identifier
+    // ("srgb_rec709_display"), which a case-sensitive "sRGB" missed, so every Neutral video export
+    // was tagged with unspecified primaries and transfer (and ProRes carried no colour atom).
+    const auto lower = [](const char c) {
+        return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+    };
+    const auto has = [&](const std::string_view text) {
+        return std::ranges::search(display, text, {}, lower, lower).begin() != display.end();
     };
     // H.273: primaries 1 BT.709, 9 BT.2020, 12 P3-D65; transfer 1 BT.709, 13 sRGB, 16 PQ,
     // 18 HLG; matrix 1 BT.709, 9 BT.2020 non-constant.
@@ -56,10 +63,11 @@ OutputColourTagsV1 outputColourTagsV1(const std::string_view display) noexcept {
         return {9, 18, 9, 1};
     if (has("P3-D65") || has("Display P3"))
         return {12, has("1886") || has("Gamma 2.6") ? 1 : 13, 1, 1};
-    if (has("1886") || has("Rec.709") || has("BT.709") || has("Rec709"))
-        return {1, 1, 1, 1};
+    // sRGB before Rec.709: "srgb_rec709_display" is the sRGB display with Rec.709 primaries.
     if (has("sRGB"))
         return {1, 13, 1, 1};
+    if (has("1886") || has("Rec.709") || has("BT.709") || has("Rec709"))
+        return {1, 1, 1, 1};
     return {2, 2, 1, 1};
 }
 std::uint64_t outputLookEffectCountV1(const runtime::CompiledCompositionPlan& plan) noexcept {

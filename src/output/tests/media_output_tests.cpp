@@ -1,8 +1,12 @@
 #include <algorithm>
+#include <array>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/output/display_output.hpp>
 #include <bloom/output/media_output.hpp>
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 namespace {
 void check(bool condition, const char* message) {
@@ -95,8 +99,26 @@ void testDisplayPayloadQuantizationMatchesReference() {
           "a payload that does not match the frame geometry is refused");
 }
 } // namespace
+// The container tags a video export declares, from its display name (exact H.273 code points).
+void testOutputColourTags() {
+    namespace o = bloom::output;
+    const auto tags = [](const std::string_view display) {
+        const auto t = o::outputColourTagsV1(display);
+        return std::array<std::int32_t, 4>{t.primaries, t.transfer, t.matrix, t.range};
+    };
+    using Tags = std::array<std::int32_t, 4>;
+    // Bloom Neutral's display is lower case; it was tagged {2, 2, 1, 1} (unspecified) before.
+    check(tags("srgb_rec709_display") == Tags{1, 13, 1, 1}, "Neutral sRGB display tags sRGB");
+    check(tags("sRGB - Display") == Tags{1, 13, 1, 1}, "ACES sRGB display tags sRGB");
+    check(tags("Rec.1886 Rec.709 - Display") == Tags{1, 1, 1, 1}, "Rec.709 display tags BT.709");
+    check(tags("Rec.2100-PQ - Display") == Tags{9, 16, 9, 1}, "PQ display tags Rec.2100 PQ");
+    check(tags("Rec.2100-HLG - Display") == Tags{9, 18, 9, 1}, "HLG display tags Rec.2100 HLG");
+    check(tags("Display P3 - Display") == Tags{12, 13, 1, 1}, "Display P3 tags P3-D65 sRGB");
+    check(tags("Unknown") == Tags{2, 2, 1, 1}, "an unknown display leaves primaries unspecified");
+}
 int main() {
     try {
+        testOutputColourTags();
         namespace p = bloom::media::provider;
         namespace o = bloom::output;
         p::EncodeSettingsV1 s;
