@@ -118,7 +118,7 @@ rangeArguments(const Arguments& arguments, const std::string& op, OperationCreat
     output.presetId = std::string(host::kExportDefaultVideoPresetId);
     if (const auto preset = host::builtInExportPreset(host::kExportDefaultVideoPresetId))
         output.settings = preset->settings;
-    output.destination.path = "Exports/{name}.mp4";
+    output.destination = host::defaultExportDestination(output.settings.format);
     return output;
 }
 

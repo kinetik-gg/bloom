@@ -19,6 +19,7 @@ exportFailure(const ExportFailureCode code, std::string diagnostic, std::string 
     failure.frame = frame;
     failure.diagnosticCode = std::move(diagnostic);
     failure.reason = std::move(reason);
+    failure.summary = std::string(exportFailureSummary(code));
     return failure;
 }
 

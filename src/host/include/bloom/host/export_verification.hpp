@@ -125,6 +125,10 @@ struct ExportDeviceProvenance final {
     std::uint32_t recoveredGenerations = 0;
     std::uint64_t gpuNativeDispatches = 0;
     std::uint64_t gpuReadbackSubmissions = 0;
+    // Frames taken from the scene-referred composite cache instead of being evaluated again
+    // (the output's useCachedFrames setting). Each reused frame still passes the same analysis,
+    // approval and verification as an evaluated one.
+    std::uint64_t framesReused = 0;
     // Encoder actually used, e.g. "openh264", "vaapi", "videotoolbox", "ffmpeg-prores".
     std::string encoder;
 };
@@ -166,6 +170,7 @@ enum class ExportPreflightCode : std::uint8_t {
     RangeOutsideComposition = 8,  // custom range no longer fits
     DuplicateTarget = 9,          // two enabled outputs write the same file
     DestinationCheckPending = 10, // the worker has not sampled this destination yet
+    NoEnabledOutputs = 11,        // every output of the job is disabled (target Job)
 };
 
 // Which part of the job or output an issue is about, so the panel can mark the right field.

@@ -151,6 +151,37 @@ struct ExportEncoderStatus final {
     bool probed = false;
 };
 
+// One closed token of a format's vocabulary with its panel label.
+struct ExportFormatToken final {
+    std::string_view token;
+    std::string_view displayName;
+    friend bool operator==(const ExportFormatToken&, const ExportFormatToken&) = default;
+};
+
+// What the panel may offer for one format, so it never hard-codes tokens. `codecProfiles` is the
+// closed document 1.29 vocabulary (document::exportCodecProfiles) and `compressions` the tokens
+// the runner accepts; an empty list means the format has no such choice. An empty
+// codecProfile/compression in a record means the listed default.
+struct ExportFormatDescription final {
+    document::ExportFormat format = document::ExportFormat::H264Mp4;
+    // The document token ("h264-mp4") and a label ("H.264 MP4").
+    std::string_view token;
+    std::string_view displayName;
+    // Without the dot ("mp4").
+    std::string_view extension;
+    bool imageSequence = false;
+    std::vector<ExportFormatToken> codecProfiles;
+    std::string_view defaultCodecProfile;
+    std::vector<ExportFormatToken> compressions;
+    std::string_view defaultCompression;
+    friend bool operator==(const ExportFormatDescription&,
+                           const ExportFormatDescription&) = default;
+};
+
+// Every format in vocabulary order (pure, static).
+[[nodiscard]] const std::vector<ExportFormatDescription>& exportFormatDescriptions();
+[[nodiscard]] const ExportFormatDescription& exportFormatDescription(document::ExportFormat format);
+
 struct ExportPresetCatalogueSnapshot final {
     // Monotonic; bumps on any preset, user-preset or encoder-status change.
     std::uint64_t revision = 0;
@@ -158,6 +189,8 @@ struct ExportPresetCatalogueSnapshot final {
     // category, user presets by display name.
     std::vector<ExportPreset> presets;
     ExportEncoderStatus encoders;
+    // exportFormatDescriptions(): the codec-profile and compression tokens per format.
+    std::vector<ExportFormatDescription> formats;
 };
 
 inline constexpr std::string_view kExportDefaultVideoPresetId = "builtin:h264-mp4";
@@ -172,7 +205,32 @@ struct ExportDefaultPreset final {
     // cannot start (neither available). Available when H.264 MP4 itself is usable.
     ExportAvailability preferredAvailability;
     bool usedFallback = false;
+    // The chosen preset's settings and ADR 0033 section 5's default destination for it
+    // (defaultExportDestination(settings.format)).
+    document::ExportOutputSettings settings;
+    document::ExportDestination destination;
 };
+
+// ADR 0033 section 5: `Exports/{name}.<ext>` beside the project (project-relative), overwrite
+// policy AskBeforeReplacing. An unsaved project resolves it to "Choose where to save this
+// output" (DestinationMissing) until it is saved or the artist chooses a path.
+[[nodiscard]] document::ExportDestination defaultExportDestination(document::ExportFormat format);
+// The record "Add to Export Queue" adds for `composition`: work-area range, enabled, no label,
+// one enabled output from `preset` with its default destination and import into Assets off. Ids
+// are left unset; AddExportJob allocates them.
+[[nodiscard]] document::ExportJob defaultExportJob(document::CompositionId composition,
+                                                   const ExportDefaultPreset& preset);
+
+// A path the artist chose (a file dialog, a drop) as a destination record, under the 1.22
+// locator rules: project-relative ("Renders/shot.mov") when `chosen` lies inside
+// `projectFolder` and every component is representable, otherwise "external" with the absolute
+// RFC 8089 file URI. `chosen` must be absolute; a relative or empty path yields std::nullopt.
+// Pure: no filesystem access.
+[[nodiscard]] std::optional<document::ExportDestination>
+exportDestinationForPath(const std::filesystem::path& chosen,
+                         const std::optional<std::filesystem::path>& projectFolder,
+                         document::ExportOverwritePolicy overwrite =
+                             document::ExportOverwritePolicy::AskBeforeReplacing);
 
 // The result of a user-preset file operation, delivered through the catalogue revision.
 enum class ExportUserPresetStatus : std::uint8_t {

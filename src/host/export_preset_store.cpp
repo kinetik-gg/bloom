@@ -262,6 +262,13 @@ std::optional<document::ExportOutputSettings> settingsFrom(const Json& json) {
     out.viewName = *view;
     out.bakeLook = *bake;
     out.includeAudio = *audio;
+    // Optional: absent means true (the 1.29 document rule).
+    if (const auto* value = json.find("useCachedFrames")) {
+        const auto* cached = std::get_if<bool>(&value->value);
+        if (!cached)
+            return std::nullopt;
+        out.useCachedFrames = *cached;
+    }
     out.audioSampleRate = static_cast<std::uint32_t>(*rate);
     out.encoder = *parsedEncoder;
     if (const auto* start = string(*naming, "startFrame")) {
@@ -299,6 +306,7 @@ std::string exportSettingsJson(const document::ExportOutputSettings& settings) {
     quote(out, settings.viewName);
     out += std::string(",\"bakeLook\":") + (settings.bakeLook ? "true" : "false");
     out += std::string(",\"includeAudio\":") + (settings.includeAudio ? "true" : "false");
+    out += std::string(",\"useCachedFrames\":") + (settings.useCachedFrames ? "true" : "false");
     out += ",\"audioSampleRate\":" + std::to_string(settings.audioSampleRate);
     out += ",\"encoder\":";
     quote(out, document::exportEncoderToken(settings.encoder));

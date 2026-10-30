@@ -3,6 +3,7 @@
 #include "export_preset_store.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <algorithm>
@@ -226,6 +227,120 @@ std::string_view exportFormatExtension(const ExportFormat format) noexcept {
     return {};
 }
 
+namespace {
+
+ExportFormatDescription describe(const ExportFormat format, const std::string_view displayName,
+                                 std::vector<ExportFormatToken> profiles,
+                                 const std::string_view defaultProfile,
+                                 std::vector<ExportFormatToken> compressions = {},
+                                 const std::string_view defaultCompression = {}) {
+    ExportFormatDescription description;
+    description.format = format;
+    description.token = document::exportFormatToken(format);
+    description.displayName = displayName;
+    description.extension = exportFormatExtension(format);
+    description.imageSequence = document::isImageExportFormat(format);
+    description.codecProfiles = std::move(profiles);
+    description.defaultCodecProfile = defaultProfile;
+    description.compressions = std::move(compressions);
+    description.defaultCompression = defaultCompression;
+    return description;
+}
+
+std::vector<ExportFormatDescription> makeFormatDescriptions() {
+    const std::vector<ExportFormatToken> prores{
+        {"proxy", "ProRes 422 Proxy"}, {"lt", "ProRes 422 LT"}, {"422", "ProRes 422"},
+        {"hq", "ProRes 422 HQ"},       {"4444", "ProRes 4444"}, {"4444xq", "ProRes 4444 XQ"}};
+    const std::vector<ExportFormatToken> dnxhr{{"lb", "DNxHR LB"},
+                                               {"sq", "DNxHR SQ"},
+                                               {"hq", "DNxHR HQ"},
+                                               {"hqx", "DNxHR HQX"},
+                                               {"444", "DNxHR 444"}};
+    const std::vector<ExportFormatToken> h264{{"high", "High"}};
+    const std::vector<ExportFormatToken> hevc{{"main", "Main"}, {"main10", "Main 10"}};
+    const std::vector<ExportFormatToken> exr{
+        {"zip", "ZIP"}, {"piz", "PIZ"}, {"zips", "ZIPS"}, {"none", "Uncompressed"}};
+    return {
+        describe(ExportFormat::Png, "PNG", {}, {}),
+        describe(ExportFormat::OpenExr, "OpenEXR", {}, {}, exr, "zip"),
+        describe(ExportFormat::Tiff, "TIFF", {}, {}),
+        describe(ExportFormat::Dpx, "DPX", {{"10bit", "10-bit"}, {"16bit", "16-bit"}}, "10bit"),
+        describe(ExportFormat::ProResMov, "ProRes MOV", prores, "hq"),
+        describe(ExportFormat::DnxhrMxf, "DNxHR MXF", dnxhr, "hq"),
+        describe(ExportFormat::H264Mov, "H.264 MOV", h264, "high"),
+        describe(ExportFormat::H264Mp4, "H.264 MP4", h264, "high"),
+        describe(ExportFormat::HevcMov, "HEVC MOV", hevc, "main"),
+        describe(ExportFormat::HevcMp4, "HEVC MP4", hevc, "main"),
+        describe(ExportFormat::Wav, "WAV", {{"s16", "16-bit PCM"}, {"s24", "24-bit PCM"}}, "s24"),
+    };
+}
+
+bool representableComponent(const std::filesystem::path& component) {
+    const auto text = component.generic_string();
+    return !text.empty() && text != "." && text != ".." && text.find(':') == std::string::npos &&
+           text.find('\\') == std::string::npos;
+}
+
+} // namespace
+
+const std::vector<ExportFormatDescription>& exportFormatDescriptions() {
+    static const auto descriptions = makeFormatDescriptions();
+    return descriptions;
+}
+
+const ExportFormatDescription& exportFormatDescription(const ExportFormat format) {
+    const auto& all = exportFormatDescriptions();
+    const auto found = std::ranges::find(all, format, &ExportFormatDescription::format);
+    return found != all.end() ? *found : all.front();
+}
+
+document::ExportDestination defaultExportDestination(const ExportFormat format) {
+    return {.portability = "project-relative",
+            .path = "Exports/{name}." + std::string(exportFormatExtension(format)),
+            .overwrite = document::ExportOverwritePolicy::AskBeforeReplacing};
+}
+
+document::ExportJob defaultExportJob(const document::CompositionId composition,
+                                     const ExportDefaultPreset& preset) {
+    document::ExportJob job;
+    job.composition = composition;
+    job.render.range = {document::ExportRangeKind::WorkArea, 0, 0};
+    document::ExportOutput output;
+    output.presetId = preset.presetId;
+    output.settings = preset.settings;
+    output.destination = preset.destination;
+    output.enabled = true;
+    output.importIntoAssets = false;
+    job.outputs.push_back(std::move(output));
+    return job;
+}
+
+std::optional<document::ExportDestination>
+exportDestinationForPath(const std::filesystem::path& chosen,
+                         const std::optional<std::filesystem::path>& projectFolder,
+                         const document::ExportOverwritePolicy overwrite) {
+    if (chosen.empty() || !chosen.is_absolute())
+        return std::nullopt;
+    const auto target = chosen.lexically_normal();
+    if (target.filename().empty())
+        return std::nullopt;
+    if (projectFolder && projectFolder->is_absolute()) {
+        const auto folder = projectFolder->lexically_normal();
+        const auto relative = target.lexically_relative(folder);
+        const bool inside = !relative.empty() && relative.is_relative() &&
+                            std::ranges::all_of(relative, representableComponent);
+        if (inside)
+            return document::ExportDestination{.portability = "project-relative",
+                                               .path = relative.generic_string(),
+                                               .overwrite = overwrite};
+    }
+    const auto uri = core::fileUriFromAbsolutePath(target);
+    if (!uri)
+        return std::nullopt;
+    return document::ExportDestination{
+        .portability = "external", .path = *uri, .overwrite = overwrite};
+}
+
 std::string_view exportFormatShortName(const ExportFormat format) noexcept {
     switch (format) {
     case ExportFormat::ProResMov:
@@ -379,6 +494,7 @@ struct ExportPresetCatalogue::State : std::enable_shared_from_this<State> {
         auto snapshot = std::make_shared<ExportPresetCatalogueSnapshot>();
         snapshot->revision = revision;
         snapshot->encoders = encoders;
+        snapshot->formats = exportFormatDescriptions();
         const auto make = [&](std::string id, std::string name, std::string description,
                               ExportPresetCategory category, ExportPresetOrigin origin,
                               const ExportOutputSettings& settings, bool dependent) {
@@ -491,15 +607,25 @@ ExportDefaultPreset ExportPresetCatalogue::defaultPreset() const {
     const auto find = [&](std::string_view id) {
         return std::ranges::find(list, id, &BuiltIn::id);
     };
+    const auto chosen = [&](const std::string_view id, ExportAvailability availability,
+                            const bool fallback) {
+        ExportDefaultPreset result;
+        result.presetId = std::string(id);
+        result.preferredAvailability = std::move(availability);
+        result.usedFallback = fallback;
+        result.settings = find(id)->settings;
+        result.destination = defaultExportDestination(result.settings.format);
+        return result;
+    };
     const auto preferred =
         exportPlatformAvailability(find(kExportDefaultVideoPresetId)->settings, encoders);
     if (preferred)
-        return {std::string(kExportDefaultVideoPresetId), preferred, false};
+        return chosen(kExportDefaultVideoPresetId, preferred, false);
     const auto fallback =
         exportPlatformAvailability(find(kExportFallbackVideoPresetId)->settings, encoders);
     if (fallback)
-        return {std::string(kExportFallbackVideoPresetId), preferred, true};
-    return {std::string(kExportDefaultVideoPresetId), preferred, false};
+        return chosen(kExportFallbackVideoPresetId, preferred, true);
+    return chosen(kExportDefaultVideoPresetId, preferred, false);
 }
 
 void ExportPresetCatalogue::setEncoderStatus(ExportEncoderStatus status) {

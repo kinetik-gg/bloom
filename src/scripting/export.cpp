@@ -215,10 +215,31 @@ void writeVerification(Json& json, const host::ExportOutputVerification& output)
         .number(output.provenance.gpuFrames)
         .key("cpuReferenceFrames")
         .number(output.provenance.cpuReferenceFrames)
+        .key("framesReused")
+        .number(output.provenance.framesReused)
         .key("encoder")
         .string(output.provenance.encoder)
         .end('}');
     json.end('}');
+}
+
+void writePreflight(Json& json, const std::vector<host::ExportPreflightIssue>& issues) {
+    json.key("preflight").begin('[');
+    for (const auto& issue : issues)
+        json.begin('{')
+            .key("code")
+            .number(static_cast<std::uint64_t>(issue.code))
+            .key("target")
+            .number(static_cast<std::uint64_t>(issue.target))
+            .key("severity")
+            .string(issue.severity == host::ExportPreflightSeverity::Blocking ? "blocking"
+                    : issue.severity == host::ExportPreflightSeverity::Warning
+                        ? "warning"
+                        : "needs-confirmation")
+            .key("reason")
+            .string(issue.reason)
+            .end('}');
+    json.end(']');
 }
 
 void writeImport(Json& json, const host::ExportAssetImportResult& result) {
@@ -307,7 +328,13 @@ std::string exportSnapshotJson(const host::ExportQueueSnapshot& snapshot) {
             json.key("remainingMs")
                 .number(static_cast<std::uint64_t>(job.progress.remaining->count()));
         if (job.failure)
-            json.key("failure").string(job.failure->reason);
+            json.key("failure")
+                .string(job.failure->reason)
+                .key("failureSummary")
+                .string(job.failure->summary)
+                .key("failureCode")
+                .string(job.failure->diagnosticCode);
+        writePreflight(json, job.preflight);
         const auto& start = job.commands[host::ExportCommand::Start];
         json.key("start").begin('{').key("available").boolean(start.available);
         if (!start.available)
@@ -324,20 +351,7 @@ std::string exportSnapshotJson(const host::ExportQueueSnapshot& snapshot) {
                 .string(outputState(output.state))
                 .key("destination")
                 .string(output.destination.firstPath.generic_string());
-            json.key("preflight").begin('[');
-            for (const auto& issue : output.preflight)
-                json.begin('{')
-                    .key("code")
-                    .number(static_cast<std::uint64_t>(issue.code))
-                    .key("severity")
-                    .string(issue.severity == host::ExportPreflightSeverity::Blocking ? "blocking"
-                            : issue.severity == host::ExportPreflightSeverity::Warning
-                                ? "warning"
-                                : "needs-confirmation")
-                    .key("reason")
-                    .string(issue.reason)
-                    .end('}');
-            json.end(']');
+            writePreflight(json, output.preflight);
             if (output.verification) {
                 json.key("verification");
                 writeVerification(json, *output.verification);

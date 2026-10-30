@@ -183,14 +183,9 @@ preflightFor(const ExportQueueService::State& state, const document::ExportJob& 
                               std::string reason) {
         issues.push_back({code, target, ExportPreflightSeverity::Blocking, std::move(reason)});
     };
-    if (!compositionOf(state, job)) {
-        blocking(ExportPreflightCode::CompositionMissing, ExportPreflightTarget::Composition,
-                 "The job's composition no longer exists");
+    // Job, Composition and Range issues live on the job view (jobPreflightFor).
+    if (!compositionOf(state, job))
         return issues;
-    }
-    if (!state.snapshot || !resolveExportRange(job, state.snapshot->project()))
-        blocking(ExportPreflightCode::RangeOutsideComposition, ExportPreflightTarget::Range,
-                 "The range lies outside the composition");
     for (const auto& issue : destination.issues)
         issues.push_back(issue);
     if (!availability.available)
@@ -254,6 +249,25 @@ preflightFor(const ExportQueueService::State& state, const document::ExportJob& 
         *estimate + platform::destinationSafetyMargin(*estimate) > *facts.freeBytes)
         blocking(ExportPreflightCode::InsufficientSpace, ExportPreflightTarget::Destination,
                  "Not enough free space at the destination for the estimated size");
+    return issues;
+}
+
+std::vector<ExportPreflightIssue> jobPreflightFor(const ExportQueueService::State& state,
+                                                  const document::ExportJob& job) {
+    std::vector<ExportPreflightIssue> issues;
+    const auto blocking = [&](ExportPreflightCode code, ExportPreflightTarget target,
+                              std::string reason) {
+        issues.push_back({code, target, ExportPreflightSeverity::Blocking, std::move(reason)});
+    };
+    if (!compositionOf(state, job))
+        blocking(ExportPreflightCode::CompositionMissing, ExportPreflightTarget::Composition,
+                 "The job's composition no longer exists");
+    else if (!state.snapshot || !resolveExportRange(job, state.snapshot->project()))
+        blocking(ExportPreflightCode::RangeOutsideComposition, ExportPreflightTarget::Range,
+                 "The range lies outside the composition");
+    if (std::ranges::none_of(job.outputs, [](const auto& output) { return output.enabled; }))
+        blocking(ExportPreflightCode::NoEnabledOutputs, ExportPreflightTarget::Job,
+                 "Enable at least one output");
     return issues;
 }
 
@@ -324,6 +338,7 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
         if (!composition)
             refuseStart(no(ExportUnavailableCode::CompositionMissing,
                            "The job's composition no longer exists"));
+        view.preflight = jobPreflightFor(state, record);
         if (!view.resolvedRange)
             refuseStart(no(ExportUnavailableCode::PreflightBlocked,
                            "The range lies outside the composition"));
@@ -479,6 +494,8 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
             << '|' << (view.resolvedRange ? view.resolvedRange->last : 0) << '|'
             << view.progress.remaining.value_or(std::chrono::milliseconds(-1)).count() << '|'
             << snapshot->catalogueRevision;
+        for (const auto& issue : view.preflight)
+            key << ',' << static_cast<int>(issue.code) << static_cast<int>(issue.severity);
         for (const auto& output : view.outputs) {
             key << '#' << static_cast<int>(output.state) << ':' << output.destination.firstPath
                 << ':' << output.preflight.size() << ':' << output.replaceConfirmed << ':'

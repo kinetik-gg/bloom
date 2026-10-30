@@ -1,6 +1,6 @@
 // The per-output passes of ExportJobRunner (ADR 0033 section 6). The image pass is the still and
-// range driver that lived in src/ui/frame_export_controller.cpp; the media pass wraps
-// SequenceExportRunnerV1 as frame_export_controller_composition.cpp did. The approval prompt is
+// range driver the former Qt export dialog's controller owned; the media pass wraps
+// SequenceExportRunnerV1 as that controller's composition export did. The approval prompt is
 // replaced by the AnalysisPolicy check against the preset's declared preservation (section 10).
 #include "export_output_drivers.hpp"
 
@@ -123,7 +123,8 @@ ExportFailure failure(const ExportFailureCode code, std::string diagnostic, std:
             .output = std::nullopt,
             .frame = frame,
             .diagnosticCode = std::move(diagnostic),
-            .reason = std::move(reason)};
+            .reason = std::move(reason),
+            .summary = std::string(exportFailureSummary(code))};
 }
 
 // Shared bookkeeping for both passes.
@@ -596,7 +597,7 @@ class ImageDriver final : public DriverBase {
         approve(attempt);
     }
 
-    // COLOR-5 deliverable colour preparation (was frame_export_controller_deliverables.cpp).
+    // COLOR-5 deliverable colour preparation (formerly in the Qt export dialog's controller).
     void prepareExr(std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt) {
         auto submission =
             dependencies_.scheduler.submit<std::shared_ptr<const output::OutputAnalysisAttemptV1>>(
@@ -962,11 +963,17 @@ class MediaDriver final : public DriverBase {
                     break;
                 }
             }
-            if (!result.diagnostic.empty())
-                log(runtime::DiagnosticSeverity::Error, "export.media.detail", result.diagnostic);
+            // A per-frame refusal already carries a plain sentence (and its diagnostic); any other
+            // media failure detail is technical and goes to the log under a plain sentence.
+            const std::string detail =
+                result.failure ? result.failure->detail : std::string("no publication result");
+            const bool readable = !result.diagnostic.empty();
+            log(runtime::DiagnosticSeverity::Error, "export.media.detail",
+                readable ? result.diagnostic : detail);
             return fail(failure(code, "export.media.failed",
-                                result.failure ? result.failure->detail
-                                               : std::string("The movie could not be published")));
+                                readable ? detail
+                                         : std::string(exportFailureSummary(code)) +
+                                               " The details are in the log."));
         }
         const auto& settings = input_.output.record.settings;
         auto& artifacts = report_.verification.artifacts;

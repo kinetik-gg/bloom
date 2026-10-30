@@ -78,8 +78,14 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
     const bool hasBitrate = node.findMember("videoBitrateKbps") != nullptr;
     if (hasBitrate)
         keys.push_back("videoBitrateKbps");
-    for (const auto* key : {"compression", "outputColorSpace", "display", "view", "bakeLook",
-                            "includeAudio", "audioSampleRate", "encoder", "naming"})
+    for (const auto* key :
+         {"compression", "outputColorSpace", "display", "view", "bakeLook", "includeAudio"})
+        keys.push_back(key);
+    // Optional in 1.29: absent means true.
+    const bool hasCachedFrames = node.findMember("useCachedFrames") != nullptr;
+    if (hasCachedFrames)
+        keys.push_back("useCachedFrames");
+    for (const auto* key : {"audioSampleRate", "encoder", "naming"})
         keys.push_back(key);
     std::vector<const JsonValue*> fields;
     if (!closed(node, keys, state, path, fields))
@@ -101,8 +107,13 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
         !text(*fields[at++], state, joinPath(path, "display"), out.displayName) ||
         !text(*fields[at++], state, joinPath(path, "view"), out.viewName) ||
         !boolean(*fields[at++], state, joinPath(path, "bakeLook"), out.bakeLook) ||
-        !boolean(*fields[at++], state, joinPath(path, "includeAudio"), out.includeAudio) ||
-        !decodeUInt32Member(*fields[at++], state, joinPath(path, "audioSampleRate"),
+        !boolean(*fields[at++], state, joinPath(path, "includeAudio"), out.includeAudio))
+        return false;
+    out.useCachedFrames = true;
+    if (hasCachedFrames &&
+        !boolean(*fields[at++], state, joinPath(path, "useCachedFrames"), out.useCachedFrames))
+        return false;
+    if (!decodeUInt32Member(*fields[at++], state, joinPath(path, "audioSampleRate"),
                             std::numeric_limits<std::uint32_t>::max(), out.audioSampleRate) ||
         !token(*fields[at++], state, joinPath(path, "encoder"), document::parseExportEncoder,
                out.encoder))

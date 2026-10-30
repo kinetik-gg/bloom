@@ -33,8 +33,13 @@
         !state.ok(writer.memberName("bakeLook")) ||
         !state.ok(writer.booleanValue(settings.bakeLook)) ||
         !state.ok(writer.memberName("includeAudio")) ||
-        !state.ok(writer.booleanValue(settings.includeAudio)) ||
-        !state.ok(writer.memberName("audioSampleRate")) ||
+        !state.ok(writer.booleanValue(settings.includeAudio)))
+        return false;
+    // Optional in 1.29 (absent means true), so files saved before it existed stay canonical.
+    if (!settings.useCachedFrames &&
+        (!state.ok(writer.memberName("useCachedFrames")) || !state.ok(writer.booleanValue(false))))
+        return false;
+    if (!state.ok(writer.memberName("audioSampleRate")) ||
         !state.ok(writer.integerValue(settings.audioSampleRate)) ||
         !emitStringMember(state, "encoder", exportEncoderToken(settings.encoder)) ||
         !state.ok(writer.memberName("naming")) || !state.ok(writer.beginObject()))

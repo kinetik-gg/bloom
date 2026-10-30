@@ -93,6 +93,10 @@ struct JobRuntime final {
     std::optional<ExportJobState> pendingTerminal;
 };
 
+// Process-wide, monotonic, never reused. Owner 1 stays reserved for the preset catalogue's
+// probes and user-preset store, which outlive any one service.
+[[nodiscard]] std::uint64_t allocateExportOwnerId() noexcept;
+
 struct PendingSample final {
     ExportOutputId output;
     SampleKey key;
@@ -122,7 +126,10 @@ struct ExportQueueService::State {
 
     // Owner thread only.
     std::uint64_t revision = 0;
-    std::uint64_t nextRun = 1;
+    // Task owner of this service's own worker tasks (destination samples, asset imports). Runs
+    // draw their owners from the same process-wide sequence, so a service recreated on the same
+    // scheduler (File > New) never reuses an owner of the service it replaced.
+    std::uint64_t serviceOwner = detail::allocateExportOwnerId();
     std::uint64_t nextLogSequence = 1;
     std::optional<document::Snapshot> snapshot;
     std::optional<document::ColorSettings> colorSettings;

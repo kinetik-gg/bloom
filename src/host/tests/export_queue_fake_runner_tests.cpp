@@ -75,7 +75,10 @@ struct Fixture {
         std::make_shared<host::testing::FakeExportRunBackend>();
     std::unique_ptr<host::ExportQueueService> service;
 
-    explicit Fixture(const bool platform = true) {
+    bool platform_ = true;
+    explicit Fixture(const bool platform = true) : platform_(platform) { makeService(); }
+    void makeService() {
+        const bool platform = platform_;
         service = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
             .session = session,
             .scheduler = scheduler,
@@ -203,6 +206,95 @@ void testSucceedsWithProgressAndWaitingForViewer() {
     expect(f.service->jobForTaskOwner(view->run->owner) == job, "the Jobs row maps to the job");
 }
 
+// ADR 0033 section 7: Job, Composition and Range issues are reported on the job view.
+void testJobPreflight() {
+    Fixture f;
+    const auto job = f.addJob();
+    f.settle();
+    expect(f.view(job)->preflight.empty(), "a startable job has no job-level issues");
+    const auto output = f.view(job)->outputs.front().id;
+    {
+        commands::Transaction transaction("Disable");
+        transaction.emplace<commands::SetExportOutputEnabled>(output, false);
+        (void)f.session.execute(std::move(transaction));
+    }
+    f.settle();
+    auto view = f.view(job);
+    expect(view->preflight.size() == 1 &&
+               view->preflight[0].code == host::ExportPreflightCode::NoEnabledOutputs &&
+               view->preflight[0].target == host::ExportPreflightTarget::Job &&
+               view->preflight[0].severity == host::ExportPreflightSeverity::Blocking,
+           "no enabled output is a blocking Job issue");
+    {
+        commands::Transaction transaction("Range");
+        transaction.emplace<commands::SetExportOutputEnabled>(output, true);
+        transaction.emplace<commands::SetExportJobRange>(
+            job, document::ExportRange{document::ExportRangeKind::Custom, 0, 100000});
+        (void)f.session.execute(std::move(transaction));
+    }
+    f.settle();
+    view = f.view(job);
+    expect(view->preflight.size() == 1 &&
+               view->preflight[0].code == host::ExportPreflightCode::RangeOutsideComposition &&
+               view->preflight[0].target == host::ExportPreflightTarget::Range,
+           "a range outside the composition is a Range issue on the job");
+    expect(std::ranges::none_of(view->outputs.front().preflight,
+                                [](const auto& issue) {
+                                    return issue.code ==
+                                           host::ExportPreflightCode::RangeOutsideComposition;
+                                }),
+           "the output view no longer repeats job-level issues");
+    expect(!f.service->canStart(job).available, "a job-level issue blocks Start");
+}
+
+// The service is destroyed and recreated on the same scheduler and session (File > New): nothing
+// the old service submitted is still alive, and the new one works.
+void testDestroyAndRecreate() {
+    Fixture f;
+    f.fake->push({.framesPerPoll = 1,
+                  .waitingForViewerAfterFrames = 0,
+                  .waitingForViewerPolls = 0,
+                  .outcome = FakeExportScript::Outcome::Succeed,
+                  .failAtFrame = 0});
+    const auto job = f.addJob();
+    f.settle();
+    auto subscribed = f.service->subscribe();
+    const document::ExportJobId ids[] = {job};
+    expect(f.service->start(ids).accepted, "the old service starts a job");
+    expect(f.pumpUntil([&] { return f.view(job)->state == ExportJobState::Rendering; }),
+           "the old service renders");
+    const auto oldOwner = f.view(job)->run->owner;
+    // A destination change while running queues a preflight sample on a worker.
+    f.service->refreshPreflight();
+    f.service->beginShutdown(host::ExportStopCause::ProjectClosing);
+    expect(f.pumpUntil([&] { return f.service->quiescent(); }), "the old service quiesces");
+    expect(f.view(job)->state == ExportJobState::Stopped &&
+               f.view(job)->stopCause == host::ExportStopCause::ProjectClosing,
+           "the running job stopped with the closing cause");
+    f.service.reset();
+    expect(subscribed.subscription.state() == host::ExportQueueSubscriptionState::Closed,
+           "destroying the service closes its subscriptions");
+    expect(std::ranges::none_of(f.scheduler.snapshots(),
+                                [](const runtime::TaskSnapshot& task) {
+                                    return task.owner.kind == runtime::TaskOwnerKind::Export &&
+                                           task.owner.id.value() != 1 &&
+                                           !runtime::isTerminal(task.state);
+                                }),
+           "no task of the old service is still alive");
+
+    f.makeService();
+    f.settle();
+    const auto again = f.view(job);
+    expect(again && again->state == ExportJobState::Ready && !again->run,
+           "the new service reads the saved queue with every job Ready");
+    expect(f.service->start(ids).accepted, "the new service starts the job");
+    expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }) &&
+               f.view(job)->state == ExportJobState::Done,
+           "the new service runs it to the end");
+    expect(f.view(job)->run->owner != oldOwner && !f.service->jobForTaskOwner(oldOwner),
+           "the new service never reuses an owner of the old one");
+}
+
 void testFailsWithVerification() {
     Fixture f;
     f.fake->push({.framesPerPoll = 2,
@@ -219,6 +311,11 @@ void testFailsWithVerification() {
     expect(view->state == ExportJobState::Failed && view->failure &&
                view->failure->code == host::ExportFailureCode::VerificationFailed,
            "a failed verification fails the job");
+    expect(view->failure->summary ==
+                   host::exportFailureSummary(host::ExportFailureCode::VerificationFailed) &&
+               view->failure->reason.find("code=") == std::string::npos &&
+               view->failure->reason.find("stage=") == std::string::npos,
+           "the failure has a plain summary and reason without codes");
     const auto& checks = view->outputs.front().verification->checks;
     expect(std::ranges::any_of(checks,
                                [](const auto& check) {
@@ -229,7 +326,8 @@ void testFailsWithVerification() {
     bool failedEvent = false;
     for (const auto& event : f.service->events(0).events)
         if (const auto* failed = std::get_if<host::ExportJobFailed>(&event.payload))
-            failedEvent = failed->job == job && !failed->outputs.empty();
+            failedEvent =
+                failed->job == job && !failed->outputs.empty() && !failed->reason.summary.empty();
     expect(failedEvent, "ExportJobFailed carries the verification");
     expect(f.service->canStart(job).available &&
                f.service->availability(job, ExportCommand::Retry).available,
@@ -342,6 +440,8 @@ int main() {
         testCancelAndPause();
         testNeedsConfirmation();
         testTransientAndPlatform();
+        testJobPreflight();
+        testDestroyAndRecreate();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

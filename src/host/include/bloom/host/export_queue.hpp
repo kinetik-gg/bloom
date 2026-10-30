@@ -230,10 +230,18 @@ struct ExportFailure final {
     std::optional<ExportOutputId> output;
     std::optional<std::uint64_t> frame;
     // The underlying stable diagnostic code (task, attempt, provider), for support and scripts.
+    // Never shown as the failure text; stage, payload and facet codes go to the job's log.
     std::string diagnosticCode;
-    // Human-readable summary, ready for display.
+    // The plain sentence that explains this failure ("Bloom couldn't check frame 12 before
+    // encoding, so the export stopped. ..."), ready for display. No stage or code numbers.
     std::string reason;
+    // A short plain headline for the failure code (exportFailureSummary(code)), for a toast,
+    // notification or row title; `reason` is the detail sentence.
+    std::string summary;
 };
+
+// The headline for a failure code, e.g. "The destination ran out of space."
+[[nodiscard]] std::string_view exportFailureSummary(ExportFailureCode code) noexcept;
 
 enum class ExportStopCause : std::uint8_t {
     User = 1,
@@ -496,6 +504,10 @@ struct ExportJobView final {
     std::uint64_t logEntryCount = 0;
     std::uint64_t lastLogSequence = 0;
     std::optional<ExportLogEntry> latestLogEntry;
+    // Job-level preflight (ADR 0033 section 7): issues whose target is the Job, its Composition
+    // or its Range (composition missing, range outside the composition, no enabled output). Each
+    // output's own issues (destination, naming, encoder, colour) stay on ExportOutputView.
+    std::vector<ExportPreflightIssue> preflight;
     std::vector<ExportOutputView> outputs;
     ExportCommandAvailabilitySet commands;
 };
@@ -745,9 +757,12 @@ class ExportQueueService final {
     // reports the gesture state; imports apply on the first pump after it closes.
     void setInteractiveGestureActive(bool active);
 
-    // Shutdown edge: refuses new starts and stops every active job with `cause`. Non-blocking;
-    // the owner keeps pumping until quiescent(), then retires the GPU provider and the encoder
-    // retirement owner as today.
+    // Shutdown edge: refuses new starts, stops every active job with `cause` and cancels the
+    // preflight samples. Non-blocking; the owner keeps pumping until quiescent(), then retires the
+    // GPU provider and the encoder retirement owner as today. Once quiescent() no task this
+    // service submitted is still running, so the owner may destroy it and create a new service on
+    // the same scheduler and session (File > New): the new service's task owners never repeat the
+    // old one's, and destroying the old service closes its subscriptions.
     void beginShutdown(ExportStopCause cause);
     [[nodiscard]] bool quiescent() const noexcept;
     // Jobs that would be stopped by closing the project or quitting (Waiting, running, Paused).

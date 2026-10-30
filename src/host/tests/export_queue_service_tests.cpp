@@ -153,6 +153,120 @@ void testScript() {
            "the Python script adds the job and starts it");
 }
 
+// ADR 0033 section 5: the default destination and job the panel adds, from the catalogue.
+void testDefaults() {
+    auto catalogue = host::ExportPresetCatalogue::create(
+        {.userDataDirectory = std::nullopt, .initialEncoders = linuxEncoders()});
+    auto chosen = catalogue->defaultPreset();
+    expect(chosen.settings.format == document::ExportFormat::H264Mp4 &&
+               chosen.destination.portability == "project-relative" &&
+               chosen.destination.path == "Exports/{name}.mp4" &&
+               chosen.destination.overwrite == document::ExportOverwritePolicy::AskBeforeReplacing,
+           "the default output is H.264 MP4 at Exports/{name}.mp4, ask before replacing");
+    catalogue->setEncoderStatus(linuxEncoders(false, false));
+    chosen = catalogue->defaultPreset();
+    expect(chosen.settings.format == document::ExportFormat::ProResMov &&
+               chosen.destination.path == "Exports/{name}.mov",
+           "the fallback's destination follows its container");
+    expect(host::defaultExportDestination(document::ExportFormat::OpenExr).path ==
+               "Exports/{name}.exr",
+           "every format has its extension in the default destination");
+    const auto composition = document::CompositionId::fromRaw(7);
+    const auto job = host::defaultExportJob(composition, chosen);
+    expect(job.composition == composition &&
+               job.render.range.kind == document::ExportRangeKind::WorkArea && job.enabled &&
+               !job.labelColor && job.outputs.size() == 1 &&
+               job.outputs[0].presetId == chosen.presetId &&
+               job.outputs[0].settings == chosen.settings &&
+               job.outputs[0].destination == chosen.destination && job.outputs[0].enabled &&
+               !job.outputs[0].importIntoAssets && job.outputs[0].settings.useCachedFrames &&
+               !job.id.isValid() && !job.outputs[0].id.isValid(),
+           "the default job: work area, one enabled output, import off, reuse on, ids unset");
+    expect(document::validateExportJob([&] {
+               auto copy = job;
+               copy.id = document::ExportJobId::fromRaw(1);
+               copy.outputs[0].id = document::ExportOutputId::fromRaw(1);
+               return copy;
+           }())
+               .ok(),
+           "the default job is a valid record");
+}
+
+// The panel offers only these tokens per format.
+void testFormatTokens() {
+    const auto catalogue = host::ExportPresetCatalogue::create(
+        {.userDataDirectory = std::nullopt, .initialEncoders = linuxEncoders()});
+    const auto snapshot = catalogue->snapshot();
+    expect(snapshot->formats == host::exportFormatDescriptions() && snapshot->formats.size() == 11,
+           "the catalogue lists every format");
+    for (const auto& format : snapshot->formats) {
+        const auto profiles = document::exportCodecProfiles(format.format);
+        bool same = profiles.size() == format.codecProfiles.size();
+        for (std::size_t index = 0; same && index < profiles.size(); ++index)
+            same = profiles[index] == format.codecProfiles[index].token;
+        expect(same,
+               "codec profiles match the document vocabulary for " + std::string(format.token));
+        expect(format.codecProfiles.empty() ||
+                   std::ranges::any_of(
+                       format.codecProfiles,
+                       [&](const auto& item) { return item.token == format.defaultCodecProfile; }),
+               "the default profile is one of the listed tokens");
+        expect(format.extension == host::exportFormatExtension(format.format) &&
+                   format.imageSequence == document::isImageExportFormat(format.format),
+               "extension and sequence flag match");
+        // Every listed token is accepted by the record validator.
+        for (const auto& profile : format.codecProfiles) {
+            document::ExportOutput output;
+            output.id = document::ExportOutputId::fromRaw(1);
+            output.settings.format = format.format;
+            output.settings.codecProfile = std::string(profile.token);
+            expect(document::validateExportOutput(output).ok(),
+                   "a listed profile validates: " + std::string(profile.token));
+        }
+    }
+    const auto& exr = host::exportFormatDescription(document::ExportFormat::OpenExr);
+    expect(exr.compressions.size() == 4 && exr.defaultCompression == "zip" &&
+               host::exportFormatDescription(document::ExportFormat::Png).compressions.empty(),
+           "EXR lists its compressions; PNG has none");
+}
+
+// The 1.22 locator rule for a chosen path.
+void testDestinationForPath() {
+    const std::filesystem::path project = "/projects/shot";
+    auto inside = host::exportDestinationForPath("/projects/shot/Renders/final.mov", project);
+    expect(inside && inside->portability == "project-relative" &&
+               inside->path == "Renders/final.mov" &&
+               inside->overwrite == document::ExportOverwritePolicy::AskBeforeReplacing,
+           "a path inside the project becomes project-relative");
+    auto outside = host::exportDestinationForPath("/renders/final.mov", project,
+                                                  document::ExportOverwritePolicy::Replace);
+    expect(outside && outside->portability == "external" &&
+               outside->path == "file:///renders/final.mov" &&
+               outside->overwrite == document::ExportOverwritePolicy::Replace,
+           "a path outside the project becomes an external file URI");
+    auto sibling = host::exportDestinationForPath("/projects/shot-old/final.mov", project);
+    expect(sibling && sibling->portability == "external",
+           "a sibling folder with the same prefix is outside");
+    auto unsaved = host::exportDestinationForPath("/renders/a b.mov", std::nullopt);
+    expect(unsaved && unsaved->portability == "external" &&
+               unsaved->path == "file:///renders/a%20b.mov",
+           "an unsaved project always gets an external URI");
+    expect(!host::exportDestinationForPath("relative.mov", project) &&
+               !host::exportDestinationForPath("", project),
+           "a relative or empty path is refused");
+    // The helper's records resolve back to the chosen file.
+    host::ExportDestinationContext context;
+    context.projectFolder = project;
+    document::ExportJob job;
+    document::ExportOutput output;
+    output.settings.format = document::ExportFormat::ProResMov;
+    output.destination = *inside;
+    job.outputs.push_back(output);
+    expect(host::resolveDestination(job, output, context).firstPath ==
+               std::filesystem::path("/projects/shot/Renders/final.mov"),
+           "a project-relative record resolves to the chosen path");
+}
+
 void testPresets() {
     auto catalogue = host::ExportPresetCatalogue::create(
         {.userDataDirectory = std::nullopt, .initialEncoders = linuxEncoders()});
@@ -752,6 +866,9 @@ int main() {
         testResolveDestination();
         testScript();
         testPresets();
+        testDefaults();
+        testFormatTokens();
+        testDestinationForPath();
         testUserPresets();
         testLifecycle();
         testReplaceConfirmation();

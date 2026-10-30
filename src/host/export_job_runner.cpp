@@ -1,7 +1,7 @@
 // ADR 0033 section 6: one captured job, its outputs one after another through the existing
-// attempt -> policy approval -> publication path, then the job-level verification. Moved from
-// src/ui/frame_export_controller*.cpp (the still/range and composition drivers, the COLOR-5
-// deliverable preparation and the facet/failure descriptions, now typed results).
+// attempt -> policy approval -> publication path, then the job-level verification. These are the
+// still/range and composition drivers, the COLOR-5 deliverable preparation and the facet/failure
+// descriptions that the former Qt export dialog's controller owned, now as typed results.
 #include <bloom/host/export_job_runner.hpp>
 
 #include "export_output_drivers.hpp"

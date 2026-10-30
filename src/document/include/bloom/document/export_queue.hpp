@@ -129,6 +129,9 @@ struct ExportOutputSettings final {
     // Bake look-tagged effects into the output. False is the VFX handoff policy (look off).
     bool bakeLook = true;
     bool includeAudio = true;
+    // Reuse frames already rendered by the scene-referred composite cache when their identity
+    // matches exactly. Persisted only when false: a 1.29 file without the member means true.
+    bool useCachedFrames = true;
     std::uint32_t audioSampleRate = 48000;
     ExportEncoderPreference encoder = ExportEncoderPreference::Automatic;
     ExportSequenceNaming naming;

@@ -9,8 +9,10 @@
 #include <bloom/project/document_reconstruct.hpp>
 #include <bloom/project/strict_json_dom.hpp>
 
+#include <algorithm>
 #include <array>
 #include <iostream>
+#include <optional>
 #include <regex>
 #include <span>
 #include <stdexcept>
@@ -171,6 +173,55 @@ void testMigration() {
     }
 }
 
+std::optional<ExportQueue> decodeQueue(const std::string& text) {
+    auto operation = memory();
+    auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
+    if (!parsed)
+        return std::nullopt;
+    auto decoded = decodeDocumentEnvelope(parsed.document()->root());
+    if (!decoded)
+        return std::nullopt;
+    return decoded.value()->exportQueue;
+}
+
+// `useCachedFrames` joined 1.29 after projects were saved at 1.29: it is optional (absent means
+// true) and written only when false, so those files open and re-save unchanged.
+void testUseCachedFrames() {
+    const auto document = makeDocument(true);
+    const auto text = encode(document);
+    expect(text.find("useCachedFrames") == std::string::npos,
+           "the default (true) is not written, so earlier 1.29 files keep their bytes");
+    const auto earlier = decodeQueue(text);
+    expect(earlier && std::ranges::all_of(earlier->jobs,
+                                          [](const auto& job) {
+                                              return std::ranges::all_of(
+                                                  job.outputs, [](const auto& output) {
+                                                      return output.settings.useCachedFrames;
+                                                  });
+                                          }),
+           "a 1.29 document without the member opens with useCachedFrames on");
+
+    auto seed = makeNewProject("Export queue", "Main", core::RationalTime::fromInteger(2));
+    auto off = job(1, seed.initialCompositionId);
+    off.outputs[0].settings.useCachedFrames = false;
+    seed.project.setExportQueue({{off}});
+    const Document withOff{std::move(seed.project)};
+    const auto offText = encode(withOff);
+    expect(offText.find("\"useCachedFrames\": false") != std::string::npos, "false is written");
+    const auto decodedOff = decodeQueue(offText);
+    expect(decodedOff && !decodedOff->jobs[0].outputs[0].settings.useCachedFrames &&
+               decodedOff->jobs[0].outputs[1].settings.useCachedFrames,
+           "false decodes per output");
+    const auto explicitTrue =
+        replaceOnce(offText, "\"useCachedFrames\": false", "\"useCachedFrames\": true");
+    const auto decodedTrue = decodeQueue(explicitTrue);
+    expect(decodedTrue && decodedTrue->jobs[0].outputs[0].settings.useCachedFrames,
+           "an explicit true decodes");
+    expect(
+        !decodeQueue(replaceOnce(offText, "\"useCachedFrames\": false", "\"useCachedFrames\": 0")),
+        "a non-boolean useCachedFrames is refused");
+}
+
 void testRejects() {
     const auto text = encode(makeDocument(true));
     for (const auto& [from, to, message] :
@@ -210,6 +261,7 @@ int main() {
         testRoundTrip();
         testMigration();
         testRejects();
+        testUseCachedFrames();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

@@ -3114,6 +3114,9 @@
         "includeAudio": {
           "type": "boolean"
         },
+        "useCachedFrames": {
+          "type": "boolean"
+        },
         "audioSampleRate": {
           "type": "integer",
           "minimum": 8000,

@@ -9,6 +9,7 @@
 #include <bloom/platform/destination_facts.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <sstream>
 
 namespace bloom::host {
@@ -227,7 +228,7 @@ struct Pump final {
     }
 
     void scheduleSamples() {
-        if (!s.snapshot)
+        if (!s.snapshot || s.runner == ExportRunnerState::ShuttingDown)
             return;
         if (std::exchange(s.refreshRequested, false))
             s.sampleKeys.clear();
@@ -254,8 +255,10 @@ struct Pump final {
                     s.confirmations.erase(output.id);
                     s.sampleKeys.erase(current);
                 }
-                auto handle = detail::submitDestinationSample(s.dependencies.scheduler,
-                                                              s.dependencies.backend, key);
+                auto handle = detail::submitDestinationSample(
+                    s.dependencies.scheduler, s.dependencies.backend, key, std::nullopt,
+                    runtime::TaskOwner{runtime::TaskOwnerKind::Export,
+                                       runtime::TaskOwnerId::fromRaw(s.serviceOwner)});
                 if (handle.isValid())
                     s.pendingSamples.push_back({output.id, key, std::move(handle)});
             }
@@ -266,6 +269,8 @@ struct Pump final {
         log(id, job,
             detail::exportLog(runtime::DiagnosticSeverity::Error, failure.diagnosticCode,
                               failure.reason, failure.output, failure.frame));
+        if (failure.summary.empty())
+            failure.summary = std::string(exportFailureSummary(failure.code));
         job.failure = std::move(failure);
         finishRun(id, job, ExportJobState::Failed);
     }
@@ -287,7 +292,7 @@ struct Pump final {
     void prepare(const ExportJobId id, const document::ExportJob& record, JobRuntime& job) {
         s.active = id;
         s.runner = ExportRunnerState::Running;
-        const auto run = s.nextRun++;
+        const auto run = detail::allocateExportOwnerId();
         const runtime::TaskOwner owner{runtime::TaskOwnerKind::Export,
                                        runtime::TaskOwnerId::fromRaw(run)};
         auto group = s.dependencies.scheduler.createGroup(
@@ -579,6 +584,10 @@ struct Pump final {
         }
         if (const auto& failure = job.runner->failure()) {
             job.failure = failure;
+            if (job.failure->summary.empty())
+                job.failure->summary = std::string(exportFailureSummary(job.failure->code));
+            if (job.failure->reason.empty())
+                job.failure->reason = job.failure->summary;
             return finishRun(id, job, ExportJobState::Failed);
         }
         const bool warnings = std::ranges::any_of(job.runner->outputs(), [](const auto& output) {
@@ -648,10 +657,10 @@ struct Pump final {
         runtime.refreshAsset = existing;
         const auto folder = s.projectFolder.value_or(path.parent_path());
         auto submission = s.dependencies.scheduler.submit<std::shared_ptr<commands::Operation>>(
-            runtime::TaskRequest("Prepare asset import",
-                                 {runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(1)},
-                                 runtime::TaskPriority::Foreground,
-                                 runtime::TaskExecutor::BlockingIo),
+            runtime::TaskRequest(
+                "Prepare asset import",
+                {runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(s.serviceOwner)},
+                runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
             [path, folder, existing](runtime::TaskContext& context)
                 -> runtime::TaskResult<std::shared_ptr<commands::Operation>> {
                 using Result = runtime::TaskResult<std::shared_ptr<commands::Operation>>;
@@ -870,6 +879,45 @@ struct Pump final {
 
 // ---------------------------------------------------------------------------------------------
 // Service
+
+std::uint64_t detail::allocateExportOwnerId() noexcept {
+    static std::atomic<std::uint64_t> next{2};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::string_view exportFailureSummary(const ExportFailureCode code) noexcept {
+    switch (code) {
+    case ExportFailureCode::CompositionMissing:
+        return "The composition no longer exists.";
+    case ExportFailureCode::CompileFailed:
+        return "Bloom couldn't prepare the composition for export.";
+    case ExportFailureCode::PreflightRefused:
+        return "A check before rendering stopped the export.";
+    case ExportFailureCode::AnalysisRefused:
+        return "A frame couldn't be exported in this format.";
+    case ExportFailureCode::EvaluationFailed:
+        return "Bloom couldn't render a frame.";
+    case ExportFailureCode::ResourceRefused:
+        return "There wasn't enough memory or GPU capacity for the export.";
+    case ExportFailureCode::EncoderUnavailable:
+        return "The encoder for this format isn't available.";
+    case ExportFailureCode::EncoderFailed:
+        return "The encoder failed.";
+    case ExportFailureCode::WriteFailed:
+        return "Bloom couldn't write the file.";
+    case ExportFailureCode::DestinationFull:
+        return "The destination ran out of space.";
+    case ExportFailureCode::VerificationFailed:
+        return "The exported file didn't pass verification.";
+    case ExportFailureCode::PublicationConflict:
+        return "The destination changed outside Bloom, so it wasn't replaced.";
+    case ExportFailureCode::DeadlineExceeded:
+        return "The export stopped making progress and timed out.";
+    case ExportFailureCode::Internal:
+        break;
+    }
+    return "The export stopped because of a problem in Bloom.";
+}
 
 ExportQueueService::ExportQueueService(ExportQueueServiceDependencies dependencies)
     : state_(std::make_unique<State>(std::move(dependencies))) {
@@ -1228,12 +1276,16 @@ void ExportQueueService::beginShutdown(const ExportStopCause cause) {
             if (job.runner)
                 job.runner->stop();
         }
+    // Preflight samples stop too; quiescent() waits for their workers to answer, so nothing this
+    // service submitted outlives it.
+    for (auto& pending : s.pendingSamples)
+        pending.handle.cancel();
     pump();
 }
 
 bool ExportQueueService::quiescent() const noexcept {
     const auto& s = *state_;
-    if (s.active)
+    if (s.active || !s.pendingSamples.empty())
         return false;
     for (const auto& [id, job] : s.jobs)
         if (job.runner || job.terminalEventPending)
