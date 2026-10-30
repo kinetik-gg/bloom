@@ -16,7 +16,9 @@ hosts reach with a modifier — bare letters belong to tools.
 ## Rules
 
 - **One meaning per key per editor.** A key does not change meaning depending on what is selected.
-- **A modifier-free letter is a tool, not a command**, except Timeline B/N range marks. Commands that destroy, duplicate, or toggle
+- **A modifier-free letter is a tool, not a command**, except the Timeline's own keys (the B/N range
+  marks and After Effects' A, P, S, R, T, U, M, E, J and K; see "Timeline keys"), which answer only
+  while the Timeline holds focus or no widget does. Commands that destroy, duplicate, or toggle
   state take a modifier or live in a menu.
 - **A command may live in a menu without owning a key.** Mute, collapse, and dissolve are exactly
   that: they are in the node context menu and bind nothing.
@@ -535,6 +537,12 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | Drag row | Reorder stable slots at the insertion indicator |
 | Double-click name | Inline rename in the name label's bounds; Return, Escape, Tab or focus loss commits changed text once, unchanged text creates no transaction, an empty name is refused with its reason |
 | Right-click row | Duplicate, Delete, Rename, Blending, Label Color, Split at Playhead |
+| Click a row's Label square | The label menu under it: Kind Default, Label 1 to Label 8, Custom… and Select Label Group. On a selected layer it labels every selected layer (one undoable step) |
+| Label menu → Select Label Group | Selects every layer of the composition with that layer's label |
+| Click the header's label filter | Its menu: All Labels, then Kind Default, Label 1 to Label 8 and Custom, each checkable; the list shows only layers with a checked label (none checked: every layer). Panel state, cleared on a composition change |
+| Click a row's Shy switch | Marks the layer shy, or not (the selected layers when it is one of them) |
+| Click the header's Shy toggle (Hide Shy Layers) | Hides shy layers from the layer list and shows them again; they still render. Persisted in `timeline/hide-shy-layers` |
+| Click a group, parameter or component row | Selects it: a group selects its layer; a parameter or component row selects every key it shows (or the parameter, with none). It keeps the selected-row wash, in both halves, while that selection stands |
 | Right-click empty layer-table space | Add submenu (existing Solid, Text and shape actions); direct Keyframes, Graph Editor, Snap to Frames, Zoom to Fit, Select All and Deselect All actions. Opening or dismissing the menu preserves selection |
 | `Ctrl+wheel` over ruler or lanes | Zoom time about the pointer; the pointer's time stays fixed until a composition boundary clamps the range |
 | `Shift+wheel` or horizontal wheel | Scroll the visible time range |
@@ -548,6 +556,32 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | Drop Assets items elsewhere in the Timeline | Adds them on top, starting at the playhead |
 | `Alt` held at the drop | Sequences several items end to end (After Effects' Sequence Layers) instead of starting them together |
 | Drop files or folders onto the Timeline | Imports them (the import progress modal), then makes layers of what was imported at the same place, as one more undoable step |
+
+### Timeline keys
+
+After Effects' Timeline keys. They are `Qt::WidgetWithChildrenShortcut` actions on the Timeline,
+so they answer while the layer table, the lanes or the graph hold focus, and also when no widget in
+the window holds focus; a text or value field being typed in keeps its letters.
+
+| Binding | Action |
+| --- | --- |
+| `A` / `P` / `S` / `R` / `T` | Show only Anchor / Position / Scale / Rotation / Opacity, directly under the layer; the same key again closes it |
+| `U` / `U` `U` | Show the keyed properties / the properties that differ from a new layer (keyed, or a constant other than its default; Position's default is the composition centre; every mask path) |
+| `M` / `E` | Show each mask's path / the node feeding the layer and the value nodes driving it (Bloom has no effects stack; these are what process the layer) |
+| `Shift` + any of those | Add it to what shows, or take it away when it all already shows |
+| `J` / `K` | Playhead to the previous / next key the Timeline shows (collapsed summaries and shown property rows) |
+| `[` / `]` | Move the layer so its in point / its last frame is at the playhead (one Move Layer step) |
+| `Alt+[` / `Alt+]` | Trim the in point to the playhead / the out point so the playhead's frame is the last (one Trim Layer step) |
+
+They act on the selected layers, or on every listed layer when none is selected; `[`/`]` skip a
+locked layer. A reveal is editor state like expansion: clicking the layer's twirl closes it and the
+next twirl shows every property. Clashes: R, E, P and T are also the Rectangle, Ellipse, Pen and
+Text tool letters, but those are read only while a Viewer or the context bar holds focus (not window
+shortcuts), so each key has one meaning per focused panel, as in After Effects (where the
+Composition panel's tools take other letters). K, M, S and A appear elsewhere only with a modifier
+(`Ctrl+K` Split, `Ctrl+Alt+K` Composition Settings, `Ctrl+M` Add to Export Queue, `Ctrl+S` Save,
+`Ctrl+A` Select All); bare M (Nodes mute) is retired. J, U, `[`, `]`, `Alt+[` and `Alt+]` were
+unbound.
 
 ### Layer drops
 
@@ -609,10 +643,11 @@ path where a window manager claims Alt-drag. Its object names are `layerStartFra
 `layerAfterModeDropdown` and `layerTimeRemapSwitch`.
 
 Bar magnetic targets are other layers' in/out points, the playhead and work-area edges. A guide
-marks the chosen target. Empty lane space retains ruler scrubbing. Visibility, solo and lock cells
-commit their boundary commands; audio and Parent columns stay hidden. A label menu offers eight
-presets, Custom… (the kit colour picker popup under the row, committing one Set Layer Label Color
-step when it closes with a new colour; Escape keeps the old one) and Kind Default. Name editing consumes text/navigation keys before
+marks the chosen target. Empty lane space retains ruler scrubbing. Visibility, audio, solo and lock
+cells commit their boundary commands. The label menu (the Label square or Right-click → Label
+Color) offers Kind Default, eight presets, Custom… (the kit colour picker popup under the row,
+committing one Set Layer Label Color step when it closes with a new colour; Escape keeps the old
+one) and Select Label Group; the current label is checked. Name editing consumes text/navigation keys before
 Timeline commands. Parenting remains separate work.
 
 New object names: `timelineSetWorkAreaStartAction`, `timelineSetWorkAreaEndAction`,

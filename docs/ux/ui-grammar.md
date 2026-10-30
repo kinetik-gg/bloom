@@ -101,7 +101,7 @@ The exceptions are deliberate and closed:
 | --- | --- |
 | Panel menu titles (`KMenuButton`: View, Select, Add, the Timeline and Nodes menus) | Menus, like a menu bar's titles, not buttons: flat text with the `Accent` hover bar |
 | Text entry (`KValueField`, `KTextField`/`KLineEdit`, `KSearchField`, `KTextArea`, the Viewer frame field) | The one text-entry recipe, `kit::fieldColors()`: a `Field` well, so an editable value never reads as a button. A field standing in a chrome row or on a node card keeps a resting `Border` (`KValueField::setOutlinedAtRest`); a property cell (Properties, Timeline rows) rests borderless. A refused entry wears `Error` over every other state |
-| Timeline layer switches (eye, audio, solo, lock) | The glyph is the state (an eye that is there or not), so a switch never takes the Accent plate; its cell is the Secondary plate |
+| Timeline layer switches (eye, audio, solo, lock, shy) | The glyph is the state (an eye that is there or not), so a switch never takes the Accent plate; its cell is the Secondary plate. The Label cell is a `kit::KSwatchButton`: the Secondary plate carrying the label colour as an `IconSmall` square with its edge-ink hairline, never tinted |
 | Ghost | Only where a control deliberately has no resting surface: disclosure carets (layer and property disclosure, the RGBA and multiline expanders) and the window title bar buttons |
 
 There is no Recessed recipe and no `ControlSurface` token any more: both existed only for the
@@ -622,7 +622,9 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | Size token | Pixels | Owner |
 | --- | --- | --- |
 | `TimelineNameDefault` | 280 | Timeline default name column |
-| `TimelineLeftColumn` | 576 | Four 24px toggles + name + two 100px dropdown columns |
+| `TimelineToggleColumn` | 136 | Video, Audio, Solo, Lock and Label: five `ToggleCell`s with XS gaps |
+| `TimelineSwitchColumn` | 28 | The Shy switch after the name: one `ToggleCell` and its XS gap |
+| `TimelineLeftColumn` | 744 | Leading switches + default name + Shy + three 100px dropdown columns |
 | `GizmoHandle / GizmoRotateZone` | 8 / 16 | Viewer transform handles / outside-corner rotation radius |
 | `ViewerWorkPadding` | 48 | Padded image work area |
 | `StatusSeparatorHeight` | 12 | The hairline between two status bar segments. |
@@ -820,7 +822,18 @@ width; an existing `timeline/layer-column-width` pixel value wins, and a double-
 Workspace returns to the 37% ratio. All timeline rows share the ListRow pitch and a zero origin;
 the 28px KPropertyRow is centered within that pitch.
 Selected rows use the kit selected-row recipe: the Accent wash over the row in both halves, with
-the SelectionEdge Accent edge at the layer row's leading side. Every populated and empty row uses
+the SelectionEdge Accent edge at the layer row's leading side. Every row of the layer table --
+layer, group, parameter and component -- takes the list hover step (one surface rung up) under the
+pointer and is clickable; a clicked group or property row wears the same selected-row recipe
+(`KListSurface::setRowStates` under the rows that paint no background, `KRow::setHovered` on a layer
+row) and its key lane the same wash. The layer table's columns read, as in After Effects: Video,
+Audio, Solo and Lock, the Label square, the disclosure and name (which takes every extra pixel),
+the Shy switch (`KRow::setCells` switches after the name), then Blending, Parent and Matte. The
+column headings put the label filter (`timelineLabelFilterButton`, `IconId::LabelFilter`) over the
+Label squares and the Hide Shy Layers toggle (`timelineHideShyToggle`, `IconId::Shy`) over the Shy
+switches; both are plated `KIconToggle`s that wear the Accent plate while filtering or hiding. New
+names: `timelineLayerLabel`, `timelineLayerShy`, `timelineLayerLabelMenu`,
+`timelineSelectLabelGroupAction`, `timelineLabelFilterMenu`. Every populated and empty row uses
 one snapped Background hairline separator (`kit::paintRowSeparator`, the window color, never a
 lighter border), without alternating fills.
 The work-area slider occupies the lane half

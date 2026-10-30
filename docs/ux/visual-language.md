@@ -459,8 +459,9 @@ Layer, group-heading and parameter rows share the `ListRow` pitch and one vertic
 scroll offset. A 16 px Phosphor CaretRight/CaretDown beside the layer name discloses expansion.
 Group headings read TRANSFORM, APPEARANCE and SOURCE. Parameter names are indented beneath the
 layer name; the 64 px name column, shared diamond, and inline value column stay on the left of the
-lane divider. The default layer width is derived from four `ToggleCell`s, `TimelineNameMin` and two
-`DropdownWidth` fields. The child-row left inset is derived from the layer control table;
+lane divider. The narrowest layer table is derived from the five leading `ToggleCell`s (Video,
+Audio, Solo, Lock, Label), `TimelineNameMin`, the Shy `ToggleCell` and three `DropdownWidth` fields;
+every extra pixel goes to the name. The child-row left inset is derived from the layer control table;
 control gaps are `Spacing::XS` (4 px), with `Spacing::XXS` (2 px) inside component cells.
 
 Position, Anchor and Scale have compact X/Y labels and two `KValueField` cells on one row.
