@@ -825,6 +825,13 @@ void ProjectHost::newProject() {
                           UnsavedChangeAction::NewProject);
 }
 
+bool ProjectHost::replaceWithBlankProject() {
+    if (isBusy())
+        return false;
+    replaceWithNewProject();
+    return true;
+}
+
 void ProjectHost::requestOpen() {
     if (isBusy()) {
         return;

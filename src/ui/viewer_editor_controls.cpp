@@ -247,6 +247,75 @@ void ViewerEditor::setResolutionCompact(const bool compact) {
             tr(compact ? kResolutionCompactNames[index] : kResolutionNames[index]));
 }
 
+QString ViewerEditor::applyRemoteChange(const RemoteChange& change) {
+    std::optional<int> displayViewIndex;
+    if (change.display || change.view) {
+        if (viewerDisplayView_ == nullptr || !viewerDisplayView_->isEnabled() ||
+            viewerDisplayView_->count() == 0)
+            return tr("This project's colour configuration offers no display or view to choose.");
+        const auto pairAt = [this](const int index) {
+            const auto data = viewerDisplayView_->itemData(index).toStringList();
+            return data.size() == 2 ? data : QStringList{QString{}, QString{}};
+        };
+        const auto current = pairAt(viewerDisplayView_->currentIndex());
+        const auto standard = pairAt(viewerDisplayViewDefault_);
+        const auto resolve = [](const std::optional<std::string>& asked, const QString& keep,
+                                const QString& fallback) {
+            if (!asked)
+                return keep;
+            return asked->empty() ? fallback : QString::fromStdString(*asked);
+        };
+        const QStringList wanted{resolve(change.display, current[0], standard[0]),
+                                 resolve(change.view, current[1], standard[1])};
+        for (int index = 0; index < viewerDisplayView_->count(); ++index)
+            if (pairAt(index) == wanted)
+                displayViewIndex = index;
+        if (!displayViewIndex) {
+            QStringList offered;
+            for (int index = 0; index < viewerDisplayView_->count(); ++index)
+                offered << tr("%1 / %2").arg(pairAt(index)[0], pairAt(index)[1]);
+            return tr("The display and view \u201c%1 / %2\u201d is not offered by this project. "
+                      "Choose one of: %3.")
+                .arg(wanted[0], wanted[1], offered.join(QStringLiteral(", ")));
+        }
+    }
+    if (change.exposure &&
+        (!std::isfinite(*change.exposure) || *change.exposure < exposureField_->minimum() ||
+         *change.exposure > exposureField_->maximum()))
+        return tr("Exposure must be between %1 and %2 stops.")
+            .arg(exposureField_->minimum())
+            .arg(exposureField_->maximum());
+    if (change.zoom == RemoteChange::Zoom::Factor &&
+        (!std::isfinite(change.zoomFactor) || change.zoomFactor < ViewTransform::kMinZoom ||
+         change.zoomFactor > ViewTransform::kMaxZoom))
+        return tr("Zoom must be between %1 and %2 (1.0 is 100 percent).")
+            .arg(ViewTransform::kMinZoom)
+            .arg(ViewTransform::kMaxZoom);
+
+    if (displayViewIndex)
+        viewerDisplayView_->setCurrentIndex(*displayViewIndex);
+    if (change.exposure)
+        exposureField_->setValue(*change.exposure);
+    if (change.channel)
+        channelDropdown_->setCurrentIndex(static_cast<int>(*change.channel));
+    switch (change.zoom) {
+    case RemoteChange::Zoom::Keep:
+        break;
+    case RemoteChange::Zoom::Fit:
+        setZoomFit();
+        break;
+    case RemoteChange::Zoom::ActualSize:
+        setZoomActualSize();
+        break;
+    case RemoteChange::Zoom::Factor:
+        transform_ = ViewTransform{.fitToWindow = false, .zoom = change.zoomFactor, .pan = {}};
+        refreshZoomDropdown();
+        update();
+        break;
+    }
+    return {};
+}
+
 void ViewerEditor::resetViewAdjust() {
     exposureField_->cancelEdit();
     gammaField_->cancelEdit();

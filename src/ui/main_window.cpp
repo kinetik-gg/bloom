@@ -156,7 +156,9 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateContentSurface);
     connect(&projectHost_, &ProjectHost::saveFinished, this,
             [this](const ProjectHostOperationOutcome outcome, const QString& message) {
-                if (outcome == ProjectHostOperationOutcome::Published) {
+                if (outcome == ProjectHostOperationOutcome::Published ||
+                    projectHost_.agentOperation()) {
+                    // An agent's call reports its failure to the agent, never in a dialog.
                     statusStrip_->showTransientMessage(message);
                     return;
                 }
@@ -166,6 +168,10 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
             });
     connect(&projectHost_, &ProjectHost::openFinished, this,
             [this](const ProjectHostOperationOutcome outcome, const QString& message) {
+                if (projectHost_.agentOperation()) {
+                    statusStrip_->showTransientMessage(message);
+                    return;
+                }
                 if (outcome == ProjectHostOperationOutcome::Published) {
                     statusStrip_->showTransientMessage(message);
                     // ADR 0032's one-time note for an older project, in an asynchronous
@@ -1069,6 +1075,14 @@ void MainWindow::scheduleDisplayedViewerUpdate() {
 void MainWindow::updateDisplayedViewer() {
     if (!statusStrip_ || !workspaceHost_)
         return;
+    auto* selected = displayedViewer();
+    statusStrip_->setDisplayedViewer(selected);
+    contextBar_->setViewer(selected);
+}
+
+ViewerEditor* MainWindow::displayedViewer() {
+    if (!workspaceHost_)
+        return nullptr;
     auto viewers = workspaceHost_->findChildren<ViewerEditor*>();
     viewers.erase(std::remove_if(viewers.begin(), viewers.end(),
                                  [](const auto* viewer) { return !viewer->isVisible(); }),
@@ -1093,8 +1107,7 @@ void MainWindow::updateDisplayedViewer() {
         selected = lastActiveViewer_;
     if (!selected && !viewers.empty())
         selected = viewers.front();
-    statusStrip_->setDisplayedViewer(selected);
-    contextBar_->setViewer(selected);
+    return selected;
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {

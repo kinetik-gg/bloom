@@ -54,6 +54,7 @@
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/live_session_adapter.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/mcp_live_ui_binding.hpp>
 #include <bloom/ui/mcp_server_adapter.hpp>
 #include <bloom/ui/mcp_server_service_port.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
@@ -635,12 +636,18 @@ int main(int argc, char* argv[]) try {
     const auto mcpPreferences = bloom::ui::loadMcpServerPreferences(QSettings{});
     const auto mcpDataDirectory = bloom::platform::userDataDirectory();
     const auto mcpCacheDirectory = bloom::platform::userCacheDirectory();
+    // The seven live-UI seams (project lifecycle, reveal, selection, active composition, transport,
+    // Viewer, colour settings): the artist's own controllers, bound once. The window is attached
+    // below, once it exists.
+    bloom::ui::McpLiveUiBinding mcpLiveUi(projectHost, compositionSession,
+                                          previewController.playbackController());
     bloom::mcp::McpServerServiceDependencies mcpDependencies{
         .live = liveSessionHost,
         // The export queue the project host currently owns; null while it is being replaced
         // (the service then answers bloom.mcp.export-unavailable).
         .exportQueue = [&projectHost] { return projectHost.exportQueue(); },
         .scheduler = taskScheduler,
+        .liveUi = mcpLiveUi.port(),
         .tokenFile = mcpDataDirectory ? *mcpDataDirectory / "mcp" / "token"
                                       : std::filesystem::path{},
         .captureDirectory = mcpCacheDirectory ? *mcpCacheDirectory / "mcp-captures"
@@ -747,6 +754,12 @@ int main(int argc, char* argv[]) try {
                                  mediaDiskCache.get(), &accelerationStatus, &cachePurgeController);
     // Every default dialog of the project host and the export controller opens over the window.
     window.setMcpServer(&mcpAdapter);
+    mcpLiveUi.setWindow(&window);
+    mcpAdapter.setCompositionNamer([&compositionSession](const std::uint64_t id) {
+        const auto* composition = compositionSession.snapshot().project().findComposition(
+            bloom::document::CompositionId::fromRaw(id));
+        return composition != nullptr ? QString::fromStdString(composition->name()) : QString{};
+    });
     // Shutdown participant: close the listener at once; the packed-host predicate below keeps the
     // coordinator from reaching quiescence until the request workers are idle.
     QObject::connect(&shutdownCoordinator,

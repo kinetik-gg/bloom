@@ -102,6 +102,9 @@ class MainWindow final : public QMainWindow {
     [[nodiscard]] QAction* windowExportAction() const noexcept { return windowExportAction_; }
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
+    // The Viewer the status bar and context bar follow: the active area's, else the last active
+    // one, else the first visible. Null with no visible Viewer.
+    [[nodiscard]] ViewerEditor* displayedViewer();
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreApplicationState(QSettings& settings);
     void saveApplicationState(QSettings& settings) const;
     // Called only after the shutdown coordinator has observed runtime quiescence. Earlier close

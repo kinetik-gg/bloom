@@ -269,6 +269,15 @@ class ProjectHost final : public QObject {
     // validates, and atomically publishes an asynchronous byte-for-byte copy and never claims to
     // rewrite or migrate the document (docs/architecture/project-session.md).
     void requestSaveCopy();
+    // Replaces the project with a fresh blank one WITHOUT asking: the caller has already settled
+    // unsaved changes (the artist's Discard, or an agent's discardChanges). Stops the export queue's
+    // jobs as File > New does. False while a project operation is in progress.
+    [[nodiscard]] bool replaceWithBlankProject();
+    // True while an agent's project call (MCP) owns the running save or open. The finished signals
+    // fire as always, but windows must not open a dialog for it: the agent gets the typed refusal
+    // and the artist sees a status message. Set by the MCP binding around begin*().
+    void setAgentOperation(bool agent) noexcept { agentOperation_ = agent; }
+    [[nodiscard]] bool agentOperation() const noexcept { return agentOperation_; }
     // Lower-level primitives (decision 1's literal list): begin the async op against an
     // already-known path. Public so tests can drive them directly, bypassing the dialog seams.
     void beginOpen(const std::filesystem::path& path);
@@ -341,6 +350,7 @@ class ProjectHost final : public QObject {
     std::optional<ExportQueueHostDependencies> exportDependencies_;
     std::unique_ptr<host::ExportQueueService> exportQueue_;
     bool confirmingExports_ = false;
+    bool agentOperation_ = false;
     void createExportQueue();
     void retireExportQueue(host::ExportStopCause cause);
 

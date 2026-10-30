@@ -323,6 +323,7 @@ void ViewerEditor::rebuildDisplayViewControl() {
             }
         }
     }
+    viewerDisplayViewDefault_ = defaultIndex;
     viewerDisplayView_->setEnabled(true);
     viewerDisplayView_->setMutedValue(false);
     viewerDisplayView_->setCurrentIndex(selectedIndex);

@@ -374,6 +374,23 @@ class ViewerEditor final : public QWidget,
     [[nodiscard]] AnchorModeState anchorModeState() const;
     bool setAnchorHandleMode(document::PathAnchorMode mode);
 
+    // What an agent (MCP viewer.set) may change: the same controls the footer and View menu offer,
+    // driven through them so both reflect it. Only the present fields change; none reaches a render.
+    struct RemoteChange final {
+        enum class Zoom : std::uint8_t { Keep, Fit, ActualSize, Factor };
+        // OCIO display and view names; an empty string selects the project default's.
+        std::optional<std::string> display;
+        std::optional<std::string> view;
+        std::optional<double> exposure;
+        std::optional<ViewerChannel> channel;
+        Zoom zoom = Zoom::Keep;
+        // With Zoom::Factor: 1.0 is 100 percent.
+        double zoomFactor = 1.0;
+    };
+    // Validates the whole change first, then applies it. Returns the refusal as a plain sentence
+    // (in the interface language), or an empty string once applied.
+    [[nodiscard]] QString applyRemoteChange(const RemoteChange& change);
+
   signals:
     void displayedStateChanged();
     void anchorModeStateChanged();
@@ -800,6 +817,8 @@ class ViewerEditor final : public QWidget,
     // hands the whole row over by reparenting exactly one widget.
     kit::KDropdown* channelDropdown_ = nullptr;
     kit::KDropdown* viewerDisplayView_ = nullptr;
+    // The item the project's default display and view occupy (set when the list is built).
+    int viewerDisplayViewDefault_ = 0;
     QToolButton* viewerLookToggle_ = nullptr;
     QAction* lookAction_ = nullptr;
     kit::KDropdown* backgroundDropdown_ = nullptr;
