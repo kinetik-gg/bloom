@@ -5,7 +5,7 @@ and AV1 (dav1d) decode paths with streams from independent reference encoders. B
 has no VP9 or AV1 encoder at this intake, so these bytes cannot be generated at test time; they are
 small enough to review byte for byte and contain no third-party content.
 
-Content: a flat Rec.709 limited-range colour (lavfi `color=c=0x3366cc`), 64x48, 12 frames at 24
+Content: a flat Rec.709 limited-range color (lavfi `color=c=0x3366cc`), 64x48, 12 frames at 24
 fps, tagged BT.709 primaries, transfer and matrix with limited range. Every decoded sample has one
 exact code: 8-bit Y'CbCr 98/177/101, 10-bit 403/714/407.
 

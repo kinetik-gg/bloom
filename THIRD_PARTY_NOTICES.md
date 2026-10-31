@@ -54,7 +54,7 @@ Copyright (c) 2021, Tampere University, ITU/ISO/IEC, project contributors. All r
 Redistribution and use in source and binary forms, with or without modification, are permitted
 under the BSD-3-Clause terms in `dependencies/licenses/kvazaar/LICENSE`. The compiled library
 includes Colin Plumb's public-domain MD5 implementation; Windows builds also include Kvazaar's
-thread wrapper (Copyright 2019 Tampere University, ISC licence) and NetBSD's `getopt` (Copyright
+thread wrapper (Copyright 2019 Tampere University, ISC license) and NetBSD's `getopt` (Copyright
 (c) 2000 The NetBSD Foundation, Inc., BSD-2-Clause), whose texts are in the Kvazaar source archive.
 
 ### dav1d

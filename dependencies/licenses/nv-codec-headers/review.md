@@ -11,12 +11,12 @@ into the dependency prefix (Linux and Windows; macOS has no NVENC), and FFmpeg's
 nothing from NVIDIA is linked into or shipped with Bloom. A computer without the driver has no NVENC
 provider and the encode chain falls through to VA-API or the bundled software encoders.
 
-## Licence
+## License
 
-Every header carries the MIT licence (`LICENSE`, copied from the headers' own notice; NVIDIA
+Every header carries the MIT license (`LICENSE`, copied from the headers' own notice; NVIDIA
 Corporation and the FFmpeg contributors who wrote the dynamic loader). The compiled declarations end
 up in the LGPL `libavcodec`, so the notice is reproduced in `THIRD_PARTY_NOTICES.md` and in Bloom's
-licence catalogue. Enabling NVENC needs neither `--enable-nonfree` nor `--enable-gpl`: FFmpeg
+license catalogue. Enabling NVENC needs neither `--enable-nonfree` nor `--enable-gpl`: FFmpeg
 classifies `ffnvcodec`/`nvenc` as LGPL-compatible. The NVIDIA driver is the user's own system
 component, not a Bloom dependency.
 

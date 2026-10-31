@@ -10,7 +10,7 @@ that archive into the worker's shared `libavcodec`; FFmpeg's version script keep
 symbol private. Kvazaar's x86 kernels are compiler intrinsics with run-time CPU dispatch, so no
 assembler is involved.
 
-## Licence
+## License
 
 Kvazaar is BSD-3-Clause since 2.0 (`LICENSE`, byte-identical to the archive's copy). The compiled
 library also contains Colin Plumb's public-domain MD5 (`src/extras/libmd5.c`). On MSVC only it
@@ -23,7 +23,7 @@ exact source archive digest.
 ## Patent posture
 
 The owner's decision (2026-10-31) accepts bundling a source-built HEVC encoder; codec patent
-questions outside ProRes are covered by Bloom's existing deployment warning. No patent licence is
+questions outside ProRes are covered by Bloom's existing deployment warning. No patent license is
 claimed.
 
 ## Qualification posture

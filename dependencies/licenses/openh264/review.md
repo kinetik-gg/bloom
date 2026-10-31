@@ -13,10 +13,10 @@ Nothing is downloaded at run time. There is no Cisco binary, no consent flow, no
 directory and no loader shim: the encoder ships inside Bloom's worker on every platform, and the
 artist installs nothing beyond Bloom.
 
-## Licence
+## License
 
 The source is BSD-2-Clause (`LICENSE`, byte-identical to the archive's copy). Binary
-redistribution reproduces that notice through `THIRD_PARTY_NOTICES.md` and the licence texts
+redistribution reproduces that notice through `THIRD_PARTY_NOTICES.md` and the license texts
 shipped with the worker. Because the archive is linked into the LGPL `libavcodec`, the lock
 records the corresponding-source obligation with the exact source archive digest so the shipped
 `libavcodec` can be rebuilt and relinked from locked sources.
@@ -24,8 +24,8 @@ records the corresponding-source obligation with the exact source archive digest
 ## Patent posture
 
 The owner's decision (2026-10-31) accepts bundling a source-built H.264 encoder; codec patent
-questions outside ProRes are covered by Bloom's existing deployment warning. The BSD licence grants
-no patent rights, and no patent licence is claimed. Cisco's separately distributed binary terms do
+questions outside ProRes are covered by Bloom's existing deployment warning. The BSD license grants
+no patent rights, and no patent license is claimed. Cisco's separately distributed binary terms do
 not apply because Bloom does not use Cisco's binary.
 
 ## Qualification posture
