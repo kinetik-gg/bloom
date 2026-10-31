@@ -1208,11 +1208,15 @@ void NodeGraphEditor::refreshSelectionReadout() {
     if (footerSelectionLabel_ == nullptr) {
         return;
     }
-    footerSelectionLabel_->setText(session_.selectedNodes().empty()
-                                       ? QString{}
-                                       : tr("%1 nodes").arg(session_.selectedNodes().size()));
-    footerSelectionLabel_->setProperty("chromeSuppressed", session_.selectedNodes().empty());
-    footerSelectionLabel_->setVisible(!session_.selectedNodes().empty());
+    // #401: selection notifications arrive during playback, so an unchanged readout is left alone.
+    // The footer row owns visibility (it hides the readout when the row runs out of room);
+    // showing it from here would fight the row and re-arrange it on every notification.
+    const bool empty = session_.selectedNodes().empty();
+    const auto text = empty ? QString{} : tr("%1 nodes").arg(session_.selectedNodes().size());
+    if (footerSelectionLabel_->text() != text)
+        footerSelectionLabel_->setText(text);
+    if (footerSelectionLabel_->property("chromeSuppressed").toBool() != empty)
+        footerSelectionLabel_->setProperty("chromeSuppressed", empty);
 }
 
 void NodeGraphEditor::buildFooter() {

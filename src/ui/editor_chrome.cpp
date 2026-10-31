@@ -382,17 +382,22 @@ class ChromeRow final : public kit::KSurface {
         collapsed_ = overflow_ && needed + hysteresis > width();
         setProperty("collapseThreshold", needed);
         setProperty("collapsed", collapsed_);
+        // Each control's visibility is set once, to its final value: showing a control here and
+        // hiding it below when it does not fit would post a LayoutRequest that arranges the row
+        // again, forever (#401).
         QList<QWidget*> visible;
         for (auto& entry : entries_) {
             const bool show = shown(entry) && !(collapsed_ && entry.menu);
-            entry.control->setVisible(show);
             if (show)
                 visible.push_back(entry.control);
+            else
+                entry.control->setVisible(false);
         }
         if (overflow_) {
-            overflow_->setVisible(collapsed_);
             if (collapsed_)
                 visible.push_back(overflow_);
+            else
+                overflow_->setVisible(false);
         }
         int remaining =
             width() - padding_ - padding_ -
