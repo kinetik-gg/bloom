@@ -38,8 +38,9 @@ The configure vector is checked byte-for-byte against
   and WAV muxers.
 - Decode: H.264, HEVC, ProRes, DNxHD, MJPEG, TIFF, AAC, MP3, and the explicitly enumerated native
   PCM decoders.
-- Encode: `libopenh264` (H.264), `libkvazaar` (HEVC), `prores_ks`, DNxHD, TIFF, AAC, the VA-API
-  H.264/HEVC hardware encoders, and the explicitly enumerated native PCM encoders.
+- Encode: `libopenh264` (H.264), `libkvazaar` (HEVC), `prores_ks`, DNxHD, TIFF, AAC, the NVIDIA
+  NVENC (`h264_nvenc`, `hevc_nvenc`) and VA-API H.264/HEVC hardware encoders, and the explicitly
+  enumerated native PCM encoders.
 - Parsers and bitstream filters are limited to the entries needed by those paths; the file
   protocol is the only protocol.
 - Programs, documentation, network access, autodetection, and all unspecified components remain
@@ -52,6 +53,9 @@ The configure vector is checked byte-for-byte against
   The codec wrappers (`libopenh264`, `libkvazaar`) are enabled on every platform;
   `--pkg-config-flags=--static` makes configure read the static archives' runtime libraries. No
   platform adds a GPL, nonfree or version-3 component.
+- NVENC (`--enable-ffnvcodec --enable-nvenc`) compiles against the MIT nv-codec-headers and loads
+  the NVIDIA driver's encode library at run time; it needs neither `--enable-nonfree` nor
+  `--enable-gpl`, and nothing from NVIDIA is linked or shipped. macOS builds omit it.
 - VA-API is enabled on Linux when libva development files are present, with only the H.264 and
   HEVC VA-API hardware accelerators. `BLOOM_FFMPEG_ENABLE_VAAPI=OFF` is the explicit fallback when
   libva is unavailable; macOS and Windows never enable it.

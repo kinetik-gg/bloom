@@ -74,6 +74,8 @@
 --enable-encoder=libkvazaar
 --enable-encoder=h264_vaapi
 --enable-encoder=hevc_vaapi
+--enable-encoder=h264_nvenc
+--enable-encoder=hevc_nvenc
 --enable-encoder=aac
 --enable-encoder=tiff
 --enable-encoder=pcm_alaw
@@ -131,6 +133,8 @@
 --enable-protocol=file
 --enable-libopenh264
 --enable-libkvazaar
+--enable-ffnvcodec
+--enable-nvenc
 --enable-vaapi
 --enable-hwaccel=h264_vaapi
 --enable-hwaccel=hevc_vaapi

@@ -58,6 +58,18 @@ set(BLOOM_FFMPEG_DEPENDS
     bloom_dependency_openh264
     bloom_dependency_kvazaar)
 
+# NVENC (nv-codec-headers.cmake): FFmpeg's h264_nvenc/hevc_nvenc compile against the MIT headers and
+# load the NVIDIA driver at run time. macOS has no NVENC, so its build omits them.
+if(BLOOM_NV_CODEC_HEADERS_REQUIRED)
+    list(APPEND BLOOM_FFMPEG_DEPENDS bloom_dependency_nv_codec_headers)
+else()
+    list(REMOVE_ITEM BLOOM_FFMPEG_CONFIGURE_ARGUMENTS
+        --enable-ffnvcodec
+        --enable-nvenc
+        --enable-encoder=h264_nvenc
+        --enable-encoder=hevc_nvenc)
+endif()
+
 # Reviewed source patches (dependencies/patches/ffmpeg/, recorded in the lock with their digests and
 # apply order). The Windows build takes `patch` from the same MSYS2 installation as its shell.
 set(BLOOM_FFMPEG_PATCHES

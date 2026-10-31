@@ -19,6 +19,7 @@ component, and its own records explain why the lock cannot represent it.
 | robin-map | 1.4.0 | MIT | Unmodified headers inside the nanobind archive and static core | `dependencies/licenses/robin_map/` |
 | FFmpeg | 8.1.2 | LGPL-2.1-or-later | Shared libraries private to `bloom-media-worker` on Linux, macOS and Windows; ProRes is non-authorized preview output | `dependencies/licenses/ffmpeg/`, `dependencies/dependencies.lock.json` |
 | OpenH264 | 2.6.0 | BSD-2-Clause | H.264 encoder built from source as a static archive inside the worker's `libavcodec`; ships with Bloom, nothing is downloaded | `dependencies/licenses/openh264/`, `dependencies/dependencies.lock.json` |
+| nv-codec-headers | 12.1.14.1 | MIT | Header-only NVIDIA Video Codec SDK interface compiled into the worker's `libavcodec` for NVENC; the NVIDIA driver is loaded at run time and never shipped | `dependencies/licenses/nv-codec-headers/`, `dependencies/dependencies.lock.json` |
 | Kvazaar | 2.3.2 | BSD-3-Clause | HEVC encoder built from source as a static archive inside the worker's `libavcodec`; ships with Bloom | `dependencies/licenses/kvazaar/`, `dependencies/dependencies.lock.json` |
 | NASM | 2.16.03 | BSD-2-Clause | Build-host-only assembler for FFmpeg's x86 SIMD; installed outside the dependency prefix, never linked or shipped | `dependencies/licenses/nasm/`, `dependencies/dependencies.lock.json` |
 | glslang | 16.4.0 | BSD-3-Clause AND BSD-2-Clause AND MIT AND Apache-2.0 AND GPL-3.0-or-later WITH Bison-exception-2.2 | Runtime `glslangValidator` staged beside the desktop/CLI/MCP executables under the private `bloom-gpu-tools/` directory, with its full `LICENSES/` set | `dependencies/licenses/glslang/`, `dependencies/dependencies.lock.json` |
@@ -54,6 +55,11 @@ under the BSD-3-Clause terms in `dependencies/licenses/kvazaar/LICENSE`. The com
 includes Colin Plumb's public-domain MD5 implementation; Windows builds also include Kvazaar's
 thread wrapper (Copyright 2019 Tampere University, ISC licence) and NetBSD's `getopt` (Copyright
 (c) 2000 The NetBSD Foundation, Inc., BSD-2-Clause), whose texts are in the Kvazaar source archive.
+
+### nv-codec-headers
+
+Copyright (c) 2010-2023 NVIDIA Corporation (and, for the dynamic loader, the FFmpeg contributors).
+Permission is granted under the MIT terms in `dependencies/licenses/nv-codec-headers/LICENSE`.
 
 ## Vendored interface assets
 

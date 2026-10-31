@@ -83,7 +83,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/bloom-dependency-downloads
-          key: bloom-dependency-archives-a2d99365b485de495151d7a22d7490d8edfd2fff0f35a44bec7acb07f1272689
+          key: bloom-dependency-archives-962c46d87ea31a5c7caf3a2867678ba152d5d9601084805c1da60fd275affad0
 
       - name: Cache dependency build
         id: cache-dependency-prefix
@@ -233,7 +233,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/bloom-dependency-downloads
-          key: bloom-dependency-archives-a2d99365b485de495151d7a22d7490d8edfd2fff0f35a44bec7acb07f1272689
+          key: bloom-dependency-archives-962c46d87ea31a5c7caf3a2867678ba152d5d9601084805c1da60fd275affad0
 
       - name: Cache dependency build
         id: cache-dependency-prefix

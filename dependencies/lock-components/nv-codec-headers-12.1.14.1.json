@@ -1,0 +1,66 @@
+{
+  "name": "nv-codec-headers",
+  "version": "12.1.14.1",
+  "source": {
+    "url": "https://github.com/FFmpeg/nv-codec-headers/releases/download/n12.1.14.1/nv-codec-headers-12.1.14.1.tar.gz",
+    "archiveSha256": "sha256:043e46265517855f13bcb98b3a225b2761b2a83983b1645fa1d05876f1c3a781",
+    "archiveSizeBytes": 78065,
+    "retrievedAt": "2026-10-31",
+    "commit": null,
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/nv-codec-headers/provenance.md",
+      "sha256": "sha256:0cfbf765cc513ad0c36166f22b8384c58e5d25f6eb5f63a5cc63a12c489d41cd"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "MIT",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/nv-codec-headers/LICENSE",
+        "sha256": "sha256:f8c2243e5f4b7a6fb293df05801c88a85749c3784bb36b455a27b3bb8e957909"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "none",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/nv-codec-headers/review.md",
+      "sha256": "sha256:abea3487d92ad604a1a146038f20991bfd866718e5231dfcec35c7e481bae752"
+    },
+    "reviewedAt": "2026-10-31"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "header-only",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.nv-codec-headers.runtime-loaded-driver",
+          "state": "enabled",
+          "reason": "Declarations only: FFmpeg loads the NVIDIA driver's encode library at run time; nothing NVIDIA is linked or shipped"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.nv-codec-headers.nvenc"
+      ],
+      "shippingRoles": [
+        "license"
+      ],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-10-31",
+    "record": {
+      "path": "dependencies/licenses/nv-codec-headers/security.md",
+      "sha256": "sha256:d0ced515285b6e8a2ec3cbf90d4aee44bd1a15ffcd29471a103b57f1c2385e03"
+    },
+    "vulnerabilities": []
+  }
+}

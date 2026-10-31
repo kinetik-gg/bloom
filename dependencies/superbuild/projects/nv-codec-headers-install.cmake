@@ -1,0 +1,15 @@
+# Installs nv-codec-headers exactly as its upstream Makefile does (headers plus ffnvcodec.pc), without
+# needing make or sed, so the same step runs on Linux and Windows.
+foreach(required SOURCE_DIR INSTALL_PREFIX)
+    if(NOT DEFINED ${required})
+        message(FATAL_ERROR "nv-codec-headers-install.cmake requires ${required}")
+    endif()
+endforeach()
+file(GLOB headers "${SOURCE_DIR}/include/ffnvcodec/*.h")
+if(NOT headers)
+    message(FATAL_ERROR "nv-codec-headers: no headers under ${SOURCE_DIR}/include/ffnvcodec")
+endif()
+file(INSTALL ${headers} DESTINATION "${INSTALL_PREFIX}/include/ffnvcodec")
+file(READ "${SOURCE_DIR}/ffnvcodec.pc.in" pc)
+string(REPLACE "@@PREFIX@@" "${INSTALL_PREFIX}" pc "${pc}")
+file(WRITE "${INSTALL_PREFIX}/lib/pkgconfig/ffnvcodec.pc" "${pc}")

@@ -40,7 +40,7 @@
     "modified": true,
     "reviewRecord": {
       "path": "dependencies/licenses/ffmpeg/review.md",
-      "sha256": "sha256:f87c429bad56af0ead7415fb880b53fb5272604d859931dec8ec19723de0d7a1"
+      "sha256": "sha256:f3f413285a28b09e61818880d5ff4665482ef4e6694aa6599bd65738310680e0"
     },
     "reviewedAt": "2026-10-31"
   },
@@ -59,6 +59,10 @@
     },
     {
       "name": "nasm",
+      "relationship": "build"
+    },
+    {
+      "name": "nv-codec-headers",
       "relationship": "build"
     },
     {
@@ -83,6 +87,11 @@
           "reason": "HEVC software encode through the libkvazaar wrapper; Kvazaar 2.3.2 is a static archive linked into libavcodec"
         },
         {
+          "id": "bloom.feature.ffmpeg-nvenc",
+          "state": "enabled",
+          "reason": "NVIDIA NVENC H.264/HEVC encode through ffnvcodec; the driver is loaded at run time and the build needs no nonfree component (Linux and Windows)"
+        },
+        {
           "id": "bloom.feature.ffmpeg-openh264",
           "state": "enabled",
           "reason": "H.264 software encode through the libopenh264 wrapper; OpenH264 2.6.0 is built from source as a static archive linked into libavcodec"
@@ -102,8 +111,10 @@
         "bloom.capability.ffmpeg",
         "bloom.capability.ffmpeg.decode",
         "bloom.capability.ffmpeg.encode",
+        "bloom.capability.ffmpeg.h264-nvenc-encode",
         "bloom.capability.ffmpeg.h264-software-openh264",
         "bloom.capability.ffmpeg.h264-vaapi-encode",
+        "bloom.capability.ffmpeg.hevc-nvenc-encode",
         "bloom.capability.ffmpeg.hevc-software-kvazaar",
         "bloom.capability.ffmpeg.hevc-vaapi-encode",
         "bloom.capability.ffmpeg.prores-preview",
