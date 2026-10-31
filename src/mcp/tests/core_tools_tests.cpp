@@ -272,6 +272,11 @@ void liveSeams() {
     expect(transport.action == mcp::McpTransportAction::Seek && transport.time &&
                *transport.time == core::RationalTime::fromInteger(1),
            "transport seeks 24 frames of the active composition: " + result);
+    result = server.call("transport", R"({"action":"ram-preview"})");
+    expect(transport.action == mcp::McpTransportAction::RamPreview && !transport.time,
+           "transport starts a RAM preview: " + result);
+    result = server.call("transport", R"({"action":"preview"})");
+    expect(contains(result, "ram-preview"), "an unknown action names ram-preview: " + result);
     result = server.call("viewer.set", R"({"zoom":"fit","channel":"alpha","exposure":1.5})");
     expect(viewer.zoom == mcp::McpViewerZoom::Fit &&
                viewer.channel == mcp::McpViewerChannel::Alpha && viewer.exposure == 1.5 &&

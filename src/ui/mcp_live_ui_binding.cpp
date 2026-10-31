@@ -9,6 +9,7 @@
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
+#include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/workspace_host.hpp>
@@ -75,6 +76,10 @@ McpLiveUiBinding::McpLiveUiBinding(ProjectHost& project, CompositionSession& ses
 McpLiveUiBinding::~McpLiveUiBinding() = default;
 
 void McpLiveUiBinding::setWindow(MainWindow* const window) { window_ = window; }
+
+void McpLiveUiBinding::setRamPreview(RamPreviewController* const ramPreview) {
+    ramPreview_ = ramPreview;
+}
 
 mcp::McpLiveUiPort McpLiveUiBinding::port() {
     return {
@@ -250,8 +255,21 @@ mcp::McpUiResult McpLiveUiBinding::transport(const mcp::McpTransportRequest& req
         playback_.play();
         return uiOk(tr("Playing."));
     case Action::Stop:
+        // Stop also ends a RAM preview that is caching, keeping what it cached (as Escape does).
+        if (ramPreview_ != nullptr && ramPreview_->isCaching())
+            ramPreview_->cancel();
         playback_.pause();
         return uiOk(tr("Stopped."));
+    case Action::RamPreview:
+        if (ramPreview_ == nullptr)
+            return uiResult(McpUiRefusal::Unbound, tr("RAM Preview is not available here."));
+        if (ramPreview_->isCaching())
+            return uiOk(tr("A RAM preview is already caching."));
+        ramPreview_->start();
+        if (!ramPreview_->isCaching())
+            return uiResult(McpUiRefusal::Failed,
+                            tr("RAM Preview could not start for this composition."));
+        return uiOk(tr("Caching a RAM preview; it plays when the range is cached."));
     case Action::StepForward:
     case Action::StepBackward: {
         const auto nearest = nearestFrameIndexForTime(context->frameRate, context->duration,

@@ -160,6 +160,9 @@ enum class McpTransportAction : std::uint8_t {
     StepBackward = 4,
     GoToStart = 5,
     GoToEnd = 6,
+    // RAM Preview, as the Viewer button and Numpad 0 start it: cache the range, then play it. A
+    // run already caching is left running; Stop ends it.
+    RamPreview = 7,
 };
 
 struct McpTransportRequest final {

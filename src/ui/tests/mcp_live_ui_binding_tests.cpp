@@ -26,10 +26,12 @@
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/mcp_live_ui_binding.hpp>
 #include <bloom/ui/playback_controller.hpp>
+#include <bloom/ui/ram_preview_controller.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <QFile>
+#include <QThread>
 #include <QUrl>
 
 #include <cstdio>
@@ -354,6 +356,37 @@ void testBinding() {
     expect(moved.ok() && fixture.preview->playbackController().state() ==
                              ui::PlaybackState::Stopped,
            "Stop pauses it");
+    moved = port.transport(transportRequest(mcp::McpTransportAction::RamPreview));
+    expect(moved.refusal == McpUiRefusal::Unbound, "RamPreview without a RAM preview is Unbound");
+    {
+        // A preparation that fails at once: the run only has to start (start() marks it caching
+        // synchronously) for Stop to end it; nothing is rendered.
+        ui::RamPreviewController ram(
+            session, *fixture.preview, fixture.scheduler, fixture.bridge,
+            [](const document::Snapshot&, const runtime::PreviewRequestIdentity&, std::size_t,
+               const std::vector<runtime::SnapshotParameterOverride>&, runtime::TaskContext&) {
+                runtime::TaskDiagnostic failure;
+                failure.code = "test.no-preparation";
+                failure.summary = "The binding test prepares no frames";
+                return runtime::TaskResult<ui::PreviewPreparationResultHandle>::failed(
+                    std::move(failure));
+            });
+        binding.setRamPreview(&ram);
+        moved = port.transport(transportRequest(mcp::McpTransportAction::RamPreview));
+        expect(moved.ok() && ram.isCaching(),
+               "RamPreview starts the run the RAM Preview button starts");
+        moved = port.transport(transportRequest(mcp::McpTransportAction::RamPreview));
+        expect(moved.ok() && ram.isCaching(), "RamPreview leaves a caching run running");
+        moved = port.transport(transportRequest(mcp::McpTransportAction::Stop));
+        expect(moved.ok() && !ram.isCaching(), "Stop ends a RAM preview that is caching");
+        ram.beginShutdown();
+        // Let the cancelled run's tasks settle before the controller goes.
+        for (int spin = 0; spin < 400 && !fixture.scheduler.isQuiescent(); ++spin) {
+            QCoreApplication::processEvents();
+            QThread::msleep(5);
+        }
+        binding.setRamPreview(nullptr);
+    }
 
     // reveal and activate
     expect(port.revealComposition(compositionId, seconds(2)) &&

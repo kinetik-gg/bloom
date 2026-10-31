@@ -317,12 +317,13 @@ yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, const McpTool
     case McpTool::Transport: {
         members(arguments, {"action", "composition", "time"}, {"action"});
         const auto action = string(member(arguments, "action"), 16);
-        constexpr std::array<std::string_view, 7> actions{
-            "seek", "play", "stop", "step-forward", "step-backward", "go-to-start", "go-to-end"};
+        constexpr std::array<std::string_view, 8> actions{
+            "seek",        "play",          "stop",        "step-forward",
+            "step-backward", "go-to-start", "go-to-end",  "ram-preview"};
         const auto found = std::ranges::find(actions, action);
         if (found == actions.end())
             throw InvalidInput("action is seek, play, stop, step-forward, step-backward, "
-                               "go-to-start or go-to-end");
+                               "go-to-start, go-to-end or ram-preview");
         McpTransportRequest request;
         request.action = static_cast<McpTransportAction>(std::distance(actions.begin(), found));
         if (request.action == McpTransportAction::Seek && !member(arguments, "time"))

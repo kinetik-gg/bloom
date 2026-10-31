@@ -32,6 +32,7 @@ namespace bloom::ui {
 
 class CompositionSession;
 class MainWindow;
+class RamPreviewController;
 class PlaybackController;
 class ProjectHost;
 enum class ProjectHostOperationOutcome : std::uint8_t;
@@ -48,6 +49,9 @@ class McpLiveUiBinding final : public QObject {
     // The window whose workspace and displayed Viewer the members act on. Weak: the window goes
     // before the binding.
     void setWindow(MainWindow* window);
+    // The RAM Preview the Viewer button and Numpad 0 run, for transport ram-preview. Weak; without
+    // one, ram-preview answers Unbound.
+    void setRamPreview(RamPreviewController* ramPreview);
 
     // The seven members, bound to this object (which must outlive the service).
     [[nodiscard]] mcp::McpLiveUiPort port();
@@ -83,6 +87,7 @@ class McpLiveUiBinding final : public QObject {
     CompositionSession& session_;
     PlaybackController& playback_;
     QPointer<MainWindow> window_;
+    QPointer<RamPreviewController> ramPreview_;
     std::unique_ptr<Pending> pending_;
     QTimer* jobsTimer_ = nullptr;
 };

@@ -785,6 +785,7 @@ int main(int argc, char* argv[]) try {
     // Every default dialog of the project host and the export controller opens over the window.
     window.setMcpServer(&mcpAdapter);
     mcpLiveUi.setWindow(&window);
+    mcpLiveUi.setRamPreview(&ramPreviewController);
     mcpAdapter.setCompositionNamer([&compositionSession](const std::uint64_t id) {
         const auto* composition = compositionSession.snapshot().project().findComposition(
             bloom::document::CompositionId::fromRaw(id));

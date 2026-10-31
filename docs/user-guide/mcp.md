@@ -91,7 +91,7 @@ the call passes `discardChanges:true`, and while export jobs run they answer
 | `editor.reveal` | `composition`, optional `time` | Shows the composition in the Viewer and moves the playhead. |
 | `selection.set` | `composition`, optional `layers`, `nodes`, `mode` (`set`, `add`, `remove`, `clear`) | Contextual `layer`, `layers` and `selection` arguments then default to it. |
 | `composition.activate` | `composition` | The Viewer, Timeline and contextual `composition` follow it. |
-| `transport` | `action` (`seek`, `play`, `stop`, `step-forward`, `step-backward`, `go-to-start`, `go-to-end`), `time` for `seek`, optional `composition` | `time` counts in the given composition, or the active one. |
+| `transport` | `action` (`seek`, `play`, `stop`, `step-forward`, `step-backward`, `go-to-start`, `go-to-end`, `ram-preview`), `time` for `seek`, optional `composition` | `time` counts in the given composition, or the active one. `ram-preview` caches the work area and then plays it, as the RAM Preview button and Numpad 0 do; `stop` also ends a RAM preview that is still caching. |
 | `viewer.set` | any of `display`, `view`, `exposure` (stops), `channel` (`rgba`, `rgb`, `red`, `green`, `blue`, `alpha`), `zoom` (`"fit"`, `"actual-size"` or a factor, 1.0 is 100%) | Display settings only: they never reach a render or the project. |
 
 A successful project tool answers `{succeeded, event, path, projectName}` and records the event
