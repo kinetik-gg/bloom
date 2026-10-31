@@ -134,6 +134,12 @@ to 1689 bytes; the C++ implementation matches all of them. Analysis digests and 
 live only within one export run (approval and reopen verification), so no saved project, cache or
 published file carries the previous values.
 
+Keyframe easing then advanced animation sampling 2 -> 3 (`kAnimationSamplingSemanticsVersion`),
+another frozen u32 of the process-frame identity, without re-deriving these pins. With `10 3 11 7`
+the oracle derives PNG analysis `b6ab5ab6...` (1961 bytes), EXR analysis `469bd805...` (1521), PNG
+output `76b216b3...` (669) and EXR output `943d71de...` (567); the C++ implementation matches all
+of them and every preimage length is unchanged.
+
 ```python
 """Independent output-identity oracle (no Bloom code imported). Usage: oracle.py PLAN ANIM EVAL PRIM"""
 import hashlib, struct, sys

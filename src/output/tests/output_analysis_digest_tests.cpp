@@ -118,16 +118,16 @@ constexpr core::Sha256Digest::Bytes kRevisionBytes{
 // Re-derived ONCE for the TEXT-2 / SHAPE-1 integration, which combines both lanes' semantics
 // steps: SHAPE-1 moved the CPU image primitive 5 -> 6 and the CPU composition evaluator 6 -> 7 for
 // path rasterization, and TEXT-2 moved the compiled plan 4 -> 5 for the new CompiledText
-// box-layout operands. Animation sampling stays 2. All four integers are frozen fields of the
+// box-layout operands. Animation sampling later moved 2 -> 3 (keyframe easing); see docs/architecture/color5-identity-oracle.md. All four integers are frozen fields of the
 // process-frame semantic identity these preimages embed, so every digest below moves while every
 // preimage LENGTH stays the same -- no frozen field was added, removed, or reordered. The values
 // come from the standalone byte-oriented identity oracle, which packs each frozen field itself and
 // links no Bloom code; it was re-validated against every previously checked-in golden set,
 // including both lanes' pre-merge sets, before its combined values were trusted.
 constexpr std::string_view kExpectedExrDigest =
-    "45c89367d644974768830f4ddd704086f1da2988e9a77ffbce87554fea535636";
+    "469bd8053e5dfb8f59eabfe2bbbdf576dd10e8d657191474e89d0978e45e2c57";
 constexpr std::string_view kExpectedPngDigest =
-    "f8d94bef5e61d45ed491c5a2a12c5e685005cf483cd1967e55e11e5992315228";
+    "b6ab5ab629f29a5d2ceb97c5f261674dfe786dc6a194c2ba93ce59c297fd8d78";
 
 class Expectations final {
   public:
