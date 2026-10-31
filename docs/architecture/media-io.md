@@ -1841,8 +1841,6 @@ inside the macOS AVFoundation provider, then the bundled FFmpeg worker; OpenH264
 with VA-API hardware preferred on Linux when requested and a render node encodes. A Hardware
 preference never refuses a preset: the encode chain falls back from `ffmpeg-vaapi` to `ffmpeg`
 (OpenH264) at `begin()` and records the fallback in `MediaProviderProvenanceV1`.
-`verifyH264RuntimeV1()`, `locateH264RuntimeV1()` and `installH264RuntimeV1()` report the bundled
-encoder and touch no file; they remain only until the desktop deletes its former install flow.
 
 `host::SequenceExportRunnerV1` compiles one immutable snapshot. `output::CompositionOutputStreamV1`
 owns the codec clients, source-audio decoding and offline mix; host owns approvals and publication.

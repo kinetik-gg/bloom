@@ -11,16 +11,6 @@
 
 namespace bloom::output {
 using namespace media::provider;
-namespace {
-H264RuntimeAvailabilityV1 bundledOpenH264() {
-    return {.installed = true,
-            .version = "2.6.0",
-            .digest = {},
-            .directory = {},
-            .detail = "OpenH264 is bundled with Bloom"};
-}
-} // namespace
-H264RuntimeAvailabilityV1 verifyH264RuntimeV1() { return bundledOpenH264(); }
 H264EncoderSupportV1 h264EncoderSupportV1() noexcept {
 #if defined(__APPLE__)
     return {.software = H264EncoderV1::VideoToolbox, .hardwareVaapi = false, .softwareReason = {}};
@@ -130,13 +120,6 @@ NvencEncodeProbeV1 probeNvencEncodeV1(std::string workerExecutable) {
     (void)workerExecutable;
 #endif
     return result;
-}
-H264RuntimeAvailabilityV1 locateH264RuntimeV1(const std::filesystem::path&,
-                                              const std::function<bool()>&) {
-    return bundledOpenH264();
-}
-H264RuntimeAvailabilityV1 installH264RuntimeV1(bool, const std::function<void(std::uint64_t)>&) {
-    return bundledOpenH264();
 }
 Result<MediaOutputAnalysisV1>
 analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,

@@ -17,7 +17,6 @@
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_commands.hpp>
-#include <bloom/ui/h264_encoder_service.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/color_picker.hpp>

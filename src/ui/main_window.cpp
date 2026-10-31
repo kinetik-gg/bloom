@@ -25,7 +25,6 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/export_queue_adapter.hpp>
-#include <bloom/ui/h264_encoder_flow.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -784,11 +783,6 @@ void MainWindow::setExportQueue(ExportQueueAdapter* const adapter) {
                 &MainWindow::revealExportPanel);
         connect(adapter, &ExportQueueAdapter::remedyRequested, this, [this](const int remedy) {
             switch (static_cast<host::ExportRemedy>(remedy)) {
-            case host::ExportRemedy::InstallOpenH264:
-            case host::ExportRemedy::LocateOpenH264:
-                if (h264Encoder_ != nullptr)
-                    showH264EncoderFlow(*this, *h264Encoder_);
-                break;
             case host::ExportRemedy::OpenProjectSettings:
                 showProjectColorSettings();
                 break;

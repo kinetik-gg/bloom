@@ -205,9 +205,8 @@ Every measurement is a fresh process.
   `playbackFps` = distinct frames shown / seconds, next to the frames the transport asked for.
 - **Export** (`kind: export`): `bloom-cli export --job <id> --replace`; `secondsPerFrame` = process
   wall time / frames, including start-up. The export's own provenance gives `gpuFrames` and the
-  CPU-reference frame count (`cpuFallbackFrames`). An encoder that is not installed is recorded as
-  `outcome: unavailable` (H.264 needs Cisco OpenH264, which Bloom installs only with the user's
-  consent; HEVC needs a VA-API encoder).
+  CPU-reference frame count (`cpuFallbackFrames`). An export that cannot run on this
+  computer is recorded as `outcome: unavailable`. H.264 and HEVC always have a bundled encoder.
 - **GPU stages**: `uploadSubmitSeconds`, `uploadFenceSeconds`, `processingSubmitSeconds`,
   `processingFenceSeconds` and `packedTransferSeconds` are the device owner's wall time per stage
   over the measured window (from the preview service counters), with `residentGraphJobs` and

@@ -904,7 +904,6 @@ void everyFormatIsOffered(TestContext& context) {
     auto output = makeOutput(11, "builtin:hevc-mp4", document::ExportFormat::HevcMp4, "Exports/a.mp4");
     output.availability.available = false;
     output.availability.reason = "HEVC needs a VA-API render node with HEVC encode";
-    output.availability.remedy = host::ExportRemedy::InstallOpenH264;
     ep::OutputModuleDialog dialog(output, catalogue, {}, *rig.editor);
     const int index = dialog.format()->findData(QStringLiteral("builtin:hevc-mp4"));
     context.expect(index >= 0 && dialog.format()->itemText(index) == "HEVC MP4" && dialog.format()->isItemEnabled(index),

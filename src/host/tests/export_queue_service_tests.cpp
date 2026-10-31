@@ -66,7 +66,7 @@ host::ExportEncoderStatus linuxEncoders(const bool openh264 = true, const bool v
     status.mediaWorker = true;
     status.h264Software = output::H264EncoderV1::OpenH264;
     status.openh264 = openh264 ? host::ExportEncoderStatus::OpenH264::Installed
-                               : host::ExportEncoderStatus::OpenH264::NotInstalled;
+                               : host::ExportEncoderStatus::OpenH264::NotNeeded;
     status.vaapiH264 = vaapi;
     status.vaapiHevc = vaapi;
     return status;
@@ -286,10 +286,8 @@ void testPresets() {
                chosen.preferredAvailability.available,
            "H.264 MP4 stays the default without VA-API or a separate OpenH264 install");
     for (const auto& preset : catalogue->snapshot()->presets)
-        expect(preset.platformAvailability.code !=
-                       host::ExportAvailabilityCode::EncoderNotInstalled &&
-                   preset.platformAvailability.remedy != host::ExportRemedy::InstallOpenH264 &&
-                   preset.platformAvailability.remedy != host::ExportRemedy::LocateOpenH264,
+        expect(preset.platformAvailability.remedy == host::ExportRemedy::None ||
+                   preset.platformAvailability.remedy == host::ExportRemedy::OpenProjectSettings,
                "no preset asks the artist to install an encoder: " + preset.id);
     document::ExportOutputSettings h264Hardware;
     h264Hardware.format = document::ExportFormat::H264Mp4;

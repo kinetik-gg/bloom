@@ -48,7 +48,6 @@
 #include <bloom/ui/export_queue_edits.hpp>
 #include <bloom/ui/export_queue_service_port.hpp>
 #include <bloom/ui/gpu_viewer_bootstrap.hpp>
-#include <bloom/ui/h264_encoder_service.hpp>
 #include <bloom/ui/interaction_sounds.hpp>
 #include <bloom/ui/jobs_editor.hpp>
 #include <bloom/ui/kit/theme.hpp>
@@ -570,9 +569,8 @@ int main(int argc, char* argv[]) try {
     // it would change what happens to task-bridge state, which item F6 does not ask for.
     bloom::ui::TaskMonitorModel taskMonitor(taskUiBridge);
 
-    // The export queue (ADR 0033). The H.264 encoder service checks which encoder this platform has
-    // on a worker; the preset catalogue probes the same and reads the user's saved presets.
-    bloom::ui::H264EncoderService h264Encoder(taskScheduler, taskUiBridge);
+    // The export queue (ADR 0033). The preset catalogue probes which encoders this computer has on
+    // a worker and reads the user's saved presets.
     bloom::host::ExportEncoderStatus initialEncoders;
 #if defined(__linux__)
 #endif
@@ -583,11 +581,6 @@ int main(int argc, char* argv[]) try {
         {.userDataDirectory = presetDirectory, .initialEncoders = initialEncoders});
     exportPresets->refreshEncoders(taskScheduler);
     exportPresets->loadUserPresets(taskScheduler);
-    QObject::connect(&h264Encoder, &bloom::ui::H264EncoderService::locateFinished, &h264Encoder,
-                     [&](const bool installed, const QString&) {
-                         if (installed)
-                             exportPresets->refreshEncoders(taskScheduler);
-                     });
     const auto exportScratch = std::filesystem::path(
         QStandardPaths::writableLocation(QStandardPaths::CacheLocation).toStdString()) /
                                "export-scratch";
@@ -801,7 +794,6 @@ int main(int argc, char* argv[]) try {
                      });
     projectHost.setDialogOwner(&window);
     window.setExportQueue(&exportQueueAdapter);
-    window.setH264EncoderService(&h264Encoder);
     // UI sound feedback and render notifications (docs/architecture/ui-feedback.md). The sound
     // engine decodes and opens its own output device on a worker thread; nothing here blocks.
     auto uiSoundEngine = std::make_unique<bloom::ui::UiSoundEngine>(

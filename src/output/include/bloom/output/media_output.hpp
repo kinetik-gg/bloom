@@ -27,20 +27,12 @@ struct MediaOutputAnalysisV1 {
     std::shared_ptr<const PreparedOutputDisplayV1> display = {};
     bool appleAuthorized = false, deliveryQualified = false;
 };
-struct H264RuntimeAvailabilityV1 {
-    bool installed = false;
-    std::string version;
-    std::string digest;
-    std::filesystem::path directory;
-    std::string detail;
-};
 // Which H.264 encoder this platform's export provider uses. A pure platform answer: it opens no
 // file and probes no device, so a dialog may ask it on the UI thread. Nothing is ever installed:
 // - macOS: VideoToolbox inside the AVFoundation provider, then the bundled FFmpeg worker.
 // - Linux and Windows: the bundled OpenH264 inside the FFmpeg worker (Linux prefers VA-API
 //   hardware when a render node encodes, and falls back to OpenH264 silently).
-// `None` is no longer produced; it remains until the desktop removes its references.
-enum class H264EncoderV1 : std::uint8_t { None, VideoToolbox, OpenH264 };
+enum class H264EncoderV1 : std::uint8_t { VideoToolbox = 1, OpenH264 = 2 };
 struct H264EncoderSupportV1 {
     // The encoder used without hardware.
     H264EncoderV1 software = H264EncoderV1::OpenH264;
@@ -74,14 +66,6 @@ struct NvencEncodeProbeV1 {
 [[nodiscard]] NvencEncodeProbeV1 probeNvencEncodeV1(std::string workerExecutable = {});
 // Whether the supervised media worker executable exists for this build. Worker threads only.
 [[nodiscard]] bool mediaWorkerAvailableV1();
-// OpenH264 ships inside the FFmpeg worker, so these three always report the bundled encoder as
-// installed and touch no file. They only keep the desktop's former install flow compiling until
-// the UI removes it; the engine never calls them.
-[[nodiscard]] H264RuntimeAvailabilityV1 verifyH264RuntimeV1();
-[[nodiscard]] H264RuntimeAvailabilityV1
-locateH264RuntimeV1(const std::filesystem::path& file, const std::function<bool()>& cancelled = {});
-[[nodiscard]] H264RuntimeAvailabilityV1
-installH264RuntimeV1(bool explicitConsent, const std::function<void(std::uint64_t)>& progress = {});
 [[nodiscard]] media::provider::Result<MediaOutputAnalysisV1>
 analyzeMediaOutputV1(OutputPresetV1 preset, media::provider::EncodeSettingsV1 settings,
                      std::shared_ptr<const PreparedOutputDisplayV1> display = {},

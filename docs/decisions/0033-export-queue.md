@@ -53,7 +53,7 @@ coverage unchanged: the queue adds no pixel operation.
 | `src/platform` | free-space queries, staged streaming hand-off to the worker, destination-scoped stale-staging cleanup |
 | **`src/host`** | **the queue's runtime owner**: `ExportQueueService`, `ExportJobRunner`, `ExportPresetCatalogue` and the user-preset store, preflight sampling, availability, snapshots, events, logs, the subscription, verification and import results, `resolveDestination()`, `exportJobScript()` (`bloom/host/export_queue.hpp`, `export_presets.hpp`, `export_verification.hpp`) |
 | `src/scripting` | `bloom.export.*` operations and the session calls (section 12) |
-| `src/ui` | the Export editor panel, the application-lifetime queue adapter, menus, the Jobs row link, the replace-confirmation and OpenH264 consent/locate dialogs |
+| `src/ui` | the Export editor panel, the application-lifetime queue adapter, menus, the Jobs row link, and the replace-confirmation dialog |
 | `apps/bloom`, `apps/bloom-cli`, `apps/bloom-mcp` | wiring, shutdown registration, `bloom-cli export`, MCP tools |
 
 `src/host` already owns `ProjectSession`, `PublicationCoordinator`, `GpuExportProvider`,
@@ -156,16 +156,15 @@ order **Video**, **VFX / sequences**, **Audio**, **User**:
 Each preset carries its settings, its capabilities (sequence, single file, still, alpha, audio,
 extension), its **expected preservation** (the eleven facet states the format is declared to
 produce) and a **platform availability** with a typed code, a tooltip-ready reason and a remedy
-(Install OpenH264, Locate OpenH264, Open Project Settings, Choose Software Encoder).
+(Open Project Settings).
 Project-dependent requirements (the named deliverables need the built-in ACES CG config with a
 pinned revision; output color names must exist in the config) are evaluated per output by
 `availabilityFor()`. This replaces `composition_export_capability.hpp`.
 
 Encoder availability comes from a worker probe published as a neutral `ExportEncoderStatus`. In the
-desktop application the existing `H264EncoderService` keeps its probe, consent and locate flow and
-forwards its state with `setEncoderStatus()`; headless owners call `refreshEncoders()`. HEVC has no
-software encoder: without a VA-API render node that exposes HEVC encode, HEVC presets report
-`HardwareEncoderMissing`.
+desktop application and headless owners call `refreshEncoders()`. H.264 and HEVC always have a
+bundled encoder (ADR 0036): hardware encoders are tried first, then the bundled software encoder,
+and no preset asks the artist to install anything.
 
 **Defaults.** **Add to Export Queue** creates a job with the work-area range and one output from
 `defaultPreset()`: H.264 MP4 when it is available here, otherwise the stated fallback video preset,
@@ -474,8 +473,7 @@ any preset.
 - **Removed from `src/ui`**: `FrameExportController` and `frame_export_controller*.cpp`, and
   `composition_export_dialog.*`, whose fields become the panel's output editor. The approval and
   range dialog builders and their review captures are removed with them.
-- **Stays in `src/ui`**: `H264EncoderService` (it forwards its state to the catalogue, and its
-  consent and locate flow is the remedy for `EncoderNotInstalled`); the new Export editor; the queue
+- **Stays in `src/ui`**: the new Export editor; the queue
   adapter; the Jobs row link; the shutdown prompt; the replace confirmation.
 
 ### 15. Platforms
@@ -490,8 +488,8 @@ saved on any platform opens on every other.
 | Queue, panel, persistence, presets, scripting edits | yes | yes | yes |
 | Start, Start All, Retry, `bloom-cli export`, `render` | yes | yes (ADR 0035) | yes (ADR 0035); file publication needs the Windows staged-artifact provider |
 | Media provider chain (ADR 0035) | FFmpeg VA-API → FFmpeg software | VideoToolbox → FFmpeg | Media Foundation (slot, no provider yet) → FFmpeg |
-| H.264 | OpenH264 after consent, or VA-API | VideoToolbox | — (needs Media Foundation or a bundled encoder) |
-| HEVC | VA-API only; otherwise `HardwareEncoderMissing` | — | — |
+| H.264 | VA-API or NVENC, then bundled OpenH264 | VideoToolbox | — (needs Media Foundation or a bundled encoder) |
+| HEVC | VA-API or NVENC, then bundled Kvazaar | — | — |
 | GPU low priority for export | global priority where the driver exposes it; batch yield otherwise | — | — |
 
 Superseded by ADR 0035: no preset is refused for its operating system. Each platform's media

@@ -32,7 +32,6 @@ class McpServerAdapter;
 class CompositionSession;
 class EditorRegistry;
 class ExportQueueAdapter;
-class H264EncoderService;
 class LicensesWindow;
 class ProjectHost;
 class RamPreviewController;
@@ -97,8 +96,6 @@ class MainWindow final : public QMainWindow {
     // shows the Export panel whenever a job is added. Null leaves the item present and disabled
     // with the reason. Borrowed; must outlive the window.
     void setExportQueue(ExportQueueAdapter* adapter);
-    // The H.264 encoder service the Export panel's Install / Locate encoder remedies open.
-    void setH264EncoderService(H264EncoderService* service) noexcept { h264Encoder_ = service; }
     [[nodiscard]] QAction* addToExportQueueAction() const noexcept { return addToExportQueueAction_; }
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
@@ -220,7 +217,6 @@ class MainWindow final : public QMainWindow {
     QAction* preferencesAction_ = nullptr;
     QAction* addToExportQueueAction_ = nullptr;
     ExportQueueAdapter* exportQueue_ = nullptr;
-    H264EncoderService* h264Encoder_ = nullptr;
     QAction* quitAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;

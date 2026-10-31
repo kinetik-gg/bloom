@@ -28,9 +28,7 @@ class TaskScheduler;
 // or deleting a user preset is therefore not undoable and does not dirty the project.
 //
 // Encoder availability (H.264, HEVC, VA-API, the supervised media worker) is probed on a worker and
-// published into the catalogue as an ExportEncoderStatus value. In the desktop application the
-// existing H264EncoderService (Qt) forwards its state with setEncoderStatus(); headless owners call
-// refreshEncoders().
+// published into the catalogue as an ExportEncoderStatus value; owners call refreshEncoders().
 //
 // Threading guarantee: every member is non-blocking and performs no I/O on the calling thread.
 // snapshot(), availabilityFor() and defaultPreset() read in-memory state only and are safe on the
@@ -56,14 +54,8 @@ enum class ExportAvailabilityCode : std::uint8_t {
     Available = 1,
     // The first worker probe has not answered yet; shown as "Checking…", not as unavailable.
     Probing = 2,
-    // No longer produced: OpenH264 ships inside the media worker. Kept until the desktop removes
-    // its "Install H.264 encoder" flow.
-    EncoderNotInstalled = 3,
     // No qualified encoder for this codec on this computer.
     NoQualifiedEncoder = 4,
-    // No longer produced: a Hardware preference without a VA-API encoder falls back silently to
-    // the bundled software encoder. Kept until the desktop removes its references.
-    HardwareEncoderMissing = 5,
     // The supervised media worker could not be started on this computer.
     WorkerUnavailable = 6,
     // Project-dependent: a named deliverable needs the built-in ACES CG config.
@@ -77,13 +69,8 @@ enum class ExportAvailabilityCode : std::uint8_t {
 // An action the UI can offer next to the reason. The engine never shows it; it only names it.
 enum class ExportRemedy : std::uint8_t {
     None = 0,
-    // InstallOpenH264, LocateOpenH264 and ChooseSoftwareEncoder are no longer produced (the
-    // encoders ship with Bloom and hardware falls back silently); kept until the desktop removes
-    // its references.
-    InstallOpenH264 = 1,
-    LocateOpenH264 = 2,
+    // Numbers 1, 2 and 4 belonged to removed remedies and are not reused.
     OpenProjectSettings = 3,
-    ChooseSoftwareEncoder = 4,
 };
 
 struct ExportAvailability final {
@@ -131,13 +118,13 @@ struct ExportPreset final {
     bool projectDependent = false;
 };
 
-// The neutral twin of H264EncoderService::State plus the other encoders #369 adds. Produced on a
+// The encoder state of this computer, produced on a
 // worker; read anywhere.
 struct ExportEncoderStatus final {
     // OpenH264 is bundled: probes report Installed (NotNeeded on macOS, where VideoToolbox is the
-    // preferred software encoder). NotInstalled is no longer produced.
-    enum class OpenH264 : std::uint8_t { NotNeeded, Checking, Installed, NotInstalled };
-    output::H264EncoderV1 h264Software = output::H264EncoderV1::None;
+    // preferred software encoder).
+    enum class OpenH264 : std::uint8_t { NotNeeded, Checking, Installed };
+    output::H264EncoderV1 h264Software = output::H264EncoderV1::OpenH264;
     std::string h264SoftwareReason;
     OpenH264 openh264 = OpenH264::Checking;
     // A VA-API render node exists and its driver exposes the encode entry point.
@@ -316,7 +303,7 @@ class ExportPresetCatalogue final {
     // reason (with a remedy such as Open Project Settings) blocks Start until the artist chooses.
     [[nodiscard]] ExportDefaultPreset defaultPreset() const;
 
-    // Publishes a probe result (desktop: forwarded from H264EncoderService on the UI thread).
+    // Publishes a probe result.
     void setEncoderStatus(ExportEncoderStatus status);
     // Headless owners: schedules the encoder probe on `scheduler`'s workers. Non-blocking.
     void refreshEncoders(runtime::TaskScheduler& scheduler);

@@ -577,8 +577,6 @@ target_sources(
         project_item_delete.hpp
         project_color_settings_dialog.cpp
         project_color_settings_dialog.hpp
-        h264_encoder_service.cpp
-        h264_encoder_flow.cpp
         timeline_key_time.cpp
         timeline_key_time.hpp
         timeline_layer_timing_gesture.hpp
@@ -674,10 +672,8 @@ target_sources(
             include/bloom/ui/editor_registry.hpp
             include/bloom/ui/editor_native_surface.hpp
             include/bloom/ui/native_surface_retirement.hpp
-            include/bloom/ui/h264_encoder_service.hpp
             include/bloom/ui/frameless_window_support.hpp
             include/bloom/ui/jobs_editor.hpp
-            include/bloom/ui/h264_encoder_flow.hpp
             include/bloom/ui/export_queue_adapter.hpp
             include/bloom/ui/export_queue_edits.hpp
             include/bloom/ui/export_queue_service_port.hpp

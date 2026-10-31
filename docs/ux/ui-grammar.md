@@ -812,8 +812,7 @@ and `compositionSettingsCancel` (the earlier `assets*` names are retired); its p
 name plus `Mode`, a switch's words its name plus `Label`),
 `licensesWindow` (`licensesCloseButton`), `compositionExportDialog` (`compositionExportFirst`,
 `compositionExportLast`, `compositionExportBrowse`, `compositionExportAudio`,
-`compositionExportContinue`, `locateOpenH264Progress`, `cancelLocateOpenH264`,
-`locateOpenH264Message`), `openh264Consent`, `exportFrameRangeDialog`
+`compositionExportContinue`), `exportFrameRangeDialog`
 (`exportFrameRangeDestination`, `exportFrameRangeBrowse`), `exportApproval`, the failure notices
 `projectSaveFailed`, `projectOpenFailed`, `projectCopyFailed`, `exportFailed` and
 `projectColorSettingsFailed`, and the label color picker `timelineLayerLabelColorPicker` (it
@@ -1149,7 +1148,7 @@ share, resolving it through the same GVFS mount the file manager used; an `smb:/
 share this machine has not mounted yet is still accepted (the cursor stays honest about there
 being something to do) but imports nothing, reporting "Connect to `<host>/<share>` in your file
 manager first" through the status bar's transient-message cell rather than dropping it silently.
-Every file dialog (`kit::chooseFile()`: Import, Relink, Open Project, Save Project As, the export destination, Locate OpenH264 and the cache folder) is Bloom's own file
+Every file dialog (`kit::chooseFile()`: Import, Relink, Open Project, Save Project As, the export destination and the cache folder) is Bloom's own file
 dialog and lists every mounted network share in its sidebar beside the standard places.
 Dragging an image/sequence row to Nodes creates an Image source; dragging an Audio row creates an
 Audio source. Dropping media or compositions on the Timeline or the Viewer creates the matching
@@ -1233,7 +1232,7 @@ content needs at that width.
   when it belongs to the dialog as a whole (the project changed while the dialog was open); a field
   inside a collapsed section opens it. Accept, Destructive and Alternate stay disabled while any
   reason exists; Enter on a refused dialog switches to the refused field's tab and focuses it. A
-  wait that is not an error (the OpenH264 check still running) is a *pending* refusal: the same
+  wait that is not an error (a background check still running) is a *pending* refusal: the same
   place, in `Muted` ink.
 - **Button row.** Kit buttons in a `QDialogButtonBox`, so the platform orders them while the kit
   paints them: Accept is a Primary `KButton`, Destructive a Danger one, Reject, Alternate, Apply

@@ -87,11 +87,10 @@ exact.
 Removed with this decision: the Cisco runtime fetch (`OpenH264Runtime` install/verify/locate, the
 `runtimeFetch` lock record, the consent entry in `Bloom.conf`), the worker's `libopenh264.so.8`
 shim, the private link-time stub, the typed "H.264 encoder not installed" refusal and HEVC's
-hardware-only rule. The host never produces `ExportAvailabilityCode::EncoderNotInstalled` or
-`HardwareEncoderMissing`,
-nor the `InstallOpenH264`, `LocateOpenH264` or `ChooseSoftwareEncoder` remedies; those enum values
-and the compile-only `verifyH264RuntimeV1()`/`locateH264RuntimeV1()`/`installH264RuntimeV1()`
-helpers remain only until the desktop deletes its install flow.
+hardware-only rule. The desktop's install, locate and consent flow, its encoder service, the
+install, locate and choose-software-encoder remedies, the "encoder not installed" and "hardware
+encoder missing" availability codes, and the compile-only runtime helpers are deleted. The
+availability codes and remedies that remain keep their numbers; the removed numbers are not reused.
 
 ## Verification boundary
 
