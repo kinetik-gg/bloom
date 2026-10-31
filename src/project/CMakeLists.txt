@@ -380,6 +380,13 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_project_easing_layer_flags_test)
     bloom_add_test(NAME bloom.project.easing-layer-flags COMMAND bloom_project_easing_layer_flags_test LABELS unit persistence)
 
+    add_executable(bloom_project_keyframe_handle_mode_test
+        ${PROJECT_SOURCE_DIR}/tests/integration/keyframe_handle_mode_persistence_tests.cpp)
+    target_link_libraries(bloom_project_keyframe_handle_mode_test PRIVATE bloom_project bloom_commands ZLIB::ZLIB)
+    target_include_directories(bloom_project_keyframe_handle_mode_test PRIVATE tests)
+    bloom_enable_warnings(bloom_project_keyframe_handle_mode_test)
+    bloom_add_test(NAME bloom.project.keyframe-handle-mode COMMAND bloom_project_keyframe_handle_mode_test LABELS unit persistence)
+
     add_executable(bloom_project_export_queue_test tests/export_queue_persistence_tests.cpp)
     target_link_libraries(bloom_project_export_queue_test PRIVATE bloom_project)
     bloom_enable_warnings(bloom_project_export_queue_test)

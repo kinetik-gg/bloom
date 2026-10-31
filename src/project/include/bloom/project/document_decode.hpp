@@ -310,6 +310,9 @@ enum class DocumentDecodeError : std::uint8_t {
     // (1.30) A keyframe's `easing` object names an unknown mode, carries a non-finite number, or a
     // negative amplitude. The same predicate admits it into the document store and the sampler.
     InvalidKeyframeEasing,
+    // (1.32) A keyframe's `handleMode` names an unknown mode, or spells the default ("free"), which
+    // the writer omits.
+    InvalidKeyframeHandleMode,
 };
 
 // (RT1) Why a same-major newer-minor document could not be opened editable even though every

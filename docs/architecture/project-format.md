@@ -1589,8 +1589,7 @@ accepts the member only at `1.32` or later.
 The mode is presentation metadata: sampling reads the stored handles, and `evaluationView()` resets
 the mode, so a transaction that changes only modes is render-neutral. The `1.31` → `1.32` DOM step
 `migrateKeyframeHandleModesV1_31` only advances the version; every older key loads Free and samples
-bit-for-bit as before. Minor `1.31` is reserved for the node group colour: until that lands the
-`1.30` → `1.31` step `migrateReservedMinor31V1_30` is version-only, and the colour change replaces it.
+bit-for-bit as before.
 
 ## Export Queue In Document 1.29
 

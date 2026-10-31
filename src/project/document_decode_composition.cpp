@@ -527,6 +527,8 @@ using document::Vec3d;
 
 // The minor that declares the easing-equation tokens and the keyframe `easing` member.
 inline constexpr std::uint32_t kKeyframeEasingMinor = 30;
+// The minor that declares the optional keyframe `handleMode` member.
+inline constexpr std::uint32_t kKeyframeHandleModeMinor = 32;
 
 [[nodiscard]] bool decodeInterpolation(const JsonValue& value, DecodeState& state,
                                        const std::string& path, KeyframeInterpolation& out) {
@@ -623,7 +625,29 @@ void appendPresentHandleKeys(const JsonValue& node, const DecodeState& state,
     if (state.documentMinor >= kKeyframeEasingMinor && members.size() > index &&
         members[index].key() == "easing") {
         keys.emplace_back("easing");
+        ++index;
     }
+    if (state.documentMinor >= kKeyframeHandleModeMinor && members.size() > index &&
+        members[index].key() == "handleMode") {
+        keys.emplace_back("handleMode");
+    }
+}
+
+// A 1.32 `handleMode` is the token of a non-Free mode. "free" is the default and is never written,
+// so a document that spells it out is not one this writer could have produced.
+[[nodiscard]] bool decodeKeyframeHandleMode(const JsonValue& node, DecodeState& state,
+                                            const std::string& path,
+                                            document::KeyframeHandleMode& out) {
+    std::string_view token;
+    if (!decodeStringMember(node, state, path, token))
+        return false;
+    const auto mode = document::keyframeHandleModeFromToken(token);
+    if (!mode || *mode == document::KeyframeHandleMode::Free) {
+        state.fail(DocumentDecodeError::InvalidKeyframeHandleMode, path);
+        return false;
+    }
+    out = *mode;
+    return true;
 }
 
 // A 1.30 easing object is CLOSED, like a handle: exactly {mode, back, amplitude, period}.
@@ -672,6 +696,12 @@ template <typename Keyframe>
                                        const std::size_t knownCount, DecodeState& state,
                                        const std::string& path, Keyframe& out) {
     for (auto index = knownCount; index < keys.size(); ++index) {
+        if (keys[index] == "handleMode") {
+            if (!decodeKeyframeHandleMode(*members[index], state, joinPath(path, keys[index]),
+                                          out.handleMode))
+                return false;
+            continue;
+        }
         if (keys[index] == "easing") {
             if (!decodeKeyframeEasing(*members[index], state, joinPath(path, keys[index]),
                                       out.easing))

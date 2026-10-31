@@ -832,11 +832,22 @@ emitKeyframeEasing(EmitState& state,
            emitFloat64Member(state, "period", easing.period) && state.ok(writer.endObject());
 }
 
+// Document 1.32: a key's handle mode, emitted ONLY when it is not Free, after the easing member.
+[[nodiscard]] bool emitKeyframeHandleMode(EmitState& state,
+                                          const bloom::document::KeyframeHandleMode mode) noexcept {
+    if (mode == bloom::document::KeyframeHandleMode::Free)
+        return true;
+    auto& writer = state.writer;
+    const PathScope modeScope(state, "handleMode");
+    return state.ok(writer.memberName("handleMode")) &&
+           state.ok(writer.stringValue(bloom::document::keyframeHandleModeToken(mode)));
+}
+
 template <typename Keyframe>
 [[nodiscard]] bool emitKeyframeHandles(EmitState& state, const Keyframe& key) noexcept {
     return emitKeyframeHandle(state, "outgoingHandle", key.outgoingHandle) &&
            emitKeyframeHandle(state, "incomingHandle", key.incomingHandle) &&
-           emitKeyframeEasing(state, key.easing);
+           emitKeyframeEasing(state, key.easing) && emitKeyframeHandleMode(state, key.handleMode);
 }
 
 [[nodiscard]] bool

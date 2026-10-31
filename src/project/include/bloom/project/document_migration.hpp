@@ -245,6 +245,11 @@ migrateEasingAndLayerFlagsV1_29(const JsonValue& root, std::pmr::memory_resource
 [[nodiscard]] MigrationStepOutcome
 migrateNodeGroupColorsV1_30(const JsonValue& root, std::pmr::memory_resource* resource,
                             std::pmr::vector<char>& output);
+// Keyframe handle modes, document 1.31 -> 1.32: version-only. The keyframe `handleMode` member is
+// optional, written only for Aligned and Auto, and absent means Free.
+[[nodiscard]] MigrationStepOutcome
+migrateKeyframeHandleModesV1_31(const JsonValue& root, std::pmr::memory_resource* resource,
+                                std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -276,7 +281,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 27}, {1, 28}, migrateVideoColourDefaultV1_27},
     MigrationStepDescriptor{{1, 28}, {1, 29}, migrateExportQueueV1_28},
     MigrationStepDescriptor{{1, 29}, {1, 30}, migrateEasingAndLayerFlagsV1_29},
-    MigrationStepDescriptor{{1, 30}, {1, 31}, migrateNodeGroupColorsV1_30}};
+    MigrationStepDescriptor{{1, 30}, {1, 31}, migrateNodeGroupColorsV1_30},
+    MigrationStepDescriptor{{1, 31}, {1, 32}, migrateKeyframeHandleModesV1_31}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

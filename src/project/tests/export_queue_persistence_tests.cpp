@@ -135,7 +135,7 @@ void testRoundTrip() {
 
 void testMigration() {
     const auto current = encode(makeDocument(false));
-    auto older = replaceOnce(current, "\"minor\": 31", "\"minor\": 28");
+    auto older = replaceOnce(current, "\"minor\": 32", "\"minor\": 28");
     older = std::regex_replace(
         older, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
     older = std::regex_replace(
@@ -151,7 +151,7 @@ void testMigration() {
            "a 1.28 document decodes with an empty queue");
     // To the current 1.31: the export-queue step, the easing step, then the version-only node group
     // colour step.
-    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 28}, {1, 31},
+    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 28}, {1, 32},
                                              kProductionDocumentMigrationSteps, {}, operation);
     expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 3,
            "1.28 to 1.31 runs the export-queue, easing and node group colour steps");
@@ -165,10 +165,10 @@ void testMigration() {
            "a migrated 1.28 project equals the same project saved at 1.31");
 
     // The already-migrated guard: a 1.28-labelled file that already has the queue is refused.
-    const auto mislabelled = replaceOnce(current, "\"minor\": 31", "\"minor\": 28");
+    const auto mislabelled = replaceOnce(current, "\"minor\": 32", "\"minor\": 28");
     auto bad = parseStrictJsonDom(std::as_bytes(std::span(mislabelled)), {}, operation);
     if (bad) {
-        const auto refused = migrateDocumentDom(bad.document()->root(), {1, 28}, {1, 31},
+        const auto refused = migrateDocumentDom(bad.document()->root(), {1, 28}, {1, 32},
                                                 kProductionDocumentMigrationSteps, {}, operation);
         expect(refused.outcome() != MigrationOutcome::Migrated,
                "a 1.28 file that already carries the queue is not migrated twice");

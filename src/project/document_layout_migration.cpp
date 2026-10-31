@@ -154,7 +154,8 @@ enum class Step {
     VideoColourDefault,
     ExportQueue,
     EasingAndLayerFlags,
-    NodeGroupColors
+    NodeGroupColors,
+    KeyframeHandleModes
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -183,6 +184,10 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // Node group colours (1.30 -> 1.31) are version-only: the new `color` member is optional and
     // absent means the neutral frame.
     if (step == Step::NodeGroupColors)
+        return false;
+    // Keyframe handle modes (1.31 -> 1.32) are version-only: the keyframe `handleMode` member is
+    // optional and absent means Free.
+    if (step == Step::KeyframeHandleModes)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -367,6 +372,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::ExportQueue          ? "{\"major\":1,\"minor\":29}"
                            : step == Step::EasingAndLayerFlags  ? "{\"major\":1,\"minor\":30}"
                            : step == Step::NodeGroupColors      ? "{\"major\":1,\"minor\":31}"
+                           : step == Step::KeyframeHandleModes  ? "{\"major\":1,\"minor\":31}"
                                                                 : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -911,6 +917,13 @@ MigrationStepOutcome migrateEasingAndLayerFlagsV1_29(const JsonValue& root,
                                                      std::pmr::memory_resource*, Buffer& output) {
     if (!sourceVersionIs(root, "29") ||
         !transform(root, Scope::Root, Step::EasingAndLayerFlags, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateKeyframeHandleModesV1_31(const JsonValue& root,
+                                                     std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "31") ||
+        !transform(root, Scope::Root, Step::KeyframeHandleModes, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

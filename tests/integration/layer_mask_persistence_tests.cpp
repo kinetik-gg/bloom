@@ -175,14 +175,14 @@ void olderDocumentsMigrateAndRefuseNewMembers() {
                                                  document::FrameRate::framesPerSecond24()))
             .project};
     auto text = encode(plain);
-    replaceOnce(text, "\"minor\": 31", "\"minor\": 23");
+    replaceOnce(text, "\"minor\": 32", "\"minor\": 23");
     stripExportQueueV1_29(text);
     expect(static_cast<bool>(decodeText(text)), "a 1.23 document without masks decodes");
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
     if (parsed) {
         const auto migrated =
-            project::migrateDocumentDom(parsed.document()->root(), {1, 23}, {1, 31},
+            project::migrateDocumentDom(parsed.document()->root(), {1, 23}, {1, 32},
                                         project::kProductionDocumentMigrationSteps, {}, operation);
         expect(
             migrated.outcome() == project::MigrationOutcome::Migrated &&
@@ -196,7 +196,7 @@ void olderDocumentsMigrateAndRefuseNewMembers() {
 
     Fixture fixture;
     auto masked = encode(fixture.document);
-    replaceOnce(masked, "\"minor\": 31", "\"minor\": 23");
+    replaceOnce(masked, "\"minor\": 32", "\"minor\": 23");
     stripExportQueueV1_29(masked);
     expect(!static_cast<bool>(decodeText(masked)), "a 1.23 document carrying masks is refused");
 }
@@ -322,7 +322,7 @@ void anchorModesPersistAndMigrate() {
                                          document::ShapeKind::Path, geometry);
     expect(shapedCommands.execute(std::move(add)).succeeded(), "a moded shape path is added");
     auto shapeText = encode(shaped);
-    replaceOnce(shapeText, "\"minor\": 31", "\"minor\": 23");
+    replaceOnce(shapeText, "\"minor\": 32", "\"minor\": 23");
     stripExportQueueV1_29(shapeText);
     expect(!static_cast<bool>(decodeText(shapeText)),
            "a pre-1.24 file carrying an anchor mode is refused");
@@ -361,7 +361,7 @@ void compositionTimecodePersists() {
         }
     }
     auto older = text;
-    replaceOnce(older, "\"minor\": 31", "\"minor\": 25");
+    replaceOnce(older, "\"minor\": 32", "\"minor\": 25");
     stripExportQueueV1_29(older);
     expect(!static_cast<bool>(decodeText(older)), "a pre-1.26 file carrying a timecode is refused");
 }
