@@ -41,9 +41,8 @@ void componentChangeSpans(const std::vector<Keyframe>& before, const std::vector
     const auto collect = [&](const std::vector<Keyframe>& keys,
                              const std::vector<Keyframe>& other) {
         for (std::size_t index = 0; index < keys.size(); ++index) {
-            if (std::ranges::any_of(other, [&](const Keyframe& candidate) {
-                    return same(candidate, keys[index]);
-                }))
+            if (std::ranges::any_of(
+                    other, [&](const Keyframe& candidate) { return same(candidate, keys[index]); }))
                 continue;
             const auto start = index == 0 ? low : keys[index - 1].time;
             const auto end = index + 1 == keys.size() ? duration : keys[index + 1].time;

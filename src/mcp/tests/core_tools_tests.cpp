@@ -469,18 +469,21 @@ void animationReadBack() {
            "set-keyframes-easing reads back mode and parameters: " + result + keyframes);
     expect(contains(server.call("query", R"({"kind":"layers","composition":1})"), R"("shy":true)"),
            "set-shy reads back");
-    expect(contains(keyframes, R"("handleMode":"free")") && contains(keyframes, R"("handleModeId":0)"),
+    expect(contains(keyframes, R"("handleMode":"free")") &&
+               contains(keyframes, R"("handleModeId":0)"),
            "every key reads back as Free until its mode is set: " + keyframes);
-    result = transact(R"({"op":"bloom.animation.set-keyframes-handle-mode","args":{"composition":1,)"
-                      R"("keys":[[)" +
-                      curve + "," + key + R"(]],"mode":"auto"}})");
+    result =
+        transact(R"({"op":"bloom.animation.set-keyframes-handle-mode","args":{"composition":1,)"
+                 R"("keys":[[)" +
+                 curve + "," + key + R"(]],"mode":"auto"}})");
     keyframes = server.call("query", R"({"kind":"keyframes","composition":1})");
     expect(contains(keyframes, R"("handleMode":"auto")") &&
                contains(keyframes, R"("handleModeId":2)"),
            "set-keyframes-handle-mode reads back: " + result + keyframes);
-    result = transact(R"({"op":"bloom.animation.set-keyframes-handle-mode","args":{"composition":1,)"
-                      R"("keys":[[)" +
-                      curve + "," + key + R"(]],"mode":"smooth"}})");
+    result =
+        transact(R"({"op":"bloom.animation.set-keyframes-handle-mode","args":{"composition":1,)"
+                 R"("keys":[[)" +
+                 curve + "," + key + R"(]],"mode":"smooth"}})");
     expect(contains(result, R"("isError":true)"), "an unknown handle mode is refused: " + result);
     const auto enums = server.call("query", R"({"kind":"enums"})");
     expect(contains(enums, R"("token":"bounce")") && contains(enums, R"("label":"Bezier")") &&

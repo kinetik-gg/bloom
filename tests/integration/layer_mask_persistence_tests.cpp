@@ -190,7 +190,8 @@ void olderDocumentsMigrateAndRefuseNewMembers() {
                 static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
             "the 1.23 -> 1.24 mask, 1.24 -> 1.25 video-metadata and 1.25 -> 1.26 channel-set and "
             "1.26 -> 1.27 composition-folder and 1.27 -> 1.28 video-colour-default steps only "
-            "advance the version, 1.28 -> 1.29 adds the empty export queue, and 1.29 -> 1.30 easing and 1.30 -> 1.31 "
+            "advance the version, 1.28 -> 1.29 adds the empty export queue, and 1.29 -> 1.30 "
+            "easing and 1.30 -> 1.31 "
             "node-group-colour only advances the version");
     }
 

@@ -1578,10 +1578,10 @@ OperationRegistry OperationRegistry::builtIn() {
             if (!composition || !keys || !mode || error) {
                 return error;
             }
-            return OperationCreateResult(std::make_unique<commands::SetKeyframesHandleMode>(
-                                             document::CompositionId::fromRaw(*composition), *keys,
-                                             *mode),
-                                         std::nullopt);
+            return OperationCreateResult(
+                std::make_unique<commands::SetKeyframesHandleMode>(
+                    document::CompositionId::fromRaw(*composition), *keys, *mode),
+                std::nullopt);
         });
 
     add("bloom.animation.easy-ease",

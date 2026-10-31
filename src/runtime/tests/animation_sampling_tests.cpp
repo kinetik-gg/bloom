@@ -233,9 +233,9 @@ void testHandleModeIsRenderNeutral(Expectations& expectations) {
             const auto at = *core::RationalTime::create(numerator, 8);
             const auto a = runtime::sampleAnimationCurve(free, at);
             const auto b = runtime::sampleAnimationCurve(other, at);
-            identical = identical && a.value && b.value &&
-                        std::bit_cast<std::uint64_t>(*a.value) ==
-                            std::bit_cast<std::uint64_t>(*b.value);
+            identical =
+                identical && a.value && b.value &&
+                std::bit_cast<std::uint64_t>(*a.value) == std::bit_cast<std::uint64_t>(*b.value);
         }
     }
     expectations.expect(identical,
