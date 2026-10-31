@@ -1,6 +1,7 @@
 #include "command_test_support.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
+#include <bloom/document/keyframe_handles.hpp>
 
 #include <algorithm>
 #include <cstdlib>
@@ -1144,6 +1145,184 @@ void testKeyframeEasingOperations(TestContext& test) {
     }
 }
 
+// Document 1.32: per-key handle modes. Free and Aligned move no handle and are render-neutral;
+// Auto recomputes handles in the same undo step; handle edits and key moves honor the mode.
+void testKeyframeHandleModes(TestContext& test) {
+    Document document(makeSourceProject());
+    CommandStack stack(document);
+    const auto execute = [&]<typename OperationType, typename... Args>(Args&&... args) {
+        Transaction transaction("Handle mode", document.snapshot().revision());
+        transaction.emplace<OperationType>(kCompositionId, std::forward<Args>(args)...);
+        return stack.execute(std::move(transaction));
+    };
+    const std::vector<KeyframePaste> seed{{kOpacityId, time(0, 1), 0.0},
+                                          {kOpacityId, time(1, 1), 1.0},
+                                          {kOpacityId, time(2, 1), 0.25},
+                                          {kOpacityId, time(3, 1), 0.75},
+                                          {kFirstPositionId, time(0, 1), document::Vec2d{3, 4}},
+                                          {kFirstPositionId, time(1, 1), document::Vec2d{5, 6}},
+                                          {kFirstPositionId, time(2, 1), document::Vec2d{9, 1}}};
+    test.expect(execute.template operator()<PasteKeyframes>(seed).changed(), "handle fixture");
+    const auto opacity = animationSource(document.snapshot(), kOpacityId);
+    const auto position = animationSource(document.snapshot(), kFirstPositionId);
+    const auto keysOf = [&] { return scalarCurve(document.snapshot(), opacity).keyframes; };
+    const auto original = keysOf();
+    if (original.size() != 4)
+        return;
+    const auto all = [&] {
+        std::vector<KeyframeAddress> addresses;
+        for (const auto& key : original)
+            addresses.push_back({opacity, key.id});
+        return addresses;
+    }();
+    const auto autoHandlesOf = [](const std::vector<document::ScalarKeyframe>& keys) {
+        std::vector<document::AutoHandleKey> points;
+        for (const auto& key : keys)
+            points.push_back({key.time.toSeconds(), key.value});
+        return document::computeAutoClampedHandles(points);
+    };
+
+    // Free and Aligned: one undo step each, no handle moves, render-neutral.
+    const auto beforeAligned = stack.size();
+    auto result = execute.template operator()<SetKeyframesHandleMode>(
+        all, document::KeyframeHandleMode::Aligned);
+    test.expect(result.changed() && !result.renderAffecting && stack.size() == beforeAligned + 1,
+                "Aligned is one render-neutral undo step");
+    auto keys = keysOf();
+    bool untouched = true;
+    for (std::size_t index = 0; index < keys.size(); ++index)
+        untouched = untouched && keys[index].handleMode == document::KeyframeHandleMode::Aligned &&
+                    keys[index].outgoingHandle == original[index].outgoingHandle &&
+                    keys[index].incomingHandle == original[index].incomingHandle &&
+                    keys[index].value == original[index].value;
+    test.expect(untouched, "Aligned stores the mode and moves nothing");
+    result = execute.template operator()<SetKeyframesHandleMode>(
+        all, document::KeyframeHandleMode::Free);
+    test.expect(result.changed() && !result.renderAffecting && keysOf() == original,
+                "Free restores the original keys and is render-neutral");
+    test.expect(execute.template operator()<SetKeyframesHandleMode>(
+                    all, document::KeyframeHandleMode::Free)
+                        .status == CommandStatus::NoChange,
+                "setting the mode a key already has is no change");
+
+    // Auto: handles are recomputed in the same step, and that is an ordinary animation edit.
+    const auto beforeAuto = stack.size();
+    result = execute.template operator()<SetKeyframesHandleMode>(
+        all, document::KeyframeHandleMode::Auto);
+    test.expect(result.changed() && result.renderAffecting && stack.size() == beforeAuto + 1,
+                "Auto recomputes handles in one render-affecting undo step");
+    const auto autoKeys = keysOf();
+    const auto expected = autoHandlesOf(autoKeys);
+    bool matches = true;
+    for (std::size_t index = 0; index < autoKeys.size(); ++index) {
+        matches = matches && autoKeys[index].handleMode == document::KeyframeHandleMode::Auto;
+        if (expected[index].outgoing)
+            matches = matches && autoKeys[index].outgoingHandle == *expected[index].outgoing;
+        if (expected[index].incoming)
+            matches = matches && autoKeys[index].incomingHandle == *expected[index].incoming;
+    }
+    test.expect(matches, "Auto stores Blender's Auto Clamped handles");
+    test.expect(autoKeys[1].outgoingHandle.value == 0.0 && autoKeys[2].incomingHandle.value == 0.0,
+                "the peak and the valley are clamped flat");
+    test.expect(stack.undo().changed() && keysOf() == original,
+                "one undo restores the modes and the handles bit for bit");
+    test.expect(stack.redo().changed() && keysOf() == autoKeys, "redo restores the Auto keys");
+
+    // A neighbor's value change recomputes an Auto key's handles in the same step.
+    test.expect(execute.template operator()<SetKeyframeValues>(
+                    std::vector<KeyframeValueEdit>{{{opacity, original[3].id}, 0.0}})
+                    .changed(),
+                "neighbor value edit");
+    auto edited = keysOf();
+    auto expectedEdited = autoHandlesOf(edited);
+    test.expect(edited[2].outgoingHandle == *expectedEdited[2].outgoing &&
+                    !(edited[2].outgoingHandle == autoKeys[2].outgoingHandle),
+                "an Auto key follows its neighbor's value");
+    // Moving a key in time recomputes too.
+    test.expect(execute.template operator()<MoveKeyframes>(std::vector<KeyframeMove>{
+                    {{opacity, original[3].id}, time(5, 1)}})
+                    .changed(),
+                "neighbor move");
+    edited = keysOf();
+    expectedEdited = autoHandlesOf(edited);
+    test.expect(edited[2].outgoingHandle == *expectedEdited[2].outgoing &&
+                    edited[2].handleMode == document::KeyframeHandleMode::Auto,
+                "an Auto key follows its neighbor's time");
+    // Deleting a key too.
+    test.expect(execute.template operator()<DeleteKeyframes>(
+                    std::vector<KeyframeAddress>{{opacity, original[2].id}})
+                    .changed(),
+                "delete a neighbor");
+    edited = keysOf();
+    expectedEdited = autoHandlesOf(edited);
+    test.expect(edited.size() == 3 && edited[1].outgoingHandle == *expectedEdited[1].outgoing,
+                "an Auto key follows a deleted neighbor");
+    test.expect(stack.undo().changed() && stack.undo().changed() && stack.undo().changed() &&
+                    keysOf() == autoKeys,
+                "undoing the neighbor edits restores the Auto keys exactly");
+    test.expect(stack.undo().changed() && keysOf() == original,
+                "and undoing the mode restores the original keys");
+
+    // Dragging an Auto handle converts the key to Aligned, with the other handle collinear.
+    test.expect(execute.template operator()<SetKeyframesHandleMode>(
+                    std::vector<KeyframeAddress>{{opacity, original[1].id}},
+                    document::KeyframeHandleMode::Auto)
+                    .changed(),
+                "Auto on one key");
+    const auto dragged = document::KeyframeHandle{0.5, 0.4};
+    test.expect(execute.template operator()<SetKeyframeHandles>(std::vector<KeyframeHandleEdit>{
+                    {{opacity, original[1].id}, dragged, std::nullopt}})
+                    .changed(),
+                "drag an Auto handle");
+    keys = keysOf();
+    test.expect(keys[1].handleMode == document::KeyframeHandleMode::Aligned &&
+                    keys[1].outgoingHandle == dragged,
+                "dragging an Auto handle converts the key to Aligned and holds the handle");
+    const double next = keys[2].time.toSeconds() - keys[1].time.toSeconds();
+    const double previous = keys[1].time.toSeconds() - keys[0].time.toSeconds();
+    const double outX = keys[1].outgoingHandle.time * next;
+    const double outY = keys[1].outgoingHandle.value;
+    const double inX = -keys[1].incomingHandle.time * previous;
+    const double inY = keys[1].incomingHandle.value;
+    test.expect(std::fabs(outX * inY - outY * inX) <=
+                        1e-9 * std::hypot(outX, outY) * std::hypot(inX, inY) &&
+                    outX * inX + outY * inY < 0.0,
+                "the opposite handle is collinear");
+    // A Free key's handles stay independent.
+    test.expect(execute.template operator()<SetKeyframeHandles>(std::vector<KeyframeHandleEdit>{
+                    {{opacity, original[2].id}, document::KeyframeHandle{0.6, 0.3},
+                     std::nullopt}})
+                    .changed(),
+                "drag a Free handle");
+    test.expect(keysOf()[2].incomingHandle == original[2].incomingHandle,
+                "a Free key's other handle does not move");
+
+    // A component-less vector address sets every component's key at that time.
+    const auto vectorKey = vec2Curve(document.snapshot(), position).components[0].keyframes[1].id;
+    test.expect(execute.template operator()<SetKeyframesHandleMode>(
+                    std::vector<KeyframeAddress>{{position, vectorKey}},
+                    document::KeyframeHandleMode::Aligned)
+                    .changed(),
+                "vector mode");
+    const auto& components = vec2Curve(document.snapshot(), position).components;
+    test.expect(components[0].keyframes[1].handleMode == document::KeyframeHandleMode::Aligned &&
+                    components[1].keyframes[1].handleMode == document::KeyframeHandleMode::Aligned &&
+                    components[0].keyframes[0].handleMode == document::KeyframeHandleMode::Free,
+                "both components' keys at that time take the mode");
+
+    // Refusals.
+    const auto revision = document.snapshot().revision();
+    test.expect(execute.template operator()<SetKeyframesHandleMode>(
+                    all, static_cast<document::KeyframeHandleMode>(9))
+                        .status == CommandStatus::Rejected &&
+                    execute.template operator()<SetKeyframesHandleMode>(
+                        std::vector<KeyframeAddress>{{opacity, document::KeyframeId::fromRaw(999)}},
+                        document::KeyframeHandleMode::Auto)
+                            .status == CommandStatus::Rejected &&
+                    document.snapshot().revision() == revision,
+                "an unknown mode or key refuses the batch");
+}
+
 void testEasyEase(TestContext& test) {
     Document document(makeSourceProject());
     CommandStack stack(document);
@@ -1260,6 +1439,7 @@ int main() {
         bloom::commands::test::testSetKeyframeInterpolation(test);
         bloom::commands::test::testKeyframeHandleAndValueOperations(test);
         bloom::commands::test::testKeyframeEasingOperations(test);
+        bloom::commands::test::testKeyframeHandleModes(test);
         bloom::commands::test::testEasyEase(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());

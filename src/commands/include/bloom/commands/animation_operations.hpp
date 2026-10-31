@@ -457,6 +457,9 @@ struct KeyframePaste {
     document::KeyframeHandle incomingHandle{};
     // Document 1.30: the easing-equation parameters travel with a copied key too.
     document::KeyframeEasingParameters easing{};
+    // Document 1.32: the handle mode travels with a copied key. A pasted Auto key is recomputed
+    // from its new neighbors.
+    document::KeyframeHandleMode handleMode = document::KeyframeHandleMode::Free;
 };
 // One key's ease handles. An absent optional leaves that handle exactly as it is, so a gesture that
 // drags only one side does not have to restate the other.
@@ -596,6 +599,32 @@ class ApplyEasyEase final : public Operation {
     document::CompositionId composition_;
     std::vector<KeyframeAddress> keys_;
     EasyEase kind_ = EasyEase::Both;
+};
+// Stores a handle mode (Free, Aligned or Auto; document 1.32) on addressed keys in one undoable
+// step. The mode itself renders nothing: Free and Aligned leave every stored handle where it is, so
+// that step is render-neutral. Switching a key to Auto recomputes its handles (and those of the
+// Auto keys around it) from the neighboring keys in the same step, which is an ordinary animation
+// edit. A component-less vector or colour address edits every component's key at that time.
+// Afterwards, handle edits and key moves honor the mode: an Aligned key keeps its other handle
+// collinear, an Auto key's handles are recomputed whenever a neighbor's time or value changes, and
+// dragging an Auto handle (SetKeyframeHandles) converts that key to Aligned. See
+// docs/architecture/animation-and-time.md, "Handle modes".
+class SetKeyframesHandleMode final : public Operation {
+  public:
+    SetKeyframesHandleMode(document::CompositionId composition, std::vector<KeyframeAddress> keys,
+                           document::KeyframeHandleMode mode)
+        : composition_(composition), keys_(std::move(keys)), mode_(mode) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId>
+    parameterEditScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    std::vector<KeyframeAddress> keys_;
+    document::KeyframeHandleMode mode_;
 };
 // Re-values addressed keys in place, preserving IDs, times and interpolation. Every value is
 // domain-checked against its parameter's OWN schema through the same predicate a constant and an

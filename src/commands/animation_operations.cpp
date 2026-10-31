@@ -2,6 +2,7 @@
 
 #include <bloom/commands/animation_operations.hpp>
 
+#include <bloom/document/keyframe_handles.hpp>
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
@@ -1351,6 +1352,8 @@ OperationResult publishCurves(document::Composition& composition, CurveEdits edi
             },
             record);
         const auto* original = staged.find(id);
+        // Document 1.32: Aligned handles follow an edited partner and Auto handles are recomputed.
+        document::settleAnimationCurveHandles(record, original);
         if (original && *original == record)
             continue;
         changed = true;
@@ -1462,6 +1465,8 @@ OperationResult DeleteKeyframes::apply(document::Draft& draft) const {
                             return false;
                         return curves.erase(id);
                     }
+                    document::settleAnimationCurveHandles(record,
+                                                          composition->animationCurves().find(id));
                     return curves.erase(id) && curves.insert(curve);
                 } else {
                     std::vector<core::RationalTime> wholeTimes;
@@ -1553,6 +1558,8 @@ OperationResult DeleteKeyframes::apply(document::Draft& draft) const {
                             return false;
                         return curves.erase(id);
                     }
+                    document::settleAnimationCurveHandles(record,
+                                                          composition->animationCurves().find(id));
                     return curves.erase(id) && curves.insert(curve);
                 }
             },
@@ -1829,7 +1836,7 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                         return exhaustedIds();
                     curve.keyframes.push_back({*id, paste.time, *value, paste.interpolation,
                                                paste.outgoingHandle, paste.incomingHandle,
-                                               paste.easing});
+                                               paste.easing, paste.handleMode});
                     return OperationResult::applied();
                 } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                     const auto* value = std::get_if<double>(&paste.value);
@@ -1846,7 +1853,7 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                         return exhaustedIds();
                     curve.keyframes.push_back({*id, paste.time, *value, paste.interpolation,
                                                paste.outgoingHandle, paste.incomingHandle,
-                                               paste.easing});
+                                               paste.easing, paste.handleMode});
                     return OperationResult::applied();
                 } else if (paste.component.has_value()) {
                     auto* component = curve.component(*paste.component);
@@ -1867,7 +1874,7 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
                         return exhaustedIds();
                     component->keyframes.push_back({*id, paste.time, *value, paste.interpolation,
                                                     paste.outgoingHandle, paste.incomingHandle,
-                                                    paste.easing});
+                                                    paste.easing, paste.handleMode});
                     return OperationResult::applied();
                 } else if constexpr (std::is_same_v<Curve, document::Vec2AnimationCurve>) {
                     const auto* value = std::get_if<document::Vec2d>(&paste.value);

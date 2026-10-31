@@ -115,6 +115,12 @@ void easeSequence(std::vector<Keyframe>& keys, const std::set<document::Keyframe
         const double third = segmentChange(keys[index], keys[index + 1]) / 3.0;
         keys[index].outgoingInterpolation = document::KeyframeInterpolation::EaseInOut;
         // Zero speed at 33.33% influence is exactly the default handle (1/3, 0).
+        // Easy Ease writes explicit handles, so a key it shapes is Free: an Auto key would have
+        // them recomputed and an Aligned key would drag its other side along.
+        if (easeLeft || !wasBezier)
+            keys[index].handleMode = document::KeyframeHandleMode::Free;
+        if (easeRight || !wasBezier)
+            keys[index + 1].handleMode = document::KeyframeHandleMode::Free;
         if (easeLeft)
             keys[index].outgoingHandle = document::KeyframeHandle{};
         else if (!wasBezier)
@@ -172,6 +178,35 @@ OperationResult SetKeyframesEasing::apply(document::Draft& draft) const {
         return OperationResult::rejected(
             OperationIssueCode::InvalidValue,
             "Easing parameters must be finite, with an amplitude of zero or more");
+    return detail::publishCurves(*composition, std::move(edits));
+}
+
+std::string_view SetKeyframesHandleMode::typeId() const noexcept {
+    return "bloom.animation.set-keyframes-handle-mode";
+}
+OperationResult SetKeyframesHandleMode::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(composition_);
+    if (!composition)
+        return invalidComposition(composition_);
+    if (!document::isValidKeyframeHandleMode(mode_))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "Unsupported handle mode");
+    detail::CurveEdits edits;
+    auto staged = detail::stageKeys(*composition, keys_, edits);
+    if (staged.status == OperationStatus::Rejected)
+        return staged;
+    const auto selection = select(edits, keys_);
+    for (auto& [curveId, record] : edits) {
+        forEachSequence(record, [&](auto& keys, const std::optional<std::size_t> component) {
+            const auto found = selection.find({curveId, component});
+            if (found == selection.end())
+                return;
+            for (auto& key : keys)
+                if (found->second.contains(key.id))
+                    key.handleMode = mode_;
+        });
+    }
+    // publishCurves settles the staged curves: Auto keys get their handles in this same step.
     return detail::publishCurves(*composition, std::move(edits));
 }
 
