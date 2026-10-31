@@ -142,13 +142,20 @@ void testHygiene(int& failures) {
            "artist scripting examples are accepted", failures);
     for (const auto* qualificationTool :
          {"tools/ci/configure_gpu_qualification.py", "tools/ci/gpu_qualification.py",
-          "tools/quality/qualify_private_share_outage.py"}) {
+          "tools/quality/qualify_private_share_outage.py", "tools/local/sprint_validation.py",
+          "tools/local/test_sprint_validation.py", "tools/bench/bench_media.py",
+          "tools/bench/bench_spec.py", "tools/bench/blender_scene.py",
+          "tools/bench/build_projects.py", "tools/bench/chart.py", "tools/bench/chart_check.py",
+          "tools/bench/imageio_min.py", "tools/bench/run_bench.py"}) {
         expect(hygieneFixture(qualificationTool, "print('qualification')\n").empty(),
                "named manual qualification drivers are accepted", failures);
     }
     expect(containsCategory(hygieneFixture("tools/ci/other.py", "print('build')\n"),
                             "python placement"),
            "qualification drivers do not allow arbitrary Python infrastructure", failures);
+    expect(containsCategory(hygieneFixture("tools/bench/other.py", "print('build')\n"),
+                            "python placement"),
+           "named benchmark tools do not make tools/bench a general Python root", failures);
 
     const auto rootPython = hygieneFixture("scripts/quality_check.py", "print('check')\n");
     expect(containsCategory(rootPython, "python placement"),

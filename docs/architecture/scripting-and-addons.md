@@ -329,8 +329,15 @@ Linux issue #304 additionally uses three named, standalone qualification drivers
 write structured evidence and supervise an isolated disposable share. They are not imported by
 product code or executed by the application build. Python's standard process/JSON APIs keep these
 manual/CI harnesses bounded and auditable without introducing shell parsing of evidence or a new
-product dependency. The hygiene gate admits exactly these files and rejects other infrastructure
-Python sources and misplaced type stubs; this is not a general Python tools root.
+product dependency. The same bounded exception names the local sprint runner and its test
+(`tools/local/sprint_validation.py`, `tools/local/test_sprint_validation.py`, see
+[Local validation](../development/local-validation.md)) and the performance benchmark generators
+and runner in `tools/bench/` (`bench_media.py`, `bench_spec.py`, `blender_scene.py`,
+`build_projects.py`, `chart.py`, `chart_check.py`, `imageio_min.py`, `run_bench.py`, see
+[Performance benchmarks](../development/benchmarks.md)); they measure and qualify Bloom from outside
+and are likewise never imported by product code or run by the application build. The hygiene gate
+admits exactly these files and rejects other infrastructure Python sources and misplaced type stubs;
+this is not a general Python tools root.
 
 See [Scripting Bloom with Python](../user-guide/python.md) and
 [Using Bloom from an agent](../user-guide/mcp.md) for executable API examples and limits.
