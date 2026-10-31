@@ -53,6 +53,28 @@ void copyIntoStaging(
     });
 }
 
+// Packs the source floats into binary16 in the staging buffer when every value is exactly
+// representable, chunked through `parallelFor` like the float copy. False at the first value that is
+// not (a later chunk then stops early); the staging contents are then unspecified.
+bool packIntoStagingAsHalf(
+    std::uint16_t* const destination, const float* const source, const std::size_t values,
+    const std::function<void(std::size_t, const std::function<void(std::size_t)>&)>& parallelFor) {
+    constexpr std::size_t kChunkValues = kStagingCopyChunkBytes / sizeof(float);
+    const std::size_t chunks = (values + kChunkValues - 1) / kChunkValues;
+    if (!parallelFor || chunks < 2)
+        return packExactHalf(source, destination, values);
+    std::atomic<bool> exact{true};
+    parallelFor(chunks, [&](const std::size_t chunk) {
+        if (!exact.load(std::memory_order_relaxed))
+            return;
+        const std::size_t offset = chunk * kChunkValues;
+        if (!packExactHalf(source + offset, destination + offset,
+                           std::min(kChunkValues, values - offset)))
+            exact.store(false, std::memory_order_relaxed);
+    });
+    return exact.load();
+}
+
 bool initializationFails(upload_detail::UploadInitializationFault boundary) noexcept {
     if (initializationFault.load() != static_cast<std::uint8_t>(boundary)) {
         return false;
@@ -83,6 +105,7 @@ GpuImageUpload::Impl::~Impl() {
     releaseResident();
     staging.release();
     spareStaging.release();
+    spareHalf.release();
     resetResources();
     releaseResidentSlot();
 }
@@ -184,10 +207,16 @@ void GpuImageUpload::releaseSpareStaging() noexcept {
         return;
     impl_->spareStaging.release();
     impl_->sparePhase = nullptr;
+    impl_->spareHalf.release();
+    impl_->spareHalfPhase = nullptr;
 }
 
 std::uint64_t GpuImageUpload::stagingAllocations() const noexcept {
     return impl_ != nullptr ? impl_->stagingAllocations : 0;
+}
+
+std::uint64_t GpuImageUpload::halfStagedUploads() const noexcept {
+    return impl_ != nullptr ? impl_->halfStagedUploads : 0;
 }
 
 bool GpuImageUpload::Impl::createResources() {
@@ -437,9 +466,42 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
                       "the upload staging buffer could not be mapped");
             return impl.jobDiagnostic;
         }
-        copyIntoStaging(static_cast<std::byte*>(stagingInfo.pMappedData),
-                        reinterpret_cast<const std::byte*>(source.pixels().data()),
-                        static_cast<std::size_t>(imageBytes), parameters.parallelFor);
+        // #401: a source whose every value is exactly representable in binary16 (EXR half and
+        // similar) crosses to the device as RGBA16F, half the bytes, and one exact NEAREST blit
+        // widens it into the RGBA32F resident image; anything else is copied as RGBA32F.
+        auto* const stagingBytes = static_cast<std::byte*>(stagingInfo.pMappedData);
+        const auto copyFloat = [&] {
+            copyIntoStaging(stagingBytes, reinterpret_cast<const std::byte*>(source.pixels().data()),
+                            static_cast<std::size_t>(imageBytes), parameters.parallelFor);
+        };
+        if (impl.halfSupport < 0)
+            impl.halfSupport = uploadHalfStagingSupported(*impl.control) ? 1 : 0;
+        // The retired spare half image when it was charged to this phase and covers the extent;
+        // otherwise a new one (the spare is released first).
+        const auto acquireHalfImage = [&] {
+            if (impl.spareHalf.image != VK_NULL_HANDLE) {
+                if (impl.spareHalfPhase == phase && impl.spareHalf.width >= width &&
+                    impl.spareHalf.height >= height) {
+                    impl.staging.half = std::move(impl.spareHalf);
+                    impl.spareHalfPhase = nullptr;
+                    return true;
+                }
+                impl.spareHalf.release();
+                impl.spareHalfPhase = nullptr;
+            }
+            return createUploadHalfImage(*impl.control, width, height, impl.staging.half);
+        };
+        bool halfStaged =
+            impl.halfSupport == 1 &&
+            packIntoStagingAsHalf(reinterpret_cast<std::uint16_t*>(stagingBytes),
+                                  reinterpret_cast<const float*>(source.pixels().data()),
+                                  static_cast<std::size_t>(imageBytes / sizeof(float)),
+                                  parameters.parallelFor) &&
+            acquireHalfImage();
+        if (!halfStaged) {
+            impl.staging.half.release();
+            copyFloat();
+        }
         if (vmaFlushAllocation(impl.control->allocator, impl.staging.allocation, 0,
                                VK_WHOLE_SIZE) != VK_SUCCESS) {
             impl.staging.release();
@@ -470,6 +532,24 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
             uploadAllocationBytes(*impl.control, resident->allocation);
         const std::uint64_t actualStaging =
             uploadAllocationBytes(*impl.control, impl.staging.allocation);
+        std::uint64_t actualHalf =
+            halfStaged ? uploadAllocationBytes(*impl.control, impl.staging.half.allocation) : 0;
+        if (halfStaged && (actualImage > byteBudget || actualHalf > byteBudget - actualImage ||
+                           actualStaging > byteBudget - actualImage - actualHalf)) {
+            // The transient half image does not fit beside the job: copy as RGBA32F instead of
+            // refusing an upload the float path admits.
+            impl.staging.half.release();
+            copyFloat();
+            halfStaged = false;
+            actualHalf = 0;
+            if (vmaFlushAllocation(impl.control->allocator, impl.staging.allocation, 0,
+                                   VK_WHOLE_SIZE) != VK_SUCCESS) {
+                impl.staging.release();
+                impl.fail(GpuImageUploadDiagnosticCode::AllocationFailed,
+                          "the upload staging buffer could not be flushed");
+                return impl.jobDiagnostic;
+            }
+        }
         if (actualImage > impl.budgets.maxImageBytes ||
             actualStaging > impl.budgets.maxStagingBytes || actualImage > byteBudget ||
             actualStaging > byteBudget - actualImage) {
@@ -479,7 +559,7 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
             return impl.jobDiagnostic;
         }
         // Peak retained by this job while the staging buffer is still referenced.
-        impl.lastJobBytes = actualImage + actualStaging;
+        impl.lastJobBytes = actualImage + actualStaging + actualHalf;
 
         impl.residentImage = std::make_unique<GpuImage>(makeGpuImage(std::move(resident)));
 
@@ -528,9 +608,41 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
         copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         copy.imageOffset = {0, 0, 0};
         copy.imageExtent = {width, height, 1};
-        dispatcher->vkCmdCopyBufferToImage(rawCommandBuffer, impl.staging.buffer,
-                                           residentRaw->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                           1, &copy);
+        if (halfStaged) {
+            // Staging -> transient RGBA16F, then one same-extent NEAREST blit into the resident
+            // RGBA32F image: binary16 -> binary32 widening is exact, so the resident bytes equal
+            // the float path's.
+            VkImageMemoryBarrier halfToTransfer = toTransfer;
+            halfToTransfer.image = impl.staging.half.image;
+            dispatcher->vkCmdPipelineBarrier(rawCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                                             nullptr, 1, &halfToTransfer);
+            dispatcher->vkCmdCopyBufferToImage(rawCommandBuffer, impl.staging.buffer,
+                                               impl.staging.half.image,
+                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            VkImageMemoryBarrier halfToSource = halfToTransfer;
+            halfToSource.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            halfToSource.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            halfToSource.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            halfToSource.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            dispatcher->vkCmdPipelineBarrier(rawCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                                             nullptr, 1, &halfToSource);
+            VkImageBlit blit{};
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            blit.srcOffsets[1] = {static_cast<std::int32_t>(width),
+                                  static_cast<std::int32_t>(height), 1};
+            blit.dstSubresource = blit.srcSubresource;
+            blit.dstOffsets[1] = blit.srcOffsets[1];
+            dispatcher->vkCmdBlitImage(rawCommandBuffer, impl.staging.half.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, residentRaw->image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                                       VK_FILTER_NEAREST);
+        } else {
+            dispatcher->vkCmdCopyBufferToImage(rawCommandBuffer, impl.staging.buffer,
+                                               residentRaw->image,
+                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        }
 
         VkImageMemoryBarrier toGeneral = toTransfer;
         toGeneral.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -571,6 +683,8 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
             return impl.jobDiagnostic;
         }
         impl.queueSubmitted = true;
+        if (halfStaged)
+            ++impl.halfStagedUploads;
         impl.jobState = GpuImageUploadJobState::Pending;
         impl.jobDiagnostic = GpuImageUploadDiagnostic{};
         return {};
@@ -697,6 +811,13 @@ GpuImageUploadPollResult GpuImageUpload::poll() {
     impl.queueSubmitted = false;
     // The copy is proved complete, so the staging bytes are no longer referenced: keep the buffer
     // as the spare for the next upload of this scene (releaseSpareStaging frees it at scene end).
+    // The blit is proved complete too: keep its half image as the spare for the next upload.
+    if (impl.staging.half.image != VK_NULL_HANDLE && impl.spareHalf.image == VK_NULL_HANDLE) {
+        impl.spareHalf = std::move(impl.staging.half);
+        impl.spareHalfPhase = impl.control->processingPhase.get();
+    } else {
+        impl.staging.half.release();
+    }
     if (impl.staging.armed && !impl.spareStaging.armed) {
         impl.spareStaging = std::move(impl.staging);
         impl.sparePhase = impl.control->processingPhase.get();

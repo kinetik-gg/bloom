@@ -14,7 +14,9 @@
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
 
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -395,7 +397,9 @@ void testChunkedStagingCopy(Expectations& expectations, GpuImageUpload& upload) 
                         "a chunked upload begins");
     if (accepted.code != GpuImageUploadDiagnosticCode::None)
         return;
-    expectations.expect(chunksAsked == 2 && chunksRun.load() == 2,
+    // This fixture is not half-exact, so a half-staging attempt may run a pass before the float
+    // copy; every pass is two chunks and every chunk runs.
+    expectations.expect(chunksAsked == 2 && chunksRun.load() >= 2 && chunksRun.load() % 2 == 0,
                         "a 14.7 MB staging copy runs as two parallel chunks");
     expectations.expect(pollUntilTerminal(upload) == GpuImageUploadPollResult::Ready,
                         "the chunked upload reaches Ready");
@@ -451,6 +455,90 @@ void testStagingReuse(Expectations& expectations, GpuImageUpload& upload) {
     upload.releaseSpareStaging();
 }
 
+// #401: an image whose every value is exactly representable in binary16 (zeros of both signs,
+// infinities-free HDR values, a half subnormal) crosses as RGBA16F and is widened by one blit; the
+// resident bytes must equal the source exactly. A source with one inexact value takes the RGBA32F
+// copy, also bit-exact.
+using HalfValue = std::array<float, 4>;
+
+[[nodiscard]] std::shared_ptr<const Rgba32fImage>
+buildValues(const ImageWindow window,
+            const std::function<HalfValue(std::uint32_t, std::uint32_t)>& value) {
+    const auto pixelAspect = PixelAspectRatio::create(1, 1);
+    if (!pixelAspect)
+        return nullptr;
+    const auto descriptor = Rgba32fImageDescriptor::create(window, window, *pixelAspect);
+    if (!descriptor)
+        return nullptr;
+    auto builder = Rgba32fImageBuilder::create(*descriptor.value(), 1ULL << 32ULL);
+    if (!builder)
+        return nullptr;
+    for (std::int64_t y = window.originY(); y < window.maxYExclusive(); ++y) {
+        auto row = builder.value()->row(y);
+        if (!row)
+            return nullptr;
+        auto pixels = *row.value();
+        for (std::uint32_t x = 0; x < pixels.size(); ++x) {
+            const auto v = value(x, static_cast<std::uint32_t>(y - window.originY()));
+            const auto pixel = Rgba32f::fromPremultiplied(v[0], v[1], v[2], v[3]);
+            if (!pixel)
+                return nullptr;
+            pixels[x] = *pixel.value();
+        }
+    }
+    auto frozen = std::move(*builder.value()).freeze();
+    if (!frozen)
+        return nullptr;
+    return std::make_shared<const Rgba32fImage>(std::move(*frozen.value()));
+}
+
+void testHalfStagedUpload(Expectations& expectations, GpuImageUpload& upload) {
+    const auto window = ImageWindow::create(0, 0, 1280, 720); // two chunks of the packing pass
+    if (!window) {
+        expectations.expect(false, "the half fixture window builds");
+        return;
+    }
+    // Every value is a binary16 value: k/1024 steps scaled by powers of two, signed zero, the
+    // largest half 65504 and the smallest half subnormal 2^-24.
+    const auto halfExact = [](const std::uint32_t x, const std::uint32_t y) {
+        const float step = static_cast<float>((x * 7U + y * 3U) % 1024U) / 1024.0F;
+        if (x == 0 && y == 0)
+            return HalfValue{-0.0F, std::ldexp(1.0F, -24), 65504.0F, 1.0F};
+        return HalfValue{step * 0.5F, -step * 2.0F, step * 256.0F, 0.5F};
+    };
+    const auto uploadAndCompare = [&](const std::shared_ptr<const Rgba32fImage>& image) {
+        if (image == nullptr)
+            return false;
+        GpuImageUploadParameters parameters;
+        parameters.source = image;
+        if (upload.begin(parameters, 1ULL << 32ULL).code != GpuImageUploadDiagnosticCode::None ||
+            pollUntilTerminal(upload) != GpuImageUploadPollResult::Ready)
+            return false;
+        auto readback = upload.readback();
+        const bool exact = readback.hasValue() &&
+                           readback.pixels.size() == image->pixels().size() &&
+                           std::memcmp(readback.pixels.data(), image->pixels().data(),
+                                       readback.pixels.size() * sizeof(Rgba32f)) == 0;
+        GpuImage taken = upload.takeImage();
+        return exact && taken.isValid();
+    };
+    const auto before = upload.halfStagedUploads();
+    expectations.expect(uploadAndCompare(buildValues(*window.value(), halfExact)),
+                        "a half-exact upload is bit-exact");
+    const bool halfTaken = upload.halfStagedUploads() == before + 1;
+    // A device without a graphics-capable upload queue or blit support keeps the float path.
+    std::cout << "half staging " << (halfTaken ? "used" : "unavailable on this device") << '\n';
+    const auto inexact = buildValues(*window.value(), [&](const auto x, const auto y) {
+        auto value = halfExact(x, y);
+        if (x == 640 && y == 360)
+            value[1] = 0.1F; // not a binary16 value
+        return value;
+    });
+    expectations.expect(uploadAndCompare(inexact) &&
+                            upload.halfStagedUploads() == (halfTaken ? before + 1 : before),
+                        "one inexact value keeps the RGBA32F copy, still bit-exact");
+}
+
 int main(const int argc, char** argv) {
     const Options options = parseOptions(argc, argv);
     if (!options.valid) {
@@ -482,6 +570,7 @@ int main(const int argc, char** argv) {
     testBitExactUpload(expectations, *device.device, upload);
     testChunkedStagingCopy(expectations, upload);
     testStagingReuse(expectations, upload);
+    testHalfStagedUpload(expectations, upload);
     testBudgetsAndArguments(expectations, upload);
     testWrongThread(expectations, upload);
     testCancellation(expectations, upload);

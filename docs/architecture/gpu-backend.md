@@ -80,7 +80,12 @@ caller's optional `parallelFor`; the scene executor passes the scheduler's row-b
 on one single-threaded memcpy on the owner thread, issue #401; a proven-retired job keeps its
 staging buffer as a spare that the next upload under the same processing phase reuses when it is
 large enough and still fits the request budget, and the executor releases it when its scene ends, so
-a frame allocates one or two staging buffers instead of one per layer); `GpuComposite` runs `TranslationOpacityBilinearV1` and
+a frame allocates one or two staging buffers instead of one per layer; a source whose every value is
+exactly representable in binary16, such as EXR half, crosses as RGBA16F, half the bytes, into a
+transient image that one same-extent `VK_FILTER_NEAREST` blit widens into the RGBA32F resident image,
+which is exact, so the resident bytes and every cache identity are unchanged; any inexact value, an
+upload queue without graphics capability, missing blit format support or a half image that does not
+fit the request keeps the RGBA32F copy); `GpuComposite` runs `TranslationOpacityBilinearV1` and
 `SourceOverV1`, each writing a new resident image; `GpuResidentDisplay` copies a resident RGBA32F
 image device-to-device through the embedded Bloom Neutral V1 shader into a resident packed RGBA8
 image, reading back only the 4-byte status word; `GpuNeutralDisplay` runs the fixed `OcioDisplayV1`

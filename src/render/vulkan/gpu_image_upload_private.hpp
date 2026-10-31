@@ -31,6 +31,44 @@ namespace bloom::render {
 // One owned host-visible staging buffer holding the copied source bytes. Co-owns the device
 // allocator generation; owner-thread destruction only. Moved into the bounded quarantine on an
 // unproved retirement instead of being destroyed.
+// #401: the transient RGBA16F image a half-exact staging buffer is copied into before one exact
+// half-to-float blit into the resident RGBA32F image. Owned by the staging buffer it belongs to and
+// released with it, so every existing staging release path (fence proof, failure, quarantine) also
+// retires it.
+struct UploadHalfImage final {
+    UploadHalfImage() = default;
+    UploadHalfImage(const UploadHalfImage&) = delete;
+    UploadHalfImage& operator=(const UploadHalfImage&) = delete;
+    UploadHalfImage(UploadHalfImage&& other) noexcept { *this = std::move(other); }
+    UploadHalfImage& operator=(UploadHalfImage&& other) noexcept;
+    ~UploadHalfImage() { release(); }
+
+    void release() noexcept;
+
+    vulkan_detail::DeviceAllocatorState* state = nullptr;
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation allocation = VK_NULL_HANDLE;
+    NativeImageStorageToken token;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
+// True when the device can take the half path: the upload queue family has graphics capability
+// (vkCmdBlitImage needs it) and RGBA16F optimal images support TRANSFER_DST and BLIT_SRC while the
+// resident RGBA32F format supports BLIT_DST.
+[[nodiscard]] bool uploadHalfStagingSupported(vulkan_detail::DeviceAllocatorState& state) noexcept;
+
+// Creates the transient RGBA16F image (TRANSFER_DST | TRANSFER_SRC) under the current phase.
+[[nodiscard]] bool createUploadHalfImage(vulkan_detail::DeviceAllocatorState& state,
+                                         std::uint32_t width, std::uint32_t height,
+                                         UploadHalfImage& out) noexcept;
+
+// Writes the IEEE binary16 encoding of `count` floats when every one of them is exactly
+// representable (zero, infinities, half normals and subnormals; never NaN or a float subnormal).
+// Returns false as soon as one is not; `destination` is then unspecified.
+[[nodiscard]] bool packExactHalf(const float* source, std::uint16_t* destination,
+                                 std::size_t count) noexcept;
+
 struct UploadStagingBuffer final {
     UploadStagingBuffer() = default;
     UploadStagingBuffer(const UploadStagingBuffer&) = delete;
@@ -48,6 +86,8 @@ struct UploadStagingBuffer final {
     std::uint64_t bytes = 0;
     bool armed = false;
     NativeBufferStorageToken token;
+    // Present only while this buffer holds half-exact pixels for the current job.
+    UploadHalfImage half;
 };
 
 // Creates a host-visible, mapped, TRANSFER_SRC buffer sized `bytes`. Returns false and leaves `out`
@@ -130,6 +170,13 @@ struct GpuImageUpload::Impl final {
     UploadStagingBuffer spareStaging;
     const void* sparePhase = nullptr;
     std::uint64_t stagingAllocations = 0;
+    // #401 half staging: -1 unknown, 0 unsupported, 1 supported (queried once per Impl).
+    int halfSupport = -1;
+    std::uint64_t halfStagedUploads = 0;
+    // The last retired transient half image, reused like spareStaging (same phase, extent at
+    // least the upload's; copy and blit address only the upload's region).
+    UploadHalfImage spareHalf;
+    const void* spareHalfPhase = nullptr;
 
     GpuImageUploadJobState jobState = GpuImageUploadJobState::Idle;
     bool queueSubmitted = false;

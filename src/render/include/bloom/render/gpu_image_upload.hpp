@@ -147,6 +147,11 @@ class GpuImageUpload final {
     void releaseSpareStaging() noexcept;
     // Staging buffers actually allocated by begin(), for tests of the reuse above.
     [[nodiscard]] std::uint64_t stagingAllocations() const noexcept;
+    // Uploads whose every source value was exactly representable in IEEE binary16 and so crossed
+    // to the device as RGBA16F (half the bytes) before one exact half-to-float blit into the
+    // RGBA32F resident image (issue #401). Other sources upload as RGBA32F; the resident bytes
+    // are identical either way.
+    [[nodiscard]] std::uint64_t halfStagedUploads() const noexcept;
 
     // Recoverable bounded-pool pressure, not a permanent fuse: true while a foreign-released or
     // unproven resident is retained for owner drain, and false again once the rightful owner thread
