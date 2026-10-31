@@ -89,6 +89,12 @@ GpuImageReadback GpuImageUpload::readback() noexcept {
 
 void GpuImageUpload::cancel() noexcept {}
 
+void GpuImageUpload::releaseSpareStaging() noexcept {}
+
+std::uint64_t GpuImageUpload::stagingAllocations() const noexcept { return 0; }
+
+std::uint64_t GpuImageUpload::halfStagedUploads() const noexcept { return 0; }
+
 bool GpuImageUpload::teardownDrainIncomplete() noexcept { return false; }
 
 } // namespace bloom::render

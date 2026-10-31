@@ -79,6 +79,13 @@ struct GpuImageUploadParameters final {
     // thread participating, instead of one single-threaded memcpy on the device owner thread
     // (issue #401). Empty copies on the calling thread. The bytes written are identical.
     std::function<void(std::size_t, const std::function<void(std::size_t)>&)> parallelFor = {};
+    // Opt-in staging reuse within one caller-owned scene (issue #401). When true, this job's
+    // proven-retired staging buffer (and its transient RGBA16F image) is kept as a spare that the
+    // next opted-in begin() under the same processing phase may reuse, and the caller MUST call
+    // releaseSpareStaging() when its scene ends. When false (the default) both are released at the
+    // job's fence, so the job's phase and memory grant retire with the job, and any spare left by
+    // an earlier opted-in job is released.
+    bool reuseStagingWithinScene = false;
 };
 
 // Separately bounded image and staging ceilings. The per-call byteBudget is the peak allowance and
@@ -139,11 +146,12 @@ class GpuImageUpload final {
     // Marks an outstanding job's result discarded; resources stay until the fence retires.
     void cancel() noexcept;
 
-    // A proven-retired job keeps its staging buffer as a spare; the next begin() under the same
-    // processing phase reuses it when it is large enough and still fits the request budget,
-    // instead of allocating a new mapped buffer per upload (issue #401). The scene executor calls
-    // this when its scene ends, so a spare never outlives the phase that charged it. Owner thread
-    // only; a no-op elsewhere or while nothing is spare.
+    // A proven-retired job begun with reuseStagingWithinScene keeps its staging buffer as a spare;
+    // the next opted-in begin() under the same processing phase reuses it when it is large enough
+    // and still fits the request budget, instead of allocating a new mapped buffer per upload
+    // (issue #401). The scene executor opts in and calls this when its scene ends, so a spare never
+    // outlives the phase that charged it. Owner thread only; a no-op elsewhere or while nothing is
+    // spare.
     void releaseSpareStaging() noexcept;
     // Staging buffers actually allocated by begin(), for tests of the reuse above.
     [[nodiscard]] std::uint64_t stagingAllocations() const noexcept;

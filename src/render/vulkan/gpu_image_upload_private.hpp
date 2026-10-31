@@ -169,6 +169,8 @@ struct GpuImageUpload::Impl final {
     // releaseSpareStaging() frees it when the scene ends; it is never reused across phases.
     UploadStagingBuffer spareStaging;
     const void* sparePhase = nullptr;
+    // Whether the current job opted in (GpuImageUploadParameters::reuseStagingWithinScene).
+    bool retainSpare = false;
     std::uint64_t stagingAllocations = 0;
     // #401 half staging: -1 unknown, 0 unsupported, 1 supported (queried once per Impl).
     int halfSupport = -1;

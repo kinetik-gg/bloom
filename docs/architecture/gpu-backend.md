@@ -77,10 +77,12 @@ owns a device-resident RGBA32F image; `GpuImageUpload` stages one already-decode
 with no media decode on the GPU thread (a staging copy of more than one 8 MiB chunk runs through the
 caller's optional `parallelFor`; the scene executor passes the scheduler's row-band executor via
 `GpuSceneExecutorBudgets::uploadCopyExecutor`, so a many-layer frame's uploads no longer serialise
-on one single-threaded memcpy on the owner thread, issue #401; a proven-retired job keeps its
-staging buffer as a spare that the next upload under the same processing phase reuses when it is
-large enough and still fits the request budget, and the executor releases it when its scene ends, so
-a frame allocates one or two staging buffers instead of one per layer; a source whose every value is
+on one single-threaded memcpy on the owner thread, issue #401; a proven-retired job begun with
+`reuseStagingWithinScene` keeps its staging buffer and transient half image as spares that the next
+opted-in upload under the same processing phase reuses when large enough and still within the
+request budget; only the scene executor opts in, releasing them when its scene ends, so a frame
+allocates one or two staging buffers instead of one per layer, while every other upload releases its
+staging at its fence so its phase and memory grant retire with the job; a source whose every value is
 exactly representable in binary16, such as EXR half, crosses as RGBA16F, half the bytes, into a
 transient image that one same-extent `VK_FILTER_NEAREST` blit widens into the RGBA32F resident image,
 which is exact, so the resident bytes and every cache identity are unchanged; any inexact value, an

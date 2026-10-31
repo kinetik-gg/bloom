@@ -15,14 +15,14 @@
 #include <bloom/render/image_types.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <functional>
-#include <atomic>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -404,8 +404,7 @@ void testChunkedStagingCopy(Expectations& expectations, GpuImageUpload& upload) 
     expectations.expect(pollUntilTerminal(upload) == GpuImageUploadPollResult::Ready,
                         "the chunked upload reaches Ready");
     auto readback = upload.readback();
-    expectations.expect(readback.hasValue() &&
-                            readback.pixels.size() == source->pixels().size() &&
+    expectations.expect(readback.hasValue() && readback.pixels.size() == source->pixels().size() &&
                             std::memcmp(readback.pixels.data(), source->pixels().data(),
                                         readback.pixels.size() * sizeof(Rgba32f)) == 0,
                         "chunks copied out of order give a bit-exact resident image");
@@ -413,9 +412,11 @@ void testChunkedStagingCopy(Expectations& expectations, GpuImageUpload& upload) 
     expectations.expect(taken.isValid(), "the chunked upload result is taken");
 }
 
-// #401: a proven-retired job's staging buffer is reused by the next upload instead of a fresh
-// mapped allocation per upload; the reused buffer is fully overwritten, and releasing the spare
-// (the executor does at scene end) makes the next upload allocate again.
+// #401: an opted-in proven-retired job's staging buffer is reused by the next opted-in upload
+// instead of a fresh mapped allocation per upload; the reused buffer is fully overwritten, and
+// releasing the spare (the executor does at scene end) makes the next upload allocate again. A job
+// that did not opt in releases its staging at its fence and keeps no spare, so its phase and grant
+// retire with it.
 void testStagingReuse(Expectations& expectations, GpuImageUpload& upload) {
     const auto window = ImageWindow::create(0, 0, 640, 360);
     const auto pixelAspect = PixelAspectRatio::create(1, 1);
@@ -423,13 +424,14 @@ void testStagingReuse(Expectations& expectations, GpuImageUpload& upload) {
         expectations.expect(false, "the reuse fixture windows build");
         return;
     }
-    const auto uploadOnce = [&](const bool checkPixels) {
+    const auto uploadOnce = [&](const bool checkPixels, const bool reuse = true) {
         auto fixture = buildFixture(*window.value(), *window.value(), *pixelAspect);
         if (!fixture)
             return false;
         const auto source = std::make_shared<const Rgba32fImage>(std::move(*fixture));
         GpuImageUploadParameters parameters;
         parameters.source = source;
+        parameters.reuseStagingWithinScene = reuse;
         if (upload.begin(parameters, 1ULL << 32ULL).code != GpuImageUploadDiagnosticCode::None ||
             pollUntilTerminal(upload) != GpuImageUploadPollResult::Ready)
             return false;
@@ -452,6 +454,12 @@ void testStagingReuse(Expectations& expectations, GpuImageUpload& upload) {
     upload.releaseSpareStaging();
     expectations.expect(uploadOnce(false) && upload.stagingAllocations() == before + 2,
                         "after the spare is released the next upload allocates again");
+    expectations.expect(uploadOnce(true, false) && upload.stagingAllocations() == before + 3,
+                        "a job that does not opt in never reuses a spare and stays bit-exact");
+    expectations.expect(uploadOnce(false, false) && upload.stagingAllocations() == before + 4,
+                        "a job that does not opt in allocates its own staging");
+    expectations.expect(uploadOnce(false) && upload.stagingAllocations() == before + 5,
+                        "a job that does not opt in keeps no spare past its fence");
     upload.releaseSpareStaging();
 }
 

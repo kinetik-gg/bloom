@@ -54,8 +54,8 @@ void copyIntoStaging(
 }
 
 // Packs the source floats into binary16 in the staging buffer when every value is exactly
-// representable, chunked through `parallelFor` like the float copy. False at the first value that is
-// not (a later chunk then stops early); the staging contents are then unspecified.
+// representable, chunked through `parallelFor` like the float copy. False at the first value that
+// is not (a later chunk then stops early); the staging contents are then unspecified.
 bool packIntoStagingAsHalf(
     std::uint16_t* const destination, const float* const source, const std::size_t values,
     const std::function<void(std::size_t, const std::function<void(std::size_t)>&)>& parallelFor) {
@@ -424,15 +424,17 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
     }
 
     impl.clearJob();
+    impl.retainSpare = parameters.reuseStagingWithinScene;
     try {
-        // Reuse the spare only under the phase that charged it, when it holds this upload and it
-        // plus the resident image (with a 1 MiB rounding margin) still fit the request budget.
+        // Reuse the spare only for an opted-in job under the phase that charged it, when it holds
+        // this upload and it plus the resident image (with a 1 MiB rounding margin) still fit the
+        // request budget. Any other begin() releases it.
         const void* const phase = impl.control->processingPhase.get();
         bool reused = false;
         if (impl.spareStaging.armed) {
             const auto spareBytes = impl.spareStaging.bytes;
             constexpr std::uint64_t kRoundingMargin = 1ULL << 20U;
-            if (impl.sparePhase == phase && spareBytes >= imageBytes &&
+            if (impl.retainSpare && impl.sparePhase == phase && spareBytes >= imageBytes &&
                 spareBytes <= impl.budgets.maxStagingBytes && byteBudget >= imageBytes &&
                 byteBudget - imageBytes >= spareBytes + kRoundingMargin) {
                 impl.staging = std::move(impl.spareStaging);
@@ -471,7 +473,8 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
         // widens it into the RGBA32F resident image; anything else is copied as RGBA32F.
         auto* const stagingBytes = static_cast<std::byte*>(stagingInfo.pMappedData);
         const auto copyFloat = [&] {
-            copyIntoStaging(stagingBytes, reinterpret_cast<const std::byte*>(source.pixels().data()),
+            copyIntoStaging(stagingBytes,
+                            reinterpret_cast<const std::byte*>(source.pixels().data()),
                             static_cast<std::size_t>(imageBytes), parameters.parallelFor);
         };
         if (impl.halfSupport < 0)
@@ -480,8 +483,8 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
         // otherwise a new one (the spare is released first).
         const auto acquireHalfImage = [&] {
             if (impl.spareHalf.image != VK_NULL_HANDLE) {
-                if (impl.spareHalfPhase == phase && impl.spareHalf.width >= width &&
-                    impl.spareHalf.height >= height) {
+                if (impl.retainSpare && impl.spareHalfPhase == phase &&
+                    impl.spareHalf.width >= width && impl.spareHalf.height >= height) {
                     impl.staging.half = std::move(impl.spareHalf);
                     impl.spareHalfPhase = nullptr;
                     return true;
@@ -809,16 +812,19 @@ GpuImageUploadPollResult GpuImageUpload::poll() {
         return GpuImageUploadPollResult::Failure;
     }
     impl.queueSubmitted = false;
-    // The copy is proved complete, so the staging bytes are no longer referenced: keep the buffer
-    // as the spare for the next upload of this scene (releaseSpareStaging frees it at scene end).
-    // The blit is proved complete too: keep its half image as the spare for the next upload.
-    if (impl.staging.half.image != VK_NULL_HANDLE && impl.spareHalf.image == VK_NULL_HANDLE) {
+    // The copy and blit are proved complete, so the staging bytes and the half image are no longer
+    // referenced. Only a successful job that opted in keeps them as spares for the next upload of
+    // its scene (the caller's releaseSpareStaging frees them at scene end); every other job
+    // releases them here, so its phase and memory grant retire with it.
+    const bool keepSpare = impl.retainSpare && pending && !impl.discardRequested.load();
+    if (keepSpare && impl.staging.half.image != VK_NULL_HANDLE &&
+        impl.spareHalf.image == VK_NULL_HANDLE) {
         impl.spareHalf = std::move(impl.staging.half);
         impl.spareHalfPhase = impl.control->processingPhase.get();
     } else {
         impl.staging.half.release();
     }
-    if (impl.staging.armed && !impl.spareStaging.armed) {
+    if (keepSpare && impl.staging.armed && !impl.spareStaging.armed) {
         impl.spareStaging = std::move(impl.staging);
         impl.sparePhase = impl.control->processingPhase.get();
     } else {

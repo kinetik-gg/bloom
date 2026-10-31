@@ -306,6 +306,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
         }
         render::GpuImageUploadParameters parameters{
             step.uploadSource, device->retainedProcessingPhase(), step.uploadDescriptor};
+        // Staging reuse across this scene's uploads; clearJob()/finishReady() release the spare.
+        parameters.reuseStagingWithinScene = true;
         if (auto* const copyPool = budgets.uploadCopyExecutor; copyPool != nullptr)
             parameters.parallelFor = [copyPool](const std::size_t count,
                                                 const std::function<void(std::size_t)>& body) {
