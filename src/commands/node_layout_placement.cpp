@@ -1,6 +1,8 @@
 #include <bloom/commands/node_layout_placement.hpp>
 
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/document/parameter_enums.hpp>
+#include <bloom/document/parameter.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/project.hpp>
 
@@ -33,6 +35,9 @@ constexpr double kPadding = 8.0;
 // operator selector runs wider still.
 constexpr double kCardWidth = 264.0;
 constexpr double kWideCardWidth = 288.0;
+// A card whose parameters draw as dropdowns (enum choices, OCIO and input colour spaces) carries
+// the Properties panel's field control, which is wider still.
+constexpr double kDropdownCardWidth = 384.0;
 constexpr double kSlotPitch = 12.0;
 
 struct Rect final {
@@ -135,6 +140,13 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
         std::ranges::any_of(definition->outputs, [](const auto& port) {
             return port.valueKind == document::SocketValueKind::String;
         });
+    const bool dropdowns = std::ranges::any_of(
+        definition->parameters, [](const auto& parameter) {
+            return !document::parameterEnumOptions(parameter.schemaKey).empty() ||
+                   parameter.schemaKey.starts_with("bloom.ocio-") ||
+                   parameter.schemaKey == document::kImageInputColorSpaceIdParameterSchemaKey ||
+                   parameter.schemaKey == document::kVideoInputColorSpaceIdParameterSchemaKey;
+        });
     // A vector parameter takes one row per component (they share the first one's socket).
     double rows = 0.0;
     for (const auto& binding : node->parameters) {
@@ -166,7 +178,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     rows += 2.0;
     if (definition->lowering == document::NodeLoweringKind::ValueBoundsReadout)
         rows += static_cast<double>(definition->outputs.size());
-    return {wide ? std::max(width, kWideCardWidth) : width,
+    return {dropdowns ? std::max(width, kDropdownCardWidth)
+            : wide    ? std::max(width, kWideCardWidth)
+                      : width,
             kTitleBand + sockets * kRow + pills + rows * kRow + kPadding};
 }
 
