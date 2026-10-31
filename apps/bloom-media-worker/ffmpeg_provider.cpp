@@ -1193,6 +1193,37 @@ bool probeVaapiEncode() {
     return std::fwrite(text.data(), 1, text.size(), stdout) == text.size() &&
            std::fflush(stdout) == 0;
 }
+namespace {
+// One NVENC session at a size every NVENC generation accepts, closed again at once.
+bool nvencEncoderOpens(const char* name, const AVPixelFormat format, const char* profile) {
+    const auto* codec = avcodec_find_encoder_by_name(name);
+    if (codec == nullptr)
+        return false;
+    AVCodecContext* context = avcodec_alloc_context3(codec);
+    if (context == nullptr)
+        return false;
+    context->width = 256;
+    context->height = 256;
+    context->time_base = {1, 24};
+    context->framerate = {24, 1};
+    context->pix_fmt = format;
+    AVDictionary* options = nullptr;
+    av_dict_set(&options, "profile", profile, 0);
+    const bool opened = avcodec_open2(context, codec, &options) >= 0;
+    av_dict_free(&options);
+    avcodec_free_context(&context);
+    return opened;
+}
+} // namespace
+bool nvencEncodeAvailable() { return nvencEncoderOpens("h264_nvenc", AV_PIX_FMT_YUV420P, "high"); }
+bool probeNvencEncode() {
+    std::string text = "bloom-nvenc-probe-v1\n";
+    text += nvencEncoderOpens("h264_nvenc", AV_PIX_FMT_YUV420P, "high") ? "1" : "0";
+    text += nvencEncoderOpens("hevc_nvenc", AV_PIX_FMT_YUV420P, "main") ? " 1" : " 0";
+    text += nvencEncoderOpens("hevc_nvenc", AV_PIX_FMT_P010LE, "main10") ? " 1\n" : " 0\n";
+    return std::fwrite(text.data(), 1, text.size(), stdout) == text.size() &&
+           std::fflush(stdout) == 0;
+}
 bool hardwareEncodeAvailable() {
     if (avcodec_find_encoder_by_name("h264_vaapi") == nullptr &&
         avcodec_find_encoder_by_name("hevc_vaapi") == nullptr)

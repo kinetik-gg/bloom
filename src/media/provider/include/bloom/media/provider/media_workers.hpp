@@ -15,6 +15,7 @@ namespace bloom::media::provider {
 // Stable provenance identities of the providers.
 inline constexpr std::string_view kMediaFoundationProviderId = "media-foundation";
 inline constexpr std::string_view kVideoToolboxProviderId = "videotoolbox";
+inline constexpr std::string_view kFfmpegNvencProviderId = "ffmpeg-nvenc";
 inline constexpr std::string_view kFfmpegVaapiProviderId = "ffmpeg-vaapi";
 inline constexpr std::string_view kFfmpegProviderId = "ffmpeg";
 

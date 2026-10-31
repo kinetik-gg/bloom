@@ -1089,10 +1089,13 @@ class MediaDriver final : public DriverBase {
             settings.format == ExportFormat::HevcMov || settings.format == ExportFormat::HevcMp4;
         const auto& encoders = input_.encoders;
         const bool softwareH264 = encoders.openh264 == ExportEncoderStatus::OpenH264::Installed;
-        // VA-API goes first when asked for, and for Automatic HEVC when a render node encodes it
-        // (the bundled Kvazaar is the slower encoder). The encode chain falls back to the bundled
-        // software encoder silently either way.
+        // Hardware first when asked for: NVIDIA NVENC, then VA-API. Automatic uses NVENC whenever
+        // the driver answers (fast, and real 10-bit HEVC), and VA-API for HEVC when a render node
+        // encodes it (the bundled Kvazaar is the slower encoder). The encode chain falls back to
+        // the bundled software encoder silently either way.
         const auto preference = settings.encoder;
+        const bool nvencServes = (h264 && encoders.nvencH264) || (hevc && encoders.nvencHevc);
+        nvenc_ = preference != document::ExportEncoderPreference::Software && nvencServes;
         hardware_ = (hevc && (preference == document::ExportEncoderPreference::Hardware ||
                               (preference == document::ExportEncoderPreference::Automatic &&
                                encoders.vaapiHevc))) ||
@@ -1111,6 +1114,7 @@ class MediaDriver final : public DriverBase {
             .profile = settings.format == ExportFormat::Wav ? std::string() : profile,
             .audio = settings.format == ExportFormat::Wav || settings.includeAudio,
             .hardware = hardware_,
+            .nvenc = nvenc_,
             .sampleRate = settings.audioSampleRate,
             .pcmCodec = settings.format == ExportFormat::Wav ? profile : "pcm_s16le",
             .bwfDescription = {},
@@ -1351,6 +1355,7 @@ class MediaDriver final : public DriverBase {
     bool approvalAsked_ = false;
     bool stopRequested_ = false;
     bool hardware_ = false;
+    bool nvenc_ = false;
     ExportDeviceRoute route_ = ExportDeviceRoute::None;
 };
 

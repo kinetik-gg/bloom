@@ -27,11 +27,11 @@ std::string mediaCodecFamilyV1(const std::string_view codec) {
         return "dnxhd";
     if (codec.starts_with("pcm_"))
         return "pcm";
-    if (codec == "libopenh264" || codec == "h264_vaapi" || codec == "h264_videotoolbox" ||
-        codec == "h264_mf")
+    if (codec == "libopenh264" || codec == "h264_nvenc" || codec == "h264_vaapi" ||
+        codec == "h264_videotoolbox" || codec == "h264_mf")
         return "h264";
-    if (codec == "libkvazaar" || codec == "hevc_vaapi" || codec == "hevc_videotoolbox" ||
-        codec == "hevc_mf")
+    if (codec == "libkvazaar" || codec == "hevc_nvenc" || codec == "hevc_vaapi" ||
+        codec == "hevc_videotoolbox" || codec == "hevc_mf")
         return "hevc";
     return std::string(codec);
 }

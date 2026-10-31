@@ -136,6 +136,27 @@ Handshake ffmpegHandshake(const bool hardware) {
     h.transports = {Transport::PipeCopiesV0};
     return h;
 }
+Handshake ffmpegNvencHandshake() {
+    auto h = ffmpegHandshake(true);
+    auto& e = h.execution;
+    e.driver = "nvenc-runtime-unqualified";
+    e.device = "nvidia-nvenc";
+    std::vector<ProviderDeclaration> declarations;
+    for (auto declaration : h.declarations) {
+        declaration.execution = e;
+        declarations.push_back(declaration);
+        // NVENC encodes HEVC Main 10 from P010 frames.
+        if (declaration.capability.role == Role::VideoEncode &&
+            declaration.capability.codec == "hevc") {
+            declaration.capability.profile = "main10";
+            declaration.capability.bitDepth = 10;
+            declaration.capability.chroma = "p010";
+            declarations.push_back(std::move(declaration));
+        }
+    }
+    h.declarations = std::move(declarations);
+    return h;
+}
 Handshake ffmpegHardwareDecodeHandshake() {
     // Preview-only VA-API decode. The worker discovers the render node at run time, so the
     // execution key names the discovery policy rather than one device path. Every worker

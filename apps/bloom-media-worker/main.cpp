@@ -52,13 +52,18 @@ int main(int argc, char** argv) {
 #else
     bool hardware = false;
     bool hardwareDecode = false;
+    bool nvenc = false;
     int stagedOutput = -1;
     for (int i = 1; i < argc; ++i) {
         const auto argument = std::string_view(argv[i]);
         if (argument == "--probe-vaapi" && argc == 2)
             return ffmpeg::probeVaapiEncode() ? 0 : 11;
+        if (argument == "--probe-nvenc" && argc == 2)
+            return ffmpeg::probeNvencEncode() ? 0 : 11;
         if (argument == "--vaapi")
             hardware = true;
+        else if (argument == "--nvenc")
+            nvenc = true;
         else if (argument == "--vaapi-decode")
             hardwareDecode = true;
         else if (argument == "--retained-video")
@@ -70,10 +75,16 @@ int main(int argc, char** argv) {
     }
     if (hardwareDecode && (hardware || !retainedVideo))
         return 2; // Preview hardware decode is a retained, decode-only worker generation.
+    if (nvenc && (hardware || hardwareDecode || retainedVideo))
+        return 2; // NVENC is an encode-only generation of its own.
     hardware = hardware && ffmpeg::hardwareEncodeAvailable();
+    // Without a working NVIDIA driver the generation answers with the software handshake, which
+    // the host does not expect, so the encode chain moves on to its next provider.
+    nvenc = nvenc && ffmpeg::nvencEncodeAvailable();
     // The decode-only VA-API handshake is device-neutral: the worker discovers the render node
     // when it opens the stream, and reports a typed refusal when none decodes it.
     const auto handshake = hardwareDecode ? provider::ffmpegHardwareDecodeHandshake()
+                           : nvenc        ? provider::ffmpegNvencHandshake()
                                           : provider::ffmpegHandshake(hardware);
 #if defined(_WIN32)
     // Streamed staged publication (ADR 0033 section 16) inherits a descriptor; Windows exports
@@ -84,7 +95,7 @@ int main(int argc, char** argv) {
     if (stagedOutput >= 0 && (retainedVideo || ::fcntl(stagedOutput, F_GETFD) < 0))
         return 2;
 #endif
-    ffmpeg::Encoder encoder(hardware, stagedOutput);
+    ffmpeg::Encoder encoder(hardware, stagedOutput, nvenc);
     std::unique_ptr<ffmpeg::DecodeSession> decoder;
     if (retainedVideo)
         decoder = std::make_unique<ffmpeg::DecodeSession>(hardwareDecode);

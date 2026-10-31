@@ -156,8 +156,9 @@ still be a one-click in-app action, never fetched at startup or from an unverifi
 ### Bundled codec libraries
 
 The permissively licensed codec libraries that FFmpeg's LGPL wrappers link -- OpenH264 (H.264
-encode) and Kvazaar (HEVC encode) -- are built from pinned source archives as static, position-independent archives and
-linked into the worker's shared `libavcodec` on Linux, macOS and Windows. FFmpeg's version script
+encode) and Kvazaar (HEVC encode) -- are built from pinned source archives as static,
+position-independent archives and linked into the worker's shared `libavcodec` on Linux, macOS and
+Windows. FFmpeg's version script
 keeps their symbols private, so the worker ships no extra runtime file. Each is a lock component
 with `static` linkage, a corresponding-source obligation (its archive completes `libavcodec`'s
 corresponding source) and an FFmpeg `link` dependency edge. Its recipe reads an adjacent
@@ -168,6 +169,10 @@ Ninja are build-host requirements for the Meson-built codecs; x86 assembly uses 
 superbuild-private NASM. `codec-static-install.cmake` appends each archive's runtime libraries to
 its pkg-config record (FFmpeg reads them through `--pkg-config-flags=--static`), gives MSVC the
 `<name>.lib` spelling and refuses any shared artifact.
+
+NVENC uses nv-codec-headers, recorded with `header-only` linkage and an FFmpeg `build` edge: the
+superbuild installs the MIT headers and `ffnvcodec.pc` (Linux and Windows), and FFmpeg's NVENC
+encoders load the NVIDIA driver at run time, so no NVIDIA code is linked or shipped.
 
 FFmpeg's x86 SIMD is enabled. NASM 2.16.03 is a source-built, build-host-only tool recorded with
 `executable` linkage and no shipping roles; FFmpeg depends on it with the `build` relationship. It is

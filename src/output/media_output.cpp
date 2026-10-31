@@ -95,6 +95,42 @@ VaapiEncodeProbeV1 probeVaapiEncodeV1(std::string workerExecutable) {
 #endif
     return result;
 }
+NvencEncodeProbeV1 probeNvencEncodeV1(std::string workerExecutable) {
+    NvencEncodeProbeV1 result;
+#if !defined(__APPLE__)
+    platform::ProcessOptions options;
+    options.executable =
+        workerExecutable.empty() ? EncodeSessionV1::defaultWorker() : std::move(workerExecutable);
+    options.arguments = {"--probe-nvenc"};
+    // The NVIDIA driver maps large virtual ranges when it opens CUDA.
+    options.addressSpaceBytes = kWorkerAddressSpaceCeiling;
+    auto launched = platform::ProcessSupervisor::launch(options);
+    auto* process = std::get_if<std::unique_ptr<platform::ProcessSupervisor>>(&launched);
+    if (process == nullptr || !*process)
+        return result;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    std::string text;
+    std::array<std::byte, 256> buffer{};
+    while (text.size() < 4096) {
+        auto read = (*process)->read(buffer, deadline, {});
+        const auto* count = std::get_if<std::size_t>(&read);
+        if (count == nullptr || *count == 0)
+            break;
+        text.append(reinterpret_cast<const char*>(buffer.data()), *count);
+    }
+    const auto finished = (*process)->finish(deadline);
+    const auto* exit = std::get_if<int>(&finished);
+    constexpr std::string_view header = "bloom-nvenc-probe-v1\n";
+    if (exit == nullptr || *exit != 0 || !text.starts_with(header) ||
+        text.size() < header.size() + 6)
+        return result;
+    const auto line = std::string_view(text).substr(header.size(), 5);
+    result = {line[0] == '1', line[2] == '1', line[4] == '1'};
+#else
+    (void)workerExecutable;
+#endif
+    return result;
+}
 H264RuntimeAvailabilityV1 locateH264RuntimeV1(const std::filesystem::path&,
                                               const std::function<bool()>&) {
     return bundledOpenH264();

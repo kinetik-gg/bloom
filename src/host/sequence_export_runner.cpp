@@ -223,16 +223,18 @@ struct detail::SequenceExportWorkV1 {
             s.videoCodec = "hevc";
             s.container = request.preset == output::OutputPresetV1::HevcMp4V1 ? "mp4" : "mov";
             s.profile = request.profile == "main10" ? "main10" : "main";
-            // VA-API first when hardware is requested; the encode chain falls back to the bundled
+            // NVENC, then VA-API when requested; the encode chain falls back to the bundled
             // Kvazaar silently (ADR 0036).
+            request.worker.nvenc = request.nvenc;
             request.worker.vaapi = request.hardware;
         } else if (request.preset == output::OutputPresetV1::H264MovV1 ||
                    request.preset == output::OutputPresetV1::H264Mp4V1) {
             s.videoCodec = "h264";
             s.container = request.preset == output::OutputPresetV1::H264Mp4V1 ? "mp4" : "mov";
             s.profile = "high";
-            // VA-API first when hardware is requested; the encode chain falls back to the bundled
-            // OpenH264 silently when no render node encodes (ADR 0035).
+            // NVENC, then VA-API when requested; the encode chain falls back to the bundled
+            // OpenH264 silently when no device encodes (ADR 0035, ADR 0036).
+            request.worker.nvenc = request.nvenc;
             request.worker.vaapi = request.hardware;
         } else if (request.preset == output::OutputPresetV1::DnxhrMxfV1) {
             s.videoCodec = "dnxhd";
@@ -434,7 +436,9 @@ struct detail::SequenceExportWorkV1 {
         // the profile and bit depth the reopened stream carries.
         if (request.preset == output::OutputPresetV1::H264MovV1)
             analysis->implementationNote +=
-                served.execution.implementation == media::provider::Implementation::Hardware
+                served.execution.device == "nvidia-nvenc"
+                    ? "; encoder=nvenc nvenc-runtime-unqualified"
+                : served.execution.implementation == media::provider::Implementation::Hardware
                     ? "; encoder=vaapi vaapi-runtime-unqualified"
                     : "; encoder=openh264 2.6.0 bundled";
         if (!qc.profile.empty() &&

@@ -267,6 +267,11 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_dependencies(bloom_media_encode_test bloom-media-worker)
     bloom_add_test(NAME bloom.media.encode COMMAND bloom_media_encode_test
                    "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" LABELS unit media TIMEOUT 120)
+    # NVIDIA NVENC needs the device: hold the machine GPU lock. Skipped (77) without a driver.
+    bloom_add_test(NAME bloom.media.encode-nvenc COMMAND bloom_media_encode_test
+                   "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" --nvenc
+                   LABELS unit media gpu device TIMEOUT 180)
+    set_tests_properties(bloom.media.encode-nvenc PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(bloom_media_ffmpeg_test "${PROJECT_SOURCE_DIR}/src/media/provider/tests/ffmpeg_tests.cpp")
     target_link_libraries(bloom_media_ffmpeg_test PRIVATE bloom_media_worker_host)
     target_compile_definitions(bloom_media_ffmpeg_test PRIVATE BLOOM_FFMPEG_WORKER="$<TARGET_FILE:bloom-media-worker>")

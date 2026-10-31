@@ -146,6 +146,10 @@ struct ExportEncoderStatus final {
     bool vaapiHevc = false;
     // The supervised media worker can be started on this computer.
     bool mediaWorker = false;
+    // The NVIDIA driver opens an NVENC H.264 / HEVC Main / HEVC Main 10 session (ADR 0036).
+    bool nvencH264 = false;
+    bool nvencHevc = false;
+    bool nvencHevcMain10 = false;
     // The VA-API render node whose driver opened the encode entry points (#369).
     std::string vaapiRenderNode;
     // True once the first worker probe has answered.

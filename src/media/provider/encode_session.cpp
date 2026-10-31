@@ -17,6 +17,9 @@ struct EncodeRoute final {
     std::string executable;
     std::vector<std::string> arguments;
     Handshake hello;
+    // The NVIDIA driver maps several GiB of virtual address space when it opens CUDA; below that
+    // NVENC refuses with ENOMEM. Zero keeps the frame-sized media-v1 ceiling.
+    std::uint64_t addressSpaceFloor = 0;
 };
 // The provider's own spelling of the requested codec family ("prores" for VideoToolbox,
 // "prores_ks" for FFmpeg). Settings for a codec the provider does not declare stay unchanged.
@@ -168,7 +171,8 @@ struct EncodeSessionV1::State {
         platform::ProcessOptions launch;
         launch.executable = route.executable;
         // Issue #352: the export worker gets the address space its frame extent needs.
-        launch.addressSpaceBytes = workerAddressSpaceBytes(settings.width, settings.height);
+        launch.addressSpaceBytes = std::max(
+            workerAddressSpaceBytes(settings.width, settings.height), route.addressSpaceFloor);
         if (options.stagedOutput) {
             // Streaming into the staged artifact is an FFmpeg worker protocol (ADR 0033 section
             // 16); the caller expects the bytes there, so a platform route cannot serve it.
@@ -223,6 +227,15 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
     }
     const auto ffmpeg =
         s.options.executable.empty() ? ffmpegWorkerExecutable() : s.options.executable;
+    if (s.options.nvenc) {
+        EncodeRoute route;
+        route.id = std::string(kFfmpegNvencProviderId);
+        route.executable = ffmpeg;
+        route.arguments = {"--nvenc"};
+        route.hello = ffmpegNvencHandshake();
+        route.addressSpaceFloor = kNvencAddressSpaceFloor;
+        routes.push_back(std::move(route));
+    }
     if (s.options.vaapi) {
         EncodeRoute route;
         route.id = std::string(kFfmpegVaapiProviderId);

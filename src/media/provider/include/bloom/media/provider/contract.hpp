@@ -257,6 +257,9 @@ void assignPlaneDigests(std::vector<CpuPlane>& planes);
 // 2 GiB floor and never above 16 GiB. UHD keeps the floor; 8K UHD gets 4 GiB.
 inline constexpr std::uint64_t kWorkerAddressSpaceFloor = 2ULL << 30U;
 inline constexpr std::uint64_t kWorkerAddressSpaceCeiling = 16ULL << 30U;
+// The NVENC encode generation's floor: the NVIDIA driver reserves several GiB of virtual address
+// space when it opens CUDA (2 GiB fails with ENOMEM; 4 GiB was measured to work).
+inline constexpr std::uint64_t kNvencAddressSpaceFloor = 8ULL << 30U;
 [[nodiscard]] std::uint64_t workerAddressSpaceBytes(std::uint32_t width,
                                                     std::uint32_t height) noexcept;
 // Domain string (u32 length + bytes), u16 schema=1, then declaration-order fields.

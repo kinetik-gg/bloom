@@ -10,6 +10,9 @@ struct EncodeSessionOptionsV1 {
     // build tree's worker. The platform media framework's worker is always located by the host.
     std::string executable;
     bool vaapi = false;
+    // Try the NVIDIA NVENC generation first (ADR 0036): NVENC, then VA-API when `vaapi`, then the
+    // bundled software encoders. A computer without an NVIDIA driver falls through silently.
+    bool nvenc = false;
     std::chrono::milliseconds timeout{120000};
     std::function<void(std::int64_t)> launched;
     // ADR 0033 section 16: the host's staged artifact. The worker writes the container into it

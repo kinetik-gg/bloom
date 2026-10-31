@@ -86,13 +86,15 @@ audio sample rate and file-name pattern an output already has are kept and used;
 edit them.
 
 - **H.264** is encoded by OpenH264, which ships with Bloom on Linux, macOS and Windows; nothing is
-  downloaded or installed. With **Hardware** chosen on Linux, Bloom uses a VA-API render node when
-  one encodes H.264 and otherwise uses OpenH264 without asking. On macOS VideoToolbox encodes
-  first.
-- **HEVC** is encoded by Kvazaar, which ships with Bloom on Linux, macOS and Windows. On Linux a
-  VA-API render node that encodes HEVC is used first when there is one, and Bloom falls back to
-  Kvazaar without asking. Kvazaar writes 8-bit HEVC: a **Main 10** output without a VA-API encoder
-  is written as **Main**.
+  downloaded or installed. On a computer with an NVIDIA graphics driver, Bloom encodes on the GPU
+  (NVENC) unless the encoder is set to **Software**. With **Hardware** chosen on Linux, a VA-API
+  render node is tried next. When no GPU encoder answers, OpenH264 is used without asking. On macOS
+  VideoToolbox encodes first.
+- **HEVC** is encoded by Kvazaar, which ships with Bloom on Linux, macOS and Windows. An NVIDIA GPU
+  (NVENC) encodes first when its driver answers, then on Linux a VA-API render node that encodes
+  HEVC, and Bloom falls back to Kvazaar without asking. NVENC writes real 10-bit **Main 10**.
+  Kvazaar writes 8-bit HEVC: a **Main 10** output with no 10-bit GPU encoder is written as
+  **Main**, and the export's log and verification report say so.
 - **ProRes** is written by FFmpeg; it is not an Apple-authorized ProRes implementation.
 - The **VFX handoff** and **Review H.264** deliverables need the built-in ACES CG configuration
   with a pinned revision.

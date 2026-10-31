@@ -33,15 +33,22 @@ worker's shared `libavcodec` through FFmpeg's LGPL wrappers, on Linux, macOS and
 | --- | --- | --- | --- |
 | OpenH264 2.6.0 | BSD-2-Clause | H.264 software encode | `libopenh264` encoder |
 | Kvazaar 2.3.2 | BSD-3-Clause | HEVC software encode (8-bit Main) | `libkvazaar` encoder |
+| nv-codec-headers 12.1.14.1 | MIT | NVIDIA NVENC H.264 and HEVC Main/Main 10 (header-only; the driver is loaded at run time) | `h264_nvenc`, `hevc_nvenc` |
 
 Each is a static, position-independent archive (dependency-intake.md, "Bundled codec
 libraries"), so the worker generation directory gains no runtime file and FFmpeg's version script
 keeps the codec symbols private. Each has its own lock component, licence/provenance/security
 review, notice and recipe argument vector checked byte for byte.
 
-Encode selection stays ADR 0035's chain. On Linux a hardware request puts `ffmpeg-vaapi` first;
-any refusal at `begin()` (no render node, a driver that cannot open the profile) falls through to
-`ffmpeg`, whose software handshake always declares the bundled encoders. The fallback is recorded
+Encode selection stays ADR 0035's chain, now NVENC → VA-API → software on Linux and NVENC →
+software on Windows (`ffmpeg-nvenc`, `ffmpeg-vaapi`, `ffmpeg`). NVENC is tried whenever the
+encoder probe found an NVIDIA driver and the preference is not Software (Automatic included: it is
+fast and gives real 10-bit HEVC); VA-API when Hardware is chosen, or for Automatic HEVC when a
+render node encodes HEVC. Any refusal at `begin()` (no driver, a driver that cannot open the
+profile) falls through to the next route and finally to `ffmpeg`, whose software handshake always
+declares the bundled encoders. The NVENC worker generation gets an 8 GiB address-space floor
+because the NVIDIA driver reserves several GiB when it opens CUDA. nv-codec-headers' 12.1 line
+needs a Linux driver 530.41.03 or newer (Windows 531.61); an older driver simply falls through. The fallback is recorded
 in `MediaProviderProvenanceV1` and the export evidence names the encoder that served; no artist
 text reports it.
 

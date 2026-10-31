@@ -223,10 +223,13 @@ struct Encoder::State {
     std::unique_ptr<PrivateMediaFile> aacReference;
     std::vector<std::vector<float>> pendingAudio;
     std::uint64_t audioSubmitted = 0;
+    // `hardware` is the VA-API generation, `nvenc` the NVIDIA NVENC generation; neither is the
+    // software generation (OpenH264, Kvazaar).
     bool hardware = false;
-    State(EncodeSettingsV1 s, const bool useHardware, const int stagedOutput)
+    bool nvenc = false;
+    State(EncodeSettingsV1 s, const bool useHardware, const int stagedOutput, const bool useNvenc)
         : settings(std::move(s)), file(settings.byteLimit, stagedOutput), io(file, true),
-          hardware(useHardware) {}
+          hardware(useHardware), nvenc(useNvenc) {}
     ~State() { avformat_free_context(format); }
     void packets(EncodeTrack& track, AVFrame* frame) {
         AVFrame* submitted = frame;
@@ -279,8 +282,10 @@ struct Encoder::State {
             c.profile = videoProfile(settings);
             c.pix_fmt = settings.videoCodec == "tiff"         ? AV_PIX_FMT_RGBA64LE
                         : hardwareCodec(settings) && hardware ? AV_PIX_FMT_VAAPI
-                        : hardwareCodec(settings)             ? AV_PIX_FMT_YUV420P
-                                                              : AV_PIX_FMT_YUV422P10LE;
+                        : hardwareCodec(settings) && nvenc && settings.profile == "main10"
+                            ? AV_PIX_FMT_P010LE
+                        : hardwareCodec(settings) ? AV_PIX_FMT_YUV420P
+                                                  : AV_PIX_FMT_YUV422P10LE;
             if (settings.videoCodec == "prores_ks" && c.profile >= 4)
                 c.pix_fmt = AV_PIX_FMT_YUVA444P10LE;
             if (settings.videoCodec == "dnxhd") {
@@ -292,7 +297,7 @@ struct Encoder::State {
             }
             // The bundled Kvazaar is an 8-bit encoder: a Main 10 request without VA-API is served
             // as Main (8-bit 4:2:0), and the stream declares what it carries.
-            if (settings.videoCodec == "hevc" && !hardware)
+            if (settings.videoCodec == "hevc" && !hardware && !nvenc)
                 c.profile = AV_PROFILE_HEVC_MAIN;
             if (hardwareCodec(settings)) {
                 c.bit_rate = settings.videoBitrateKbps != 0
@@ -360,6 +365,14 @@ struct Encoder::State {
             av_dict_set(&options, "profile", settings.profile.c_str(), 0);
         if (video && hardware && hardwareCodec(settings))
             av_dict_set_int(&options, "async_depth", kVaapiAsyncDepth, 0);
+        if (video && nvenc && hardwareCodec(settings)) {
+            // Constant bit rate at the delivery target, the profile the request names (P010 input
+            // carries Main 10), no lookahead delay.
+            av_dict_set(&options, "preset", "p5", 0);
+            av_dict_set(&options, "rc", "cbr", 0);
+            av_dict_set(&options, "profile", settings.profile.c_str(), 0);
+            av_dict_set_int(&options, "delay", 0, 0);
+        }
         if (video && name == "libkvazaar") {
             // One-second intra period like the other delivery encoders, the session's thread
             // budget, and Kvazaar's fast preset (an export, not an archival master).
@@ -450,8 +463,12 @@ struct Encoder::State {
         }
         if (!settings.videoCodec.empty())
             openTrack(videoTrack,
-                      settings.videoCodec == "h264"   ? (hardware ? "h264_vaapi" : "libopenh264")
-                      : settings.videoCodec == "hevc" ? (hardware ? "hevc_vaapi" : "libkvazaar")
+                      settings.videoCodec == "h264"   ? (nvenc      ? "h264_nvenc"
+                                                         : hardware ? "h264_vaapi"
+                                                                    : "libopenh264")
+                      : settings.videoCodec == "hevc" ? (nvenc      ? "hevc_nvenc"
+                                                         : hardware ? "hevc_vaapi"
+                                                                    : "libkvazaar")
                                                       : settings.videoCodec,
                       true);
         if (!settings.audioCodec.empty())
@@ -812,8 +829,8 @@ struct Encoder::State {
             require(qc.audio == expectedPcm.finalize(), "Reopened PCM samples differ");
     }
 };
-Encoder::Encoder(const bool hardware, const int stagedOutput)
-    : hardware_(hardware), stagedOutput_(stagedOutput) {}
+Encoder::Encoder(const bool hardware, const int stagedOutput, const bool nvenc)
+    : hardware_(hardware), nvenc_(nvenc), stagedOutput_(stagedOutput) {}
 Encoder::~Encoder() = default;
 provider::Payload Encoder::call(provider::MessageKind kind, const provider::Payload& payload) {
     try {
@@ -821,7 +838,7 @@ provider::Payload Encoder::call(provider::MessageKind kind, const provider::Payl
         if (kind == MessageKind::EncodeBegin) {
             require(!state_, "Encoder already initialized", Error::UnexpectedMessage);
             state_ = std::make_unique<State>(std::get<EncodeSettingsV1>(payload), hardware_,
-                                             std::exchange(stagedOutput_, -1));
+                                             std::exchange(stagedOutput_, -1), nvenc_);
             state_->open();
         } else {
             require(state_ != nullptr, "Encoder is not initialized", Error::UnexpectedMessage);

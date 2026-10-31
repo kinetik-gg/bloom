@@ -466,6 +466,10 @@ ExportEncoderStatus probeExportEncoders(const ExportEncoderStatus& initial) {
     status.vaapiH264 = support.hardwareVaapi && vaapi.h264;
     status.vaapiHevc = support.hardwareVaapi && vaapi.hevc;
     status.vaapiRenderNode = vaapi.renderNode;
+    const auto nvenc = output::probeNvencEncodeV1();
+    status.nvencH264 = nvenc.h264;
+    status.nvencHevc = nvenc.hevc;
+    status.nvencHevcMain10 = nvenc.hevcMain10;
     status.probed = true;
     return status;
 }

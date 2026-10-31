@@ -66,7 +66,10 @@ struct SequenceExportRequestV1 {
     output::OutputPresetV1 preset = output::OutputPresetV1::ProResMovV1;
     std::string profile = "hq";
     bool audio = true;
+    // VA-API first (`hardware`) and NVIDIA NVENC before it (`nvenc`); the encode chain falls back
+    // to the bundled software encoders silently.
     bool hardware = false;
+    bool nvenc = false;
     std::uint32_t sampleRate = 48000;
     std::string pcmCodec = "pcm_s16le", bwfDescription;
     std::filesystem::path assetBaseDirectory;

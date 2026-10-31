@@ -429,9 +429,74 @@ void chromaSampling(const std::filesystem::path& directory) {
     }
 }
 } // namespace
+// ADR 0036: NVIDIA NVENC is the first hardware encoder. Run under the machine GPU lock as
+// bloom.media.encode-nvenc; without an NVIDIA driver every case is skipped (exit 77), and a driver
+// that answers must serve each request itself and pass the unchanged reopen check.
+int nvencTests(const std::filesystem::path& directory) {
+    EncodeSettingsV1 settings;
+    settings.width = 1920;
+    settings.height = 1080;
+    settings.frames = 24;
+    settings.videoCodec = "h264";
+    settings.profile = "high";
+    settings.container = "mov";
+    settings.audioCodec = "pcm_s16le";
+    settings.audioSamples = 48000;
+    EncodeSessionOptionsV1 options;
+    options.nvenc = true;
+    MediaProviderProvenanceV1 served;
+    EncodeQcV1 delivered;
+    (void)run(settings, directory / "nvenc-h264.mov", options, &served, &delivered);
+    if (served.provider != kFfmpegNvencProviderId) {
+        std::cout << "SKIP: NVENC — no NVIDIA driver opened an encode session (" +
+                         served.diagnostic() + ")\n";
+        return 77;
+    }
+    test::check(delivered.profile == "High" && delivered.bitDepth == 8,
+                "NVENC H.264 delivers High 8-bit");
+    const auto nvenc = [&](EncodeSettingsV1 request, const char* file) {
+        MediaProviderProvenanceV1 provenance;
+        EncodeQcV1 qc;
+        (void)run(request, directory / file, options, &provenance, &qc);
+        test::check(provenance.provider == kFfmpegNvencProviderId && qc.adjustment.empty(),
+                    "NVENC serves the request itself");
+        return qc;
+    };
+    auto mp4 = settings;
+    mp4.container = "mp4";
+    mp4.audioCodec = "aac";
+    (void)nvenc(mp4, "nvenc-h264.mp4");
+    auto hevc = settings;
+    hevc.videoCodec = "hevc";
+    hevc.profile = "main";
+    test::check(nvenc(hevc, "nvenc-hevc.mov").bitDepth == 8, "NVENC HEVC Main is 8-bit");
+    hevc.profile = "main10";
+    const auto ten = nvenc(hevc, "nvenc-hevc-main10.mov");
+    test::check(ten.profile == "Main 10" && ten.bitDepth == 10,
+                "NVENC delivers real 10-bit HEVC Main 10");
+    hevc.container = "mp4";
+    hevc.audioCodec = "aac";
+    (void)nvenc(hevc, "nvenc-hevc-main10.mp4");
+    // Extents that are not whole blocks round-trip through the reopen check too.
+    for (const auto* codec : {"h264", "hevc"}) {
+        auto odd = settings;
+        odd.videoCodec = codec;
+        odd.profile = std::string_view(codec) == "h264" ? "high" : "main";
+        odd.width = 1918;
+        odd.height = 1078;
+        odd.frames = 6;
+        odd.audioCodec.clear();
+        odd.audioSamples = 0;
+        (void)nvenc(odd, (std::string("nvenc-") + codec + "-1918x1078.mov").c_str());
+    }
+    return 0;
+}
 int main(int argc, char** argv) {
     try {
-        test::check(argc == 2, "test output directory");
+        test::check(argc == 2 || (argc == 3 && std::string_view(argv[2]) == "--nvenc"),
+                    "test output directory");
+        if (argc == 3)
+            return nvencTests(argv[1]);
         tests(argv[1]);
         chromaSampling(argv[1]);
         // Issue #352: one 8K UHD ProRes frame exports and passes reopen quality check.

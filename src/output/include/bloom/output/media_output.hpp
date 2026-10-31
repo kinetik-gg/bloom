@@ -63,6 +63,15 @@ struct VaapiEncodeProbeV1 {
     bool hevc = false;
 };
 [[nodiscard]] VaapiEncodeProbeV1 probeVaapiEncodeV1(std::string workerExecutable = {});
+// NVIDIA NVENC discovery (ADR 0036): whether the supervised worker opens an NVENC H.264, HEVC Main
+// and HEVC Main 10 session through the driver installed on this computer. Blocking: worker threads
+// only. All false on macOS and where no NVIDIA driver answers.
+struct NvencEncodeProbeV1 {
+    bool h264 = false;
+    bool hevc = false;
+    bool hevcMain10 = false;
+};
+[[nodiscard]] NvencEncodeProbeV1 probeNvencEncodeV1(std::string workerExecutable = {});
 // Whether the supervised media worker executable exists for this build. Worker threads only.
 [[nodiscard]] bool mediaWorkerAvailableV1();
 // OpenH264 ships inside the FFmpeg worker, so these three always report the bundled encoder as
