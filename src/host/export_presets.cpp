@@ -209,7 +209,11 @@ std::string_view exportFormatExtension(const ExportFormat format) noexcept {
         return "mxf";
     case ExportFormat::H264Mp4:
     case ExportFormat::HevcMp4:
+    case ExportFormat::Av1Mp4:
         return "mp4";
+    case ExportFormat::Vp9Webm:
+    case ExportFormat::Av1Webm:
+        return "webm";
     case ExportFormat::Wav:
         return "wav";
     }

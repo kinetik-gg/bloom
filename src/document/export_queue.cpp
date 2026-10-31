@@ -28,7 +28,7 @@ parseToken(const std::array<std::pair<Enum, std::string_view>, Count>& table,
     return std::nullopt;
 }
 
-constexpr std::array<std::pair<ExportFormat, std::string_view>, 11> kFormats{{
+constexpr std::array<std::pair<ExportFormat, std::string_view>, 14> kFormats{{
     {ExportFormat::Png, "png"},
     {ExportFormat::OpenExr, "exr"},
     {ExportFormat::Tiff, "tiff"},
@@ -40,6 +40,9 @@ constexpr std::array<std::pair<ExportFormat, std::string_view>, 11> kFormats{{
     {ExportFormat::HevcMov, "hevc-mov"},
     {ExportFormat::HevcMp4, "hevc-mp4"},
     {ExportFormat::Wav, "wav"},
+    {ExportFormat::Vp9Webm, "vp9-webm"},
+    {ExportFormat::Av1Webm, "av1-webm"},
+    {ExportFormat::Av1Mp4, "av1-mp4"},
 }};
 
 constexpr std::array<std::pair<ExportRangeKind, std::string_view>, 4> kRangeKinds{{
@@ -68,6 +71,7 @@ constexpr std::array<std::string_view, 1> kH264Profiles{"high"};
 constexpr std::array<std::string_view, 2> kHevcProfiles{"main", "main10"};
 constexpr std::array<std::string_view, 2> kDpxProfiles{"10bit", "16bit"};
 constexpr std::array<std::string_view, 2> kWavProfiles{"s16", "s24"};
+constexpr std::array<std::string_view, 2> kBitDepthProfiles{"8bit", "10bit"};
 
 [[nodiscard]] bool validText(const std::string_view value) noexcept {
     if (value.size() > kExportTextMaximumBytes)
@@ -158,6 +162,10 @@ std::span<const std::string_view> exportCodecProfiles(const ExportFormat format)
         return kDpxProfiles;
     case ExportFormat::Wav:
         return kWavProfiles;
+    case ExportFormat::Vp9Webm:
+    case ExportFormat::Av1Webm:
+    case ExportFormat::Av1Mp4:
+        return kBitDepthProfiles;
     default:
         return {};
     }

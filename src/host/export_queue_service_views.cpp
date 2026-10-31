@@ -151,6 +151,16 @@ std::optional<std::uint64_t> estimateBytes(const document::ExportOutputSettings&
         bytes = seconds * kbps * 125.0 + audio;
         break;
     }
+    case ExportFormat::Vp9Webm:
+    case ExportFormat::Av1Webm:
+    case ExportFormat::Av1Mp4:
+        // Constant quality has no target rate: a generous bits-per-pixel bound for the default
+        // quality (VP9 spends more than AV1), and 10-bit a quarter more.
+        bytes = pixels * static_cast<double>(frames) *
+                    (settings.format == ExportFormat::Vp9Webm ? 0.12 : 0.08) *
+                    (settings.codecProfile == "10bit" ? 1.25 : 1.0) / 8.0 +
+                audio;
+        break;
     case ExportFormat::ProResMov:
     case ExportFormat::DnxhrMxf:
         bytes = pixels * static_cast<double>(frames) * intraBitsPerPixel(settings) / 8.0 + audio;

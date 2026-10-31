@@ -237,7 +237,7 @@ void roundTripsEveryMember() {
 
 void olderDocumentMigratesAndResavesWithoutTiming() {
     auto text = encodeProject({});
-    text = replaceRegex(text, R"("minor": 32\s*\})", "\"minor\": 22\n  }");
+    text = replaceRegex(text, R"("minor": 33\s*\})", "\"minor\": 22\n  }");
     stripExportQueueV1_29(text);
     const auto typeAt = text.find("\"bloom.layer-output\"");
     const auto versionAt = text.find("\"schemaVersion\": 5", typeAt);
@@ -296,7 +296,7 @@ void olderDocumentMigratesAndResavesWithoutTiming() {
     for (const auto member : kMembers)
         expect(resaved.find(std::string("\"") + std::string(member) + "\"") == std::string::npos,
                "re-saved 1.22 document has no layer time member");
-    expect(resaved.find("\"minor\": 32") != std::string::npos, "re-save writes the current minor");
+    expect(resaved.find("\"minor\": 33") != std::string::npos, "re-save writes the current minor");
 }
 
 void rejectsInvalidMembers() {
@@ -319,7 +319,7 @@ void rejectsInvalidMembers() {
            "fixed extent with zero duration is rejected");
     expect(!decodeText(replaceRegex(fixed, R"("kind": "fixed")", "\"kind\": \"bogus\"")),
            "unknown extent kind is rejected");
-    expect(!decodeText(replaceRegex(fixed, R"("minor": 32\s*\})", "\"minor\": 22\n  }")),
+    expect(!decodeText(replaceRegex(fixed, R"("minor": 33\s*\})", "\"minor\": 22\n  }")),
            "layer time members are not accepted in a 1.22 document");
 }
 } // namespace

@@ -102,7 +102,8 @@ the service itself issues is the asset import an output explicitly asks for (sec
 
 `labelColor` uses the layer label representation: three integers `0..255`. `format` tokens are
 the closed 1.29 vocabulary: `png`, `exr`, `tiff`, `dpx`, `prores-mov`, `dnxhr-mxf`, `h264-mov`,
-`h264-mp4`, `hevc-mov`, `hevc-mp4`, `wav`. Ids are allocator-backed decimal strings and
+`h264-mp4`, `hevc-mov`, `hevc-mp4`, `wav`; document 1.33 adds `vp9-webm`, `av1-webm` and
+`av1-mp4` (ADR 0036). Ids are allocator-backed decimal strings and
 project-global per namespace. Bounds: 1,024 jobs, 16 outputs per job, 4 KiB per string. A job's
 composition must exist: deleting a composition removes its jobs in the same transaction, and undo
 restores both. Destination paths follow the 1.22 locator rules (relative to the project folder when

@@ -91,9 +91,15 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
     if (!closed(node, keys, state, path, fields))
         return false;
     std::size_t at = 0;
-    if (!token(*fields[at++], state, joinPath(path, "format"), document::parseExportFormat,
-               out.format) ||
-        !text(*fields[at++], state, joinPath(path, "codecProfile"), out.codecProfile))
+    if (!token(*fields[at], state, joinPath(path, "format"), document::parseExportFormat,
+               out.format))
+        return false;
+    // The WebM and AV1 tokens exist from document 1.33; an older document cannot name them.
+    if (document::isDocument133ExportFormat(out.format) &&
+        state.documentMinor < document::kExportWebmFormatsMinor)
+        return fail(state, joinPath(path, "format"));
+    ++at;
+    if (!text(*fields[at++], state, joinPath(path, "codecProfile"), out.codecProfile))
         return false;
     if (hasBitrate) {
         std::uint32_t bitrate = 0;

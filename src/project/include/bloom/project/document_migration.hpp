@@ -250,6 +250,12 @@ migrateNodeGroupColorsV1_30(const JsonValue& root, std::pmr::memory_resource* re
 [[nodiscard]] MigrationStepOutcome
 migrateKeyframeHandleModesV1_31(const JsonValue& root, std::pmr::memory_resource* resource,
                                 std::pmr::vector<char>& output);
+// WebM and AV1 export formats, document 1.32 -> 1.33: version-only. The export output `format`
+// vocabulary gains `vp9-webm`, `av1-webm` and `av1-mp4` and `codecProfile` gains `8bit`; no older
+// document can contain them.
+[[nodiscard]] MigrationStepOutcome
+migrateWebmExportFormatsV1_32(const JsonValue& root, std::pmr::memory_resource* resource,
+                              std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -282,7 +288,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 28}, {1, 29}, migrateExportQueueV1_28},
     MigrationStepDescriptor{{1, 29}, {1, 30}, migrateEasingAndLayerFlagsV1_29},
     MigrationStepDescriptor{{1, 30}, {1, 31}, migrateNodeGroupColorsV1_30},
-    MigrationStepDescriptor{{1, 31}, {1, 32}, migrateKeyframeHandleModesV1_31}};
+    MigrationStepDescriptor{{1, 31}, {1, 32}, migrateKeyframeHandleModesV1_31},
+    MigrationStepDescriptor{{1, 32}, {1, 33}, migrateWebmExportFormatsV1_32}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

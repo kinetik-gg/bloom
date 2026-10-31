@@ -69,9 +69,11 @@ struct ExportRenderSettings final {
     friend bool operator==(const ExportRenderSettings&, const ExportRenderSettings&) = default;
 };
 
-// The closed output-format vocabulary of document 1.29. Values are serialized as tokens (ADR 0033,
-// "Schema"); the numeric values here are not persisted. A newer minor may add tokens; an unknown
-// token at a supported minor is a decode error, exactly as for other closed document vocabularies.
+// The closed output-format vocabulary of document 1.29, extended by document 1.33 with the WebM
+// and AV1 formats. Values are serialized as tokens (ADR 0033, "Schema"); the numeric values here
+// are not persisted. A newer minor may add tokens; an unknown token at a supported minor (or a 1.33
+// token in an older document) is a decode error, exactly as for other closed document
+// vocabularies.
 enum class ExportFormat : std::uint8_t {
     // Image formats: one file per frame (a still when the range is one frame).
     Png = 1,     // "png": 8-bit straight RGBA, display-referred
@@ -86,7 +88,19 @@ enum class ExportFormat : std::uint8_t {
     HevcMov = 9,   // "hevc-mov" (issue #369)
     HevcMp4 = 10,  // "hevc-mp4" (issue #369)
     Wav = 11,      // "wav": PCM WAV/BWF, RF64 when large
+    // Document 1.33 (ADR 0036): the bundled SVT-AV1, libvpx and Opus encoders.
+    Vp9Webm = 12, // "vp9-webm": VP9 with Opus audio in WebM
+    Av1Webm = 13, // "av1-webm": AV1 with Opus audio in WebM
+    Av1Mp4 = 14,  // "av1-mp4": AV1 with AAC audio in MP4
 };
+
+// The first document minor that accepts the WebM and AV1 format tokens.
+inline constexpr std::uint32_t kExportWebmFormatsMinor = 33;
+// True for the formats document 1.33 added; an older document cannot name them.
+[[nodiscard]] constexpr bool isDocument133ExportFormat(const ExportFormat format) noexcept {
+    return format == ExportFormat::Vp9Webm || format == ExportFormat::Av1Webm ||
+           format == ExportFormat::Av1Mp4;
+}
 
 // Which encoder implementation a movie output asks for. A preference, not a guarantee: the
 // runner reports the encoder it actually used in the output's verification.
@@ -113,9 +127,11 @@ struct ExportSequenceNaming final {
 struct ExportOutputSettings final {
     ExportFormat format = ExportFormat::H264Mp4;
     // Closed per format: ProRes "proxy|lt|422|hq|4444|4444xq", DNxHR "lb|sq|hq|hqx|444",
-    // H.264 "high", HEVC "main|main10", DPX "10bit|16bit", WAV "s16|s24".
+    // H.264 "high", HEVC "main|main10", DPX "10bit|16bit", WAV "s16|s24", VP9 and AV1
+    // "8bit|10bit".
     std::string codecProfile;
-    // Movie target bit rate for H.264/HEVC; absent means the preset default.
+    // Movie target bit rate for H.264/HEVC; absent means the preset default. AV1 and VP9 encode at
+    // constant quality and ignore it.
     std::optional<std::uint32_t> videoBitrateKbps;
     // EXR compression token ("zip", "piz", ...).
     std::string compression;

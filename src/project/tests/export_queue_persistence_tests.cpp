@@ -1,5 +1,6 @@
 // Document 1.29 (ADR 0033): the export queue persists in run order, round-trips byte for byte,
-// and the 1.28 -> 1.29 migration gives older projects an empty queue.
+// and the 1.28 -> 1.29 migration gives older projects an empty queue. Document 1.33 (ADR 0036)
+// adds the WebM and AV1 formats, which no older document may name.
 #include <bloom/document/document.hpp>
 #include <bloom/document/export_queue.hpp>
 #include <bloom/document/new_project.hpp>
@@ -135,7 +136,7 @@ void testRoundTrip() {
 
 void testMigration() {
     const auto current = encode(makeDocument(false));
-    auto older = replaceOnce(current, "\"minor\": 32", "\"minor\": 28");
+    auto older = replaceOnce(current, "\"minor\": 33", "\"minor\": 28");
     older = std::regex_replace(
         older, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
     older = std::regex_replace(
@@ -151,9 +152,9 @@ void testMigration() {
            "a 1.28 document decodes with an empty queue");
     // To the current 1.31: the export-queue step, the easing step, then the version-only node group
     // colour step.
-    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 28}, {1, 32},
+    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 28}, {1, 33},
                                              kProductionDocumentMigrationSteps, {}, operation);
-    expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 4,
+    expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 5,
            "1.28 to 1.31 runs the export-queue, easing and node group colour steps");
     if (migrated.outcome() != MigrationOutcome::Migrated)
         return;
@@ -165,10 +166,10 @@ void testMigration() {
            "a migrated 1.28 project equals the same project saved at 1.31");
 
     // The already-migrated guard: a 1.28-labelled file that already has the queue is refused.
-    const auto mislabelled = replaceOnce(current, "\"minor\": 32", "\"minor\": 28");
+    const auto mislabelled = replaceOnce(current, "\"minor\": 33", "\"minor\": 28");
     auto bad = parseStrictJsonDom(std::as_bytes(std::span(mislabelled)), {}, operation);
     if (bad) {
-        const auto refused = migrateDocumentDom(bad.document()->root(), {1, 28}, {1, 32},
+        const auto refused = migrateDocumentDom(bad.document()->root(), {1, 28}, {1, 33},
                                                 kProductionDocumentMigrationSteps, {}, operation);
         expect(refused.outcome() != MigrationOutcome::Migrated,
                "a 1.28 file that already carries the queue is not migrated twice");
@@ -256,6 +257,70 @@ void testRejects() {
     }
 }
 
+// Document 1.33: the WebM and AV1 formats and their bit-depth profiles round-trip, a document that
+// claims 1.32 cannot name them, and a 1.32 document migrates to 1.33 without changing any member.
+void testWebmFormats() {
+    auto seed = makeNewProject("Export queue", "Main", core::RationalTime::fromInteger(2));
+    auto webm = job(1, seed.initialCompositionId);
+    const std::array formats{std::pair{ExportFormat::Vp9Webm, "10bit"},
+                             std::pair{ExportFormat::Av1Webm, "8bit"},
+                             std::pair{ExportFormat::Av1Mp4, "10bit"}};
+    webm.outputs.clear();
+    for (std::size_t index = 0; index < formats.size(); ++index) {
+        ExportOutput output;
+        output.id = ExportOutputId::fromRaw(10 + index);
+        output.presetId = "builtin:custom";
+        output.settings.format = formats[index].first;
+        output.settings.codecProfile = formats[index].second;
+        output.destination.path = "Exports/{name}";
+        webm.outputs.push_back(output);
+    }
+    seed.project.setExportQueue({{webm}});
+    const Document document{std::move(seed.project)};
+    const auto text = encode(document);
+    expect(text.find("\"minor\": 33\n  },\n  \"project\"") != std::string::npos,
+           "the document is written at 1.33");
+    for (const auto* token : {"\"vp9-webm\"", "\"av1-webm\"", "\"av1-mp4\"", "\"8bit\""})
+        expect(text.find(token) != std::string::npos, "each 1.33 token is written");
+    const auto decoded = decodeQueue(text);
+    expect(decoded && *decoded == document.snapshot().project().exportQueue(),
+           "the WebM and AV1 outputs decode exactly");
+    for (const auto& output : webm.outputs)
+        expect(validateExportOutput(output).ok(), "a WebM or AV1 output validates");
+    auto wrong = webm.outputs[0];
+    wrong.settings.codecProfile = "main10";
+    expect(!validateExportOutput(wrong).ok(), "an HEVC profile does not apply to VP9");
+
+    const auto older = replaceOnce(text, "\"minor\": 33\n  },\n  \"project\"",
+                                   "\"minor\": 32\n  },\n  \"project\"");
+    expect(!decodeQueue(older), "a document claiming 1.32 cannot name a 1.33 format");
+
+    const auto plain = encode(makeDocument(true));
+    const auto plain132 = replaceOnce(plain, "\"minor\": 33\n  },\n  \"project\"",
+                                      "\"minor\": 32\n  },\n  \"project\"");
+    expect(static_cast<bool>(decodeQueue(plain132)), "a 1.32 queue without new formats decodes");
+    auto operation = memory();
+    auto parsed = parseStrictJsonDom(std::as_bytes(std::span(plain132)), {}, operation);
+    if (!parsed)
+        throw std::runtime_error("1.32 parse");
+    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 32}, {1, 33},
+                                             kProductionDocumentMigrationSteps, {}, operation);
+    expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 1 &&
+               migrated.migratedRoot() != nullptr,
+           "1.32 -> 1.33 is one version-only step");
+    if (migrated.migratedRoot() == nullptr)
+        return;
+    auto envelope = decodeDocumentEnvelope(*migrated.migratedRoot());
+    expect(static_cast<bool>(envelope) &&
+               envelope.value()->exportQueue == makeDocument(true).snapshot().project().exportQueue(),
+           "the migrated queue is unchanged");
+    if (!envelope)
+        return;
+    auto rebuilt = reconstructDocument(std::move(*envelope.value()));
+    expect(static_cast<bool>(rebuilt) && encode(*rebuilt.value()->document) == plain,
+           "re-saving a migrated 1.32 project changes only the schema minor");
+}
+
 } // namespace
 
 int main() {
@@ -264,6 +329,7 @@ int main() {
         testMigration();
         testRejects();
         testUseCachedFrames();
+        testWebmFormats();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

@@ -1,7 +1,8 @@
 # Bloom Project Format
 
-The current document schema is 1.32. It adds the optional keyframe member `handleMode` (see "Keyframe
-Handle Modes In Document 1.32"). Document 1.31 added the optional node group `color` (see "Node Group
+The current document schema is 1.33. It adds the export formats `vp9-webm`, `av1-webm` and `av1-mp4`
+and their codec profiles (see "Export Formats In Document 1.33"). Document 1.32 added the optional
+keyframe member `handleMode` (see "Keyframe Handle Modes In Document 1.32"). Document 1.31 added the optional node group `color` (see "Node Group
 Colors In Document 1.31"). Document 1.30 added Blender's keyframe easing equations (ten interpolation
 tokens and the optional keyframe `easing` member) and the optional presentation-only layer members
 `shy` and `nameFollowsSource` (see "Easing And Layer Flags In Document 1.30"). Document 1.29 added
@@ -1392,9 +1393,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.32`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.33`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.32.schema.json` and `manifest-1.32.schema.json`; the
+The current artifacts are `document-1.33.schema.json` and `manifest-1.33.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1577,6 +1578,23 @@ audio source's asset name, or a nested composition's name; see
 [layer-graph-model.md](layer-graph-model.md#layer-timeline-contract)). Following the source therefore
 changes no visible name. The DOM step, which archive loading does not run, leaves the flag absent.
 
+## Export Formats In Document 1.33
+
+Document `1.33` adds three export output formats for the bundled web encoders
+([ADR 0036](../decisions/0036-bundled-codec-libraries.md)): `vp9-webm` (VP9 with Opus audio in
+WebM), `av1-webm` (AV1 with Opus audio in WebM) and `av1-mp4` (AV1 with AAC audio in MP4). Their
+`codecProfile` is empty (the format default, 8-bit) or one of `8bit` and `10bit`; the profile
+vocabulary gains `8bit`. `videoBitrateKbps` is kept but does not apply to them (they encode at
+constant quality), and a WebM output's audio is mixed at 48 kHz whatever `audioSampleRate` says.
+The decoder accepts the three format tokens only at `1.33` or later: a document claiming an older
+minor that names one is refused like any unknown token. The `1.32` → `1.33` DOM step
+`migrateWebmExportFormatsV1_32` only advances the version; no older document can contain the new
+tokens, so every older queue opens unchanged. The schema artifacts move the format and profile
+vocabularies into `exportFormat-1.33` and `exportCodecProfile-1.33`.
+
+The `1.31` → `1.32` step now writes minor `32` (it wrote `31` while `1.32` was the newest minor,
+which the next step's source-version check would have refused).
+
 ## Keyframe Handle Modes In Document 1.32
 
 Document `1.32` adds the per-key handle mode
@@ -1617,7 +1635,8 @@ never reused.
 1.29 vocabulary `png`, `exr`, `tiff`, `dpx`, `prores-mov`, `dnxhr-mxf`, `h264-mov`, `h264-mp4`,
 `hevc-mov`, `hevc-mp4`, `wav`; `codecProfile` is empty (the format default) or a token the format
 accepts (ProRes `proxy|lt|422|hq|4444|4444xq`, DNxHR `lb|sq|hq|hqx|444`, H.264 `high`, HEVC
-`main|main10`, DPX `10bit|16bit`, WAV `s16|s24`). The shapes are closed. Bounds: 1,024 jobs, 1 to 16
+`main|main10`, DPX `10bit|16bit`, WAV `s16|s24`; from 1.33 also the WebM and AV1 formats with
+`8bit|10bit`, see "Export Formats In Document 1.33"). The shapes are closed. Bounds: 1,024 jobs, 1 to 16
 outputs per job, 4 KiB per string, frame padding 1 to 12, one `####` or `{frame}` in a naming
 pattern. A job's composition must exist: deleting a composition removes its jobs in the same edit,
 and undo restores both. A project-relative destination is a relative path below the project folder;

@@ -25,7 +25,7 @@ namespace bloom::project {
 // that merely names a CanonicalDocumentV1.
 class RoundTripState;
 
-inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 32};
+inline constexpr document::SchemaVersion kCanonicalDocumentSchemaVersionV1{1, 33};
 inline constexpr document::SchemaVersion kMinimumDocumentSchemaVersionV1{1, 15};
 // The first document minor that stores the layer `nameFollowsSource` flag; an older one infers it.
 inline constexpr std::uint32_t kLayerNameFollowsSourceMinor = 30;

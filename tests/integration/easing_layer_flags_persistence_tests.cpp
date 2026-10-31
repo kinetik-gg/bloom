@@ -156,7 +156,7 @@ void roundTrip() {
     const auto snapshot = fixture.document.snapshot();
     const auto archive = save(snapshot);
     const auto text = documentText(archive);
-    expect(text.find("\"minor\": 32") != std::string::npos, "the document is written at 1.32");
+    expect(text.find("\"minor\": 33") != std::string::npos, "the document is written at 1.33");
     expect(text.find("\"elastic\"") != std::string::npos &&
                text.find("\"bounce\"") != std::string::npos,
            "the easing equations are written with their tokens");
@@ -189,7 +189,7 @@ void olderDocuments() {
 
     // A 1.29 file cannot carry 1.30's tokens or members.
     auto mislabelled = text;
-    mislabelled.replace(mislabelled.find("\"minor\": 32"), std::string_view("\"minor\": 32").size(),
+    mislabelled.replace(mislabelled.find("\"minor\": 33"), std::string_view("\"minor\": 33").size(),
                         "\"minor\": 29");
     const auto refused = decode(mislabelled);
     expect(!refused, "a document claiming 1.29 while carrying an easing equation is refused");
@@ -199,7 +199,7 @@ void olderDocuments() {
         std::regex_replace(text, std::regex(R"re(,\s*"(shy|nameFollowsSource)": true)re"), "");
     older = std::regex_replace(older, std::regex(R"(,\s*"easing": \{[^}]*\})"), "");
     older = std::regex_replace(older, std::regex(R"re("(elastic|bounce)")re"), "\"linear\"");
-    older.replace(older.find("\"minor\": 32"), std::string_view("\"minor\": 32").size(),
+    older.replace(older.find("\"minor\": 33"), std::string_view("\"minor\": 33").size(),
                   "\"minor\": 29");
     const auto decoded = decode(older);
     expect(static_cast<bool>(decoded), "a 1.29 document decodes");

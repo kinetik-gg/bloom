@@ -155,7 +155,8 @@ enum class Step {
     ExportQueue,
     EasingAndLayerFlags,
     NodeGroupColors,
-    KeyframeHandleModes
+    KeyframeHandleModes,
+    WebmExportFormats
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -188,6 +189,10 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // Keyframe handle modes (1.31 -> 1.32) are version-only: the keyframe `handleMode` member is
     // optional and absent means Free.
     if (step == Step::KeyframeHandleModes)
+        return false;
+    // The WebM and AV1 export formats (1.32 -> 1.33) are version-only: they add tokens no older
+    // document can contain.
+    if (step == Step::WebmExportFormats)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -372,7 +377,8 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::ExportQueue          ? "{\"major\":1,\"minor\":29}"
                            : step == Step::EasingAndLayerFlags  ? "{\"major\":1,\"minor\":30}"
                            : step == Step::NodeGroupColors      ? "{\"major\":1,\"minor\":31}"
-                           : step == Step::KeyframeHandleModes  ? "{\"major\":1,\"minor\":31}"
+                           : step == Step::KeyframeHandleModes  ? "{\"major\":1,\"minor\":32}"
+                           : step == Step::WebmExportFormats    ? "{\"major\":1,\"minor\":33}"
                                                                 : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -924,6 +930,13 @@ MigrationStepOutcome migrateKeyframeHandleModesV1_31(const JsonValue& root,
                                                      std::pmr::memory_resource*, Buffer& output) {
     if (!sourceVersionIs(root, "31") ||
         !transform(root, Scope::Root, Step::KeyframeHandleModes, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateWebmExportFormatsV1_32(const JsonValue& root,
+                                                   std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "32") ||
+        !transform(root, Scope::Root, Step::WebmExportFormats, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }
