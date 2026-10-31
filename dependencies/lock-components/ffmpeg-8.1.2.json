@@ -40,9 +40,9 @@
     "modified": false,
     "reviewRecord": {
       "path": "dependencies/licenses/ffmpeg/review.md",
-      "sha256": "sha256:927fb4d5d76328b7d47a45ecad37f6f9674693aaf8a37e567b885308c3fb1570"
+      "sha256": "sha256:deda7bd1c1b620c5d69fa9167fd350ebec38f702b84f286d9fb928f9e7540a66"
     },
-    "reviewedAt": "2026-09-17"
+    "reviewedAt": "2026-10-31"
   },
   "patches": [],
   "dependencies": [
@@ -69,7 +69,7 @@
         {
           "id": "bloom.feature.ffmpeg-openh264",
           "state": "enabled",
-          "reason": "OpenH264 2.6.0 is built only as a private FFmpeg link-time stub; Cisco's runtime binary is fetched separately"
+          "reason": "H.264 software encode through the libopenh264 wrapper; OpenH264 2.6.0 is built from source as a static archive linked into libavcodec"
         },
         {
           "id": "bloom.feature.ffmpeg-vaapi",

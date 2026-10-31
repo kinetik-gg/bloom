@@ -43,21 +43,11 @@ add_executable(bloom_ffmpeg_consume_smoke "${CMAKE_BINARY_DIR}/ffmpeg_consume_sm
 target_link_libraries(bloom_ffmpeg_consume_smoke PRIVATE FFmpeg::avcodec FFmpeg::avformat)
 target_compile_features(bloom_ffmpeg_consume_smoke PRIVATE cxx_std_20)
 
-# libavcodec records DT_NEEDED libopenh264.so.8, but the qualified prefix deliberately carries only
-# a text import stub and never an OpenH264 runtime binary (see openh264-boundary.cmake). The worker
-# runtime directory holds the six-symbol OpenH264 shim that satisfies the two symbols libavcodec
-# references, so resolve the link and run against it when the caller supplies that directory.
-set(BLOOM_FFMPEG_CONSUME_LIBRARY_PATH "${BLOOM_DEPENDENCY_PREFIX}/lib")
-if(DEFINED BLOOM_MEDIA_WORKER_RUNTIME)
-    target_link_directories(bloom_ffmpeg_consume_smoke PRIVATE "${BLOOM_MEDIA_WORKER_RUNTIME}")
-    target_link_options(bloom_ffmpeg_consume_smoke PRIVATE
-        "LINKER:-rpath-link,${BLOOM_MEDIA_WORKER_RUNTIME}")
-    string(APPEND BLOOM_FFMPEG_CONSUME_LIBRARY_PATH ":${BLOOM_MEDIA_WORKER_RUNTIME}")
-endif()
-
+# The bundled codecs are linked into libavcodec (codec-boundary.cmake), so the prefix's FFmpeg
+# libraries resolve on their own.
 add_test(NAME bloom.dependency.ffmpeg-consume COMMAND bloom_ffmpeg_consume_smoke)
 set_tests_properties(bloom.dependency.ffmpeg-consume PROPERTIES
-    ENVIRONMENT "LD_LIBRARY_PATH=${BLOOM_FFMPEG_CONSUME_LIBRARY_PATH}")
+    ENVIRONMENT "LD_LIBRARY_PATH=${BLOOM_DEPENDENCY_PREFIX}/lib")
 
 set(BLOOM_MEDIA_WORKER_RUNTIME_ARGUMENT)
 if(DEFINED BLOOM_MEDIA_WORKER_RUNTIME)
@@ -65,11 +55,11 @@ if(DEFINED BLOOM_MEDIA_WORKER_RUNTIME)
          -DBLOOM_MEDIA_WORKER_RUNTIME=${BLOOM_MEDIA_WORKER_RUNTIME})
 endif()
 add_test(
-    NAME bloom.dependency.openh264-boundary
+    NAME bloom.dependency.codec-boundary
     COMMAND ${CMAKE_COMMAND}
         -DBLOOM_DEPENDENCY_PREFIX=${BLOOM_DEPENDENCY_PREFIX}
         ${BLOOM_MEDIA_WORKER_RUNTIME_ARGUMENT}
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/openh264-boundary.cmake")
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/codec-boundary.cmake")
 
 get_filename_component(BLOOM_REPOSITORY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(BLOOM_DESKTOP_BINARY_ARGUMENT)

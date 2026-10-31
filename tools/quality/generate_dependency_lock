@@ -121,7 +121,12 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--component", type=Path, action="append", default=[])
     parser.add_argument("--replace-component", type=Path, action="append", default=[])
-    parser.add_argument("--configure-arguments", type=Path)
+    parser.add_argument(
+        "--configure-arguments",
+        action="append",
+        default=[],
+        help="NAME=PATH copies a recipe argument file into component NAME; a bare PATH is FFmpeg's",
+    )
     args = parser.parse_args()
 
     lock = read_json(args.input)
@@ -129,10 +134,18 @@ def main() -> int:
         add_component(lock, component_path)
     for component_path in args.replace_component:
         replace_component(lock, component_path)
-    if args.configure_arguments is not None:
+    for spec in args.configure_arguments:
+        name, separator, path = spec.partition("=")
+        if not separator:
+            name, path = "ffmpeg", spec
         components = lock["components"]
-        ffmpeg = next(component for component in components if component.get("name") == "ffmpeg")
-        add_configure_arguments(ffmpeg, args.configure_arguments)
+        component = next(
+            (entry for entry in components if isinstance(entry, dict) and entry.get("name") == name),
+            None,
+        )
+        if component is None:
+            raise ValueError(f"no component {name!r} for configure arguments {path}")
+        add_configure_arguments(component, Path(path))
     upgrade_schema(lock)
     write_lock(lock, args.output)
     return 0

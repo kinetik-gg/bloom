@@ -11,6 +11,7 @@
 --disable-iconv
 --disable-audiotoolbox
 --enable-pic
+--pkg-config-flags=--static
 --enable-demuxer=mov
 --enable-demuxer=matroska
 --enable-demuxer=mxf
@@ -19,6 +20,7 @@
 --enable-demuxer=mp3
 --enable-demuxer=aac
 --enable-muxer=mov
+--enable-muxer=mp4
 --enable-muxer=matroska
 --enable-muxer=mxf
 --enable-muxer=wav

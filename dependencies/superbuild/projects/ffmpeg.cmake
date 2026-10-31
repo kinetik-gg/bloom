@@ -22,6 +22,8 @@ if(BLOOM_FFMPEG_ENABLE_VAAPI AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "BLOOM_FFMPEG_ENABLE_VAAPI is Linux-only")
 endif()
 
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_LIST_DIR}/ffmpeg.configure-arguments")
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/ffmpeg.configure-arguments"
     BLOOM_FFMPEG_CONFIGURE_ARGUMENTS)
 if(NOT BLOOM_FFMPEG_ENABLE_VAAPI)
@@ -49,18 +51,10 @@ else()
     endif()
 endif()
 
-# OpenH264: the link-time stub and Cisco's runtime fetch are the Linux x86-64 profile
-# (openh264.cmake builds a GNU ld import script; the lock records only linux64 runtime digests). The
-# macOS and Windows FFmpeg builds therefore omit the libopenh264 wrapper; H.264 encode there comes
-# from the platform media framework.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(BLOOM_FFMPEG_DEPENDS bloom_dependency_openh264)
-else()
-    set(BLOOM_FFMPEG_DEPENDS)
-    list(REMOVE_ITEM BLOOM_FFMPEG_CONFIGURE_ARGUMENTS
-        --enable-libopenh264
-        --enable-encoder=libopenh264)
-endif()
+# Bundled permissive codecs (codec-common.cmake): OpenH264 (H.264 encode) is a static archive
+# linked into libavcodec on every platform, so the worker ships no extra runtime file.
+# --pkg-config-flags=--static makes FFmpeg read its Libs.private runtime libraries.
+set(BLOOM_FFMPEG_DEPENDS bloom_dependency_openh264)
 
 # x86 SIMD: FFmpeg's x86 assembly is built with the superbuild-private NASM (nasm.cmake). Other
 # targets use FFmpeg's inline/NEON assembly and need neither the tool nor the argument.

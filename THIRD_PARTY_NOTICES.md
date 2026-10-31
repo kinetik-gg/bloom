@@ -17,8 +17,8 @@ component, and its own records explain why the lock cannot represent it.
 | --- | --- | --- | --- | --- |
 | nanobind | 3.0.1 | BSD-3-Clause | Precompiled static core for the optional Python bridge | `dependencies/licenses/nanobind/` |
 | robin-map | 1.4.0 | MIT | Unmodified headers inside the nanobind archive and static core | `dependencies/licenses/robin_map/` |
-| FFmpeg | 8.1.2 | LGPL-2.1-or-later | Shared libraries for the future Linux `bloom-media-worker` only; ProRes is non-authorized preview output | `dependencies/licenses/ffmpeg/`, `dependencies/dependencies.lock.json` |
-| OpenH264 | 2.6.0 | BSD-2-Clause plus Cisco binary terms | Private source-built FFmpeg link-time stub; Cisco `libopenh264.so.8` is fetched by the end user's machine after consent and is never bundled | `dependencies/licenses/openh264/`, `dependencies/dependencies.lock.json` |
+| FFmpeg | 8.1.2 | LGPL-2.1-or-later | Shared libraries private to `bloom-media-worker` on Linux, macOS and Windows; ProRes is non-authorized preview output | `dependencies/licenses/ffmpeg/`, `dependencies/dependencies.lock.json` |
+| OpenH264 | 2.6.0 | BSD-2-Clause | H.264 encoder built from source as a static archive inside the worker's `libavcodec`; ships with Bloom, nothing is downloaded | `dependencies/licenses/openh264/`, `dependencies/dependencies.lock.json` |
 | NASM | 2.16.03 | BSD-2-Clause | Build-host-only assembler for FFmpeg's x86 SIMD; installed outside the dependency prefix, never linked or shipped | `dependencies/licenses/nasm/`, `dependencies/dependencies.lock.json` |
 | glslang | 16.4.0 | BSD-3-Clause AND BSD-2-Clause AND MIT AND Apache-2.0 AND GPL-3.0-or-later WITH Bison-exception-2.2 | Runtime `glslangValidator` staged beside the desktop/CLI/MCP executables under the private `bloom-gpu-tools/` directory, with its full `LICENSES/` set | `dependencies/licenses/glslang/`, `dependencies/dependencies.lock.json` |
 | SPIRV-Tools | b707790a898e44038547df54580022fc1cf89c3d | Apache-2.0 | Runtime `spirv-val` staged beside the desktop/CLI/MCP executables under the private `bloom-gpu-tools/` directory, with the Apache-2.0 text | `dependencies/licenses/spirv-tools/`, `dependencies/dependencies.lock.json` |
@@ -34,13 +34,16 @@ FFmpeg's corresponding-source obligation is the exact locked official release ar
 recipe, detached-signature evidence, and license/review/security records are the authority for the
 configuration and source offer; the desktop `bloom` target does not link FFmpeg.
 
-OpenH264's corresponding source is the locked Cisco v2.6.0 source archive. The redistributed
-runtime binary is downloaded only from Cisco's HTTPS endpoint, verified against the lock's archive
-and decompressed-library digests, and installed in a per-user directory. Bloom does not bundle or
-load the private source-built stub at runtime. Bloom's separate `libopenh264.so.8` loader shim is
-Bloom-owned code with six re-declared public ABI signatures, no Cisco implementation, and no
-third-party runtime contents; it keeps the worker loadable for decode when the Cisco binary is
-absent.
+The bundled codec libraries (OpenH264) are compiled from their locked source archives into the
+worker's LGPL `libavcodec`; each archive is part of that library's corresponding source, and each
+licence text is part of Bloom's third-party licence catalogue. Bloom uses no Cisco-distributed
+binary.
+
+### OpenH264
+
+Copyright (c) 2013, Cisco Systems. All rights reserved. Redistribution and use in source and
+binary forms, with or without modification, are permitted under the BSD-2-Clause terms in
+`dependencies/licenses/openh264/LICENSE`.
 
 ## Vendored interface assets
 

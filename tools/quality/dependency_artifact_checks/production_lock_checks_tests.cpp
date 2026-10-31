@@ -2,8 +2,10 @@
 
 #include "production_lock_checks.hpp"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -448,6 +450,37 @@ void testMinorThreeBuildOnlyLinkage(const Path& repositoryRoot, Expectations& ex
                         "an unknown schema minor is rejected rather than loosened");
 }
 
+// A recipe argument file beside a component's recipe binds its locked configure vector line for
+// line, the same byte check FFmpeg's vector has always had (the bundled codec libraries use it).
+void testRecipeConfigureArguments(const Path& repositoryRoot, Expectations& expectations) {
+    const ProductionFixture fixture(repositoryRoot);
+    fixture.temporary.write(
+        "dependencies/superbuild/projects/component.synthetic.configure-arguments",
+        "--enable-alpha\n-Dbeta=false\n");
+    const auto withArguments = [](std::initializer_list<Value> arguments) {
+        auto lock = minimalProductionLock();
+        auto& members = lock.at("components").asArray().front().asObject();
+        const auto version = std::ranges::find_if(
+            members, [](const auto& member) { return member.first == "version"; });
+        members.insert(std::next(version), {"configureArguments", array(arguments)});
+        return lock;
+    };
+
+    fixture.rejectsWith(minimalProductionLock(), "recipe-configure-arguments", expectations,
+                        "a component with a recipe argument file must lock its vector");
+    fixture.rejectsWith(withArguments({text("--enable-alpha"), text("-Dbeta=true")}),
+                        "recipe-configure-arguments", expectations,
+                        "a locked vector differing from the recipe file is rejected");
+    fixture.rejectsWith(withArguments({text("--enable-alpha")}), "recipe-configure-arguments",
+                        expectations, "a locked vector shorter than the recipe file is rejected");
+
+    fixture.temporary.write(
+        "dependencies/dependencies.lock.json",
+        dependency::encodeCanonical(withArguments({text("--enable-alpha"), text("-Dbeta=false")})));
+    const auto accepted = dependency::validateProductionLock(fixture.temporary.root());
+    expectations.expect(accepted.present, "the exact recipe vector is accepted");
+}
+
 } // namespace
 
 namespace bloom::quality::dependencies::tests {
@@ -463,6 +496,7 @@ auto runProductionLockTests(const std::filesystem::path& repositoryRoot) -> int 
     testPatchRules(repositoryRoot, expectations);
     testCrossReferencesAndSets(repositoryRoot, expectations);
     testMinorThreeBuildOnlyLinkage(repositoryRoot, expectations);
+    testRecipeConfigureArguments(repositoryRoot, expectations);
     return expectations.failures();
 }
 

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <ranges>
@@ -308,6 +309,13 @@ void validateComponentProduction(const Value& value, const std::string& location
     if (const auto* runtime = value.find("runtimeFetch"); runtime != nullptr)
         validateProductionRuntimeFetch(*runtime, location + ".runtimeFetch", root);
 
+    // A component whose recipe reads an adjacent `<name>.configure-arguments` file (FFmpeg and the
+    // codec libraries it links) must lock that exact vector, line for line. FFmpeg must have one.
+    const auto recipePath =
+        root / "dependencies/superbuild/projects" / (componentName + ".configure-arguments");
+    std::error_code recipeError;
+    const bool recipeVector =
+        componentName == "ffmpeg" || std::filesystem::is_regular_file(recipePath, recipeError);
     const auto* configureArguments = value.find("configureArguments");
     if (configureArguments != nullptr) {
         const auto& arguments =
@@ -318,9 +326,7 @@ void validateComponentProduction(const Value& value, const std::string& location
             const auto& argument = stringValue(arguments[index], argumentLocation);
             validatePrintableToken(argument, argumentLocation);
         }
-        if (componentName == "ffmpeg") {
-            const auto recipePath =
-                root / "dependencies/superbuild/projects/ffmpeg.configure-arguments";
+        if (recipeVector) {
             const auto recipeBytes = readBounded(recipePath, static_cast<std::size_t>(64) * 1024U);
             std::vector<std::string> recipeArguments;
             std::size_t begin = 0;
@@ -343,12 +349,12 @@ void validateComponentProduction(const Value& value, const std::string& location
             }
             if (arguments.size() != recipeArguments.size()) {
                 fail("recipe-configure-arguments", location + ".configureArguments",
-                     "lock arguments must exactly match the FFmpeg recipe argument file");
+                     "lock arguments must exactly match the recipe argument file");
             }
             for (std::size_t index = 0; index < arguments.size(); ++index) {
                 if (arguments[index].asString() != recipeArguments[index]) {
                     fail("recipe-configure-arguments", location + ".configureArguments",
-                         "lock arguments must exactly match the FFmpeg recipe argument file");
+                         "lock arguments must exactly match the recipe argument file");
                 }
             }
         } else {
@@ -360,9 +366,10 @@ void validateComponentProduction(const Value& value, const std::string& location
                 }
             }
         }
-    } else if (componentName == "ffmpeg") {
+    } else if (recipeVector) {
         fail("recipe-configure-arguments", location,
-             "FFmpeg must lock the exact configure argument vector");
+             "a component with a recipe argument file must lock its exact configure argument "
+             "vector");
     }
 
     const auto& source = value.at("source");

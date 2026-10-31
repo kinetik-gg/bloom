@@ -1,0 +1,5 @@
+--buildtype=release
+--default-library=static
+--libdir=lib
+-Db_staticpic=true
+-Dtests=disabled

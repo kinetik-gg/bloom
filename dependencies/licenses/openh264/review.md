@@ -1,40 +1,36 @@
 # OpenH264 2.6.0 intake review
 
-## Source and link-time boundary
+## Role and boundary
 
-The source component is BSD-2-Clause and is unmodified. The lock records a corresponding-source
-obligation because Cisco's binary terms point end users to the matching source. The superbuild compiles it into a private
-`libopenh264.so.8` link-time stub for FFmpeg's LGPL-compatible `libopenh264` wrapper. The private
-library remains below the superbuild build tree; the qualified dependency prefix receives the
-headers and a linker import script only. No OpenH264 library is installed into a distributable
-runtime path.
+OpenH264 is Bloom's bundled H.264 software encoder. The superbuild compiles the unmodified
+BSD-2-Clause source release from its pinned archive on Linux, macOS and Windows (Meson, the
+adjacent `openh264.configure-arguments` vector) into a static, position-independent archive.
+FFmpeg's LGPL `libopenh264` wrapper links that archive into the worker's shared `libavcodec`; the
+FFmpeg version script keeps every OpenH264 symbol private to `libavcodec`. Only the encoder is
+enabled (`--disable-decoder=libopenh264`); H.264 decode stays FFmpeg's native decoder.
 
-The FFmpeg worker's resulting `DT_NEEDED` entry is `libopenh264.so.8` with no rpath to the private
-stub. At launch, the host supplies a separately verified Cisco binary directory, and the worker
-uses that directory before loading FFmpeg. The source-built library is never loaded at runtime.
+Nothing is downloaded at run time. There is no Cisco binary, no consent flow, no per-user install
+directory and no loader shim: the encoder ships inside Bloom's worker on every platform, and the
+artist installs nothing beyond Bloom.
 
-The worker also installs a separate Bloom-owned `libopenh264.so.8` loader shim beside its private
-FFmpeg libraries. The shim re-declares the six public C ABI entry points without including Cisco
-or OpenH264 headers, exports no codec implementation, returns creator failure/null, and reports
-version 0.0.0 with a shim marker. It is used for worker startup, decode, and fixture generation;
-only software H.264 encode can shadow it with the host-verified Cisco binary.
+## Licence
 
-## Runtime-fetched binary licence
+The source is BSD-2-Clause (`LICENSE`, byte-identical to the archive's copy). Binary
+redistribution reproduces that notice through `THIRD_PARTY_NOTICES.md` and the licence texts
+shipped with the worker. Because the archive is linked into the LGPL `libavcodec`, the lock
+records the corresponding-source obligation with the exact source archive digest so the shipped
+`libavcodec` can be rebuilt and relinked from locked sources.
 
-Cisco's `BINARY_LICENSE.txt` is retained beside this record and shown before first installation.
-The Cisco binary URL is HTTPS and is pinned in the reviewed lock to both the compressed archive
-digest and the decompressed `libopenh264.so.8` digest. Bloom stores the end-user consent version
-in `Bloom.conf`; it never fetches at startup or without explicit consent. The UI states that the
-binary is separately fetched from Cisco and that the user can disable or remove it.
+## Patent posture
 
-The BSD-2-Clause source licence does not itself grant the patent rights described in Cisco's
-binary terms. The installed binary is therefore accepted only when its Cisco licence text is
-shown, its URL and digest are visible in the consent flow, and the runtime asset is present only
-in the user's per-user Bloom data directory.
+The owner's decision (2026-10-31) accepts bundling a source-built H.264 encoder; codec patent
+questions outside ProRes are covered by Bloom's existing deployment warning. The BSD licence grants
+no patent rights, and no patent licence is claimed. Cisco's separately distributed binary terms do
+not apply because Bloom does not use Cisco's binary.
 
 ## Qualification posture
 
-Software H.264 is an export capability only when the host verifies the Cisco binary on every worker
-launch. VA-API H.264/HEVC hardware encode is a separate capability and is advertised only after
-the worker initializes an encode context. Neither capability is Apple authorization or archival
-qualification.
+Software H.264 is the FFmpeg worker's `h264` encode declaration, served by `libopenh264`, and is
+the silent fallback when VA-API hardware encode is unavailable or refused. It is a development
+qualification exercised by the encode/reopen round trip; it is neither Apple authorization nor an
+archival claim.

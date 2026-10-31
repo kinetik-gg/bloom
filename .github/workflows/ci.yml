@@ -52,7 +52,7 @@ jobs:
       - name: Install LLVM 22 quality tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ca-certificates cmake curl gnupg ninja-build \
+          sudo apt-get install --yes ca-certificates cmake curl gnupg ninja-build meson \
             libfontconfig1-dev libva-dev python3-dev ccache
           llvm_key=$(mktemp)
           trap 'rm -f "$llvm_key"' EXIT
@@ -90,8 +90,7 @@ jobs:
         id: cache-dependency-prefix
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          # The qualified prefix's OpenH264 link stub names the private OpenH264 install by
-          # absolute path, so the superbuild tree that holds it must restore alongside the prefix.
+          # The superbuild tree restores alongside the prefix so a cache hit skips every recipe.
           path: |
             ${{ runner.temp }}/bloom-superbuild
             build/dependency-prefix
@@ -179,7 +178,7 @@ jobs:
       - name: Install LLVM 22 quality tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ca-certificates cmake curl gnupg ninja-build \
+          sudo apt-get install --yes ca-certificates cmake curl gnupg ninja-build meson \
             libgl-dev libegl-dev libfontconfig1-dev libxkbcommon-dev libva-dev python3-dev ccache
           llvm_key=$(mktemp)
           trap 'rm -f "$llvm_key"' EXIT
@@ -242,8 +241,7 @@ jobs:
         id: cache-dependency-prefix
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          # The qualified prefix's OpenH264 link stub names the private OpenH264 install by
-          # absolute path, so the superbuild tree that holds it must restore alongside the prefix.
+          # The superbuild tree restores alongside the prefix so a cache hit skips every recipe.
           path: |
             ${{ runner.temp }}/bloom-superbuild
             build/dependency-prefix
