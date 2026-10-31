@@ -337,10 +337,9 @@ struct Encoder::State {
                         : hardwareCodec(settings) && nvenc && settings.profile == "main10"
                             ? AV_PIX_FMT_P010LE
                         : hardwareCodec(settings) ? AV_PIX_FMT_YUV420P
-                        : webCodec(settings)
-                            ? (settings.profile == "10bit" ? AV_PIX_FMT_YUV420P10LE
-                                                           : AV_PIX_FMT_YUV420P)
-                            : AV_PIX_FMT_YUV422P10LE;
+                        : webCodec(settings) ? (settings.profile == "10bit" ? AV_PIX_FMT_YUV420P10LE
+                                                                            : AV_PIX_FMT_YUV420P)
+                                             : AV_PIX_FMT_YUV422P10LE;
             if (settings.videoCodec == "prores_ks" && c.profile >= 4)
                 c.pix_fmt = AV_PIX_FMT_YUVA444P10LE;
             if (settings.videoCodec == "dnxhd") {
@@ -456,8 +455,8 @@ struct Encoder::State {
             // A fixed parallelism level instead of SVT-AV1's core-count default, so its buffer
             // counts, and the worker address space they need, do not grow with the computer:
             // level 2 up to 8K UHD, level 1 above it (av1EncodeAddressSpaceBytes).
-            const bool beyond8k = static_cast<std::uint64_t>(settings.width) * settings.height >
-                                  7680ULL * 4320ULL;
+            const bool beyond8k =
+                static_cast<std::uint64_t>(settings.width) * settings.height > 7680ULL * 4320ULL;
             av_dict_set(&options, "svtav1-params", beyond8k ? "lp=1" : "lp=2", 0);
         }
         if (video && name == "libvpx-vp9") {

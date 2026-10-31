@@ -324,14 +324,14 @@ void tests(const std::filesystem::path& directory) {
             const auto name = std::string("export-") + codec + "-" + depth;
             (void)run(web, directory / (name + ".webm"), {}, &served, &delivered);
             const bool ten = std::string_view(depth) == "10bit";
-            test::check(served.provider == kFfmpegProviderId && !served.fellBack() &&
-                            delivered.container == std::string("webm/") + codec &&
-                            delivered.bitDepth == (ten ? 10U : 8U) &&
-                            delivered.adjustment.empty() &&
-                            delivered.profile == (std::string_view(codec) == "av1" ? "Main"
-                                                  : ten                          ? "Profile 2"
-                                                                                 : "Profile 0"),
-                        "the bundled VP9/AV1 encoder delivers the requested depth in WebM with Opus");
+            test::check(
+                served.provider == kFfmpegProviderId && !served.fellBack() &&
+                    delivered.container == std::string("webm/") + codec &&
+                    delivered.bitDepth == (ten ? 10U : 8U) && delivered.adjustment.empty() &&
+                    delivered.profile == (std::string_view(codec) == "av1" ? "Main"
+                                          : ten                            ? "Profile 2"
+                                                                           : "Profile 0"),
+                "the bundled VP9/AV1 encoder delivers the requested depth in WebM with Opus");
             if (std::string_view(codec) == "av1") {
                 auto mp4 = web;
                 mp4.container = "mp4";

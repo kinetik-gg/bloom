@@ -908,7 +908,7 @@ void testVideoEndToEnd(const document::ExportFormat format,
     Fixture f(name, encoders);
     document::ExportOutputSettings settings;
     settings.format = format;
-    settings.codecProfile = !profile.empty()                            ? profile
+    settings.codecProfile = !profile.empty()                              ? profile
                             : format == document::ExportFormat::ProResMov ? "hq"
                                                                           : "high";
     settings.includeAudio = audio;
@@ -979,8 +979,7 @@ int main() {
                           "10bit");
         testVideoEndToEnd(document::ExportFormat::Av1Webm, linuxEncoders(), "av1-webm-10bit",
                           "10bit", true);
-        testVideoEndToEnd(document::ExportFormat::Av1Mp4, linuxEncoders(), "av1-mp4", "8bit",
-                          true);
+        testVideoEndToEnd(document::ExportFormat::Av1Mp4, linuxEncoders(), "av1-mp4", "8bit", true);
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

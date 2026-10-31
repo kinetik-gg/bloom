@@ -311,8 +311,8 @@ void testWebmFormats() {
     if (migrated.migratedRoot() == nullptr)
         return;
     auto envelope = decodeDocumentEnvelope(*migrated.migratedRoot());
-    expect(static_cast<bool>(envelope) &&
-               envelope.value()->exportQueue == makeDocument(true).snapshot().project().exportQueue(),
+    expect(static_cast<bool>(envelope) && envelope.value()->exportQueue ==
+                                              makeDocument(true).snapshot().project().exportQueue(),
            "the migrated queue is unchanged");
     if (!envelope)
         return;
