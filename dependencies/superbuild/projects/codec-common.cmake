@@ -1,11 +1,11 @@
 # Shared build plumbing for the permissively licensed codec libraries that FFmpeg's LGPL wrappers
-# link (OpenH264, Kvazaar, dav1d). Each codec is built from its pinned source archive as a static,
-# position-independent library and linked into the worker's shared libavcodec, so the worker ships
-# no extra runtime files and nothing is fetched or installed by the user. The per-codec configure
+# link (OpenH264, Kvazaar, dav1d, SVT-AV1, libvpx, Opus). Each codec is built from its pinned source
+# archive as a static, position-independent library and linked into the worker's shared libavcodec,
+# so the worker ships no extra runtime files and nothing is fetched or installed by the user. The per-codec configure
 # vectors live in adjacent `<name>.configure-arguments` files that the dependency lock copies and
 # the production lock check compares byte for byte.
 
-# Meson builds OpenH264 and dav1d on Linux, macOS and Windows (MSVC from a developer shell).
+# Meson builds OpenH264, dav1d and Opus on Linux, macOS and Windows (MSVC from a developer shell).
 find_program(BLOOM_MESON_EXECUTABLE meson REQUIRED)
 find_program(BLOOM_NINJA_EXECUTABLE ninja REQUIRED)
 

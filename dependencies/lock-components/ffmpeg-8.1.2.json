@@ -40,7 +40,7 @@
     "modified": true,
     "reviewRecord": {
       "path": "dependencies/licenses/ffmpeg/review.md",
-      "sha256": "sha256:b0bef19055b3e2682b28fb3d8871ccfc4aac64b5d5e763bc60cef60e9671cce1"
+      "sha256": "sha256:c852b96d5c99613015c6412d742356af1baa691914fd4d58ca77ebc5721b45ca"
     },
     "reviewedAt": "2026-10-31"
   },
@@ -62,6 +62,10 @@
       "relationship": "link"
     },
     {
+      "name": "libvpx",
+      "relationship": "link"
+    },
+    {
       "name": "nasm",
       "relationship": "build"
     },
@@ -71,6 +75,14 @@
     },
     {
       "name": "openh264",
+      "relationship": "link"
+    },
+    {
+      "name": "opus",
+      "relationship": "link"
+    },
+    {
+      "name": "svt-av1",
       "relationship": "link"
     }
   ],
@@ -96,6 +108,11 @@
           "reason": "HEVC software encode through the libkvazaar wrapper; Kvazaar 2.3.2 is a static archive linked into libavcodec"
         },
         {
+          "id": "bloom.feature.ffmpeg-libvpx",
+          "state": "enabled",
+          "reason": "VP9 software encode (8-bit Profile 0 and 10-bit Profile 2) through the libvpx wrapper; libvpx 1.17.0 is a static archive linked into libavcodec"
+        },
+        {
           "id": "bloom.feature.ffmpeg-nvenc",
           "state": "enabled",
           "reason": "NVIDIA NVENC H.264/HEVC encode through ffnvcodec; the driver is loaded at run time and the build needs no nonfree component (Linux and Windows)"
@@ -104,6 +121,16 @@
           "id": "bloom.feature.ffmpeg-openh264",
           "state": "enabled",
           "reason": "H.264 software encode through the libopenh264 wrapper; OpenH264 2.6.0 is built from source as a static archive linked into libavcodec"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-opus",
+          "state": "enabled",
+          "reason": "Opus audio encode through the libopus wrapper (libopus 1.5.2 is a static archive linked into libavcodec) and FFmpeg's native Opus decoder and parser for the reopen check"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-svt-av1",
+          "state": "enabled",
+          "reason": "AV1 software encode (8-bit and 10-bit) through the libsvtav1 wrapper; SVT-AV1 4.2.0 is a static archive linked into libavcodec"
         },
         {
           "id": "bloom.feature.ffmpeg-vaapi",
@@ -116,6 +143,11 @@
           "reason": "FFmpeg's native VP9 decoder and parser for WebM and Matroska sources"
         },
         {
+          "id": "bloom.feature.ffmpeg-webm-mux",
+          "state": "enabled",
+          "reason": "FFmpeg's WebM muxer (the Matroska muxer's WebM profile) for VP9 and AV1 with Opus deliveries"
+        },
+        {
           "id": "bloom.feature.ffmpeg-x86-simd",
           "state": "enabled",
           "reason": "x86 SIMD is assembled with the superbuild-private NASM 2.16.03 build tool, passed through --x86asmexe on x86 targets only"
@@ -124,6 +156,7 @@
       "capabilities": [
         "bloom.capability.ffmpeg",
         "bloom.capability.ffmpeg.av1-decode-dav1d",
+        "bloom.capability.ffmpeg.av1-software-svt-av1",
         "bloom.capability.ffmpeg.decode",
         "bloom.capability.ffmpeg.encode",
         "bloom.capability.ffmpeg.h264-nvenc-encode",
@@ -132,9 +165,12 @@
         "bloom.capability.ffmpeg.hevc-nvenc-encode",
         "bloom.capability.ffmpeg.hevc-software-kvazaar",
         "bloom.capability.ffmpeg.hevc-vaapi-encode",
+        "bloom.capability.ffmpeg.opus-encode-libopus",
         "bloom.capability.ffmpeg.prores-preview",
         "bloom.capability.ffmpeg.vaapi",
-        "bloom.capability.ffmpeg.vp9-decode"
+        "bloom.capability.ffmpeg.vp9-decode",
+        "bloom.capability.ffmpeg.vp9-software-libvpx",
+        "bloom.capability.ffmpeg.webm-mux"
       ],
       "shippingRoles": [
         "library",

@@ -1,0 +1,69 @@
+{
+  "name": "opus",
+  "version": "1.5.2",
+  "source": {
+    "url": "https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz",
+    "archiveSha256": "sha256:65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1",
+    "archiveSizeBytes": 7839412,
+    "retrievedAt": "2026-10-31",
+    "commit": null,
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/opus/provenance.md",
+      "sha256": "sha256:25ab3a6313a62f0fc085f0560a41b12a5e0c3ef2a20883a6ea3d6e88866b7fad"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "BSD-3-Clause",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/opus/LICENSE",
+        "sha256": "sha256:01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "corresponding-source",
+    "correspondingSourceArchiveSha256": "sha256:65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/opus/review.md",
+      "sha256": "sha256:769f029d31f091f7ea5f0696297ac4b6b61848f0831613843710824ae74c7cf2"
+    },
+    "reviewedAt": "2026-10-31"
+  },
+  "patches": [],
+  "dependencies": [],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.opus.bundled-static",
+          "state": "enabled",
+          "reason": "Built from source as a static library-only archive (no programs, tests or neural models) linked into the worker's libavcodec on every platform"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.opus.opus-encode"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-10-31",
+    "record": {
+      "path": "dependencies/licenses/opus/security.md",
+      "sha256": "sha256:994d1170b3f89b0aac3dcdb9cf90e159415b696b123d200c23048b66d36a03d1"
+    },
+    "vulnerabilities": []
+  }
+}

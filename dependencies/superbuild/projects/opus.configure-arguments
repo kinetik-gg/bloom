@@ -1,0 +1,11 @@
+--buildtype=release
+--default-library=static
+--libdir=lib
+-Db_staticpic=true
+-Dcustom-modes=false
+-Ddeep-plc=disabled
+-Ddred=disabled
+-Dosce=disabled
+-Dextra-programs=disabled
+-Dtests=disabled
+-Ddocs=disabled

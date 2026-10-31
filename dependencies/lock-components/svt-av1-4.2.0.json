@@ -1,0 +1,91 @@
+{
+  "name": "svt-av1",
+  "version": "4.2.0",
+  "source": {
+    "url": "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.2.0/SVT-AV1-v4.2.0.tar.gz",
+    "archiveSha256": "sha256:c7b13c4a84bd3751aa35fcc72be13e6875467e7c2216879251a486e5b1e4e740",
+    "archiveSizeBytes": 11070537,
+    "retrievedAt": "2026-10-31",
+    "commit": null,
+    "provenancePolicy": "not-published",
+    "provenanceReview": {
+      "path": "dependencies/licenses/svt-av1/provenance.md",
+      "sha256": "sha256:c56904d7ccbd97c7a00517c4dd4c1e4d65fe1868c572a65a2973db27b3500d1a"
+    },
+    "provenance": []
+  },
+  "license": {
+    "spdxExpression": "BSD-3-Clause-Clear AND BSD-2-Clause AND BSD-3-Clause AND MIT",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/svt-av1/LICENSE-BSD2.md",
+        "sha256": "sha256:c582fcbeb9cf972a60d298bfaf41dc5adff2dd14208946edcb9bb56a281e8438"
+      },
+      {
+        "path": "dependencies/licenses/svt-av1/LICENSE.md",
+        "sha256": "sha256:0acc2fcb27472bdc9aaf8b71f37055bbdac4f54671b7d922f241bd7fcd0dd3e6"
+      },
+      {
+        "path": "dependencies/licenses/svt-av1/fastfeat-LICENSE",
+        "sha256": "sha256:043dcfd059386f9facd376351b2bd79325778744aa442177390cdfcca54babed"
+      },
+      {
+        "path": "dependencies/licenses/svt-av1/safestringlib-LICENSE",
+        "sha256": "sha256:c0f99a208799ca20c9ccf31a30533d49334eb458dca5a3d14f9afe3e884e5d7d"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [
+      {
+        "path": "dependencies/licenses/svt-av1/PATENTS.md",
+        "sha256": "sha256:20678ab10402659106dc4c147c97b2a6e94b5c0695415e15a8f195ebc3547922"
+      }
+    ],
+    "sourceObligation": "corresponding-source",
+    "correspondingSourceArchiveSha256": "sha256:c7b13c4a84bd3751aa35fcc72be13e6875467e7c2216879251a486e5b1e4e740",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/svt-av1/review.md",
+      "sha256": "sha256:cd078e8cd53b7a6c5e0168028e76d48321094561729d098310810c59ca677435"
+    },
+    "reviewedAt": "2026-10-31"
+  },
+  "patches": [],
+  "dependencies": [
+    {
+      "name": "nasm",
+      "relationship": "build"
+    }
+  ],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.svt-av1.bundled-static",
+          "state": "enabled",
+          "reason": "Built from source as a static library-only archive (no apps, tests or LTO) linked into the worker's libavcodec on every platform; x86 assembly uses the superbuild-private NASM"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.svt-av1.av1-encode"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-10-31",
+    "record": {
+      "path": "dependencies/licenses/svt-av1/security.md",
+      "sha256": "sha256:e9a688378253b70e84c03c6362e3d046ec1ef957a4b705b872be66ac3a344c89"
+    },
+    "vulnerabilities": []
+  }
+}

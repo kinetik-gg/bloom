@@ -37,10 +37,10 @@ FFmpeg's corresponding-source obligation is the exact locked official release ar
 reviewed patch under `dependencies/patches/ffmpeg/`. The lock, recipe, detached-signature evidence,
 and license/review/security records are the authority for the configuration and source offer; the desktop `bloom` target does not link FFmpeg.
 
-The bundled codec libraries (OpenH264, Kvazaar, dav1d) are compiled from their locked source archives into
-the worker's LGPL `libavcodec`; each archive is part of that library's corresponding source, and each
-licence text is part of Bloom's third-party licence catalogue. Bloom uses no Cisco-distributed
-binary.
+The bundled codec libraries (OpenH264, Kvazaar, dav1d, SVT-AV1, libvpx, Opus) are compiled from
+their locked source archives into the worker's LGPL `libavcodec`; each archive is part of that
+library's corresponding source, and each license text is part of Bloom's third-party license
+catalogue. Bloom uses no Cisco-distributed binary.
 
 ### OpenH264
 
@@ -62,6 +62,35 @@ thread wrapper (Copyright 2019 Tampere University, ISC licence) and NetBSD's `ge
 Copyright (c) 2018-2025, VideoLAN and dav1d authors. All rights reserved. Redistribution and use in
 source and binary forms, with or without modification, are permitted under the BSD-2-Clause terms
 in `dependencies/licenses/dav1d/LICENSE`.
+
+### SVT-AV1
+
+Copyright (c) 2016-2025, Alliance for Open Media, and Copyright (c) 2019 Intel Corporation. All
+rights reserved. Redistribution and use in source and binary forms, with or without modification,
+are permitted under the BSD 3-Clause Clear terms in `dependencies/licenses/svt-av1/LICENSE.md` and,
+for the files that carry it, the BSD-2-Clause terms in
+`dependencies/licenses/svt-av1/LICENSE-BSD2.md`. The compiled library includes Intel's
+safestringlib (Copyright (c) 2014-2018 Intel Corporation, MIT,
+`dependencies/licenses/svt-av1/safestringlib-LICENSE`) and the FAST corner detector (Copyright (c)
+2006, 2008 Edward Rosten, BSD-3-Clause, `dependencies/licenses/svt-av1/fastfeat-LICENSE`). The
+Alliance for Open Media Patent License 1.0 applies to this implementation and is reproduced in
+`dependencies/licenses/svt-av1/PATENTS.md`.
+
+### libvpx
+
+Copyright (c) 2010, The WebM Project authors. All rights reserved. Redistribution and use in source
+and binary forms, with or without modification, are permitted under the BSD-3-Clause terms in
+`dependencies/licenses/libvpx/LICENSE`. Google's additional IP rights grant for VP8 and VP9 is
+reproduced in `dependencies/licenses/libvpx/PATENTS`. The compiled x86 assembly includes
+`x86inc.asm` (Copyright (C) 2005-2012 x264 project, ISC terms in
+`dependencies/licenses/libvpx/x86inc-LICENSE`).
+
+### Opus
+
+Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry,
+CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo, Mozilla, Amazon. Redistribution and
+use in source and binary forms, with or without modification, are permitted under the BSD-3-Clause
+terms in `dependencies/licenses/opus/LICENSE`.
 
 ### nv-codec-headers
 

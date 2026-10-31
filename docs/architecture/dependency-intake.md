@@ -156,17 +156,22 @@ still be a one-click in-app action, never fetched at startup or from an unverifi
 ### Bundled codec libraries
 
 The permissively licensed codec libraries that FFmpeg's LGPL wrappers link -- OpenH264 (H.264
-encode), Kvazaar (HEVC encode) and dav1d (AV1 decode) -- are built from pinned source archives as static,
-position-independent archives and linked into the worker's shared `libavcodec` on Linux, macOS and
-Windows. FFmpeg's version script
-keeps their symbols private, so the worker ships no extra runtime file. Each is a lock component
+encode), Kvazaar (HEVC encode), dav1d (AV1 decode), SVT-AV1 (AV1 encode), libvpx (VP9 encode) and
+libopus (Opus encode) -- are built from pinned source archives as static, position-independent
+archives and linked into the worker's shared `libavcodec` on Linux, macOS and Windows. FFmpeg's
+version script keeps their symbols private, so the worker ships no extra runtime file. Each is a lock component
 with `static` linkage, a corresponding-source obligation (its archive completes `libavcodec`'s
 corresponding source) and an FFmpeg `link` dependency edge. Its recipe reads an adjacent
 `<name>.configure-arguments` vector (Meson or CMake options); the lock generator copies that file
 into the component's `configureArguments` (`--configure-arguments <name>=<path>`), and the
-production lock check compares the two line for line exactly as it does FFmpeg's vector. Meson and
-Ninja are build-host requirements for the Meson-built codecs; x86 assembly uses the
-superbuild-private NASM. `codec-static-install.cmake` appends each archive's runtime libraries to
+production lock check compares the two line for line exactly as it does FFmpeg's vector (libvpx's
+vector is its configure script's options). Meson and Ninja are build-host requirements for the
+Meson-built codecs; x86 assembly uses the superbuild-private NASM (libvpx receives it through
+`AS`, SVT-AV1 through `CMAKE_ASM_NASM_COMPILER`). On Windows libvpx's configure script generates a
+Visual Studio solution with the static runtime, run from the same MSYS2 shell as FFmpeg's. A
+patent grant shipped with a library (the AOM Patent License 1.0 with SVT-AV1, Google's VP8/VP9
+grant with libvpx) is a notice file of its lock component and is reproduced in
+`THIRD_PARTY_NOTICES.md`. `codec-static-install.cmake` appends each archive's runtime libraries to
 its pkg-config record (FFmpeg reads them through `--pkg-config-flags=--static`), gives MSVC the
 `<name>.lib` spelling and refuses any shared artifact.
 
