@@ -286,6 +286,9 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(bloom.media.ffmpeg PROPERTIES FIXTURES_REQUIRED media3)
     add_executable(bloom_media_video_session_test "${PROJECT_SOURCE_DIR}/src/media/video/tests/session_tests.cpp")
     target_link_libraries(bloom_media_video_session_test PRIVATE bloom_media_video bloom_color_video)
+    # Independent-encoder VP9 and AV1 references (tests/data/provenance.md).
+    target_compile_definitions(bloom_media_video_session_test PRIVATE
+        BLOOM_MEDIA_CODEC_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
     bloom_enable_warnings(bloom_media_video_session_test)
     add_dependencies(bloom_media_video_session_test bloom-media-worker bloom_media_generate_fixtures)
     bloom_add_test(NAME bloom.media.video-session COMMAND bloom_media_video_session_test

@@ -30,6 +30,8 @@ std::string mediaCodecFamilyV1(const std::string_view codec) {
     if (codec == "libopenh264" || codec == "h264_nvenc" || codec == "h264_vaapi" ||
         codec == "h264_videotoolbox" || codec == "h264_mf")
         return "h264";
+    if (codec == "libdav1d")
+        return "av1";
     if (codec == "libkvazaar" || codec == "hevc_nvenc" || codec == "hevc_vaapi" ||
         codec == "hevc_videotoolbox" || codec == "hevc_mf")
         return "hevc";

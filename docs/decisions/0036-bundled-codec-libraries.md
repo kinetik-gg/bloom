@@ -33,6 +33,10 @@ worker's shared `libavcodec` through FFmpeg's LGPL wrappers, on Linux, macOS and
 | --- | --- | --- | --- |
 | OpenH264 2.6.0 | BSD-2-Clause | H.264 software encode | `libopenh264` encoder |
 | Kvazaar 2.3.2 | BSD-3-Clause | HEVC software encode (8-bit Main) | `libkvazaar` encoder |
+| dav1d 1.5.4 | BSD-2-Clause | AV1 decode | `libdav1d` decoder, `av1` parser |
+
+VP9 decode needs no external library: FFmpeg's native `vp9` decoder and parser are enabled. WebM is
+read by the existing Matroska demuxer.
 | nv-codec-headers 12.1.14.1 | MIT | NVIDIA NVENC H.264 and HEVC Main/Main 10 (header-only; the driver is loaded at run time) | `h264_nvenc`, `hevc_nvenc` |
 
 Each is a static, position-independent archive (dependency-intake.md, "Bundled codec

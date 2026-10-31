@@ -236,7 +236,8 @@ void retainedRouting(const std::filesystem::path& directory) {
                   provider::kWorkerAddressSpaceCeiling,
           "worker address space: UHD keeps the floor, 8K grows, bounded by the ceiling");
     check(video::sourceSnapshotQuotaBytes(0) == std::uint64_t{32} << 30U &&
-              video::sourceSnapshotQuotaBytes(std::uint64_t{1} << 40U) == std::uint64_t{768} << 30U &&
+              video::sourceSnapshotQuotaBytes(std::uint64_t{1} << 40U) == std::uint64_t{768}
+                                                                              << 30U &&
               video::sourceSnapshotQuotaBytes(std::uint64_t{64} << 40U) ==
                   4U * provider::Limits::sourceBytes,
           "source snapshot quota follows free space between 32 GiB and four maximal sources");
@@ -291,9 +292,9 @@ void colourInterpretation(const std::filesystem::path& directory) {
     const auto untagged = yuv420({128, 128}, {128, 128}, {2, 2, 2, 0});
     const auto assumed =
         video::videoToSceneLinear(untagged, 0, *descriptor.value(), 1, 1, std::size_t{4} * 2 * 16);
-    const auto tagged601 = video::videoToSceneLinear(yuv420({128, 128}, {128, 128}, {6, 6, 6, 1}),
-                                                     0, *descriptor.value(), 1, 1,
-                                                     std::size_t{4} * 2 * 16);
+    const auto tagged601 =
+        video::videoToSceneLinear(yuv420({128, 128}, {128, 128}, {6, 6, 6, 1}), 0,
+                                  *descriptor.value(), 1, 1, std::size_t{4} * 2 * 16);
     check(std::holds_alternative<bloom::render::Rgba32fImage>(assumed) &&
               std::holds_alternative<bloom::render::Rgba32fImage>(tagged601) &&
               std::get<bloom::render::Rgba32fImage>(assumed).pixels()[0].red() ==
@@ -301,7 +302,9 @@ void colourInterpretation(const std::filesystem::path& directory) {
           "an untagged SD frame converts as tagged SMPTE 170M limited range");
     {
         const auto fill = [](provider::ColourTags tags, std::uint32_t w, std::uint32_t h,
-                             double rate) { return video::assumeMissingVideoColour(tags, {w, h, rate}); };
+                             double rate) {
+            return video::assumeMissingVideoColour(tags, {w, h, rate});
+        };
         const auto hd = fill({2, 2, 2, 0}, 1280, 720, 24);
         const auto pal = fill({2, 2, 2, 0}, 720, 576, 25);
         const auto ntsc = fill({-1, -1, -1, -1}, 720, 480, 30000.0 / 1001.0);
@@ -357,12 +360,13 @@ void colourInterpretation(const std::filesystem::path& directory) {
         video::VideoDecodeSession session(directory / "untagged-hd-prores.mov");
         const auto probe = std::get<provider::ProbeResult>(session.probe());
         const auto& stream = probe.streams[0];
-        const auto assumedHd = video::assumeMissingVideoColour(
-            stream.colour, {stream.width, stream.height, 24.0});
+        const auto assumedHd =
+            video::assumeMissingVideoColour(stream.colour, {stream.width, stream.height, 24.0});
         check(stream.width == 1280 && stream.height == 720 && assumedHd.assumed &&
                   assumedHd.identity.rfind("assumed-colour-v2:ptm", 0) == 0 &&
                   assumedHd.tags.primaries == 1 && assumedHd.tags.matrix == 1 &&
-                  assumedHd.tags.transfer == 1 && assumedHd.note.find("Rec.709") != std::string::npos,
+                  assumedHd.tags.transfer == 1 &&
+                  assumedHd.note.find("Rec.709") != std::string::npos,
               "the untagged HD fixture assumes Rec.709 for its missing tags");
         const auto decoded = session.frame(probe, 0, 3, 0, nullptr);
         const auto hdWindow = bloom::render::ImageWindow::create(0, 0, 1280, 720);
@@ -393,8 +397,8 @@ void lazyIndex(const std::filesystem::path& directory) {
     using namespace bloom::media;
     const auto path = directory / "long-h264.mp4";
     std::atomic<std::int64_t> worker{0};
-    video::VideoDecodeSession session(path, video::VideoDecodeSession::defaultWorker(), nullptr,
-                                      {}, nullptr, [&](std::int64_t pid) { worker = pid; });
+    video::VideoDecodeSession session(path, video::VideoDecodeSession::defaultWorker(), nullptr, {},
+                                      nullptr, [&](std::int64_t pid) { worker = pid; });
     const auto probe = std::get<provider::ProbeResult>(session.probe());
     check(probe.streams[0].frameCount == 1200, "the long fixture has 1,200 frames");
     const video::SourceRevisionAccess preview{video::SourceRevisionPolicy::Retained, true};
@@ -639,6 +643,66 @@ void undecodableCodec(const std::filesystem::path& directory) {
               refused->detail == "Codec not available in this build: vp8",
           "a WebM stream with an undecodable codec is refused by name at probe");
 }
+// Issue #398: VP9 (FFmpeg's native decoder) and AV1 (the bundled dav1d) decode in WebM and MP4.
+// The fixtures are flat Rec.709 limited-range frames from independent encoders (libvpx and libaom,
+// apps/bloom-media-worker/tests/data/provenance.md), so every decoded sample has one exact code.
+void vp9AndAv1(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    struct Case {
+        const char* file;
+        const char* codec;
+        bool tenBit;
+    };
+    for (const auto& c : {Case{"vp9-flat.webm", "vp9", false}, Case{"av1-flat.mp4", "av1", false},
+                          Case{"av1-flat10.webm", "av1", true}}) {
+        video::VideoDecodeSession session(directory / c.file);
+        const auto probed = session.probe();
+        const auto* probe = std::get_if<provider::ProbeResult>(&probed);
+        if (const auto* refused = std::get_if<provider::Unavailable>(&probed))
+            std::cerr << c.file << " probe refused: " << refused->detail << '\n';
+        if (probe != nullptr)
+            for (const auto& stream : probe->streams)
+                std::cerr << c.file << ": " << stream.codec << ' ' << stream.width << 'x'
+                          << stream.height << " frames=" << stream.frameCount
+                          << " matrix=" << stream.colour.matrix << " range=" << stream.colour.range
+                          << '\n';
+        check(probe != nullptr && probe->streams.size() == 1 &&
+                  probe->streams[0].codec == c.codec && probe->streams[0].width == 64 &&
+                  probe->streams[0].height == 48 && probe->streams[0].frameCount == 12 &&
+                  probe->streams[0].colour.matrix == 1 && probe->streams[0].colour.range == 1,
+              "a VP9 or AV1 stream probes with its codec, extent, length and colour");
+        for (const std::uint64_t index : {std::uint64_t{0}, std::uint64_t{11}}) {
+            const auto decoded = session.frame(*probe, 0, index, 0, nullptr);
+            if (const auto* refused = std::get_if<provider::Unavailable>(&decoded))
+                std::cerr << c.file << " frame " << index << " refused: " << refused->detail
+                          << '\n';
+            check(std::holds_alternative<Frame>(decoded), "a VP9 or AV1 frame decodes");
+            const auto& frame = *std::get<Frame>(decoded);
+            const std::array<unsigned, 3> codes = c.tenBit ? std::array<unsigned, 3>{403, 714, 407}
+                                                           : std::array<unsigned, 3>{98, 177, 101};
+            bool exact = frame.planes.size() >= 3;
+            for (std::size_t plane = 0; exact && plane < 3; ++plane) {
+                const auto& bytes = frame.planes[plane].bytes;
+                if (frame.format == provider::PixelFormat::Yuv420p8) {
+                    for (const auto value : bytes)
+                        exact = exact && std::to_integer<unsigned>(value) == codes[plane];
+                } else {
+                    // 16-bit planes: the source code scaled to 16 bits (10-bit AV1, or a
+                    // converted 8-bit frame), within one source step.
+                    const auto depth = c.tenBit ? 10U : 8U;
+                    const auto expected = codes[plane] << (16U - depth);
+                    for (std::size_t i = 0; exact && i + 1 < bytes.size(); i += 2) {
+                        const auto value = std::to_integer<unsigned>(bytes[i]) |
+                                           (std::to_integer<unsigned>(bytes[i + 1]) << 8U);
+                        exact = value + (1U << (16U - depth)) > expected &&
+                                value < expected + (1U << (16U - depth));
+                    }
+                }
+            }
+            check(exact, "every decoded VP9 or AV1 sample has the encoded code");
+        }
+    }
+}
 int main(int argc, char** argv) {
     try {
         check(argc == 2, "fixture directory");
@@ -647,6 +711,7 @@ int main(int argc, char** argv) {
         colourInterpretation(argv[1]);
         chromaSiting(argv[1]);
         undecodableCodec(argv[1]);
+        vp9AndAv1(BLOOM_MEDIA_CODEC_FIXTURES);
         timingAndLayout(argv[1]);
         lazyIndex(argv[1]);
         eightK(argv[1]);

@@ -201,8 +201,9 @@ assembles it with NASM 2.16.03, a source-built, build-host-only tool installed o
 dependency prefix that is never linked or shipped.
 
 Import routes `.mp4 .mov .mkv .webm .mxf .m4v .mts .m2ts .ts` to this worker. A video stream whose
-codec the build does not decode (VP9 and AV1 today) is refused at probe as "Codec not available in
-this build: <codec>" (issue #398), so a WebM or AV1 file never falls through to the still-image
+codec the build does not decode is refused at probe as "Codec not available in this build: <codec>"
+(issue #398; an internal diagnostic, since VP9 and AV1 now decode: FFmpeg's native VP9 decoder and
+the bundled dav1d, ADR 0036), so such a file never falls through to the still-image
 reader or fails later at render.
 
 FFmpeg ProRes is a non-authorized preview/workflow capability only. It is not evidence of Apple

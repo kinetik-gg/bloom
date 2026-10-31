@@ -263,6 +263,13 @@ ProbeResult probe(Input& input, const Digest& digest, std::uint64_t bytes) {
                     (slots > stream.nb_frames + 1 || slots + 1 < stream.nb_frames))
                     s.frameCount = static_cast<std::uint64_t>(slots);
             }
+            // Matroska and WebM record no per-stream frame count: the nominal slots the stream's
+            // (or the file's) duration covers, to the nearest slot (issue #398).
+            if (stream.nb_frames <= 0 && s.duration.numerator > 0 && s.duration.denominator > 0)
+                s.frameCount = static_cast<std::uint64_t>(std::max<std::int64_t>(
+                    0, av_rescale_rnd(s.duration.numerator, rate.num,
+                                      s.duration.denominator * static_cast<std::int64_t>(rate.den),
+                                      AV_ROUND_NEAR_INF)));
             const auto* name = av_get_pix_fmt_name(static_cast<AVPixelFormat>(p.format));
             s.pixelFormat = name ? name : "unknown";
             const auto* layout = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(p.format));

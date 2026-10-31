@@ -55,7 +55,8 @@ Handshake ffmpegHandshake(const bool hardware) {
         add(Role::Probe, "intake-discovery");
         add(Role::DemuxIndex, "intake-discovery");
     }
-    for (const auto* codec : {"h264", "hevc", "prores", "dnxhd", "mjpeg", "tiff"})
+    // VP9 is FFmpeg's native decoder; AV1 is the bundled dav1d (ADR 0036).
+    for (const auto* codec : {"h264", "hevc", "vp9", "av1", "prores", "dnxhd", "mjpeg", "tiff"})
         if (!hardware || std::string_view(codec) == "h264" || std::string_view(codec) == "hevc")
             add(Role::VideoDecode, codec);
     if (!hardware)
