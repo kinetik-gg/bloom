@@ -195,7 +195,12 @@ Every measurement is a fresh process.
   `cachedPresentedFps` counts every change of the shown frame, so it stays meaningful when a
   short work area loops. `cachedPlayUiBusySeconds`, `cachedPlayMaxSliceMs` and
   `cachedPlayLongSlices` report the UI thread's event-loop time over the run, its longest slice
-  and the slices longer than one frame period.
+  and the slices longer than one frame period. `cachedPlayCacheHits`/`Misses`/`StaleDrops`/
+  `Evictions`, `cachedPlayRevisionChanges` and `cachedPlaySnapshotRefreshes` say whether a cached
+  run really stayed cached, and `lastFrameDiagnostics` carries the last frame's preview
+  diagnostics. `realTimeRatio` (playback runs) and `cachedRealTimeRatio` are the session time the
+  transport advanced, unwrapped across loop restarts, over wall time: 1.0 means playback held real
+  time by dropping frames rather than slowing down.
 - **Playback** (`kind: playback`): a cold start with background read-ahead and no RAM fill;
   `playbackFps` = distinct frames shown / seconds, next to the frames the transport asked for.
 - **Export** (`kind: export`): `bloom-cli export --job <id> --replace`; `secondsPerFrame` = process
