@@ -186,7 +186,7 @@ void olderDocumentsMigrateAndRefuseNewMembers() {
                                         project::kProductionDocumentMigrationSteps, {}, operation);
         expect(
             migrated.outcome() == project::MigrationOutcome::Migrated &&
-                migrated.stepsApplied() == 8 &&
+                migrated.stepsApplied() == 9 &&
                 static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
             "the 1.23 -> 1.24 mask, 1.24 -> 1.25 video-metadata and 1.25 -> 1.26 channel-set and "
             "1.26 -> 1.27 composition-folder and 1.27 -> 1.28 video-colour-default steps only "

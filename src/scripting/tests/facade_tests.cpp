@@ -17,7 +17,7 @@
 
 int main() {
     auto registry = bloom::scripting::OperationRegistry::builtIn();
-    if (registry.descriptors().size() != 136U ||
+    if (registry.descriptors().size() != 137U ||
         registry.find("bloom.layer.set-timing") == nullptr ||
         registry.find("bloom.layer.add-solid") == nullptr ||
         registry.find("bloom.project.set-name") == nullptr) {

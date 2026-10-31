@@ -153,7 +153,7 @@ void testMigration() {
     // colour step.
     const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 28}, {1, 32},
                                              kProductionDocumentMigrationSteps, {}, operation);
-    expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 3,
+    expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 4,
            "1.28 to 1.31 runs the export-queue, easing and node group colour steps");
     if (migrated.outcome() != MigrationOutcome::Migrated)
         return;

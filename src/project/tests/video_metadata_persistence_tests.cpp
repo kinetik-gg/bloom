@@ -138,7 +138,7 @@ void migration() {
             continue;
         const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 32},
                                                  kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 7,
+        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 8,
                "1.24 to the current schema runs the video-metadata, channel-set, folder, "
                "video-colour-default, export-queue, easing and node-group-colour steps");
         if (migrated.outcome() != MigrationOutcome::Migrated)
@@ -179,7 +179,7 @@ void videoColourDefaultMigration() {
         const auto older = decodeDocumentEnvelope(parsed.document()->root());
         const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 27}, {1, 32},
                                                  kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 4,
+        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 5,
                "1.27 to 1.31 runs the version-only steps and the export-queue step");
         if (migrated.outcome() != MigrationOutcome::Migrated)
             continue;

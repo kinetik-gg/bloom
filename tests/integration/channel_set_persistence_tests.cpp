@@ -209,7 +209,7 @@ void imageSourceV1Migrates() {
         project::migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 32},
                                     project::kProductionDocumentMigrationSteps, {}, operation);
     expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-               migrated.stepsApplied() == 7,
+               migrated.stepsApplied() == 8,
            "the video-metadata, channel-set, composition-folder, video-colour-default, "
            "export-queue, easing and node-group-colour steps run once each");
     if (migrated.outcome() != project::MigrationOutcome::Migrated)

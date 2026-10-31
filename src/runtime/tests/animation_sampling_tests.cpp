@@ -217,6 +217,8 @@ void testHandleModeIsRenderNeutral(Expectations& expectations) {
             key.outgoingHandle = {0.3, 0.1 * static_cast<double>(index)};
             key.incomingHandle = {0.45, -0.05};
             key.handleMode = mode;
+            if (index == 3)
+                key.outgoingInterpolation = document::KeyframeInterpolation::Linear;
             curve.keyframes.push_back(key);
         }
         return curve;
