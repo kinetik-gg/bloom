@@ -75,7 +75,8 @@ AudioBlock sound(const EncodeSettingsV1& settings, std::uint64_t offset, std::ui
     return block;
 }
 Bytes run(const EncodeSettingsV1& settings, const std::filesystem::path& destination,
-          EncodeSessionOptionsV1 options = {}, MediaProviderProvenanceV1* provenance = nullptr) {
+          EncodeSessionOptionsV1 options = {}, MediaProviderProvenanceV1* provenance = nullptr,
+          EncodeQcV1* reopened = nullptr) {
     EncodeSessionV1 session(std::move(options));
     ok(session.begin(settings));
     if (provenance != nullptr)
@@ -91,6 +92,8 @@ Bytes run(const EncodeSettingsV1& settings, const std::filesystem::path& destina
                                    static_cast<std::uint32_t>(std::min<std::uint64_t>(
                                        2000, settings.audioSamples - offset)))));
     const auto qc = get(session.finish());
+    if (reopened != nullptr)
+        *reopened = qc;
     test::check(qc.frames == settings.frames && qc.audioSamples == settings.audioSamples,
                 "reopen counts exact");
     const auto durationNumerator =
@@ -257,6 +260,52 @@ void tests(const std::filesystem::path& directory) {
                         served.fallbacks.front().provider == kFfmpegVaapiProviderId,
                     "H.264 falls back from VA-API to the bundled OpenH264 silently");
     }
+    // HEVC ships with Bloom too: the bundled Kvazaar encodes Main in MOV and MP4, serves a Main 10
+    // request as 8-bit Main, pads an extent that is not whole 8x8 blocks (cropped again by the
+    // conformance window), and is VA-API's silent fallback.
+    {
+        auto hevc = settings;
+        hevc.videoCodec = "hevc";
+        hevc.profile = "main";
+        MediaProviderProvenanceV1 served;
+        (void)run(hevc, directory / "export-hevc.mov", {}, &served);
+        test::check(served.provider == kFfmpegProviderId && !served.fellBack(),
+                    "software HEVC is served by the FFmpeg worker's bundled Kvazaar");
+        auto mp4 = hevc;
+        mp4.container = "mp4";
+        mp4.audioCodec = "aac";
+        (void)run(mp4, directory / "export-hevc.mp4");
+        EncodeQcV1 delivered;
+        (void)run(hevc, directory / "export-hevc-main.mov", {}, nullptr, &delivered);
+        test::check(delivered.profile == "Main" && delivered.bitDepth == 8 &&
+                        delivered.adjustment.empty(),
+                    "an HEVC Main request reports the Main 8-bit stream it delivered");
+        auto main10 = hevc;
+        main10.profile = "main10";
+        (void)run(main10, directory / "export-hevc-main10.mov", {}, nullptr, &delivered);
+        test::check(
+            delivered.profile == "Main" && delivered.bitDepth == 8 &&
+                delivered.adjustment.find("Main 10") != std::string::npos,
+            "a Main 10 request served by Kvazaar reports 8-bit Main and why, never silently");
+        // 1918x1078 is not whole 8x8 blocks: Kvazaar codes the padded picture and crops it with
+        // the conformance window, and the reopen check sees the exact extent.
+        auto unaligned = hevc;
+        unaligned.width = 1918;
+        unaligned.height = 1078;
+        unaligned.frames = 6;
+        unaligned.audioCodec.clear();
+        unaligned.audioSamples = 0;
+        (void)run(unaligned, directory / "export-hevc-1918x1078.mov");
+        auto absent = hevc;
+        absent.vaapiDevice = "/dev/dri/renderD-absent";
+        EncodeSessionOptionsV1 vaapi;
+        vaapi.vaapi = true;
+        MediaProviderProvenanceV1 fell;
+        (void)run(absent, directory / "export-hevc-fallback.mov", std::move(vaapi), &fell);
+        test::check(fell.provider == kFfmpegProviderId && fell.fellBack() &&
+                        fell.fallbacks.front().provider == kFfmpegVaapiProviderId,
+                    "HEVC falls back from VA-API to the bundled Kvazaar silently");
+    }
     if (std::filesystem::exists("/dev/dri/renderD128") ||
         std::filesystem::exists("/dev/dri/renderD129")) {
         auto vaapiSettings = settings;
@@ -337,6 +386,17 @@ void chromaSampling(const std::filesystem::path& directory) {
     settings.videoCodec = "h264";
     settings.profile = "high";
     (void)run(settings, directory / "red-square-h264.mov");
+    // The bundled Kvazaar at 640x360 and at 1920x1080, where its encoder threads must fit the
+    // worker's address-space ceiling.
+    {
+        auto hevc = settings;
+        hevc.videoCodec = "hevc";
+        hevc.profile = "main";
+        (void)run(hevc, directory / "red-square-hevc.mov");
+        hevc.width = 1920;
+        hevc.height = 1080;
+        (void)run(hevc, directory / "red-square-hevc-1080p.mov");
+    }
     if (!std::filesystem::exists("/dev/dri/renderD128") &&
         !std::filesystem::exists("/dev/dri/renderD129")) {
         std::cout << "SKIP: VA-API red square — no render node\n";

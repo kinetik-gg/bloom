@@ -45,10 +45,6 @@ bool needsWorker(const ExportFormat format) {
     return format != ExportFormat::Png && format != ExportFormat::OpenExr;
 }
 
-bool isHevc(const ExportFormat format) {
-    return format == ExportFormat::HevcMov || format == ExportFormat::HevcMp4;
-}
-
 // Facet order: Pixels, Precision, Color, AlphaAssociation, Channels, DataWindow, DisplayWindow,
 // PixelAspect, Compression, Metadata, ExternalDependencies. Each entry is the worst state the
 // format is declared to produce; an analysis fits when every facet is at most that state.
@@ -148,13 +144,11 @@ std::vector<BuiltIn> makeBuiltIns() {
         add("builtin:review-h264", "Review H.264", "Rec.709 review deliverable with the look on",
             C::Video, std::move(review), true);
     }
+    // HEVC prefers a VA-API encoder when one answers and otherwise uses the bundled Kvazaar.
     auto hevc = video(ExportFormat::HevcMp4, "main");
-    hevc.encoder = ExportEncoderPreference::Hardware;
-    add("builtin:hevc-mp4", "HEVC MP4 (hardware)", "HEVC Main in MP4 on VA-API hardware", C::Video,
-        hevc);
+    add("builtin:hevc-mp4", "HEVC MP4", "HEVC Main in MP4", C::Video, hevc);
     hevc.format = ExportFormat::HevcMov;
-    add("builtin:hevc-mov", "HEVC MOV (hardware)", "HEVC Main in MOV on VA-API hardware", C::Video,
-        hevc);
+    add("builtin:hevc-mov", "HEVC MOV", "HEVC Main in QuickTime MOV", C::Video, hevc);
     add("builtin:prores-proxy-mov", "ProRes 422 Proxy MOV", "ProRes 422 Proxy", C::Video,
         video(ExportFormat::ProResMov, "proxy"));
     add("builtin:prores-lt-mov", "ProRes 422 LT MOV", "ProRes 422 LT", C::Video,
@@ -396,17 +390,9 @@ ExportAvailability exportPlatformAvailability(const document::ExportOutputSettin
     if (!encoders.mediaWorker)
         return unavailable(ExportAvailabilityCode::WorkerUnavailable,
                            "The media worker could not be started on this computer");
-    if (isHevc(format)) {
-        if (settings.encoder == ExportEncoderPreference::Software)
-            return unavailable(ExportAvailabilityCode::NoQualifiedEncoder,
-                               "HEVC has no software encoder; choose Automatic or Hardware");
-        if (!encoders.vaapiHevc)
-            return unavailable(ExportAvailabilityCode::HardwareEncoderMissing,
-                               "HEVC needs a VA-API render node with HEVC encode");
-        return available();
-    }
-    // H.264 always has an encoder: the bundled OpenH264 in the media worker. A Hardware preference
-    // without a VA-API encoder falls back to it silently; the serving encoder is in provenance.
+    // H.264 and HEVC always have an encoder: the bundled OpenH264 and Kvazaar in the media worker.
+    // A Hardware preference without a VA-API encoder falls back to them silently; the serving
+    // encoder is in provenance.
     return available();
 }
 

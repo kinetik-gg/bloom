@@ -89,9 +89,10 @@ Handshake ffmpegHandshake(const bool hardware) {
             encode(Role::Mux, "intake-encoders-v1", container, "closed-stream-layout-v1");
             encode(Role::ReopenDecode, "intake-encoders-v1", container, "first-last-pcm-v1");
         }
-        // H.264 software encode: the bundled OpenH264, linked into libavcodec on every platform.
-        {
-            encode(Role::VideoEncode, "h264", "mov", "high");
+        // Software H.264 and HEVC encode: the bundled OpenH264 and Kvazaar, linked into
+        // libavcodec on every platform. Kvazaar is 8-bit: a Main 10 request is served as Main.
+        for (const auto [codec, profile] : {std::pair{"h264", "high"}, std::pair{"hevc", "main"}}) {
+            encode(Role::VideoEncode, codec, "mov", profile);
             auto& d = h.declarations.back();
             d.capability.bitDepth = 8;
             d.capability.chroma = "yuv420p";

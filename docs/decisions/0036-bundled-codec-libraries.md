@@ -32,6 +32,7 @@ worker's shared `libavcodec` through FFmpeg's LGPL wrappers, on Linux, macOS and
 | Library | Licence | Role | FFmpeg component |
 | --- | --- | --- | --- |
 | OpenH264 2.6.0 | BSD-2-Clause | H.264 software encode | `libopenh264` encoder |
+| Kvazaar 2.3.2 | BSD-3-Clause | HEVC software encode (8-bit Main) | `libkvazaar` encoder |
 
 Each is a static, position-independent archive (dependency-intake.md, "Bundled codec
 libraries"), so the worker generation directory gains no runtime file and FFmpeg's version script
@@ -44,10 +45,20 @@ any refusal at `begin()` (no render node, a driver that cannot open the profile)
 in `MediaProviderProvenanceV1` and the export evidence names the encoder that served; no artist
 text reports it.
 
+Kvazaar is an 8-bit encoder. An HEVC Main 10 request that no 10-bit encoder serves is delivered as
+8-bit HEVC Main rather than refused, and never silently: the worker's reopen QC reports the
+delivered profile and bit depth with the reason (`EncodeQcV1::profile`, `bitDepth`,
+`adjustment`), the host copies the reason into `MediaProviderProvenanceV1::adjustment`, logs it,
+and the export evidence states the delivered profile. FFmpeg's `libkvazaar` wrapper refused
+extents that are not multiples of eight; the reviewed patch
+`dependencies/patches/ffmpeg/0001-libkvazaar-pad-frames-to-whole-blocks.patch` pads frames to
+whole blocks so Kvazaar's conformance window crops them, and every even extent encodes.
+
 Removed with this decision: the Cisco runtime fetch (`OpenH264Runtime` install/verify/locate, the
 `runtimeFetch` lock record, the consent entry in `Bloom.conf`), the worker's `libopenh264.so.8`
-shim, the private link-time stub, and the typed "H.264 encoder not installed" refusal. The host
-never produces `ExportAvailabilityCode::EncoderNotInstalled` or `HardwareEncoderMissing` for H.264,
+shim, the private link-time stub, the typed "H.264 encoder not installed" refusal and HEVC's
+hardware-only rule. The host never produces `ExportAvailabilityCode::EncoderNotInstalled` or
+`HardwareEncoderMissing`,
 nor the `InstallOpenH264`, `LocateOpenH264` or `ChooseSoftwareEncoder` remedies; those enum values
 and the compile-only `verifyH264RuntimeV1()`/`locateH264RuntimeV1()`/`installH264RuntimeV1()`
 helpers remain only until the desktop deletes its install flow.

@@ -30,7 +30,8 @@ std::string mediaCodecFamilyV1(const std::string_view codec) {
     if (codec == "libopenh264" || codec == "h264_vaapi" || codec == "h264_videotoolbox" ||
         codec == "h264_mf")
         return "h264";
-    if (codec == "hevc_vaapi" || codec == "hevc_videotoolbox" || codec == "hevc_mf")
+    if (codec == "libkvazaar" || codec == "hevc_vaapi" || codec == "hevc_videotoolbox" ||
+        codec == "hevc_mf")
         return "hevc";
     return std::string(codec);
 }
@@ -63,6 +64,8 @@ bool mediaFallbackPermittedV1(const Unavailable& error) noexcept {
 
 std::string MediaProviderProvenanceV1::diagnostic() const {
     std::string text = provider.empty() ? std::string("no provider") : provider;
+    if (!adjustment.empty())
+        text += " [delivered: " + adjustment + "]";
     if (fallbacks.empty())
         return text;
     text += " (after";

@@ -220,13 +220,12 @@ struct detail::SequenceExportWorkV1 {
         // session translates them for the provider that serves the attempt.
         if (request.preset == output::OutputPresetV1::HevcMovV1 ||
             request.preset == output::OutputPresetV1::HevcMp4V1) {
-            // HEVC is hardware-only (ADR 0033): VA-API, never a software encoder.
-            require(request.hardware, "HEVC needs a VA-API render node with HEVC encode",
-                    Error::Unavailable);
             s.videoCodec = "hevc";
             s.container = request.preset == output::OutputPresetV1::HevcMp4V1 ? "mp4" : "mov";
             s.profile = request.profile == "main10" ? "main10" : "main";
-            request.worker.vaapi = true;
+            // VA-API first when hardware is requested; the encode chain falls back to the bundled
+            // Kvazaar silently (ADR 0036).
+            request.worker.vaapi = request.hardware;
         } else if (request.preset == output::OutputPresetV1::H264MovV1 ||
                    request.preset == output::OutputPresetV1::H264Mp4V1) {
             s.videoCodec = "h264";
@@ -368,8 +367,11 @@ struct detail::SequenceExportWorkV1 {
         // Captured before the encoder is released below: the serving provider and why the
         // providers ahead of it in the platform chain did not serve (ADR 0035).
         const auto served = encoder->handshake();
-        const auto provenance = encoder->provenance();
-        if (provenance.fellBack())
+        auto provenance = encoder->provenance();
+        // ADR 0036: a delivery that differs from the request (an 8-bit HEVC Main for a Main 10
+        // request) is recorded in provenance, logged and stated in the evidence; never silent.
+        provenance.adjustment = qc.adjustment;
+        if (provenance.fellBack() || !provenance.adjustment.empty())
             std::cerr << "Bloom export: media provider " << provenance.diagnostic() << '\n';
         require(qc.frames == settings().frames && qc.audioSamples == settings().audioSamples &&
                     qc.bytes <= settings().byteLimit,
@@ -428,12 +430,19 @@ struct detail::SequenceExportWorkV1 {
         }
         require(reopened.finalize() == qc.artifact && static_cast<bool>(lease.acceptVerification()),
                 "Staged artifact digest differs", Error::DigestMismatch);
-        // The encoder that actually served the attempt, after any silent VA-API fallback.
+        // The encoder that actually served the attempt, after any silent VA-API fallback, and
+        // the profile and bit depth the reopened stream carries.
         if (request.preset == output::OutputPresetV1::H264MovV1)
             analysis->implementationNote +=
                 served.execution.implementation == media::provider::Implementation::Hardware
                     ? "; encoder=vaapi vaapi-runtime-unqualified"
                     : "; encoder=openh264 2.6.0 bundled";
+        if (!qc.profile.empty() &&
+            (settings().videoCodec == "h264" || settings().videoCodec == "hevc"))
+            analysis->implementationNote += "; delivered=" + settings().videoCodec + " " +
+                                            qc.profile + " " + std::to_string(qc.bitDepth) + "-bit";
+        if (!qc.adjustment.empty())
+            analysis->implementationNote += "; " + qc.adjustment;
         auto evidence =
             checked(output::makeMediaQcEvidenceV1(*analysis, qc, approvals.finalize(), &served));
         checkpoint();

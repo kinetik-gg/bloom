@@ -139,7 +139,7 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
     if (h264)
         result.implementationNote = "Review deliverable — not for archival";
     if (hevc)
-        result.implementationNote = "HEVC on VA-API hardware; not for archival";
+        result.implementationNote = "HEVC delivery — not for archival";
     using F = OutputFacetIdV1;
     using S = OutputPreservationStateV1;
     const bool alpha =

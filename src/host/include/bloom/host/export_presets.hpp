@@ -142,7 +142,7 @@ struct ExportEncoderStatus final {
     OpenH264 openh264 = OpenH264::Checking;
     // A VA-API render node exists and its driver exposes the encode entry point.
     bool vaapiH264 = false;
-    // HEVC is hardware-only: VA-API HEVC Main/Main 10 encode. There is no software HEVC encoder.
+    // A VA-API render node encodes HEVC Main/Main 10. Without it HEVC uses the bundled Kvazaar.
     bool vaapiHevc = false;
     // The supervised media worker can be started on this computer.
     bool mediaWorker = false;

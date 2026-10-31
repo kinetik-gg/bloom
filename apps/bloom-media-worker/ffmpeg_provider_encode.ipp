@@ -279,7 +279,7 @@ struct Encoder::State {
             c.profile = videoProfile(settings);
             c.pix_fmt = settings.videoCodec == "tiff"         ? AV_PIX_FMT_RGBA64LE
                         : hardwareCodec(settings) && hardware ? AV_PIX_FMT_VAAPI
-                        : settings.videoCodec == "h264"       ? AV_PIX_FMT_YUV420P
+                        : hardwareCodec(settings)             ? AV_PIX_FMT_YUV420P
                                                               : AV_PIX_FMT_YUV422P10LE;
             if (settings.videoCodec == "prores_ks" && c.profile >= 4)
                 c.pix_fmt = AV_PIX_FMT_YUVA444P10LE;
@@ -290,6 +290,10 @@ struct Encoder::State {
                 if (c.profile == 0)
                     c.bit_rate = 120000000;
             }
+            // The bundled Kvazaar is an 8-bit encoder: a Main 10 request without VA-API is served
+            // as Main (8-bit 4:2:0), and the stream declares what it carries.
+            if (settings.videoCodec == "hevc" && !hardware)
+                c.profile = AV_PROFILE_HEVC_MAIN;
             if (hardwareCodec(settings)) {
                 c.bit_rate = settings.videoBitrateKbps != 0
                                  ? std::int64_t{settings.videoBitrateKbps} * 1000
@@ -356,6 +360,16 @@ struct Encoder::State {
             av_dict_set(&options, "profile", settings.profile.c_str(), 0);
         if (video && hardware && hardwareCodec(settings))
             av_dict_set_int(&options, "async_depth", kVaapiAsyncDepth, 0);
+        if (video && name == "libkvazaar") {
+            // One-second intra period like the other delivery encoders, the session's thread
+            // budget, and Kvazaar's fast preset (an export, not an archival master).
+            const auto period = std::max<std::int64_t>(
+                1, settings.rate.numerator / std::max<std::int64_t>(1, settings.rate.denominator));
+            const auto parameters =
+                "preset=fast,period=" + std::to_string(period) + ",threads=" +
+                (settings.threads == 0 ? std::string("auto") : std::to_string(settings.threads));
+            av_dict_set(&options, "kvazaar-params", parameters.c_str(), 0);
+        }
         if (settings.videoCodec == "tiff" && video)
             av_dict_set(&options, "compression_algo", "raw", 0);
         const auto status = avcodec_open2(&c, codec, &options);
@@ -369,6 +383,11 @@ struct Encoder::State {
                 track.stream->avg_frame_rate = c.framerate;
             require(avcodec_parameters_from_context(track.stream->codecpar, &c) >= 0,
                     "Encoder metadata failure");
+            // QuickTime and Apple players open HEVC only as 'hvc1' (parameter sets in the sample
+            // description), not FFmpeg's default 'hev1'. Kvazaar's global header carries every
+            // parameter set; the VA-API encoder's does not reliably, so it keeps 'hev1'.
+            if (video && settings.videoCodec == "hevc" && !hardware && c.extradata_size > 0)
+                track.stream->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
         }
         if (video) {
             track.frame->format =
@@ -403,9 +422,6 @@ struct Encoder::State {
     }
     void open() {
         require(valid(settings), "Invalid encode settings", Error::InvalidValue);
-        // HEVC is hardware-only (ADR 0033): there is no software HEVC encoder in the intake.
-        if ((settings.videoCodec == "hevc" && !hardware) || settings.videoCodec == "h265")
-            throw Unavailable{Error::Unavailable, "codec.hevc.software-encoder-not-intaken"};
         if (settings.videoCodec == "tiff") {
             require(settings.container == "tiff" && settings.frames == 1 &&
                         settings.audioCodec.empty(),
@@ -435,7 +451,7 @@ struct Encoder::State {
         if (!settings.videoCodec.empty())
             openTrack(videoTrack,
                       settings.videoCodec == "h264"   ? (hardware ? "h264_vaapi" : "libopenh264")
-                      : settings.videoCodec == "hevc" ? "hevc_vaapi"
+                      : settings.videoCodec == "hevc" ? (hardware ? "hevc_vaapi" : "libkvazaar")
                                                       : settings.videoCodec,
                       true);
         if (!settings.audioCodec.empty())
@@ -661,6 +677,13 @@ struct Encoder::State {
         qc.colour = {parameters.color_primaries, parameters.color_trc, parameters.color_space,
                      parameters.color_range};
         qc.container = containerToken(*input.format, parameters);
+        if (const auto* name = avcodec_profile_name(parameters.codec_id, parameters.profile))
+            qc.profile = name;
+        if (const auto* layout = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(parameters.format)))
+            qc.bitDepth = static_cast<std::uint32_t>(layout->comp[0].depth);
+        if (settings.videoCodec == "hevc" && settings.profile == "main10" && qc.bitDepth == 8)
+            qc.adjustment = "HEVC Main 10 was requested; no 10-bit HEVC encoder answered, so the "
+                            "bundled 8-bit Kvazaar delivered HEVC Main (8-bit)";
         const DeclaredSampling declared{parameters.color_space, parameters.color_range,
                                         parameters.chroma_location};
         decoder(input, stream, nullptr);

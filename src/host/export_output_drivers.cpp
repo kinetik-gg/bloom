@@ -1089,9 +1089,15 @@ class MediaDriver final : public DriverBase {
             settings.format == ExportFormat::HevcMov || settings.format == ExportFormat::HevcMp4;
         const auto& encoders = input_.encoders;
         const bool softwareH264 = encoders.openh264 == ExportEncoderStatus::OpenH264::Installed;
-        hardware_ =
-            hevc || (h264 && (settings.encoder == document::ExportEncoderPreference::Hardware ||
-                              (settings.encoder == document::ExportEncoderPreference::Automatic &&
+        // VA-API goes first when asked for, and for Automatic HEVC when a render node encodes it
+        // (the bundled Kvazaar is the slower encoder). The encode chain falls back to the bundled
+        // software encoder silently either way.
+        const auto preference = settings.encoder;
+        hardware_ = (hevc && (preference == document::ExportEncoderPreference::Hardware ||
+                              (preference == document::ExportEncoderPreference::Automatic &&
+                               encoders.vaapiHevc))) ||
+                    (h264 && (preference == document::ExportEncoderPreference::Hardware ||
+                              (preference == document::ExportEncoderPreference::Automatic &&
                                !softwareH264 && encoders.vaapiH264)));
         const auto profile = mediaProfile(settings);
         SequenceExportRequestV1 request{

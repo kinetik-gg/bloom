@@ -62,8 +62,8 @@ An image output writes one file per frame, or a single still when the range is o
 
 Formats are listed in four groups:
 
-- **Video**: H.264 MP4 (default), H.264 MOV, Review H.264 (Rec.709, look on), HEVC MP4 and MOV
-  (hardware), ProRes 422 Proxy, LT, 422, HQ, 4444 and 4444 XQ MOV, DNxHR HQ MXF.
+- **Video**: H.264 MP4 (default), H.264 MOV, Review H.264 (Rec.709, look on), HEVC MP4 and MOV,
+  ProRes 422 Proxy, LT, 422, HQ, 4444 and 4444 XQ MOV, DNxHR HQ MXF.
 - **Image sequences**: VFX handoff EXR (ACES2065-1, PIZ, from 1001, `####`), OpenEXR, DPX, PNG
   and TIFF sequences.
 - **Audio**: PCM WAV/BWF (RF64 when large).
@@ -89,8 +89,10 @@ edit them.
   downloaded or installed. With **Hardware** chosen on Linux, Bloom uses a VA-API render node when
   one encodes H.264 and otherwise uses OpenH264 without asking. On macOS VideoToolbox encodes
   first.
-- **HEVC** is hardware-only (VA-API). Without a VA-API render node that encodes HEVC, HEVC presets
-  say **HEVC needs a VA-API render node with HEVC encode** and cannot start.
+- **HEVC** is encoded by Kvazaar, which ships with Bloom on Linux, macOS and Windows. On Linux a
+  VA-API render node that encodes HEVC is used first when there is one, and Bloom falls back to
+  Kvazaar without asking. Kvazaar writes 8-bit HEVC: a **Main 10** output without a VA-API encoder
+  is written as **Main**.
 - **ProRes** is written by FFmpeg; it is not an Apple-authorized ProRes implementation.
 - The **VFX handoff** and **Review H.264** deliverables need the built-in ACES CG configuration
   with a pinned revision.

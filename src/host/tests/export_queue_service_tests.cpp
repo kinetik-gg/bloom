@@ -329,16 +329,18 @@ void testPresets() {
 
     document::ExportOutputSettings hevc;
     hevc.format = document::ExportFormat::HevcMp4;
-    hevc.encoder = document::ExportEncoderPreference::Software;
-    expect(host::exportPlatformAvailability(hevc, linuxEncoders()).code ==
-               host::ExportAvailabilityCode::NoQualifiedEncoder,
-           "HEVC has no software encoder");
-    hevc.encoder = document::ExportEncoderPreference::Automatic;
-    expect(host::exportPlatformAvailability(hevc, linuxEncoders()).code ==
-               host::ExportAvailabilityCode::HardwareEncoderMissing,
-           "HEVC without a VA-API render node is HardwareEncoderMissing");
-    expect(host::exportPlatformAvailability(hevc, linuxEncoders(true, true)).available,
-           "HEVC is available with VA-API HEVC encode");
+    // HEVC ships with Bloom: the bundled Kvazaar serves every preference without VA-API.
+    for (const auto preference :
+         {document::ExportEncoderPreference::Software, document::ExportEncoderPreference::Automatic,
+          document::ExportEncoderPreference::Hardware}) {
+        hevc.encoder = preference;
+        const auto withoutDevice = host::exportPlatformAvailability(hevc, linuxEncoders());
+        expect(withoutDevice.available && withoutDevice.reason.empty() &&
+                   withoutDevice.remedy == host::ExportRemedy::None,
+               "HEVC is available without a VA-API render node");
+        expect(host::exportPlatformAvailability(hevc, linuxEncoders(true, true)).available,
+               "HEVC is available with VA-API HEVC encode");
+    }
 
     document::ExportOutputSettings handoff;
     handoff.format = document::ExportFormat::OpenExr;
@@ -744,13 +746,11 @@ void testEveryPlatformExports() {
         {.userDataDirectory = std::nullopt, .initialEncoders = ffmpegOnlyEncoders()});
     for (const auto& preset : catalogue->snapshot()->presets) {
         const auto format = preset.settings.format;
-        const bool needsHevc =
-            format == document::ExportFormat::HevcMov || format == document::ExportFormat::HevcMp4;
         expect(preset.platformAvailability.code !=
                        host::ExportAvailabilityCode::WorkerUnavailable &&
                    preset.platformAvailability.reason.find("Linux") == std::string::npos,
                "no preset is refused for its operating system: " + preset.id);
-        if (!needsHevc && format != document::ExportFormat::Dpx)
+        if (format != document::ExportFormat::Dpx)
             expect(preset.platformAvailability.available &&
                        preset.platformAvailability.reason.empty(),
                    "the FFmpeg worker serves the preset with no unavailable reason: " + preset.id);

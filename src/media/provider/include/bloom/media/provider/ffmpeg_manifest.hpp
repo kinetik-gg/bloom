@@ -3,7 +3,7 @@
 namespace bloom::media::provider {
 // Codec-free declaration shared by the host and the isolated executable.
 // `hardware` selects the VA-API encode generation; the software generation always declares the
-// bundled OpenH264 H.264 encoder.
+// bundled OpenH264 (H.264) and Kvazaar (HEVC) encoders.
 [[nodiscard]] Handshake ffmpegHandshake(bool hardware = false);
 // Preview-only VA-API decode for H.264/HEVC with run-time render-node discovery and a
 // per-worker software parity gate. Software decode remains the reference and fallback.
