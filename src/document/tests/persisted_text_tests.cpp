@@ -217,6 +217,22 @@ void testParameterSchemaAndStringPayload(ExpectationContext& expectations) {
         "parameter schema keys are structural text and string constants require strict UTF-8");
 }
 
+void testTextOverflowRange(ExpectationContext& expectations) {
+    const auto insertInteger = [](const std::string_view key, const std::int64_t value) {
+        bloom::document::ParameterStore parameters;
+        return parameters.insert(
+            {id<ParameterId>(1), std::string(key), ConstantValueSource{value}});
+    };
+    expectations.expect(
+        insertInteger(bloom::document::kTextOverflowParameterSchemaKey, 0) &&
+            insertInteger(bloom::document::kTextOverflowParameterSchemaKey, 1) &&
+            !insertInteger(bloom::document::kTextOverflowParameterSchemaKey, 2) &&
+            !insertInteger(bloom::document::kTextOverflowParameterSchemaKey, -1) &&
+            insertInteger(bloom::document::kTextVerticalAlignmentParameterSchemaKey, 2) &&
+            insertInteger(bloom::document::kTextAnchorModeParameterSchemaKey, 2),
+        "text overflow accepts only Clip and Grow while alignment and anchor keep 0..2");
+}
+
 } // namespace
 
 int main() {
@@ -226,6 +242,7 @@ int main() {
         testProjectCompositionAndLayerNames(expectations);
         testGraphIdentifiersRolesAndPorts(expectations);
         testParameterSchemaAndStringPayload(expectations);
+        testTextOverflowRange(expectations);
         return expectations.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

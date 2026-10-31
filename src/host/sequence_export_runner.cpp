@@ -124,6 +124,9 @@ struct detail::SequenceExportWorkV1 {
     // reused by every frame's CPU fallback. Released with the work on the retirement owner.
     std::shared_ptr<const runtime::CpuCompositionEvaluator> fallbackEvaluator =
         std::make_shared<const runtime::CpuCompositionEvaluator>();
+    // The range is one linear pass: shared caches retain only what recurs between its frames.
+    std::shared_ptr<runtime::LinearPassRetention> linearPass =
+        std::make_shared<runtime::LinearPassRetention>();
     explicit SequenceExportWorkV1(SequenceExportRequestV1 r,
                                   std::shared_ptr<output::ExportResourceLedgerV1> lifetime)
         : request(std::move(r)), ledgerLifetime(std::move(lifetime)) {}
@@ -461,6 +464,12 @@ struct detail::SequenceExportWorkV1 {
         outcome.evidence = std::move(evidence);
         outcome.expectedColourTags =
             settings().videoCodec.empty() ? ColourTags{} : settings().colour;
+        // FFmpeg's MXF writes the matrix but neither the primaries nor the transfer, so a DNxHR
+        // MXF reopens with both unspecified; expect only what the container can declare.
+        if (settings().container == "mxf") {
+            outcome.expectedColourTags.primaries = 2;
+            outcome.expectedColourTags.transfer = 2;
+        }
         const auto& codec =
             settings().videoCodec.empty() ? settings().audioCodec : settings().videoCodec;
         outcome.expectedContainer =
@@ -808,7 +817,8 @@ struct SequenceExportRunnerV1::State {
                            .quality = runtime::EvaluationQuality::Reference,
                            .colorIntent = work->colorIntent(),
                            .pixelStorageByteLimit = 0,
-                           .bypassLookNodes = work->request.bypassLookNodes},
+                           .bypassLookNodes = work->request.bypassLookNodes,
+                           .linearPass = work->linearPass},
             .assetBaseDirectory = work->request.assetBaseDirectory,
             .fallbackEvaluator = work->fallbackEvaluator,
             .targetPath = work->request.range.destination,
@@ -833,6 +843,12 @@ struct SequenceExportRunnerV1::State {
     // or cancelled. False after a terminal failure.
     bool fill() {
         if (!compiled || stage == Stage::Complete || work->isCancelled())
+            return true;
+        // Issue #396: no frame starts before the GPU provider's bootstrap is terminal (evaluator
+        // and shared OCIO context published); an earlier frame would be evaluated and displayed
+        // on the CPU reference path on a GPU-capable machine. A provider without a device still
+        // reaches the terminal state, and its frames then take the reported CPU path.
+        if (work->request.gpuProvider && work->request.gpuProvider->bootstrapPending())
             return true;
         // Retry the earliest refused frame once something of this export completed since its
         // refusal, or once the capacity wait's backoff elapsed when other work held the root.

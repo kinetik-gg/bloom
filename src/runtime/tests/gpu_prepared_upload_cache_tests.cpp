@@ -248,6 +248,32 @@ void testOrdinaryGraceIsPreserved(Expectations& checks) {
                   "ordinary-only incoming operation preserves an existing decoded grace entry");
 }
 
+// An export's linear pass retains a prepared upload only when its key recurs within the pass, in
+// the pooled and the standalone arm; a store without the pass (viewer, RAM Preview) is unchanged.
+void testLinearPassRetainsOnlyRecurringUploads(Expectations& checks) {
+    RetirementScope scope;
+    bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
+    auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
+    GpuPreparedUploadCache pooled(pool, scope.owner, 1U << 20U, 64);
+    GpuPreparedUploadCache standalone(1U << 20U, 64);
+    const auto image = makeImage(4, 4);
+    for (auto* cache : {&pooled, &standalone}) {
+        bloom::runtime::LinearPassRetention pass;
+        for (int frame = 0; frame < 8; ++frame)
+            cache->store("frame-" + std::to_string(frame), image, &pass);
+        checks.expect(cache->entryCount() == 0 && cache->retainedBytes() == 0,
+                      "frame-unique uploads stream through a linear pass");
+        cache->store("static", image, &pass);
+        checks.expect(cache->find("static") == nullptr, "a first offer is not retained");
+        cache->store("static", image, &pass);
+        checks.expect(cache->find("static") == image, "a recurring upload is retained");
+        cache->store("viewer", image);
+        checks.expect(cache->find("viewer") == image, "a store without a pass is retained");
+    }
+    checks.expect(pool->preparedStatistics().linearPassDeferrals == 9,
+                  "the pool counts every deferred prepared offer");
+}
+
 void testSharedNamespaceAndPolicy(Expectations& checks) {
     RetirementScope scope;
     bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
@@ -797,6 +823,7 @@ int main() {
         testRepeatedReplacementAndFindStaysConsistent(expectations);
         testCoverageCacheEviction(expectations);
         testSharedNamespaceAndPolicy(expectations);
+        testLinearPassRetainsOnlyRecurringUploads(expectations);
         testOrdinaryGraceIsPreserved(expectations);
         testHeldRetirementConservation(expectations);
         testCandidatePressureAndClose(expectations);

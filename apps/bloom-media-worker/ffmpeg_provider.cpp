@@ -52,6 +52,12 @@ void require(bool ok, const char* detail, Error code = Error::Corrupt) {
     if (!ok)
         throw Unavailable{code, detail};
 }
+// A codec this build cannot decode, refused by name (issue #398).
+void requireDecoder(const AVCodecParameters& parameters) {
+    if (avcodec_find_decoder(parameters.codec_id) == nullptr)
+        throw Unavailable{Error::Unavailable, std::string("Codec not available in this build: ") +
+                                                  avcodec_get_name(parameters.codec_id)};
+}
 Rational rational(std::int64_t n, std::int64_t d) {
     require(d > 0 && n != std::numeric_limits<std::int64_t>::min(), "Invalid timestamp");
     const auto divisor = std::gcd(n, d);
@@ -279,6 +285,17 @@ ProbeResult probe(Input& input, const Digest& digest, std::uint64_t bytes) {
             s.kind = MediaKind::Data;
         result.streams.push_back(std::move(s));
     }
+    // Issue #398: a stream whose codec this build cannot decode (VP9, AV1) is refused at probe by
+    // name, so import says why instead of failing later or on another path. The first video stream
+    // is the one an asset uses; attached pictures (cover art) are not video.
+    for (unsigned i = 0; i < input.format->nb_streams; ++i) {
+        const auto& stream = *input.format->streams[i];
+        if (stream.codecpar->codec_type != AVMEDIA_TYPE_VIDEO ||
+            (stream.disposition & AV_DISPOSITION_ATTACHED_PIC) != 0)
+            continue;
+        requireDecoder(*stream.codecpar);
+        break;
+    }
     require(valid(result), "Invalid probe metadata");
     return result;
 }
@@ -357,8 +374,8 @@ void configureThreads(AVCodecContext& codec, const AVCodecParameters& p) {
 }
 // A null device selects the software reference decoder.
 void decoder(Input& input, const AVStream& stream, AVBufferRef* device) {
+    requireDecoder(*stream.codecpar);
     const auto* codec = avcodec_find_decoder(stream.codecpar->codec_id);
-    require(codec != nullptr, "Codec is not in the intake", Error::Unavailable);
     input.codec = avcodec_alloc_context3(codec);
     require(input.codec != nullptr, "Decoder allocation failed", Error::Oversized);
     require(avcodec_parameters_to_context(input.codec, stream.codecpar) >= 0,
@@ -625,9 +642,17 @@ FrameProduct frame(Input& input, const AVStream& stream, AVFrame* decoded) {
             sws_freeContext(input.scale);
             input.scale = sws_alloc_context();
             require(input.scale != nullptr, "Pixel layout unavailable", Error::Oversized);
+            // Siting applies per axis, and only along an axis the layout subsamples: 4:2:2 has
+            // full vertical chroma resolution, so its chroma rows sit on the luma rows whatever
+            // the declared location (whose vertical half is a 4:2:0 statement). Positions are in
+            // 1/256 luma samples; 0 is co-sited with the first luma sample of the pair.
             int horizontal = 0, vertical = 0;
             require(av_chroma_location_enum_to_pos(&horizontal, &vertical, siting) >= 0,
                     "Chroma siting unavailable", Error::Unavailable);
+            if (layout->log2_chroma_w == 0)
+                horizontal = 0;
+            if (layout->log2_chroma_h == 0)
+                vertical = 0;
             auto* options = static_cast<void*>(input.scale);
             require(av_opt_set_int(options, "srcw", decoded->width, 0) >= 0 &&
                         av_opt_set_int(options, "srch", decoded->height, 0) >= 0 &&
@@ -1109,9 +1134,10 @@ std::unique_ptr<Input> openInput(const CallRequest& request) {
 }
 } // namespace
 namespace {
-// Opens `name` on `node` with a tiny NV12 VA-API frame pool. Success means the driver exposes the
-// encode entry point, not merely the device.
-bool vaapiEncoderOpens(const char* name, const std::string& node) {
+// Opens `name` on `node` with a small NV12 VA-API frame pool of `width` x `height`. Success means
+// the driver exposes the encode entry point, not merely the device.
+bool vaapiEncoderOpensAt(const char* name, const std::string& node, const int width,
+                         const int height) {
     const auto* codec = avcodec_find_encoder_by_name(name);
     if (codec == nullptr)
         return false;
@@ -1125,12 +1151,12 @@ bool vaapiEncoderOpens(const char* name, const std::string& node) {
         auto* framesContext = reinterpret_cast<AVHWFramesContext*>(frames->data);
         framesContext->format = AV_PIX_FMT_VAAPI;
         framesContext->sw_format = AV_PIX_FMT_NV12;
-        framesContext->width = 64;
-        framesContext->height = 64;
+        framesContext->width = width;
+        framesContext->height = height;
         framesContext->initial_pool_size = 2;
         if (av_hwframe_ctx_init(frames) >= 0) {
-            context->width = 64;
-            context->height = 64;
+            context->width = width;
+            context->height = height;
             context->time_base = {1, 24};
             context->framerate = {24, 1};
             context->pix_fmt = AV_PIX_FMT_VAAPI;
@@ -1142,6 +1168,12 @@ bool vaapiEncoderOpens(const char* name, const std::string& node) {
     av_buffer_unref(&frames);
     av_buffer_unref(&device);
     return opened;
+}
+// Issue #394: drivers reject pictures outside their encode limits (AMD's Mesa driver reports
+// 128..4096), so a 64x64 probe called a working encoder unavailable. Probe at sizes every
+// qualified encoder accepts: 256x256 first, then 1280x720 for a driver with a larger minimum.
+bool vaapiEncoderOpens(const char* name, const std::string& node) {
+    return vaapiEncoderOpensAt(name, node, 256, 256) || vaapiEncoderOpensAt(name, node, 1280, 720);
 }
 } // namespace
 bool probeVaapiEncode() {

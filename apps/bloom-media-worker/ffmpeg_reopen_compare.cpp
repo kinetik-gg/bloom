@@ -1,6 +1,9 @@
 #include "ffmpeg_reopen_compare.hpp"
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <memory>
+#include <utility>
 extern "C" {
 #include <libavutil/pixdesc.h>
 }
@@ -29,7 +32,80 @@ unsigned sample(std::span<const std::byte> bytes, std::size_t offset) {
     return std::to_integer<unsigned>(bytes[offset]) |
            (std::to_integer<unsigned>(bytes[offset + 1]) << 8U);
 }
+// Kr and Kb of a declared Y'CbCr matrix (the matrices swsCoefficients() accepts).
+std::pair<double, double> lumaCoefficients(const AVColorSpace matrix) noexcept {
+    switch (matrix) {
+    case AVCOL_SPC_BT470BG:
+    case AVCOL_SPC_SMPTE170M:
+        return {0.299, 0.114};
+    case AVCOL_SPC_FCC:
+        return {0.30, 0.11};
+    case AVCOL_SPC_SMPTE240M:
+        return {0.212, 0.087};
+    case AVCOL_SPC_BT2020_NCL:
+    case AVCOL_SPC_BT2020_CL:
+        return {0.2627, 0.0593};
+    default:
+        return {0.2126, 0.0722};
+    }
+}
 } // namespace
+// Y'CbCr samples -> full-resolution 16-bit Y'CbCr (chroma reconstructed at the declared siting,
+// range kept) -> RGBA16 under the declared matrix and range, clipped to [0, 65535].
+bool reconstructYuv(const int width, const int height, const AVPixelFormat format,
+                    const std::uint8_t* const* planes, const int* strides,
+                    const DeclaredSampling& declared, std::vector<std::byte>& out) {
+    Scale scale(declaredConversion(width, height, format, AV_PIX_FMT_YUVA444P16LE, declared,
+                                   kReconstructionFlags),
+                sws_freeContext);
+    if (!scale)
+        return false;
+    std::unique_ptr<AVFrame, void (*)(AVFrame*)> full(av_frame_alloc(),
+                                                      [](AVFrame* f) { av_frame_free(&f); });
+    if (!full)
+        return false;
+    full->format = AV_PIX_FMT_YUVA444P16LE;
+    full->width = width;
+    full->height = height;
+    if (av_frame_get_buffer(full.get(), 32) < 0 ||
+        sws_scale(scale.get(), planes, strides, 0, height, full->data, full->linesize) != height)
+        return false;
+    out.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 8U,
+               std::byte{});
+    const auto [kr, kb] = lumaCoefficients(declared.matrix);
+    const double kg = 1.0 - kr - kb;
+    const bool limited = declared.range != AVCOL_RANGE_JPEG;
+    // 16-bit code points: limited black 16 << 8, white 235 << 8, chroma 128 << 8 +/- 112 << 8.
+    const double black = limited ? 4096.0 : 0.0, lumaSpan = limited ? 56064.0 : 65535.0;
+    const double chromaSpan = limited ? 57344.0 : 65535.0;
+    const auto at = [&](const int plane, const int x, const int y) {
+        const auto* row =
+            full->data[plane] + static_cast<std::ptrdiff_t>(y) * full->linesize[plane];
+        return static_cast<double>(row[x * 2] | (row[x * 2 + 1] << 8));
+    };
+    const auto code = [](const double value) {
+        return static_cast<unsigned>(std::lround(std::clamp(value, 0.0, 1.0) * 65535.0));
+    };
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x) {
+            const double luma = (at(0, x, y) - black) / lumaSpan;
+            const double cb = (at(1, x, y) - 32768.0) / chromaSpan;
+            const double cr = (at(2, x, y) - 32768.0) / chromaSpan;
+            const double red = luma + 2.0 * (1.0 - kr) * cr;
+            const double blue = luma + 2.0 * (1.0 - kb) * cb;
+            const double green = (luma - kr * red - kb * blue) / kg;
+            const std::array<unsigned, 4> rgba{code(red), code(green), code(blue),
+                                               static_cast<unsigned>(at(3, x, y))};
+            const auto offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+                                 static_cast<std::size_t>(x)) *
+                                8U;
+            for (std::size_t c = 0; c < 4; ++c) {
+                out[offset + c * 2] = static_cast<std::byte>(rgba[c] & 255U);
+                out[offset + c * 2 + 1] = static_cast<std::byte>(rgba[c] >> 8U);
+            }
+        }
+    return true;
+}
 AVChromaLocation effectiveSiting(const AVChromaLocation siting) noexcept {
     return siting == AVCHROMA_LOC_UNSPECIFIED ? AVCHROMA_LOC_LEFT : siting;
 }
@@ -93,16 +169,24 @@ ReopenMeasure measureReopen(const AVFrame& decoded, const std::span<const std::b
         return result;
     }
     int rgbaStride = width * 8;
+    // Issue #394: swscale's Y'CbCr to RGBA64 path wraps instead of clipping when a decoded sample
+    // lies outside the nominal range next to saturated chroma (a Y' of 12 beside a pure red edge
+    // reconstructed as G = 65535), so lossy codecs failed on footroom they are allowed to produce.
+    // Chroma is therefore reconstructed Y'CbCr to Y'CbCr (swscale, declared siting, no matrix),
+    // and the declared matrix and range are applied here with clipping.
     const auto reconstruct = [&](const std::uint8_t* const* planes, const int* strides,
                                  std::vector<std::byte>& out) {
-        Scale scale(declaredConversion(width, height, format, AV_PIX_FMT_RGBA64LE, declared,
-                                       kReconstructionFlags),
-                    sws_freeContext);
         out.assign(bytes, std::byte{});
-        std::uint8_t* target[4]{reinterpret_cast<std::uint8_t*>(out.data()), nullptr, nullptr,
-                                nullptr};
-        return scale &&
-               sws_scale(scale.get(), planes, strides, 0, height, target, &rgbaStride) == height;
+        if (rgb(format)) {
+            Scale scale(declaredConversion(width, height, format, AV_PIX_FMT_RGBA64LE, declared,
+                                           kReconstructionFlags),
+                        sws_freeContext);
+            std::uint8_t* target[4]{reinterpret_cast<std::uint8_t*>(out.data()), nullptr, nullptr,
+                                    nullptr};
+            return scale && sws_scale(scale.get(), planes, strides, 0, height, target,
+                                      &rgbaStride) == height;
+        }
+        return reconstructYuv(width, height, format, planes, strides, declared, out);
     };
     if (!reconstruct(decoded.data, decoded.linesize, result.rgba)) {
         result.failure = "Reopen conversion unavailable for the declared sampling";

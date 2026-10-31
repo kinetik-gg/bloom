@@ -200,6 +200,11 @@ the development files. On x86 and x86-64 hosts FFmpeg's hand-written SIMD is ena
 assembles it with NASM 2.16.03, a source-built, build-host-only tool installed outside the
 dependency prefix that is never linked or shipped.
 
+Import routes `.mp4 .mov .mkv .webm .mxf .m4v .mts .m2ts .ts` to this worker. A video stream whose
+codec the build does not decode (VP9 and AV1 today) is refused at probe as "Codec not available in
+this build: <codec>" (issue #398), so a WebM or AV1 file never falls through to the still-image
+reader or fails later at render.
+
 FFmpeg ProRes is a non-authorized preview/workflow capability only. It is not evidence of Apple
 authorization, certification, patent clearance, or delivery qualification. The worker resolves its
 own bundled shared libraries privately (Linux `$ORIGIN/lib`, macOS `@loader_path/lib` with
@@ -697,7 +702,17 @@ selection reuses them after the usual identity observation and reads nothing its
 stay outstanding, which is what a network share needs: on an SMB share measured at 61-66 MB/s with
 one reader, four and eight concurrent readers reached 75-82 MB/s. Read-ahead never evicts; a file
 that does not fit the cache's free budget, or one already cached, queued or in flight, is skipped.
-Destroying the evaluator cancels outstanding captures and joins the workers.
+Destroying the evaluator cancels outstanding captures and joins the workers. Export frames do not
+read ahead (see the linear-pass retention below).
+
+**Linear-pass retention.** An export run owns one `runtime::LinearPassRetention` and carries it on
+every frame's `EvaluationRequest::linearPass`. Each store into the shared operation cache (decoded
+media, source revisions, operation and value results) and into the prepared-upload subset receives
+that pass explicitly; a keyed entry is retained only the second time the pass offers it, so
+frame-unique footage and results stream through while static layers and held or looped sources stay
+cached. The pass remembers a bounded set of key hashes (metadata only) and is thread-safe across the
+frames in flight; each run starts with an empty one. Viewer, playback and RAM Preview requests carry
+no pass and retain as before. The pass never changes pixels or cache identity.
 
 `EvaluationRequest::mediaSourceRevisionPolicy` defaults to `Revalidate`: source verification
 precedes CPU operation memoization and GPU prepared-upload lookup, including nested evaluation. A
@@ -1696,8 +1711,15 @@ No operation-cache or memory-ledger implementation changes are required.
 Color conversion preserves stream tags when a decoder omits them from its frame. The provider
 copies left-sited YUV420P8 directly; any other layout or chroma siting is expanded to bounded
 YUVA444P16 by bit-exact bilinear chroma reconstruction at the frame's H.273 chroma location
-(unspecified 4:2:0 siting is the H.273 default, left). The host reconstructs YUV420P8 chroma with
-the same left-sited bilinear filter rather than nearest neighbor. `src/media/video` performs the
+(unspecified siting is left: the H.273 default for 4:2:0, and the co-sited convention of 4:2:2
+codecs such as ProRes and DNxHR, which carry no chroma location). Siting applies per axis and only
+along an axis the layout subsamples: a location's vertical half is a 4:2:0 statement, so 4:2:2 and
+4:4:4 chroma rows stay on their luma rows (issue #393; before it, "left" 4:2:2 chroma was resampled
+half a line down). The host reconstructs YUV420P8 chroma with the same left-sited bilinear filter
+rather than nearest neighbor: chroma row k sits half-way between luma rows 2k and 2k+1, so luma
+row y reads chroma coordinate y/2 - 1/4 (issue #393 corrected a y/2 - 1/8 coordinate, a quarter-line
+shift). Exact-value regression tests: `bloom.media.video-session` (a ProRes 422 HQ Cr step between
+rows 23 and 24 stays a step; 4:2:0 row weights 0, 1/4, 3/4, 1). `src/media/video` performs the
 matrix/range step and `src/color` applies the resolved OCIO input-id-to-working-space transform on
 straight RGB before alpha is restored; the GPU route uploads the same host-prepared pre-OCIO RGB
 and runs that transform as a GPU OCIO effect.
@@ -1735,10 +1757,15 @@ Issue #365 interpretation rules:
 - PQ and HLG streams resolve automatically to the config's Rec.2100 PQ or HLG color space,
   searched among active and inactive spaces because configs usually hide these display-referred
   spaces from pickers. The pinned ACES 1.3 CG config provides `Rec.2100-PQ - Display`; Bloom
-  Neutral has no PQ space, so PQ there is refused with a diagnostic that names the space. Neither
-  pinned config defines HLG, so HLG resolves to the synthesized scene-light `Rec.2100-HLG (Bloom)`
-  space ([color management](color-management.md#synthesized-rec2100-hlg-input-space)). Other
-  Rec.2020 streams need an explicit space.
+  Neutral has no PQ space, so PQ there resolves to the synthesized `Rec.2100-PQ (Bloom)` space
+  ([color management](color-management.md#synthesized-rec2100-pq-input-space)). Neither pinned
+  config defines HLG, so HLG resolves to the synthesized scene-light `Rec.2100-HLG (Bloom)` space
+  ([color management](color-management.md#synthesized-rec2100-hlg-input-space)). Both put HDR
+  reference white (203 cd/m2, HLG 75%) at 1.0 ([HDR reference
+  white](color-management.md#hdr-reference-white)). Other Rec.2020 streams need an explicit space.
+- The YUV matrix is independent of the primaries: Rec.709 primaries coded with the Rec.601 matrix
+  (SMPTE 170M or BT.470BG), as some encoders and cameras write, are ordinary SDR video and resolve
+  like Rec.709.
 - On the unmanaged legacy path (no config space), Rec.2020, PQ and HLG stay typed `Unavailable`,
   including under a legacy transfer override. Raw and linear compatibility overrides keep their
   transfer-only behavior.
@@ -1861,7 +1888,10 @@ The comparison models the codec's own chroma sampling (`reference=declared-sampl
 reopened stream declares its sample format, matrix, range and chroma siting. Bloom takes the
 RGBA16 reference the encoder received through that sample format with the encoder's own conversion,
 using the declared matrix, range and siting. It then reconstructs the reference and the decoded
-frame to RGBA16 with one siting-aware conversion and compares them. 4:2:0 and 4:2:2 chroma
+frame to RGBA16 with one siting-aware conversion and compares them: chroma is reconstructed
+Y'CbCr to full-resolution 16-bit Y'CbCr at the declared siting, and the declared matrix and range
+are applied with clipping (issue #394: swscale's Y'CbCr to RGBA64 path wrapped footroom samples
+beside saturated chroma, so a near-black VA-API H.264 pixel read back as full green). 4:2:0 and 4:2:2 chroma
 decimation is therefore not counted as codec error, so a small saturated feature passes. The
 luma, alpha and every chroma sample the codec kept are still compared, and the bounds are
 unchanged. A real encoding error still fails: corrupted or drifting samples, a sample layout that
@@ -1946,7 +1976,9 @@ Issue #369 ships with the export queue ([ADR 0033](../decisions/0033-export-queu
   uses the probed node.
 - **Color tags** come from the output color intent: `output::outputColourTagsV1()` maps the
   resolved display to H.273 primaries, transfer and matrix (sRGB displays get the sRGB transfer,
-  Rec.1886/Rec.709 BT.709, P3 and Rec.2100 their own code points, unknown displays unspecified), and
+  Rec.1886/Rec.709 BT.709, P3 and Rec.2100 their own code points, unknown displays unspecified;
+  names match case-insensitively, so Bloom Neutral's `srgb_rec709_display` is tagged BT.709
+  primaries, sRGB transfer and BT.709 matrix, which it was not before the accuracy chart), and
   the matrix selects the RGB to YUV coefficients. `EncodeSettingsV1` is version 2 for this; the
   reopen reads the tags and `<container>/<codec>` back into `EncodeQcV1`/`MediaQcEvidenceV1` for the
   ColourTags and Container checks.

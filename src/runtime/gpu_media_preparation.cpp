@@ -155,8 +155,10 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
                               const GpuSceneMediaContext& context,
                               const ImageSourceSelection& selection, const bool explicitBypass,
                               const bool planBypass) {
-    if (!context.sequenceReadAhead || !context.operationCache || explicitBypass || planBypass ||
-        !selection.available || !source.asset ||
+    // A linear pass does not read ahead into the cache: its frames are used once, and its own
+    // frames in flight already overlap decode with evaluation.
+    if (request.linearPass || !context.sequenceReadAhead || !context.operationCache ||
+        explicitBypass || planBypass || !selection.available || !source.asset ||
         source.asset->kind != document::AssetKind::Sequence)
         return;
     auto targets =
@@ -234,7 +236,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
     const ImageSourceSelection& selection, const ResolvedEvaluation& resolved,
     const GpuSceneMediaContext& context, const std::uint64_t pixelBudget, const bool explicitBypass,
     const bool planBypass, const CancellationToken& cancellation,
-    GpuSceneMediaStatistics& statistics) {
+    GpuSceneMediaStatistics& statistics, LinearPassRetention* const linearPass) {
     MediaUploadOutcome outcome;
     outcome.frameBounds = imageSourceFrameBounds(selection);
     outcome.semanticKey = uploadSemanticKey("image", selection.cacheKey, resolved);
@@ -261,9 +263,10 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
                                                 : ImageSourceMemoryCacheAccess::ReadWrite);
     auto* const diskCache = (explicitBypass || planBypass) ? nullptr : context.mediaDiskCache.get();
     media::ImageDecodeStatistics decodeStatistics;
-    auto image = evaluateImageSource(selection, resolved.imageDescriptor, resolved.horizontalScale,
-                                     resolved.verticalScale, byteBudget(pixelBudget), memoryCache,
-                                     memoryAccess, cancellation, diskCache, &decodeStatistics);
+    auto image =
+        evaluateImageSource(selection, resolved.imageDescriptor, resolved.horizontalScale,
+                            resolved.verticalScale, byteBudget(pixelBudget), memoryCache,
+                            memoryAccess, cancellation, diskCache, &decodeStatistics, linearPass);
     addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
     addMediaWork(statistics.imageRepairedPixels, image.repairedPixels);
     ++statistics.imageConversions;
@@ -281,7 +284,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
     outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(*image.value));
     outcome.converted = true;
     if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr) {
-        context.preparedUploadCache->store(outcome.uploadSemanticKey, outcome.image);
+        context.preparedUploadCache->store(outcome.uploadSemanticKey, outcome.image, linearPass);
     }
     return outcome;
 }
@@ -290,7 +293,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
     const VideoSourceSelection& selection, const ResolvedEvaluation& resolved,
     const GpuSceneMediaContext& context, const std::uint64_t pixelBudget, const bool explicitBypass,
     const bool planBypass, const CancellationToken& cancellation,
-    GpuSceneMediaStatistics& statistics) {
+    GpuSceneMediaStatistics& statistics, LinearPassRetention* const linearPass) {
     MediaUploadOutcome outcome;
     outcome.semanticKey = uploadSemanticKey("video", selection.cacheKey, resolved);
     outcome.uploadSemanticKey = outcome.semanticKey;
@@ -324,7 +327,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
     outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(pixels));
     outcome.converted = true;
     if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr) {
-        context.preparedUploadCache->store(outcome.uploadSemanticKey, outcome.image);
+        context.preparedUploadCache->store(outcome.uploadSemanticKey, outcome.image, linearPass);
     }
     return outcome;
 }
@@ -405,7 +408,7 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass);
+        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get());
     recordSourceRevisionWork(selection, statistics);
     requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass);
     if (selection.cancelled) {
@@ -422,7 +425,8 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
         return outcome;
     }
     return evaluateConvertedImageUpload(selection, resolved, context, pixelBudget, explicitBypass,
-                                        planBypass, cancellation, statistics);
+                                        planBypass, cancellation, statistics,
+                                        request.linearPass.get());
 }
 
 MediaUploadOutcome
@@ -456,7 +460,8 @@ prepareVideoUpload(const CompiledVideoSource& source, const EvaluationRequest& r
         return outcome;
     }
     return evaluateConvertedVideoUpload(selection, resolved, context, pixelBudget, explicitBypass,
-                                        planBypass, cancellation, statistics);
+                                        planBypass, cancellation, statistics,
+                                        request.linearPass.get());
 }
 
 MediaUploadOutcome
@@ -478,7 +483,7 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass);
+        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get());
     recordSourceRevisionWork(selection, statistics);
     requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass);
     if (selection.cancelled) {
@@ -507,7 +512,8 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     if (ocioContext.preparer == nullptr) {
         ++statistics.imageSources;
         return evaluateConvertedImageUpload(selection, resolved, context, pixelBudget,
-                                            explicitBypass, planBypass, cancellation, statistics);
+                                            explicitBypass, planBypass, cancellation, statistics,
+                                            request.linearPass.get());
     }
     std::optional<color::ResolvedBloomNeutralConfig> config;
     if (!identityTransform) {
@@ -568,7 +574,7 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         outcome.image = std::move(*decoded.value);
         outcome.converted = true;
         if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr) {
-            context.preparedUploadCache->store(backingKey, outcome.image);
+            context.preparedUploadCache->store(backingKey, outcome.image, request.linearPass.get());
         }
     }
     if (outcome.image->descriptor() == nullptr) {
@@ -633,7 +639,7 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass);
+        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get());
     for (const auto& source : selection.sources)
         recordSourceRevisionWork(source, statistics);
     if (selection.cancelled) {
@@ -727,7 +733,7 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
         outcome.image = std::move(*gathered.value);
         outcome.converted = true;
         if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr)
-            context.preparedUploadCache->store(backingKey, outcome.image);
+            context.preparedUploadCache->store(backingKey, outcome.image, request.linearPass.get());
     }
     if (outcome.image->descriptor() == nullptr) {
         outcome.failure = "Raw shuffle upload has no descriptor";
@@ -788,7 +794,7 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass);
+        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get());
     for (const auto& source : selection.channels.sources)
         recordSourceRevisionWork(source, statistics);
     if (selection.cancelled) {
@@ -874,13 +880,15 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
         outcome.converted = true;
         ids = gather.ids;
         if (cacheable && !planBypass) {
-            context.preparedUploadCache->store(backingKey, outcome.image);
+            context.preparedUploadCache->store(backingKey, outcome.image, request.linearPass.get());
             std::vector<CompiledValue> values;
             values.reserve(gather.ids.size());
             for (const auto id : gather.ids)
                 values.emplace_back(static_cast<std::int64_t>(id));
             context.operationCache->store(idsKey, document::Revision{},
-                                          {.image = {}, .values = std::move(values), .bounds = {}});
+                                          {.image = {}, .values = std::move(values), .bounds = {}},
+                                          OperationCacheEntryKind::Operation, {},
+                                          request.linearPass.get());
         }
     }
     const auto rankCount = static_cast<std::uint32_t>(selection.ranks.size());
@@ -972,7 +980,8 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
     // caller's opt-in to the raw-upload + native-PointResample (+ optional OCIO) split.
     if (ocioContext.preparer == nullptr) {
         return evaluateConvertedVideoUpload(selection, resolved, context, pixelBudget,
-                                            explicitBypass, planBypass, cancellation, statistics);
+                                            explicitBypass, planBypass, cancellation, statistics,
+                                            request.linearPass.get());
     }
     std::optional<color::ResolvedBloomNeutralConfig> config;
     if (!identityTransform) {
@@ -1037,7 +1046,7 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
         outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(pixels));
         outcome.converted = true;
         if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr) {
-            context.preparedUploadCache->store(backingKey, outcome.image);
+            context.preparedUploadCache->store(backingKey, outcome.image, request.linearPass.get());
         }
     }
     if (outcome.image->descriptor() == nullptr) {

@@ -64,12 +64,16 @@ GpuPreparedUploadCache::find(const std::string& key) noexcept {
 }
 
 void GpuPreparedUploadCache::store(std::string key,
-                                   std::shared_ptr<const render::Rgba32fImage> image) {
+                                   std::shared_ptr<const render::Rgba32fImage> image,
+                                   LinearPassRetention* const linearPass) {
     if (pool_) {
-        pool_->storePreparedUpload(std::move(key), std::move(image));
+        pool_->storePreparedUpload(std::move(key), std::move(image), linearPass);
         return;
     }
     if (image == nullptr || maxBytes_ == 0 || maxEntries_ == 0) {
+        return;
+    }
+    if (linearPass != nullptr && !linearPass->offer(key, true)) {
         return;
     }
     const std::uint64_t bytes = static_cast<std::uint64_t>(image->pixels().size_bytes());

@@ -33,7 +33,8 @@ selectChannelSetSources(const CompiledChannelExpression& expression, const core:
                         const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                         OperationCache* revisionCache,
                         const MediaSourceRevisionPolicy revisionPolicy,
-                        const std::size_t hostByteBudget, const bool allowRevisionInsertion) {
+                        const std::size_t hostByteBudget, const bool allowRevisionInsertion,
+                        LinearPassRetention* const linearPass) {
     ChannelSetSourceSelection result;
     for (const auto& source : expression.sources) {
         const CompiledImageSource image{source.sourceNodeId,
@@ -47,7 +48,7 @@ selectChannelSetSources(const CompiledChannelExpression& expression, const core:
                                         {}};
         auto selected =
             selectImageSource(image, time, rate, base, cancel, colorIntent, revisionCache,
-                              revisionPolicy, hostByteBudget, allowRevisionInsertion);
+                              revisionPolicy, hostByteBudget, allowRevisionInsertion, linearPass);
         if (selected.cancelled) {
             result.cancelled = true;
             return result;
@@ -75,7 +76,8 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
                      const document::FrameRate rate, const std::filesystem::path& base,
                      const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                      OperationCache* revisionCache, const MediaSourceRevisionPolicy revisionPolicy,
-                     const std::size_t hostByteBudget, const bool allowRevisionInsertion) {
+                     const std::size_t hostByteBudget, const bool allowRevisionInsertion,
+                     LinearPassRetention* const linearPass) {
     ChannelShuffleSelection result;
     result.associated = shuffle.associated;
     std::vector<const media::ImagePartInfo*> parts;
@@ -83,9 +85,9 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
         const CompiledImageSource image{source.sourceNodeId, source.asset,     source.startFrame,
                                         source.loopMode,     source.colorSpace, source.inputColorSpaceId,
                                         false,               source.part,       {}};
-        auto selected = selectImageSource(image, time, rate, base, cancel, colorIntent,
-                                          revisionCache, revisionPolicy, hostByteBudget,
-                                          allowRevisionInsertion);
+        auto selected =
+            selectImageSource(image, time, rate, base, cancel, colorIntent, revisionCache,
+                              revisionPolicy, hostByteBudget, allowRevisionInsertion, linearPass);
         if (selected.cancelled) {
             result.cancelled = true;
             return result;

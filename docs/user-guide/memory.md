@@ -87,7 +87,11 @@ container's) memory minus the headroom, and the refusal names the measured numbe
 Export, rendering and RAM Preview stream: a run holds only the frames in flight (at most four for an
 export, eight for RAM Preview and playback, and never more than a quarter of the free memory at its
 start) plus caches within the headroom. Every finished frame is encoded or written and its memory
-released, so the length of an export is never limited by memory.
+released, so the length of an export is never limited by memory. An export also keeps the caches
+from filling with frames it uses once: during an export a decoded frame, a converted upload or a
+result is kept only when the export asks for it a second time (a still image, a static layer, a held
+or looped frame), so footage frames pass straight through while the Viewer's and RAM Preview's
+cached frames stay where they are.
 
 The earlier per-cache targets `playback/operation-cache-bytes` and
 `playback/ram-preview-memory-bytes` are retired. Bloom ignores saved values for them and does not

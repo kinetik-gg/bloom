@@ -374,10 +374,14 @@ constantMatchesSchema(const std::string_view schemaKey,
     if (schemaKey == kTextWrapParameterSchemaKey)
         return std::holds_alternative<bool>(constant.value);
     if (schemaKey == kTextVerticalAlignmentParameterSchemaKey ||
-        schemaKey == kTextAnchorModeParameterSchemaKey ||
-        schemaKey == kTextOverflowParameterSchemaKey) {
+        schemaKey == kTextAnchorModeParameterSchemaKey) {
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value != nullptr && *value >= 0 && *value <= 2;
+    }
+    if (schemaKey == kTextOverflowParameterSchemaKey) {
+        // Overflow is Clip (0) or Grow (1); the renderer rejects anything above Grow.
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= 0 && *value <= 1;
     }
     if (schemaKey == kTextLineHeightParameterSchemaKey ||
         schemaKey == kTextLetterSpacingParameterSchemaKey) {

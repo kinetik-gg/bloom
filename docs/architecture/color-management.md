@@ -48,10 +48,10 @@ Auto resolution is format-specific and never uses an ambient `$OCIO` or a decode
 | EXR with Rec.709/D65 chromaticities | The config's scene-linear Rec.709 space: `lin_rec709_scene` (Bloom Neutral), `Linear Rec.709 (sRGB)` (ACES CG); never a camera/video space |
 | EXR with other chromaticities | Refuse with a typed reason; choose an explicit config id |
 | EXR without chromaticities | Working space, with a visible warning |
-| Video: Rec.709 or Rec.601 primaries/matrix + BT.709/SMPTE 170M transfer | Config sRGB-texture space, as for 8/16-bit stills: the YUV step decodes the matrix and range and the R'G'B' is shown as players show it ([ADR 0032](../decisions/0032-sdr-video-colour-default.md)); refused by name if a config has no sRGB-texture space (both pinned configs have one) |
-| Video: sRGB transfer | Config sRGB-texture space |
-| Video: linear transfer | Working space |
-| Video: BT.2020 + PQ tags | The config's Rec.2100 PQ space (active or inactive); refused by name when the config has none |
+| Video: Rec.709 or Rec.601 primaries and a Rec.709 or Rec.601 matrix (in any combination) + BT.709/SMPTE 170M transfer | Config sRGB-texture space, as for 8/16-bit stills: the YUV step decodes the matrix and range and the R'G'B' is shown as players show it ([ADR 0032](../decisions/0032-sdr-video-colour-default.md)); refused by name if a config has no sRGB-texture space (both pinned configs have one) |
+| Video: sRGB transfer, Rec.709 or Rec.601 primaries and matrix | Config sRGB-texture space |
+| Video: linear transfer, Rec.709 primaries | Working space |
+| Video: BT.2020 + PQ tags | The config's Rec.2100 PQ space (active or inactive), otherwise the synthesized `Rec.2100-PQ (Bloom)` space |
 | Video: BT.2020 + HLG tags | The config's Rec.2100 HLG space, otherwise the synthesized `Rec.2100-HLG (Bloom)` space |
 | Video: missing tags | Filled by the size convention (Rec.709 for HD, Rec.601 for SD, BT.709 transfer, limited range; [media I/O](media-io.md)) and resolved as above, with the visible note "Color tags missing — assumed Rec.709 with the sRGB transfer. Change in Assets → Input Color" (Rec.601 for SD, Rec.2020 without the transfer clause for wide-gamut streams) |
 | Video: other Rec.2020 tags | Typed refusal naming the input-color override |
@@ -94,16 +94,29 @@ Like the HLG space it is added without changing the config version, the copy pas
 part of video transform identity. `ResolvedBloomNeutralConfig::rec709VideoColorSpaceId()` names it.
 Linear Rec.709 EXR data maps to the scene-linear Rec.709 space, never to a camera space.
 
+### HDR reference white
+
+Bloom's scene-linear working space puts diffuse white at 1.0: an sRGB still's white, an SDR video's
+white and a Rec.709 EXR's 1.0 all land there. Both synthesized Rec.2100 input spaces follow ITU-R
+BT.2408 and map HDR reference white to the same 1.0, so SDR and HDR sources composite at one white
+without a gain node: 203 cd/m2 for PQ, and the 75% signal for HLG (whose scene light there is
+E = 0.26496 of the normalized BT.2100 range). Peak PQ (10,000 cd/m2) is therefore 49.26 and peak
+HLG (signal 1.0, E = 1) is 3.774. Exact-value tests pin both (`bloom.runtime.input-color-context`),
+and the colour/format accuracy chart encodes its HDR variants with the same convention.
+
 ### Synthesized Rec.2100 HLG input space
 
 Neither pinned config (Bloom Neutral v1, OCIO ACES 1.3 CG) defines an HLG space, so every resolved
 pinned config that lacks one gains `Rec.2100-HLG (Bloom)` in memory. Its definition, from scene
 light to the config reference, is:
 
-1. OCIO 2.5 built-in `CURVE - HLG-OETF-INVERSE` (BT.2100 HLG signal to scene light, scaled so a
-   signal of 0.42 is 18% gray);
-2. the BT.2020 (D65) RGB to CIE XYZ matrix derived from the BT.2020 primaries; then
-3. to the reference primaries: the inverse BT.709 RGB-to-XYZ matrix for Bloom Neutral (linear
+1. OCIO 2.5 built-in `CURVE - HLG-OETF-INVERSE` (BT.2100 HLG signal to scene light, scaled by OCIO
+   so a signal of 0.42 is 18% gray: 3 x the normalized E, so the 75% signal is 0.795);
+2. a uniform scale of 1 / (3 x 0.26496) = 1.2580, so the 75% reference-white signal is 1.0 (see
+   [HDR reference white](#hdr-reference-white));
+3. the BT.2020 (D65) RGB to CIE XYZ matrix derived from the BT.2020 primaries (the scale is folded
+   into this matrix); then
+4. to the reference primaries: the inverse BT.709 RGB-to-XYZ matrix for Bloom Neutral (linear
    Rec.709 reference), or the inverse OCIO built-in `UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD` for
    the ACES config (ACES2065-1 reference).
 
@@ -121,7 +134,21 @@ working space are scene-linear, and a display-side OOTF belongs to the output tr
 input interpretation. The pinned locator, payload and content revision are unchanged, and the
 space is re-synthesized every time a pinned config is resolved, so a saved project naming it opens
 anywhere. Because the definition uses OCIO built-ins, transform identity includes
-`synthesizedColorSpaceIdentity()` (`bloom-hlg-scene-v1;ocio=<version>`) as well as the space id.
+`synthesizedColorSpaceIdentity()` (`bloom-hlg-scene-v2;ocio=<version>`) as well as the space id.
+Version 1 (before issue #369) used OCIO's scale unchanged, so HLG reference white was 0.795 (a third
+of a stop, about 24 codes of 8-bit sRGB below SDR white); the identity change re-decodes every
+cached HLG frame, thumbnail and proxy.
+
+### Synthesized Rec.2100 PQ input space
+
+Bloom Neutral v1 has no PQ space, so tagged PQ video had no Auto interpretation and failed to
+render. Every resolved pinned config without a non-data Rec.2100 PQ space gains
+`Rec.2100-PQ (Bloom)` in memory: OCIO 2.5 built-in `CURVE - ST-2084_to_LINEAR` (absolute luminance
+in units of 100 cd/m2, embedded from a raw 2.4 config exactly as for HLG), a uniform scale of
+100 / 203 so 203 cd/m2 is 1.0, the BT.2020 to XYZ matrix, then the reference primaries as above.
+Its identity is `bloom-pq-scene-v1;ocio=<version>`. The ACES 1.3 CG config keeps its own
+`Rec.2100-PQ - Display` as the Auto choice and does not gain the synthesized space. No tone mapping
+is applied on input: values above reference white stay above 1.0 for the output transform.
 
 ARRI LogC3 and RED Log3G10 are not container-tagged automatic cases. The Assets and Properties
 pickers list every non-data color space, grouped by the config's family, so an artist can choose

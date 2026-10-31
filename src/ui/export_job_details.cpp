@@ -130,8 +130,9 @@ struct Line final {
     }
     const auto& provenance = verification.provenance;
     if (provenance.gpuFrames + provenance.cpuReferenceFrames > 0)
-        add(provenance.cpuReferenceFrames == 0 ? tr("Rendered on the GPU")
-                                               : tr("Some frames rendered on the CPU"),
+        add(provenance.cpuReferenceFrames == 0 && provenance.cpuDisplayFrames == 0
+                ? tr("Rendered on the GPU")
+                : tr("Some frames rendered on the CPU"),
             StatusTone::Neutral,
             provenance.encoder.empty() ? QString{} : tr("Encoder: %1").arg(qs(provenance.encoder)));
     if (provenance.framesReused > 0)

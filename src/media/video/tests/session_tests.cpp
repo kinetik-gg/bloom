@@ -13,6 +13,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 namespace {
 void check(bool value, const char* message) {
     if (!value)
@@ -544,12 +545,108 @@ void timingAndLayout(const std::filesystem::path& directory) {
     }
 }
 } // namespace
+// Issue #393: chroma siting applies only along an axis the layout subsamples. 4:2:2 has full
+// vertical chroma resolution, so a Cr step between rows 23 and 24 stays a step after decode; the
+// worker used to apply the 4:2:0 vertical half of "left" siting (src_v_chr_pos 128) and blended
+// the rows on both sides of the edge.
+std::uint16_t sample16(const bloom::media::provider::CpuPlane& plane, unsigned x, unsigned y) {
+    const auto offset = static_cast<std::size_t>(y) * plane.stride + x * 2U;
+    return static_cast<std::uint16_t>(std::to_integer<unsigned>(plane.bytes[offset]) |
+                                      (std::to_integer<unsigned>(plane.bytes[offset + 1]) << 8U));
+}
+void chromaSiting(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    video::VideoDecodeSession session(directory / "chroma-edge-422.mov");
+    const auto probe = std::get<provider::ProbeResult>(session.probe());
+    const auto decoded = session.frame(probe, 0, 0, 0, nullptr);
+    check(std::holds_alternative<Frame>(decoded), "the 4:2:2 chroma-edge fixture decodes");
+    const auto& frame = *std::get<Frame>(decoded);
+    check(frame.format == provider::PixelFormat::Yuva444p16 && frame.planes.size() == 4 &&
+              frame.planes[2].width == 64 && frame.planes[2].height == 48,
+          "4:2:2 decodes to full-resolution 16-bit planes");
+    const auto& cr = frame.planes[2];
+    bool flatAbove = true, flatBelow = true;
+    for (unsigned x = 0; x < 64; ++x) {
+        for (unsigned y = 16; y < 24; ++y)
+            flatAbove = flatAbove && sample16(cr, x, y) == sample16(cr, x, 16);
+        for (unsigned y = 24; y < 32; ++y)
+            flatBelow = flatBelow && sample16(cr, x, y) == sample16(cr, x, 31);
+    }
+    // Every row of the block above the edge keeps the upper value exactly, and every row below it
+    // the lower one; the old vertical siting gave row 23 the midpoint and shifted the edge.
+    check(flatAbove && flatBelow, "4:2:2 chroma rows are not resampled vertically");
+    // 10-bit 768 and 384 expanded to 16 bits (code << 6 | code >> 4), within two 10-bit codes of
+    // ProRes DC quantization.
+    const auto upper = sample16(cr, 10, 23), lower = sample16(cr, 10, 24);
+    check(std::abs(static_cast<int>(upper) - 49200) <= 128 &&
+              std::abs(static_cast<int>(lower) - 24600) <= 128,
+          "the decoded Cr step keeps both 10-bit values (768 and 384)");
+    // The luma plane is the flat 512 grey on both sides.
+    check(sample16(frame.planes[0], 10, 23) == sample16(frame.planes[0], 10, 24),
+          "the chroma edge has flat luma");
+
+    // Host reconstruction of left-sited 4:2:0 (the compact Yuv420p8 product): chroma row k sits
+    // half-way between luma rows 2k and 2k+1, so luma rows 0..3 read chroma coordinates -1/4, 1/4,
+    // 3/4 and 5/4. Red is affine in Cr, so the reconstructed weights show exactly in the ratios
+    // (red(y) - red(0)) / (red(3) - red(0)): 0, 1/4, 3/4, 1. The old y/2 - 1/8 coordinate gave
+    // 0.375 and 0.875 (a quarter-pixel vertical shift).
+    provider::FrameProduct compact;
+    compact.format = provider::PixelFormat::Yuv420p8;
+    compact.colour = {1, 1, 1, 1};
+    const auto plane = [](std::uint32_t w, std::uint32_t h, std::vector<unsigned> values) {
+        provider::CpuPlane p;
+        p.width = w;
+        p.height = h;
+        p.stride = w;
+        for (const auto v : values)
+            p.bytes.push_back(static_cast<std::byte>(v));
+        p.digest = provider::digestBytes(p.bytes);
+        return p;
+    };
+    compact.planes.push_back(plane(2, 4, {126, 126, 126, 126, 126, 126, 126, 126}));
+    compact.planes.push_back(plane(1, 2, {128, 128}));
+    compact.planes.push_back(plane(1, 2, {128, 200}));
+    const auto window = bloom::render::ImageWindow::create(0, 0, 2, 4);
+    const auto descriptor = bloom::render::Rgba32fImageDescriptor::create(
+        *window.value(), *window.value(), bloom::core::PixelAspectRatio::square());
+    const auto converted = video::videoToInputColorSpace(compact, 0, "space", *descriptor.value(),
+                                                         1, 1, std::size_t{2} * 4 * 16);
+    check(std::holds_alternative<bloom::render::Rgba32fImage>(converted),
+          "the 4:2:0 siting frame converts");
+    if (const auto* image = std::get_if<bloom::render::Rgba32fImage>(&converted)) {
+        const auto red = [&](unsigned y) { return image->pixels()[y * 2].red(); };
+        const auto span = red(3) - red(0);
+        check(span > 0.1F && std::abs((red(1) - red(0)) / span - 0.25F) < 1e-5F &&
+                  std::abs((red(2) - red(0)) / span - 0.75F) < 1e-5F,
+              "left-sited 4:2:0 chroma is centred between its two luma rows");
+    }
+}
+// Issue #398: WebM is a video container, and a codec this build cannot decode is refused at probe
+// by name instead of falling through to the still-image reader.
+void undecodableCodec(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    check(video::isVideoExtension("clip.webm") && video::isVideoExtension("CLIP.WEBM") &&
+              video::isVideoExtension("clip.mkv"),
+          "WebM and Matroska files take the video path");
+    video::VideoDecodeSession session(directory / "vp8-unavailable.webm");
+    const auto probed = session.probe();
+    const auto* refused = std::get_if<provider::Unavailable>(&probed);
+    if (refused == nullptr)
+        std::cerr << "VP8 probe was not refused\n";
+    else if (refused->detail != "Codec not available in this build: vp8")
+        std::cerr << "VP8 probe refusal: " << refused->detail << '\n';
+    check(refused != nullptr && refused->reason == provider::Error::Unavailable &&
+              refused->detail == "Codec not available in this build: vp8",
+          "a WebM stream with an undecodable codec is refused by name at probe");
+}
 int main(int argc, char** argv) {
     try {
         check(argc == 2, "fixture directory");
         run(argv[1]);
         retainedRouting(argv[1]);
         colourInterpretation(argv[1]);
+        chromaSiting(argv[1]);
+        undecodableCodec(argv[1]);
         timingAndLayout(argv[1]);
         lazyIndex(argv[1]);
         eightK(argv[1]);

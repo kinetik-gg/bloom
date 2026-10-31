@@ -164,6 +164,19 @@ if(BUILD_TESTING)
         ENVIRONMENT ${_bloom_render_injected_test_environment}
         TIMEOUT 180
     )
+    # The headless export queue (bloom-cli export, scripted export.* calls) renders a ProRes output
+    # with its display/view transform on the GPU: provenance has GPU frames and GPU display
+    # transforms only. Skips (77) without a device or the packaged tools.
+    add_dependencies(bloom_scripting_render_injected_provider_test bloom-media-worker)
+    bloom_add_test(
+        NAME bloom.scripting.headless-export-queue-gpu-display
+        COMMAND bloom_scripting_render_injected_provider_test --route queue
+        LABELS unit scripting host gpu
+        ENVIRONMENT ${_bloom_render_injected_test_environment}
+        TIMEOUT 300
+    )
+    set_tests_properties(bloom.scripting.headless-export-queue-gpu-display PROPERTIES
+        SKIP_RETURN_CODE 77)
 
     # Scripted export route-proof writers: the same production Render::run facade, opt-in
     # --route-proof-dir, publishing only after every parity assertion passed. The sequence/range

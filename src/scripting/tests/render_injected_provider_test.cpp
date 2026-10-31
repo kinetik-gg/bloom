@@ -19,6 +19,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/frame_range_runner.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -26,6 +27,7 @@
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/scripting/export.hpp>
 #include <bloom/scripting/render.hpp>
 #include <bloom/scripting/session.hpp>
 
@@ -40,6 +42,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <source_location>
 #include <span>
@@ -64,6 +67,7 @@ using namespace std::chrono_literals;
 // make the sort-includes pass produce that exact order.
 #include "render_injected_provider_0_support.ipp"
 #include "render_injected_provider_1_native_tests.ipp"
+#include "render_injected_provider_2_queue_tests.ipp"
 
 } // namespace
 
@@ -88,6 +92,13 @@ int main(int argc, char** argv) {
         }
     }
     try {
+        // The headless export queue's display route has its own registration.
+        if (proofRoute == "queue") {
+            const auto outcome = testNativeHeadlessQueueVideoDisplay(expectations, requireDevice);
+            if (expectations.failures() != 0)
+                return EXIT_FAILURE;
+            return outcome == GpuProofOutcome::Skipped ? 77 : EXIT_SUCCESS;
+        }
         testInjectedProviderIsReusedAndNotRetired(expectations);
         testMissingProcessingRootIsRefused(expectations);
         if (proofRoute != "sequence") {

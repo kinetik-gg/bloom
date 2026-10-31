@@ -304,14 +304,15 @@ selectCryptomatte(const CompiledCryptomatte& cryptomatte, const core::RationalTi
                   const document::FrameRate rate, const std::filesystem::path& base,
                   const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                   OperationCache* revisionCache, const MediaSourceRevisionPolicy revisionPolicy,
-                  const std::size_t hostByteBudget, const bool allowRevisionInsertion) {
+                  const std::size_t hostByteBudget, const bool allowRevisionInsertion,
+                  LinearPassRetention* const linearPass) {
     CryptomatteSelection result;
     result.layer = cryptomatte.layer;
     result.mattes = cryptomatte.mattes;
     result.preview = cryptomatte.preview;
     result.channels = selectChannelSetSources(cryptomatte.channels, time, rate, base, cancel,
                                               colorIntent, revisionCache, revisionPolicy,
-                                              hostByteBudget, allowRevisionInsertion);
+                                              hostByteBudget, allowRevisionInsertion, linearPass);
     result.cancelled = result.channels.cancelled;
     result.budgetExceeded = result.channels.budgetExceeded;
     OperationKey key;

@@ -56,6 +56,12 @@ class ExportProviderTeardown final {
     bool finished_ = false;
 };
 
+// This executable's packaged GPU shader tools. The definitions that describe them belong to this
+// target, so the resolver is made here and handed to every headless export queue.
+[[nodiscard]] std::shared_ptr<bloom::runtime::GpuOcioContextResolver> packagedOcioResolver() {
+    return bloom::host::makePackagedGpuOcioResolver(bloom::host::currentExecutablePath());
+}
+
 void printUsage() {
     std::cerr << "usage: bloom-cli new <file> | open <file> | run <script.json|script.py> | "
                  "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
@@ -159,7 +165,8 @@ frameRange(std::string_view value) {
     for (const auto& transaction : parsed.transactions()) {
         if (scripting::isExportCall(transaction.operation)) {
             if (!exports)
-                exports = std::make_unique<scripting::HeadlessExportQueue>(*session);
+                exports = std::make_unique<scripting::HeadlessExportQueue>(*session,
+                                                                           packagedOcioResolver());
             const auto answer =
                 exports->calls().call(transaction.operation, transaction.arguments, true);
             if (!answer.ok) {
@@ -187,7 +194,8 @@ frameRange(std::string_view value) {
                       << warning.issue.message << '\n';
         if (const auto job = result.command->outputId<document::ExportJobId>("exportJob")) {
             if (!exports)
-                exports = std::make_unique<scripting::HeadlessExportQueue>(*session);
+                exports = std::make_unique<scripting::HeadlessExportQueue>(*session,
+                                                                           packagedOcioResolver());
             exports->calls().noteAddedJob(*job);
         }
     }
@@ -244,7 +252,7 @@ frameRange(std::string_view value) {
     auto session = std::move(opened).takeSession();
     int status = 0;
     {
-        scripting::HeadlessExportQueue exports(*session);
+        scripting::HeadlessExportQueue exports(*session, packagedOcioResolver());
         auto& service = exports.service();
         if (all)
             for (const auto& job : session->snapshot().project().exportJobs())

@@ -97,6 +97,9 @@ struct ValueGraphMemoization final {
     std::size_t maxStringBytes = kDefaultValueStringBytes;
     std::size_t maxRetainedStringBytes = 8U * kDefaultValueStringBytes;
     std::size_t maxStringScratchBytes = kDefaultValueStringScratchBytes;
+    // The linear pass (an export) this evaluation belongs to: memoized values are then retained
+    // only when they recur within it (EvaluationRequest::linearPass).
+    LinearPassRetention* linearPass = nullptr;
 };
 
 // Evaluates every operation in order. `operations` must already be topologically ordered (the

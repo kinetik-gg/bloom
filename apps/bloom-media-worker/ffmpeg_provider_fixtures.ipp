@@ -337,8 +337,10 @@ void fixture(const std::filesystem::path& path, bool prores, bool alpha = false,
     require(av_write_trailer(out.format) >= 0, "Fixture mux trailer");
 }
 // Issue #367 timing/metadata fixtures, 64x48 with the numbered luma pattern, and a 1280x720
-// ProRes stream with no colour tags (the HD case of the untagged-colour convention).
-enum class Special { Vfr, Rotated, Interlaced, Rgb, Anamorphic, UntaggedHd, EightK };
+// ProRes stream with no colour tags (the HD case of the untagged-colour convention). ChromaEdge
+// (issue #393) is a ProRes 422 HQ picture of flat grey luma whose Cr steps from 768 to 384 at row
+// 24, on an 8x8 block boundary so each block is flat and decodes to one value per side.
+enum class Special { Vfr, Rotated, Interlaced, Rgb, Anamorphic, UntaggedHd, EightK, ChromaEdge };
 void special(const std::filesystem::path& path, const Special kind) {
     // The 8K UHD fixture (issue #352) is a tagged Rec.709 ProRes 422 stream laid out like the HD
     // one; it exceeds the former 16,777,216-pixel provider limit.
@@ -367,7 +369,8 @@ void special(const std::filesystem::path& path, const Special kind) {
     vp.color_range = kind == Special::Rgb ? AVCOL_RANGE_JPEG
                      : untagged           ? AVCOL_RANGE_UNSPECIFIED
                                           : AVCOL_RANGE_MPEG;
-    const bool encoded = kind == Special::Interlaced || kind == Special::Rgb || hd;
+    const bool chromaEdge = kind == Special::ChromaEdge;
+    const bool encoded = kind == Special::Interlaced || kind == Special::Rgb || hd || chromaEdge;
     if (encoded) {
         const auto* encoder =
             avcodec_find_encoder_by_name(kind == Special::Rgb ? "tiff" : "prores_ks");
@@ -387,6 +390,8 @@ void special(const std::filesystem::path& path, const Special kind) {
         out.codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER | AV_CODEC_FLAG_BITEXACT;
         if (hd)
             out.codec->profile = 2;
+        if (chromaEdge)
+            out.codec->profile = 3;
         if (kind == Special::Interlaced) {
             out.codec->profile = 2;
             out.codec->flags |= AV_CODEC_FLAG_INTERLACED_DCT;
@@ -447,6 +452,9 @@ void special(const std::filesystem::path& path, const Special kind) {
                             row[x * 6 + c * 2] = static_cast<std::uint8_t>(rgb[c] & 255U);
                             row[x * 6 + c * 2 + 1] = static_cast<std::uint8_t>(rgb[c] >> 8U);
                         }
+                    } else if (chromaEdge) {
+                        row[x * 2] = 0;
+                        row[x * 2 + 1] = 2;
                     } else if (hd) {
                         // The numbered pattern tiled across the HD picture.
                         const auto value = luma(n, x % 64U, y % 48U) * 4U;
@@ -461,8 +469,9 @@ void special(const std::filesystem::path& path, const Special kind) {
                     }
                 }
             }
-            // Neutral 10-bit chroma (512) for the 4:2:2 ProRes fixtures.
-            if (kind == Special::Interlaced || hd)
+            // Neutral 10-bit chroma (512) for the 4:2:2 ProRes fixtures; the chroma-edge fixture
+            // steps Cr from 768 (rows 0-23) to 384 (rows 24-47).
+            if (kind == Special::Interlaced || hd || chromaEdge)
                 for (unsigned plane = 1; plane < 3; ++plane)
                     for (unsigned y = 0; y < height; ++y)
                         for (unsigned x = 0; x < width / 2U; ++x) {
@@ -470,8 +479,10 @@ void special(const std::filesystem::path& path, const Special kind) {
                                 out.frame->data[plane] +
                                 static_cast<std::ptrdiff_t>(y) * out.frame->linesize[plane] +
                                 static_cast<std::ptrdiff_t>(x) * 2;
-                            pixel[0] = 0;
-                            pixel[1] = 2;
+                            const unsigned value =
+                                chromaEdge && plane == 2 ? (y < 24U ? 768U : 384U) : 512U;
+                            pixel[0] = static_cast<std::uint8_t>(value & 255U);
+                            pixel[1] = static_cast<std::uint8_t>(value >> 8U);
                         }
             out.frame->flags = kind == Special::Interlaced
                                    ? AV_FRAME_FLAG_INTERLACED | AV_FRAME_FLAG_TOP_FIELD_FIRST
@@ -493,6 +504,36 @@ void special(const std::filesystem::path& path, const Special kind) {
         out.packet->stream_index = stream->index;
         av_packet_rescale_ts(out.packet, {1, 24}, stream->time_base);
         require(av_interleaved_write_frame(out.format, out.packet) >= 0, "Fixture special mux");
+    }
+    require(av_write_trailer(out.format) >= 0, "Fixture mux trailer");
+}
+// Issue #398: a WebM (Matroska) file carrying a VP8 stream, a WebM codec this build does not decode.
+// The packets are opaque bytes: the probe must refuse the stream by name before any decode. (VP9
+// cannot be muxed here: Matroska inserts the vp9_superframe filter, which the build omits.)
+void undecodableWebm(const std::filesystem::path& path) {
+    Output out;
+    require(avformat_alloc_output_context2(&out.format, nullptr, "matroska", path.c_str()) >= 0,
+            "Fixture mux allocation");
+    auto* stream = avformat_new_stream(out.format, nullptr);
+    require(stream, "Fixture video stream");
+    stream->time_base = {1, 1000};
+    stream->avg_frame_rate = {24, 1};
+    auto& vp = *stream->codecpar;
+    vp.codec_type = AVMEDIA_TYPE_VIDEO;
+    vp.codec_id = AV_CODEC_ID_VP8;
+    vp.width = 64;
+    vp.height = 48;
+    vp.format = AV_PIX_FMT_YUV420P;
+    require(avio_open(&out.format->pb, path.c_str(), AVIO_FLAG_WRITE) >= 0, "Fixture file open");
+    require(avformat_write_header(out.format, nullptr) >= 0, "Fixture mux header");
+    for (int n = 0; n < 2; ++n) {
+        require(av_new_packet(out.packet, 16) >= 0, "Fixture packet allocation");
+        std::memset(out.packet->data, 0x80 + n, 16);
+        out.packet->pts = out.packet->dts = av_rescale_q(n, {1, 24}, stream->time_base);
+        out.packet->duration = av_rescale_q(1, {1, 24}, stream->time_base);
+        out.packet->flags = AV_PKT_FLAG_KEY;
+        out.packet->stream_index = stream->index;
+        require(av_interleaved_write_frame(out.format, out.packet) >= 0, "Fixture webm mux");
     }
     require(av_write_trailer(out.format) >= 0, "Fixture mux trailer");
 }
@@ -573,6 +614,8 @@ bool generateFixtures(const std::string& directory) {
         special(path / "anamorphic-h264.mp4", Special::Anamorphic);
         special(path / "untagged-hd-prores.mov", Special::UntaggedHd);
         special(path / "uhd8k-prores.mov", Special::EightK);
+        special(path / "chroma-edge-422.mov", Special::ChromaEdge);
+        undecodableWebm(path / "vp8-unavailable.webm");
         // Issue #352: a 1,200-frame (50 s) constant-cadence H.264 stream for the lazy index.
         fixture(path / "long-h264.mp4", false, false, {}, 1200);
         // Issue #381: colour patches tagged BT.709 and untagged (64x48 is SD, so the size
@@ -595,6 +638,8 @@ bool generateFixtures(const std::string& directory) {
                "12-frame untagged 1280x720 ProRes 422 (tiled numbered pattern)\n"
                "1200-frame H.264 (pattern repeats every 48 frames) for lazy indexing\n"
                "2-frame 7680x4320 Rec.709 ProRes 422 (tiled numbered pattern)\n"
+               "12-frame ProRes 422 HQ, flat luma, Cr 768/384 split at row 24 (siting)\n"
+               "2-packet WebM (Matroska) VP8 stream of opaque bytes (undecodable codec)\n"
                "2-frame H.264 color patches (BT.709 tagged, untagged BT.601) with their\n"
                "FFmpeg swscale RGB24 decodes (limited Y'CbCr to full-range R'G'B')\n"
                "PCM mono 48000 Hz: sample[n]=((n%997)-498)/1024\n"
@@ -607,7 +652,8 @@ bool generateFixtures(const std::string& directory) {
              {"numbered-h264.mp4", "numbered-prores.mov", "alpha-prores.mov", "untagged-h264.mp4",
               "pq2020-h264.mp4", "hlg2020-h264.mp4", "vfr-h264.mp4", "rotated-h264.mp4",
               "interlaced-prores.mov", "rgb-tiff.mov", "anamorphic-h264.mp4",
-              "untagged-hd-prores.mov", "long-h264.mp4", "uhd8k-prores.mov", "bars709-h264.mp4",
+              "untagged-hd-prores.mov", "long-h264.mp4", "uhd8k-prores.mov",
+              "chroma-edge-422.mov", "vp8-unavailable.webm", "bars709-h264.mp4",
               "bars-untagged-h264.mp4", "bars709-h264.rgb24", "bars-untagged-h264.rgb24"}) {
             const auto identity = sourceIdentity((path / name).string()).first.toLowercaseHex();
             provenance << name << " SHA-256: " << std::string(identity.begin(), identity.end())

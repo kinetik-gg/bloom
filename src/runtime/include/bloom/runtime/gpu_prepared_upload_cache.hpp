@@ -37,7 +37,9 @@ class GpuPreparedUploadCache final {
                                     std::size_t maxEntries = kDefaultPreparedUploadCacheEntries);
 
     [[nodiscard]] std::shared_ptr<const render::Rgba32fImage> find(const std::string& key) noexcept;
-    void store(std::string key, std::shared_ptr<const render::Rgba32fImage> image);
+    // A store made for a linear pass (`linearPass`) is retained only when its key recurs in it.
+    void store(std::string key, std::shared_ptr<const render::Rgba32fImage> image,
+               LinearPassRetention* linearPass = nullptr);
     // Drops every retained upload, releasing the cache's own references. A caller already holding a
     // converted image keeps it valid; only re-derivation is forced. Lifetime hit/miss counters are
     // left intact. Thread-safe.

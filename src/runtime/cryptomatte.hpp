@@ -100,7 +100,8 @@ selectCryptomatte(const CompiledCryptomatte& cryptomatte, core::RationalTime tim
                   document::FrameRate rate, const std::filesystem::path& base,
                   const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                   OperationCache* revisionCache, MediaSourceRevisionPolicy revisionPolicy,
-                  std::size_t hostByteBudget, bool allowRevisionInsertion);
+                  std::size_t hostByteBudget, bool allowRevisionInsertion,
+                  LinearPassRetention* linearPass = nullptr);
 
 // The host decode layout of every rank pair: one image per rank on the union window of the rank
 // channels in the anchor source's frame, R = the ID's exact bits, G = coverage, B = 0, A = 1, with

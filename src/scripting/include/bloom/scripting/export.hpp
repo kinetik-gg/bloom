@@ -4,7 +4,9 @@
 #include <bloom/scripting/value.hpp>
 
 #include <chrono>
+#include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,6 +18,10 @@
 // `sinceRevision`), export.events (`afterSequence`), export.log (`job`, `afterSequence`),
 // export.wait (a job or the drain, with a timeout; headless only), export.presets and
 // export.script (exportJobScript).
+namespace bloom::runtime {
+class GpuOcioContextResolver;
+}
+
 namespace bloom::scripting {
 
 struct ExportCallResult final {
@@ -50,9 +56,18 @@ class Session;
 // The export queue of a headless session (bloom-cli, bloom-mcp). Construction probes the encoders
 // (waiting up to 30 s on the calling thread) and must happen on a client thread, never a UI
 // thread. Destruction stops every job and retires the GPU provider and encoder workers.
+// `ocioResolver` is the composition root's packaged GPU shader-tool resolver
+// (host::makePackagedGpuOcioResolver in the executable that stages the tools). It must come from
+// the executable: only that target carries the packaging definitions, and without it the queue's
+// output colour (display/view for ProRes, DNxHR, H.264, PNG) has no GPU preparation.
+// `vulkanLoader` overrides the platform Vulkan loader (tests name the qualified prefix's loader);
+// `bootstrapGate` is the provider's shared native-bootstrap gate (GpuExportProvider::create).
 class HeadlessExportQueue final {
   public:
-    explicit HeadlessExportQueue(Session& session);
+    HeadlessExportQueue(Session& session,
+                        std::shared_ptr<runtime::GpuOcioContextResolver> ocioResolver,
+                        std::filesystem::path vulkanLoader = {},
+                        std::shared_ptr<std::timed_mutex> bootstrapGate = {});
     ~HeadlessExportQueue();
     HeadlessExportQueue(const HeadlessExportQueue&) = delete;
     HeadlessExportQueue& operator=(const HeadlessExportQueue&) = delete;

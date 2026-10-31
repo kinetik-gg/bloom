@@ -48,6 +48,13 @@ std::FILE* privateSpool() {
     return std::tmpfile();
 #endif
 }
+// VA-API encode input (issue #394). The encoder keeps up to `async_depth` submitted pictures in
+// flight, each holding its input surface; measured on Mesa radeonsi with this P-only GOP, H.264
+// and HEVC need max(2, async_depth) surfaces. The depth is pinned (FFmpeg's default, 2) so the
+// pool stays valid if that default changes, and the pool adds the surface being uploaded and one
+// for a driver that releases a picture one submission later: 2 + 1 + 1.
+constexpr int kVaapiAsyncDepth = 2;
+constexpr int kVaapiInputSurfaces = kVaapiAsyncDepth + 2;
 struct PrivateMediaFile {
     std::FILE* file = nullptr;
     std::uint64_t size = 0, limit = 0;
@@ -224,10 +231,15 @@ struct Encoder::State {
     void packets(EncodeTrack& track, AVFrame* frame) {
         AVFrame* submitted = frame;
         if (frame != nullptr && track.hardwareFrames != nullptr) {
+            // Issue #394: return the previous frame's surface to the pool first. The encoder holds
+            // its own reference while it needs the surface; without this unref every surface
+            // stayed taken and the fixed pool ran dry after kVaapiInputSurfaces frames.
+            av_frame_unref(track.hardwareFrame);
             require(av_hwframe_get_buffer(track.hardwareFrames, track.hardwareFrame, 0) >= 0 &&
                         av_hwframe_transfer_data(track.hardwareFrame, frame, 0) >= 0,
                     "VA-API frame upload failed", Error::Unavailable);
-            track.hardwareFrame->pts = frame->pts;
+            require(av_frame_copy_props(track.hardwareFrame, frame) >= 0,
+                    "VA-API frame metadata copy failed", Error::Unavailable);
             submitted = track.hardwareFrame;
         }
         require(avcodec_send_frame(track.codec, submitted) >= 0, "Encoder rejected input");
@@ -302,7 +314,7 @@ struct Encoder::State {
                     frames->sw_format = hardwareSamples(settings);
                     frames->width = c.width;
                     frames->height = c.height;
-                    frames->initial_pool_size = 4;
+                    frames->initial_pool_size = kVaapiInputSurfaces;
                     require(av_hwframe_ctx_init(track.hardwareFrames) >= 0,
                             "VA-API frame context failed", Error::Unavailable);
                     c.hw_frames_ctx = av_buffer_ref(track.hardwareFrames);
@@ -342,6 +354,8 @@ struct Encoder::State {
         AVDictionary* options = nullptr;
         if (settings.videoCodec == "dnxhd" && video)
             av_dict_set(&options, "profile", settings.profile.c_str(), 0);
+        if (video && hardware && hardwareCodec(settings))
+            av_dict_set_int(&options, "async_depth", kVaapiAsyncDepth, 0);
         if (settings.videoCodec == "tiff" && video)
             av_dict_set(&options, "compression_algo", "raw", 0);
         const auto status = avcodec_open2(&c, codec, &options);
@@ -363,6 +377,14 @@ struct Encoder::State {
                     : c.pix_fmt;
             track.frame->width = c.width;
             track.frame->height = c.height;
+            // Encoders that write colour into the bitstream (ProRes's frame header) read it from
+            // each frame, not the codec context; an untagged frame made FFmpeg-based players
+            // decode Bloom's BT.709 ProRes with the BT.601 matrix.
+            track.frame->color_primaries = c.color_primaries;
+            track.frame->color_trc = c.color_trc;
+            track.frame->colorspace = c.colorspace;
+            track.frame->color_range = c.color_range;
+            track.frame->chroma_location = c.chroma_sample_location;
             require(av_frame_get_buffer(track.frame, 32) >= 0, "Encode frame allocation",
                     Error::Oversized);
             // The conversion is exactly what the stream declares: its matrix, range and siting.
@@ -653,6 +675,12 @@ struct Encoder::State {
             if (qc.frames == 0 || qc.frames + 1 == settings.frames)
                 compare(*input.frame, qc.frames == 0 ? firstReference : lastReference, qc,
                         declared);
+            // ProRes also carries the matrix in each frame header, which FFmpeg-based players
+            // decode with; it must match what the container declares.
+            if (settings.videoCodec == "prores_ks" &&
+                videoTrack.codec->colorspace != AVCOL_SPC_UNSPECIFIED)
+                require(input.frame->colorspace == videoTrack.codec->colorspace,
+                        "Reopened ProRes frame matrix differs from the container");
             ++qc.frames;
             av_frame_unref(input.frame);
         }

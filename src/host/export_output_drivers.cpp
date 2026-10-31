@@ -251,11 +251,14 @@ class DriverBase : public ExportOutputDriver {
 
     ExportCheckResult provenanceCheck() const {
         const auto& provenance = report_.verification.provenance;
-        if (provenance.cpuReferenceFrames > 0)
+        // A video frame is a GPU frame only when its display transform ran on the GPU as well.
+        const auto gpuFrames = provenance.cpuDisplayFrames > 0
+                                   ? std::min(provenance.gpuFrames, provenance.gpuDisplayFrames)
+                                   : provenance.gpuFrames;
+        if (provenance.cpuReferenceFrames > 0 || provenance.cpuDisplayFrames > 0)
             return check(ExportCheck::DeviceProvenance, ExportCheckOutcome::Warning,
                          "export.check.device.cpu-reference",
-                         provenance.gpuFrames + provenance.cpuReferenceFrames,
-                         provenance.gpuFrames);
+                         provenance.gpuFrames + provenance.cpuReferenceFrames, gpuFrames);
         return check(ExportCheck::DeviceProvenance, ExportCheckOutcome::Passed,
                      "export.check.device.gpu", provenance.gpuFrames, provenance.gpuFrames);
     }
@@ -559,6 +562,11 @@ class ImageDriver final : public DriverBase {
     // Keeps up to depthLimit_ frames analysing ahead of the publication tail, in frame order, and
     // retries the earliest refused frame once something completed since its refusal.
     void fill() {
+        // Issue #396: no frame starts before the GPU provider's bootstrap is terminal. Until then
+        // the evaluator and the shared OCIO context are unpublished, and a frame would be
+        // evaluated and colour-transformed on the CPU reference path on a GPU-capable machine.
+        if (dependencies_.gpu != nullptr && dependencies_.gpu->bootstrapPending())
+            return;
         for (auto& frame : window_) {
             if (pendingRepublish_)
                 break;
@@ -646,7 +654,8 @@ class ImageDriver final : public DriverBase {
                            .quality = runtime::EvaluationQuality::Reference,
                            .colorIntent = input_.colorIntent,
                            .pixelStorageByteLimit = 0,
-                           .bypassLookNodes = !input_.output.record.settings.bakeLook},
+                           .bypassLookNodes = !input_.output.record.settings.bakeLook,
+                           .linearPass = linearPass_},
             .assetBaseDirectory = input_.assetBaseDirectory,
             .targetPath = frame.target,
             .overwritePolicy = input_.output.refuseExisting
@@ -1024,6 +1033,9 @@ class ImageDriver final : public DriverBase {
     std::shared_ptr<const output::OutputAnalysisAttemptV1> pendingRepublish_;
     bool republishing_ = false;
     std::shared_ptr<OutputMediaDisplayCommandV1> mediaDisplay_;
+    // The image sequence is one linear pass: shared caches retain only what recurs between frames.
+    std::shared_ptr<runtime::LinearPassRetention> linearPass_ =
+        std::make_shared<runtime::LinearPassRetention>();
     std::shared_ptr<std::shared_ptr<OutputMediaDisplayCommandV1>> mediaDisplaySlot_ =
         std::make_shared<std::shared_ptr<OutputMediaDisplayCommandV1>>();
     OutputAnalysisCapacityWaitV1 capacity_;
@@ -1198,8 +1210,11 @@ class MediaDriver final : public DriverBase {
         provenance.gpuEncodedPayloadBytes = result.gpuEncodedPayloadBytes;
         provenance.gpuDeviceOwnershipEpoch = result.gpuDeviceOwnershipEpoch;
         provenance.framesReused = result.framesReused;
-        route_ = provenance.cpuReferenceFrames > 0 ? ExportDeviceRoute::CpuReference
-                                                   : ExportDeviceRoute::Gpu;
+        provenance.gpuDisplayFrames = result.gpuDisplayFrames;
+        provenance.cpuDisplayFrames = result.cpuDisplayFrames;
+        route_ = provenance.cpuReferenceFrames > 0 || provenance.cpuDisplayFrames > 0
+                     ? ExportDeviceRoute::CpuReference
+                     : ExportDeviceRoute::Gpu;
         if (const auto* analysis = runner_->analysis())
             provenance.encoder = analysis->implementationNote;
         if (report_.failure)

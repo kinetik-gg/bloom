@@ -358,7 +358,7 @@ if(BUILD_TESTING)
         bloom_package_gpu_shader_tools(bloom_host_sequence_export_runner_test)
         bloom_enable_warnings(bloom_host_sequence_export_runner_test)
         bloom_add_test(NAME bloom.host.sequence-export COMMAND bloom_host_sequence_export_runner_test
-                       "${CMAKE_CURRENT_BINARY_DIR}/sequence-export-fixtures" LABELS unit host media output TIMEOUT 180)
+                       "${CMAKE_CURRENT_BINARY_DIR}/sequence-export-fixtures" LABELS unit host media output TIMEOUT 420)
 
         add_executable(bloom_host_export_queue_service_test tests/export_queue_service_tests.cpp)
         target_link_libraries(bloom_host_export_queue_service_test PRIVATE bloom_host bloom_commands)

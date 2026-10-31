@@ -363,8 +363,8 @@ class Evaluator final {
                         key.bytes(), memoization_.revision,
                         {.image = {},
                          .values = {outputs_.begin() + static_cast<std::ptrdiff_t>(first),
-                                    outputs_.begin() +
-                                        static_cast<std::ptrdiff_t>(first + count)}});
+                                    outputs_.begin() + static_cast<std::ptrdiff_t>(first + count)}},
+                        runtime::OperationCacheEntryKind::Operation, {}, memoization_.linearPass);
                 }
             }
             sampled_.clear();
