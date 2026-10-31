@@ -54,6 +54,26 @@ leaving it. The eased segments become Bezier. The other end of a segment keeps t
 easing one key does not change how its neighbors move. Easy Ease is one undo step for the whole
 selection.
 
+## Handle modes
+
+A Bezier segment is shaped by the handles on its two keys. Each key also has a **handle mode**, set
+from the right-click **Handles** menu in the Graph Editor, that decides how its two handles relate:
+
+- **Free** -- the handles are independent. This is how every key behaves until you change it.
+- **Aligned** -- the handles stay in a straight line through the key. Drag one and the other turns
+  to follow it, keeping its own length.
+- **Auto** -- Bloom places the handles for you, like Blender's Automatic Clamped handles: they follow
+  the direction between the neighboring keys and flatten at peaks and valleys, so the curve never
+  overshoots. They update by themselves whenever a neighboring key moves or changes value. The first
+  and last key of a curve are always flat. If you drag an Auto handle, that key becomes Aligned.
+
+Changing the mode to **Free** or **Aligned** moves nothing and never changes your render, so RAM
+Preview and cached frames are kept. Switching to **Auto** repositions the handles, which is an
+ordinary edit and re-renders the affected frames. Every mode change is one undo step. Easy Ease
+sets explicit handles, so it makes the keys it eases Free.
+
+Projects saved before handle modes existed open with every key Free and look exactly as before.
+
 ## Shy layers
 
 Mark a layer **shy** to hide it from the layer table while the table's shy filter is on, like After
@@ -86,6 +106,7 @@ bloom.ops.animation.set_keyframes_interpolation(keys=keys, interpolation="bounce
 bloom.ops.animation.set_keyframes_easing(keys=keys, interpolation="elastic", ease="out",
                                          amplitude=2.0, period=0.25)
 bloom.ops.animation.easy_ease(keys=keys, side="both")    # "both", "in" or "out"
+bloom.ops.animation.set_keyframes_handle_mode(keys=keys, mode="auto")  # "free", "aligned", "auto"
 bloom.ops.layer.set_shy(layer=layer, shy=True)
 bloom.ops.layer.set_name_follows_source(layer=layer, follows=True)
 ```
@@ -95,6 +116,6 @@ Interpolation names are `hold` (or `constant`), `linear`, `ease-in-out` (or `bez
 `auto`, `in`, `out` and `in-out`.
 
 Keyframes read back through `bloom.data` with `interpolation_name`, `ease`, `back`, `amplitude` and
-`period`, and layers with `shy` and `name_follows_source`. Over MCP, `query` with `kind: "layers"`
+`period` and `handle_mode`, and layers with `shy` and `name_follows_source`. Over MCP, `query` with `kind: "layers"`
 or `kind: "keyframes"` (and a `composition`) returns the same fields, and `kind: "enums"` lists the
-interpolation, ease and Easy Ease names with their ids.
+interpolation, ease, handle mode and Easy Ease names with their ids. Keys also carry `handleMode`.

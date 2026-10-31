@@ -1,6 +1,7 @@
 # Bloom Project Format
 
-The current document schema is 1.31. It adds the optional node group `color` (see "Node Group
+The current document schema is 1.32. It adds the optional keyframe member `handleMode` (see "Keyframe
+Handle Modes In Document 1.32"). Document 1.31 added the optional node group `color` (see "Node Group
 Colors In Document 1.31"). Document 1.30 added Blender's keyframe easing equations (ten interpolation
 tokens and the optional keyframe `easing` member) and the optional presentation-only layer members
 `shy` and `nameFollowsSource` (see "Easing And Layer Flags In Document 1.30"). Document 1.29 added
@@ -1391,9 +1392,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.31`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.32`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.31.schema.json` and `manifest-1.31.schema.json`; the
+The current artifacts are `document-1.32.schema.json` and `manifest-1.32.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1576,6 +1577,21 @@ audio source's asset name, or a nested composition's name; see
 [layer-graph-model.md](layer-graph-model.md#layer-timeline-contract)). Following the source therefore
 changes no visible name. The DOM step, which archive loading does not run, leaves the flag absent.
 
+## Keyframe Handle Modes In Document 1.32
+
+Document `1.32` adds the per-key handle mode
+([animation-and-time.md](animation-and-time.md#handle-modes)). A scalar, component or Path key may end,
+after its handles and `easing`, with `"handleMode": "aligned"` or `"handleMode": "auto"`. `free` is the
+default and is never written, so a key that never had its mode set gains no member; a file that spells
+`"handleMode": "free"` is refused (`InvalidKeyframeHandleMode`), as is any other token. The decoder
+accepts the member only at `1.32` or later.
+
+The mode is presentation metadata: sampling reads the stored handles, and `evaluationView()` resets
+the mode, so a transaction that changes only modes is render-neutral. The `1.31` → `1.32` DOM step
+`migrateKeyframeHandleModesV1_31` only advances the version; every older key loads Free and samples
+bit-for-bit as before. Minor `1.31` is reserved for the node group colour: until that lands the
+`1.30` → `1.31` step `migrateReservedMinor31V1_30` is version-only, and the colour change replaces it.
+
 ## Export Queue In Document 1.29
 
 Document `1.29` persists the export queue ([ADR 0033](../decisions/0033-export-queue.md)): the jobs,
@@ -1678,16 +1694,16 @@ advances the version: every new member is optional, so no record is inserted or 
 
 ## Video Assets In Document 1.17
 
-The current document and manifest schema artifacts are `document-1.31.schema.json` and
-`manifest-1.31.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
+The current document and manifest schema artifacts are `document-1.32.schema.json` and
+`manifest-1.32.schema.json`. Container version remains 1.0 and the load floor remains 1.15.
 The 1.16 → 1.17 migration only advances the version; the 1.17 → 1.18 and 1.18 → 1.19 steps
 likewise preserve existing assets and pixels. Opening 1.15 first applies asset-organization
 defaults and the historical video and working-space steps, then the 1.19 → 1.20 input-id step,
 1.20 → 1.21 LUT step, 1.21 → 1.22 locator version step, 1.22 → 1.23 layer-time step,
 1.23 → 1.24 layer-mask version step, 1.24 → 1.25 video-metadata step, 1.25 → 1.26 channel-set step,
 1.26 → 1.27 composition-folder version step, 1.27 → 1.28 video-color-default version step,
-1.28 → 1.29 export-queue step, 1.29 → 1.30 easing and layer-flags version step and
-1.30 → 1.31 node-group-color version step.
+1.28 → 1.29 export-queue step, 1.29 → 1.30 easing and layer-flags version step,
+1.30 → 1.31 node-group-color version step and 1.31 → 1.32 handle-mode version step.
 
 `AssetKind::Video` serializes as `"video"`. It retains the shared asset identity, locator,
 interpretation, dimensions and organization envelope, with a closed `video` member before

@@ -314,6 +314,52 @@ outgoing side. Bloom maps it onto its handle model exactly:
 `ApplyEasyEase` (`bloom.animation.easy-ease`, `side` `both`/`in`/`out`) is one undoable step over the
 whole selection; re-applying it to an already eased side is no change.
 
+### Handle modes
+
+Document 1.32 stores a `KeyframeHandleMode` per scalar, component and Path key, next to the
+handles it describes: `Free` (0, the default), `Aligned` (1) and `Auto` (2). The mode is
+presentation metadata. Sampling and curve compilation never read it: the STORED handle values are
+the evaluation inputs, and `Aligned`/`Auto` are maintained by rewriting those values. A document
+written before 1.32 loads every key as `Free` and samples bit-for-bit as it did. The writer emits
+`handleMode` only for `Aligned` and `Auto`, after `easing`.
+
+- **Free** -- the two handles are independent.
+- **Aligned** -- editing one handle makes the other collinear through the key in (time, value)
+  space: its length is kept and its direction follows (its time fraction is capped at 1 by
+  shortening it). If the key was collinear and a neighbor's move changes the adjacent segment
+  durations, the incoming handle follows the outgoing one again. Switching a key to Aligned moves
+  nothing; collinearity is enforced from the next handle edit.
+- **Auto** -- Blender's Auto Clamped handles, computed from the neighboring keys with auto-handle
+  smoothing off (`computeAutoClampedHandles` in `document/keyframe_handles.hpp`, a double
+  transcription of `calchandleNurb_intern` and of the first/last-key flattening in
+  `BKE_fcurve_handles_recalc`). The direction is the average of the two adjacent slopes, handle
+  length is `segment / 2.5614` (one side capped at five times the other), an interior extremum or a
+  handle that would pass a neighbor's value is clamped flat so the curve never overshoots (the
+  opposite handle is re-aligned when only one side clamps), and the first and last key are flat
+  because Bloom extrapolates by holding. A Path key's axis is its index, so every segment runs 0 -> 1
+  and its value offsets are fractions of the segment's progress. The side of a key with no segment
+  has no handle to compute and is left as it is.
+
+The store keeps the invariant. `AnimationCurveStore::insertKeyframe`, `updateKeyframe` and
+`eraseKeyframe` and the commands' staged publication (`publishCurves`, `DeleteKeyframes`) call
+`settleKeyframeHandles(after, before)` whenever the sequence holds an `Aligned` or `Auto` key (a
+`Free`-only sequence is never touched): an `Auto` key whose handle the edit changed becomes `Aligned`
+(Blender: dragging an Auto handle converts it), an `Aligned` key whose one handle changed gets the
+other made collinear, and then every `Auto` key is recomputed from its neighbors. Moving, re-valuing,
+inserting, deleting, pasting, snapping to a new frame rate and undo/redo all go through it, so an
+`Auto` key follows any neighbor whose time or value changes. Easy Ease writes explicit handles and
+therefore makes the keys it shapes `Free`.
+
+`SetKeyframesHandleMode` (`bloom.animation.set-keyframes-handle-mode`, `mode` `free`/`aligned`/
+`auto`) writes the mode on a key selection in one undoable step. Free and Aligned leave every stored
+handle where it is. Switching to Auto recomputes the handles of the key and its Auto neighbors in the
+same step, which is an ordinary animation edit.
+
+**Invalidation.** `evaluationView(ScalarKeyframe | PathKeyframe | AnimationCurveRecord)` resets the
+mode, so a transaction that changes only modes proves render-neutral (#399): the plan and every
+cache stay valid, and the render footprint ignores a mode-only difference. A recomputed handle
+differs in its stored values and invalidates like any handle edit.
+
 ## Compiled Plan And Evaluation
 
 Runtime uses distinct typed operands rather than a per-pixel variant lookup:
