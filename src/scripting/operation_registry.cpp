@@ -173,6 +173,14 @@ using AnimationValue = std::variant<double, document::Vec2d, document::Vec3d, co
     return document::keyframeEasingFromToken(*name);
 }
 
+[[nodiscard]] std::optional<document::KeyframeHandleMode> handleModeOf(const Value& value) {
+    const auto* name = std::get_if<std::string>(&value.storage);
+    if (name == nullptr) {
+        return std::nullopt;
+    }
+    return document::keyframeHandleModeFromToken(*name);
+}
+
 [[nodiscard]] std::optional<commands::EasyEase> easyEaseOf(const Value& value) {
     const auto* name = std::get_if<std::string>(&value.storage);
     if (name == nullptr) {
@@ -1548,6 +1556,32 @@ OperationRegistry OperationRegistry::builtIn() {
                     document::CompositionId::fromRaw(*composition), *keys,
                     commands::KeyframeEasingEdit{ease, back, amplitude, period}, mode),
                 std::nullopt);
+        });
+
+    add("bloom.animation.set-keyframes-handle-mode",
+        {compositionArgument(),
+         need("keys", ValueKind::Array,
+              ValueArray{Value(ValueArray{Value(StableId{1}), Value(StableId{1})})},
+              "Key addresses as (curve, keyframe) or (curve, keyframe, component)."),
+         need(
+             "mode", ValueKind::String, "auto",
+             R"(How the keys' two handles relate: "free" (independent), "aligned" (editing one keeps the other collinear) or "auto" (Blender's Auto Clamped handles, recomputed from the neighboring keys). Free and aligned move no handle and never change the render; auto recomputes the handles in the same undo step.)")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto keys =
+                read(args, op, "keys", error, true,
+                     "expects (curve, keyframe) entries, each with an optional component",
+                     keyframeAddressesOf);
+            const auto mode = read(args, op, "mode", error, true,
+                                   R"(expects "free", "aligned" or "auto")", handleModeOf);
+            if (!composition || !keys || !mode || error) {
+                return error;
+            }
+            return OperationCreateResult(std::make_unique<commands::SetKeyframesHandleMode>(
+                                             document::CompositionId::fromRaw(*composition), *keys,
+                                             *mode),
+                                         std::nullopt);
         });
 
     add("bloom.animation.easy-ease",

@@ -186,6 +186,7 @@ namespace {
 constexpr std::array<std::string_view, 13> kInterpolationLabels{
     "Constant", "Linear",      "Bezier",   "Sine", "Quadratic", "Cubic",  "Quartic",
     "Quintic",  "Exponential", "Circular", "Back", "Bounce",    "Elastic"};
+constexpr std::array<std::string_view, 3> kHandleModeLabels{"Free", "Aligned", "Auto"};
 constexpr std::array<std::string_view, 4> kEasingLabels{"Automatic Easing", "Ease In", "Ease Out",
                                                         "Ease In and Out"};
 
@@ -219,6 +220,8 @@ template <typename Keyframe> yyjson_mut_val* keyRecord(Json& out, const Keyframe
     out.set(record, "back", out.real(key.easing.back));
     out.set(record, "amplitude", out.real(key.easing.amplitude));
     out.set(record, "period", out.real(key.easing.period));
+    out.set(record, "handleMode", out.text(document::keyframeHandleModeToken(key.handleMode)));
+    out.set(record, "handleModeId", out.number(static_cast<std::uint64_t>(key.handleMode)));
     return record;
 }
 
@@ -262,6 +265,13 @@ void appendAnimationEnums(Json& out, yyjson_mut_val* records) {
             return document::keyframeEasingToken(static_cast<document::KeyframeEasing>(index));
         },
         kEasingLabels);
+    table(
+        "handleMode",
+        [](const std::size_t index) {
+            return document::keyframeHandleModeToken(
+                static_cast<document::KeyframeHandleMode>(index));
+        },
+        kHandleModeLabels);
     constexpr std::array<std::string_view, 3> easyEaseTokens{"both", "in", "out"};
     constexpr std::array<std::string_view, 3> easyEaseLabels{"Easy Ease", "Easy Ease In",
                                                              "Easy Ease Out"};

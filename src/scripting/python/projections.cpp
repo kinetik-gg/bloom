@@ -59,6 +59,9 @@ template <typename Keyframe> void easing(nb::dict& row, const Keyframe& key) {
     row["back"] = key.easing.back;
     row["amplitude"] = key.easing.amplitude;
     row["period"] = key.easing.period;
+    row["handle_mode"] = std::string(document::keyframeHandleModeToken(key.handleMode));
+    row["outgoing_handle"] = nb::make_tuple(key.outgoingHandle.time, key.outgoingHandle.value);
+    row["incoming_handle"] = nb::make_tuple(key.incomingHandle.time, key.incomingHandle.value);
 }
 
 nb::list keyframes(const std::vector<document::ScalarKeyframe>& keys) {
