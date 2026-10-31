@@ -115,7 +115,7 @@ std::vector<commands::KeyframePaste> CompositionSession::selectedKeyframeData() 
                                 result.push_back({*parameter, key.time, key.value,
                                                   key.outgoingInterpolation, address.component,
                                                   key.outgoingHandle, key.incomingHandle,
-                                                  key.easing});
+                                                  key.easing, key.handleMode});
                     }
                     return;
                 }
@@ -125,7 +125,7 @@ std::vector<commands::KeyframePaste> CompositionSession::selectedKeyframeData() 
                             result.push_back({*parameter, key.time, key.value,
                                               key.outgoingInterpolation, std::nullopt,
                                               key.outgoingHandle, key.incomingHandle,
-                                              key.easing});
+                                              key.easing, key.handleMode});
                 }
             },
             *record);
