@@ -1,5 +1,5 @@
 // The graph editor's context menu (T1, item 5). Right-clicking a key offers exactly:
-// Interpolation, Easing, Easy Ease / In / Out, Handles (once the document carries handle modes) and
+// Interpolation, Easing, Easy Ease / In / Out, Handles (Auto / Aligned / Free) and
 // Delete. Every entry is an existing command; nothing here edits a curve by itself.
 
 #include <bloom/ui/timeline_graph_view.hpp>
@@ -62,6 +62,7 @@ void TimelineGraphView::populateContextMenu(QMenu& menu) {
     std::vector<commands::KeyframeAddress> all;
     std::vector<commands::KeyframeAddress> segments;
     std::vector<document::KeyframeInterpolation> modes;
+    std::vector<document::KeyframeHandleMode> handleModes;
     for (const auto& key : session_.selection().keyframes) {
         const commands::KeyframeAddress address{key.curveId, key.keyframeId, key.component};
         all.push_back(address);
@@ -70,6 +71,8 @@ void TimelineGraphView::populateContextMenu(QMenu& menu) {
             continue;
         const auto keys = keysFor(*curve, false);
         const auto at = std::ranges::find(keys, key.keyframeId, &document::ScalarKeyframe::id);
+        if (at != keys.end())
+            handleModes.push_back(at->handleMode);
         if (at == keys.end() || at + 1 == keys.end())
             continue;
         segments.push_back(address);
@@ -150,13 +153,34 @@ void TimelineGraphView::populateContextMenu(QMenu& menu) {
         if (action != nullptr)
             menu.addAction(action);
 
-    if constexpr (kGraphHandleModesAvailable) {
-        auto* handles = kit::makeMenu(tr("Handles"), &menu);
-        handles->setObjectName(QStringLiteral("graphHandlesMenu"));
-        for (const auto name : kGraphHandleModeNames)
-            handles->addAction(tr(name.data()));
-        menu.addMenu(handles);
+    // Handles > Auto / Aligned / Free. The engine owns what a mode means (Auto recomputes handles,
+    // Aligned mirrors them); the menu only issues the one command for the selected keys.
+    auto* handles = kit::makeMenu(tr("Handles"), &menu);
+    handles->setObjectName(QStringLiteral("graphHandlesMenu"));
+    handles->menuAction()->setEnabled(!all.empty());
+    auto* handleGroup = new QActionGroup(handles);
+    handleGroup->setExclusive(false);
+    const bool commonMode = !handleModes.empty() && std::ranges::all_of(handleModes, [&](auto mode) {
+        return mode == handleModes[0];
+    });
+    for (const auto& [mode, label] :
+         {std::pair{document::KeyframeHandleMode::Auto, tr("Auto")},
+          std::pair{document::KeyframeHandleMode::Aligned, tr("Aligned")},
+          std::pair{document::KeyframeHandleMode::Free, tr("Free")}}) {
+        auto* action = handles->addAction(label);
+        action->setObjectName(QStringLiteral("graphHandleModeAction"));
+        action->setCheckable(true);
+        action->setChecked(commonMode && handleModes[0] == mode);
+        action->setEnabled(!all.empty());
+        handleGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, targets = all, mode] {
+            commands::Transaction transaction("Set Handle Mode", session_.snapshot().revision());
+            transaction.emplace<commands::SetKeyframesHandleMode>(session_.compositionId(), targets,
+                                                                  mode);
+            (void)session_.executeTransaction(std::move(transaction));
+        });
     }
+    menu.addMenu(handles);
     menu.addSeparator();
     auto* remove = menu.addAction(tr("Delete"));
     remove->setObjectName(QStringLiteral("graphDeleteAction"));

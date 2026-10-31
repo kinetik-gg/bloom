@@ -589,8 +589,8 @@ void testContextMenuOffersTheCurveCommands() {
                                QStringLiteral("timelineEasyEaseAction"),
                                QStringLiteral("timelineEasyEaseInAction"),
                                QStringLiteral("timelineEasyEaseOutAction"),
-                               QStringLiteral("graphDeleteAction")}),
-           "the key menu is Interpolation, Easing, the three Easy Eases and Delete, in order");
+                               QStringLiteral("Handles"), QStringLiteral("graphDeleteAction")}),
+           "the key menu is Interpolation, Easing, the three Easy Eases, Handles and Delete");
     expect(interpolation != nullptr && interpolation->actions().size() == 3 &&
                interpolation->actions()[0]->text() == QStringLiteral("Constant") &&
                interpolation->actions()[1]->text() == QStringLiteral("Linear") &&
@@ -620,6 +620,76 @@ void testContextMenuOffersTheCurveCommands() {
                held->keyframes[0].outgoingInterpolation == document::KeyframeInterpolation::Hold &&
                held->keyframes[2].outgoingInterpolation == document::KeyframeInterpolation::Linear,
            "Easing > Constant holds the selected keys' segments and leaves the final key Linear");
+}
+
+[[nodiscard]] QMenu* handlesMenu(QMenu& menu) {
+    for (auto* action : menu.actions())
+        if (action->menu() != nullptr && action->menu()->objectName() == "graphHandlesMenu")
+            return action->menu();
+    return nullptr;
+}
+
+[[nodiscard]] QString checkedHandleMode(QMenu& menu) {
+    const auto* handles = handlesMenu(menu);
+    QStringList checked;
+    if (handles != nullptr)
+        for (auto* action : handles->actions())
+            if (action->isChecked())
+                checked << action->text();
+    return checked.join(QLatin1Char(','));
+}
+
+// Handles > Auto / Aligned / Free: the submenu, its check state for one and for mixed selections,
+// one undo step per pick, and copy/paste keeping the mode.
+void testHandlesSubmenu() {
+    GraphFixture fixture(makeProject("Graph handle modes"));
+    const auto curveId = seedOpacity(fixture.session.session);
+    fixture.expandAndShowGraph();
+    auto& session = fixture.session.session;
+    const auto keys = scalarCurve(session, curveId)->keyframes;
+    session.selectKeyframe(curveId, keys[1].id);
+    QCoreApplication::processEvents();
+
+    QMenu menu;
+    fixture.view->populateContextMenu(menu);
+    auto* handles = handlesMenu(menu);
+    expect(handles != nullptr && handles->actions().size() == 3 &&
+               handles->actions()[0]->text() == QStringLiteral("Auto") &&
+               handles->actions()[1]->text() == QStringLiteral("Aligned") &&
+               handles->actions()[2]->text() == QStringLiteral("Free"),
+           "Handles offers Auto, Aligned and Free in that order");
+    expect(checkedHandleMode(menu) == QStringLiteral("Free"), "a default key checks Free");
+
+    handles->actions()[1]->trigger();
+    const auto modeOf = [&](const std::size_t index) {
+        return scalarCurve(session, curveId)->keyframes[index].handleMode;
+    };
+    expect(modeOf(1) == document::KeyframeHandleMode::Aligned && modeOf(0) == keys[0].handleMode,
+           "choosing Aligned sets the mode on the selected key only");
+    expect(session.undo() && modeOf(1) == document::KeyframeHandleMode::Free,
+           "one undo restores the previous mode");
+    expect(session.redo() && modeOf(1) == document::KeyframeHandleMode::Aligned,
+           "and redo reapplies it");
+
+    session.selectKeyframes({{curveId, keys[0].id, std::nullopt}, {curveId, keys[1].id, std::nullopt}});
+    QMenu mixed;
+    fixture.view->populateContextMenu(mixed);
+    expect(checkedHandleMode(mixed).isEmpty(), "mixed modes check none");
+    QMenu same;
+    session.selectKeyframe(curveId, keys[1].id);
+    fixture.view->populateContextMenu(same);
+    expect(checkedHandleMode(same) == QStringLiteral("Aligned"), "a common mode is checked");
+
+    session.copySelectedKeyframes();
+    const auto data = session.selectedKeyframeData();
+    expect(data.size() == 1 && data[0].handleMode == document::KeyframeHandleMode::Aligned,
+           "copy captures the handle mode");
+    expect(session.setCurrentTime(time(8)), "the playhead moves");
+    expect(session.pasteCopiedKeyframes(), "the copied key pastes");
+    const auto& pasted = scalarCurve(session, curveId)->keyframes;
+    const auto at = std::ranges::find_if(pasted, [&](const auto& key) { return key.time == time(8); });
+    expect(at != pasted.end() && at->handleMode == document::KeyframeHandleMode::Aligned,
+           "the pasted key keeps its handle mode");
 }
 
 // T1, item 9: the Easing list offers Linear and Constant, then every Blender function as Ease In /
@@ -1142,6 +1212,7 @@ int main(int argc, char** argv) {
     testFitRestoresAZoomedViewport();
     testDoubleClickInsertsAKeyOnTheCurve();
     testContextMenuOffersTheCurveCommands();
+    testHandlesSubmenu();
     testHiddenKeysPaintNoKeyframeInk();
     testEasingPresets();
     testEasyEaseActions();

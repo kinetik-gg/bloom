@@ -42,9 +42,4 @@ inline constexpr std::array<std::pair<std::string_view, document::KeyframeEasing
                        {"Ease Out", document::KeyframeEasing::Out},
                        {"Ease In-Out", document::KeyframeEasing::InOut}}};
 
-// Handles > Auto / Aligned / Free (item 5) need a persisted per-key handle mode the document does
-// not carry yet (handoff-T1.md). The submenu is not offered until it does.
-inline constexpr bool kGraphHandleModesAvailable = false;
-inline constexpr std::array<std::string_view, 3> kGraphHandleModeNames{"Auto", "Aligned", "Free"};
-
 } // namespace bloom::ui
