@@ -348,16 +348,26 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
             if ((role == Role::VideoEncode && analysis.settings.videoCodec.empty()) ||
                 (role == Role::AudioEncode && analysis.settings.audioCodec.empty()))
                 continue;
-            const auto found = std::ranges::find_if(hello.declarations, [&](const auto& d) {
+            const auto matches = [&](const auto& d, const bool delivered) {
                 return d.capability.role == role &&
                        (role == Role::VideoEncode
                             ? mediaCodecFamilyV1(d.capability.codec) ==
                                       mediaCodecFamilyV1(analysis.settings.videoCodec) &&
-                                  d.capability.profile == analysis.settings.profile
+                                  (delivered ? d.capability.bitDepth == qc.bitDepth
+                                             : d.capability.profile == analysis.settings.profile)
                         : role == Role::AudioEncode
                             ? d.capability.codec == analysis.settings.audioCodec
                             : d.capability.container == analysis.settings.container);
-            });
+            };
+            auto found = std::ranges::find_if(hello.declarations,
+                                              [&](const auto& d) { return matches(d, false); });
+            // ADR 0036: when the serving encoder delivered something other than the request (the
+            // bundled 8-bit Kvazaar serving HEVC Main 10), the component that served is the
+            // codec's declaration at the delivered bit depth; the adjustment is in the evidence.
+            if (found == hello.declarations.end() && role == Role::VideoEncode &&
+                !qc.adjustment.empty())
+                found = std::ranges::find_if(hello.declarations,
+                                             [&](const auto& d) { return matches(d, true); });
             require(found != hello.declarations.end(), "Export component not in pinned manifest",
                     Error::IdentityMismatch);
             pipeline.steps.push_back({checked(digest(found->capability)),

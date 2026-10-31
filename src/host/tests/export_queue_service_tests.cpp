@@ -901,14 +901,17 @@ void testFreeTextWorkingSpace(const std::string& workingSpace) {
 }
 
 // End to end: a movie through the media worker, reopened by the worker and checked for its
-// container, colour tags, frame count and digest.
+// container, colour tags, frame count and digest. An empty profile is the format's usual one.
 void testVideoEndToEnd(const document::ExportFormat format,
-                       const host::ExportEncoderStatus encoders, const std::string& name) {
+                       const host::ExportEncoderStatus encoders, const std::string& name,
+                       const std::string& profile = {}, const bool audio = false) {
     Fixture f(name, encoders);
     document::ExportOutputSettings settings;
     settings.format = format;
-    settings.codecProfile = format == document::ExportFormat::ProResMov ? "hq" : "high";
-    settings.includeAudio = false;
+    settings.codecProfile = !profile.empty()                            ? profile
+                            : format == document::ExportFormat::ProResMov ? "hq"
+                                                                          : "high";
+    settings.includeAudio = audio;
     const auto extension = std::string(host::exportFormatExtension(format));
     const auto job = f.addJob(settings, "Exports/{name}." + extension,
                               document::ExportOverwritePolicy::AskBeforeReplacing,
@@ -964,6 +967,10 @@ int main() {
         testFreeTextWorkingSpace("Linear P3-D65");
         // H.264 MP4 end to end on the bundled OpenH264, with nothing installed.
         testVideoEndToEnd(document::ExportFormat::H264Mp4, linuxEncoders(), "h264-mp4");
+        // HEVC Main 10 without a 10-bit encoder: the bundled Kvazaar delivers 8-bit Main, recorded
+        // in provenance, and the export still publishes.
+        testVideoEndToEnd(document::ExportFormat::HevcMp4, linuxEncoders(), "hevc-mp4-main10",
+                          "main10");
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
