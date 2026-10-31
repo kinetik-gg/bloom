@@ -91,9 +91,9 @@ The inherited source snapshot and streamed staged output are POSIX descriptors; 
 streamed output on macOS) the host uses the path and chunk-copy routes it already has.
 
 The superbuild FFmpeg recipe builds on macOS (`--install-name-dir=@rpath`) and on Windows (MSVC
-toolchain driven from an MSYS2 shell). VA-API stays Linux-only. The OpenH264 link-time stub and
-Cisco runtime download are the Linux x86-64 profile, so the macOS and Windows FFmpeg builds omit the
-libopenh264 wrapper; H.264 encode there belongs to the platform framework.
+toolchain driven from an MSYS2 shell). VA-API stays Linux-only. (Amended by ADR 0036: OpenH264 is
+now built from source and linked into `libavcodec` on every platform; there is no Cisco runtime
+download.)
 
 ## Not done in this decision
 

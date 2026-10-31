@@ -9,9 +9,6 @@ struct EncodeSessionOptionsV1 {
     // The FFmpeg worker. Empty selects the installed worker beside the application, else this
     // build tree's worker. The platform media framework's worker is always located by the host.
     std::string executable;
-    std::string openh264Directory;
-    std::string openh264Version;
-    std::string openh264Digest;
     bool vaapi = false;
     std::chrono::milliseconds timeout{120000};
     std::function<void(std::int64_t)> launched;

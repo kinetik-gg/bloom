@@ -2,9 +2,7 @@
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 
 namespace bloom::media::provider {
-Handshake ffmpegHandshake(const bool hardware, const bool openh264,
-                          const std::string_view openh264Version,
-                          const std::string_view openh264Digest) {
+Handshake ffmpegHandshake(const bool hardware) {
     Handshake h;
     auto& e = h.execution;
     e.provider = "bloom.ffmpeg";
@@ -20,9 +18,6 @@ Handshake ffmpegHandshake(const bool hardware, const bool openh264,
     e.synchronization = "pipe-order";
     e.resourceProfile = "media-v1";
     e.entitlement = "apple_authorized=false;delivery_qualified=false";
-    if (openh264)
-        e.entitlement +=
-            ";openh264=" + std::string(openh264Version) + ";sha256=" + std::string(openh264Digest);
     e.trustDomain = "ffmpeg-lgpl";
     QualificationEvidenceV1 q;
     if (const auto fixtures = Digest::fromLowercaseHex(BLOOM_FFMPEG_FIXTURE_ID))
@@ -90,11 +85,12 @@ Handshake ffmpegHandshake(const bool hardware, const bool openh264,
         encode(Role::VideoEncode, "tiff", "tiff", "rgba16");
         for (const auto* codec : {"pcm_s16le", "pcm_s24le", "aac"})
             encode(Role::AudioEncode, codec, "intake-muxers-v1", "source-rate");
-        for (const auto* container : {"mov", "mxf", "matroska", "wav", "tiff"}) {
+        for (const auto* container : {"mov", "mp4", "mxf", "matroska", "wav", "tiff"}) {
             encode(Role::Mux, "intake-encoders-v1", container, "closed-stream-layout-v1");
             encode(Role::ReopenDecode, "intake-encoders-v1", container, "first-last-pcm-v1");
         }
-        if (openh264) {
+        // H.264 software encode: the bundled OpenH264, linked into libavcodec on every platform.
+        {
             encode(Role::VideoEncode, "h264", "mov", "high");
             auto& d = h.declarations.back();
             d.capability.bitDepth = 8;
@@ -125,15 +121,16 @@ Handshake ffmpegHandshake(const bool hardware, const bool openh264,
             d.capability.profile = "source-rate";
             d.capability.mapping = "bounded-encode-v1";
         }
-        for (const auto role : {Role::Mux, Role::ReopenDecode}) {
-            add(role, "intake-encoders-v1");
-            auto& d = h.declarations.back();
-            d.capability.purpose = Purpose::Export;
-            d.capability.container = "mov";
-            d.capability.profile =
-                role == Role::Mux ? "closed-stream-layout-v1" : "first-last-pcm-v1";
-            d.capability.mapping = "bounded-encode-v1";
-        }
+        for (const auto* container : {"mov", "mp4"})
+            for (const auto role : {Role::Mux, Role::ReopenDecode}) {
+                add(role, "intake-encoders-v1");
+                auto& d = h.declarations.back();
+                d.capability.purpose = Purpose::Export;
+                d.capability.container = container;
+                d.capability.profile =
+                    role == Role::Mux ? "closed-stream-layout-v1" : "first-last-pcm-v1";
+                d.capability.mapping = "bounded-encode-v1";
+            }
     }
     h.transports = {Transport::PipeCopiesV0};
     return h;

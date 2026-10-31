@@ -2,9 +2,9 @@
 #include <bloom/media/provider/protocol.hpp>
 namespace bloom::media::provider {
 // Codec-free declaration shared by the host and the isolated executable.
-[[nodiscard]] Handshake ffmpegHandshake(bool hardware = false, bool openh264 = false,
-                                        std::string_view openh264Version = {},
-                                        std::string_view openh264Digest = {});
+// `hardware` selects the VA-API encode generation; the software generation always declares the
+// bundled OpenH264 H.264 encoder.
+[[nodiscard]] Handshake ffmpegHandshake(bool hardware = false);
 // Preview-only VA-API decode for H.264/HEVC with run-time render-node discovery and a
 // per-worker software parity gate. Software decode remains the reference and fallback.
 [[nodiscard]] Handshake ffmpegHardwareDecodeHandshake();

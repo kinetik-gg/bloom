@@ -4,7 +4,6 @@
 #include <bloom/media/provider/ffmpeg_launch.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/media_workers.hpp>
-#include <bloom/media/provider/openh264_runtime.hpp>
 #include <filesystem>
 #include <random>
 
@@ -18,7 +17,6 @@ struct EncodeRoute final {
     std::string executable;
     std::vector<std::string> arguments;
     Handshake hello;
-    std::string openh264;
 };
 // The provider's own spelling of the requested codec family ("prores" for VideoToolbox,
 // "prores_ks" for FFmpeg). Settings for a codec the provider does not declare stay unchanged.
@@ -182,8 +180,7 @@ struct EncodeSessionV1::State {
         launch.arguments.insert(launch.arguments.end(), route.arguments.begin(),
                                 route.arguments.end());
         if (!route.native)
-            configureFfmpegWorkerEnvironment(launch, launch.executable,
-                                             std::filesystem::path(route.openh264));
+            configureFfmpegWorkerEnvironment(launch, launch.executable);
         auto launched = platform::ProcessSupervisor::launch(launch);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&launched))
             return processFailure(*e);
@@ -213,23 +210,6 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
         return Unavailable{Error::InvalidValue, "Invalid encode session request"};
     if (s.cancel && s.cancel())
         return Unavailable{Error::Cancelled, "Encode cancelled"};
-    const bool h264 = settings.videoCodec == "h264";
-    // Software H.264 in the FFmpeg worker is Cisco's OpenH264 where Bloom verifies that binary
-    // (Linux x86-64). Elsewhere the FFmpeg route does not declare H.264 and the platform media
-    // framework serves it.
-    bool openh264 = false;
-    if (h264 && OpenH264Runtime::platformSupported()) {
-        const auto root = s.options.openh264Directory.empty()
-                              ? std::filesystem::path{}
-                              : std::filesystem::path(s.options.openh264Directory);
-        const auto status = OpenH264Runtime(root).verify();
-        openh264 = status.installed;
-        if (openh264) {
-            s.options.openh264Directory = status.directory.string();
-            s.options.openh264Version = status.version;
-            s.options.openh264Digest = status.digest;
-        }
-    }
     std::vector<EncodeRoute> routes;
     // The platform media framework first (ADR 0035). Windows has a Media Foundation slot with no
     // provider yet; it reports NotInstalled and FFmpeg serves the encode.
@@ -248,20 +228,16 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
         route.id = std::string(kFfmpegVaapiProviderId);
         route.executable = ffmpeg;
         route.arguments = {"--vaapi"};
-        route.hello = ffmpegHandshake(true, false, {}, {});
+        route.hello = ffmpegHandshake(true);
         routes.push_back(std::move(route));
     }
     {
         EncodeRoute route;
         route.id = std::string(kFfmpegProviderId);
         route.executable = ffmpeg;
-        route.hello =
-            ffmpegHandshake(false, openh264, s.options.openh264Version, s.options.openh264Digest);
-        if (openh264) {
-            route.arguments = {"--openh264-dir", s.options.openh264Directory, "--openh264-sha256",
-                               s.options.openh264Digest};
-            route.openh264 = s.options.openh264Directory;
-        }
+        // Software encode, the silent fallback for every codec: the bundled OpenH264 (H.264)
+        // and Kvazaar (HEVC) are linked into the worker's libavcodec on every platform.
+        route.hello = ffmpegHandshake(false);
         routes.push_back(std::move(route));
     }
     std::vector<MediaProviderCandidateV1> candidates;
@@ -287,16 +263,8 @@ std::optional<Unavailable> EncodeSessionV1::begin(const EncodeSettingsV1& settin
             return std::monostate{};
         },
         s.provenance);
-    if (const auto* error = std::get_if<Unavailable>(&result)) {
-        // Nothing was attempted for software H.264: the consented Cisco install is missing.
-        const bool attempted = std::ranges::any_of(s.provenance.fallbacks, [](const auto& f) {
-            return f.cause == MediaFallbackCauseV1::Failed;
-        });
-        if (!attempted && h264 && !s.options.vaapi && OpenH264Runtime::platformSupported() &&
-            !openh264)
-            return Unavailable{Error::Unavailable, "H.264 encoder not installed"};
+    if (const auto* error = std::get_if<Unavailable>(&result))
         return *error;
-    }
     return std::nullopt;
 }
 std::optional<Unavailable> EncodeSessionV1::video(FrameProduct frame) {

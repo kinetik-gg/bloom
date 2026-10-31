@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-09-18
+Updated: 2026-10-31
 
 ## Purpose
 
@@ -147,28 +147,32 @@ and decompressed-library SHA-256 values, the installed library name, and the ven
 artifact. The generated lock is still the only production lock; records under
 `dependencies/lock-components/` remain the generator inputs.
 
-OpenH264 2.6.0 illustrates the boundary. The superbuild builds headers and a private source
-library only to link FFmpeg, then installs headers and an import stub into the qualified prefix.
-The stub is never a runtime library and the worker has no rpath to its private tree. On first use,
-the host requires explicit Cisco-licence consent, supervises `curl` and `bunzip2`, verifies the
-download and decompressed bytes against the lock, and atomically publishes the binary under
-`Kinetik/Bloom/openh264/2.6.0/`. Every worker launch verifies the installed bytes again. A locate
-path follows the same digest check. Runtime-fetched components are never bundled, fetched at
-startup, or accepted from an unverified mirror.
+No production component uses `runtimeFetch` today. OpenH264, the one component that did, is built
+from its pinned source archive and linked into the worker's `libavcodec` instead (ADR 0036): Bloom
+never downloads, verifies or installs a codec binary on the end user's machine. The schema record
+stays available for a future component whose binary cannot be redistributed; such a component must
+still be a one-click in-app action, never fetched at startup or from an unverified mirror.
+
+### Bundled codec libraries
+
+The permissively licensed codec libraries that FFmpeg's LGPL wrappers link -- OpenH264 (H.264
+encode) -- are built from pinned source archives as static, position-independent archives and
+linked into the worker's shared `libavcodec` on Linux, macOS and Windows. FFmpeg's version script
+keeps their symbols private, so the worker ships no extra runtime file. Each is a lock component
+with `static` linkage, a corresponding-source obligation (its archive completes `libavcodec`'s
+corresponding source) and an FFmpeg `link` dependency edge. Its recipe reads an adjacent
+`<name>.configure-arguments` vector (Meson or CMake options); the lock generator copies that file
+into the component's `configureArguments` (`--configure-arguments <name>=<path>`), and the
+production lock check compares the two line for line exactly as it does FFmpeg's vector. Meson and
+Ninja are build-host requirements for the Meson-built codecs; x86 assembly uses the
+superbuild-private NASM. `codec-static-install.cmake` appends each archive's runtime libraries to
+its pkg-config record (FFmpeg reads them through `--pkg-config-flags=--static`), gives MSVC the
+`<name>.lib` spelling and refuses any shared artifact.
 
 FFmpeg's x86 SIMD is enabled. NASM 2.16.03 is a source-built, build-host-only tool recorded with
 `executable` linkage and no shipping roles; FFmpeg depends on it with the `build` relationship. It is
 installed into a superbuild-private `tools/` directory rather than the dependency prefix and is
 passed to FFmpeg through `--x86asmexe` on x86 targets only.
-
-The worker also carries a Bloom-owned API shim named `libopenh264.so.8` in its private `lib/`
-directory. The shim re-declares only the six public C entry points required by the FFmpeg wrapper,
-exports no codec implementation, reports a zero version with a shim marker, and makes encoder and
-decoder creation fail. It is installed in every worker build, including release builds with tests
-disabled. A verified Cisco directory is prepended to the worker environment for encode, decode,
-and fixture-generator processes; therefore the real binary shadows the shim only after the host
-has verified it. Decode never needs the Cisco binary: the shim keeps FFmpeg loadable, while only
-the H.264 software encoder requires the real Cisco implementation.
 
 ### Closed Resource Limits
 

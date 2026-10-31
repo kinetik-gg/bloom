@@ -56,12 +56,13 @@ enum class ExportAvailabilityCode : std::uint8_t {
     Available = 1,
     // The first worker probe has not answered yet; shown as "Checking…", not as unavailable.
     Probing = 2,
-    // Linux x86-64 software H.264 needs Cisco OpenH264, which is not installed yet.
+    // No longer produced: OpenH264 ships inside the media worker. Kept until the desktop removes
+    // its "Install H.264 encoder" flow.
     EncoderNotInstalled = 3,
     // No qualified encoder for this codec on this computer.
     NoQualifiedEncoder = 4,
-    // The codec is hardware-only (HEVC) or the output asks for hardware, and no VA-API render
-    // node exposes the needed encode entry point. HEVC has no software encoder by design.
+    // No longer produced: a Hardware preference without a VA-API encoder falls back silently to
+    // the bundled software encoder. Kept until the desktop removes its references.
     HardwareEncoderMissing = 5,
     // The supervised media worker could not be started on this computer.
     WorkerUnavailable = 6,
@@ -76,8 +77,11 @@ enum class ExportAvailabilityCode : std::uint8_t {
 // An action the UI can offer next to the reason. The engine never shows it; it only names it.
 enum class ExportRemedy : std::uint8_t {
     None = 0,
-    InstallOpenH264 = 1, // consent + download flow (H264EncoderService)
-    LocateOpenH264 = 2,  // verify-and-copy a downloaded binary
+    // InstallOpenH264, LocateOpenH264 and ChooseSoftwareEncoder are no longer produced (the
+    // encoders ship with Bloom and hardware falls back silently); kept until the desktop removes
+    // its references.
+    InstallOpenH264 = 1,
+    LocateOpenH264 = 2,
     OpenProjectSettings = 3,
     ChooseSoftwareEncoder = 4,
 };
@@ -130,6 +134,8 @@ struct ExportPreset final {
 // The neutral twin of H264EncoderService::State plus the other encoders #369 adds. Produced on a
 // worker; read anywhere.
 struct ExportEncoderStatus final {
+    // OpenH264 is bundled: probes report Installed (NotNeeded on macOS, where VideoToolbox is the
+    // preferred software encoder). NotInstalled is no longer produced.
     enum class OpenH264 : std::uint8_t { NotNeeded, Checking, Installed, NotInstalled };
     output::H264EncoderV1 h264Software = output::H264EncoderV1::None;
     std::string h264SoftwareReason;
@@ -303,7 +309,7 @@ class ExportPresetCatalogue final {
     // preset, never an image sequence: MP4/H.264 ("builtin:h264-mp4") when available here, else
     // the stated fallback video preset, ProRes 422 HQ MOV ("builtin:prores-422hq-mov"). When
     // neither is available on this computer the job still gets H.264 MP4, and its availability
-    // reason (with a remedy such as Install OpenH264) blocks Start until the artist chooses.
+    // reason (with a remedy such as Open Project Settings) blocks Start until the artist chooses.
     [[nodiscard]] ExportDefaultPreset defaultPreset() const;
 
     // Publishes a probe result (desktop: forwarded from H264EncoderService on the UI thread).

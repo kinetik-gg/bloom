@@ -93,6 +93,10 @@ hardware execution key with no determinism claim; its tuple is advertised only w
 initializes the hardware path. The export dialog exposes a typed “H.264 encoder not installed”
 reason, one-click install/locate controls, and a VA-API alternative.
 
+**Superseded 2026-10-31 by ADR 0036:** OpenH264 is built from its pinned source and linked into the
+worker's `libavcodec` on every platform. There is no Cisco binary, consent, download, shim or
+"H.264 encoder not installed" reason; VA-API falls back to OpenH264 inside the encode chain.
+
 ## Accepted v0 amendment: WAV and MP3 preview audio (2026-09-15)
 
 Building on the narrow v0 in-process image exception introduced by MEDIA-1, AUDIO-1 admits a

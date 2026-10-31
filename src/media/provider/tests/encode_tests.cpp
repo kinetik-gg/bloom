@@ -1,6 +1,7 @@
 #include "support.hpp"
 #include <bloom/media/provider/encode_session.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/media/provider/media_workers.hpp>
 #include <cmath>
 #include <csignal>
 #include <filesystem>
@@ -74,9 +75,11 @@ AudioBlock sound(const EncodeSettingsV1& settings, std::uint64_t offset, std::ui
     return block;
 }
 Bytes run(const EncodeSettingsV1& settings, const std::filesystem::path& destination,
-          EncodeSessionOptionsV1 options = {}) {
+          EncodeSessionOptionsV1 options = {}, MediaProviderProvenanceV1* provenance = nullptr) {
     EncodeSessionV1 session(std::move(options));
     ok(session.begin(settings));
+    if (provenance != nullptr)
+        *provenance = session.provenance();
     for (std::uint64_t i = 0; i < settings.frames; ++i) {
         ok(session.video(image(settings, i)));
         if (!settings.audioCodec.empty())
@@ -220,49 +223,56 @@ void tests(const std::filesystem::path& directory) {
     settings.profile = "rgba16";
     settings.container = "tiff";
     (void)run(settings, directory / "export.tiff");
+    // H.264 ships with Bloom (owner, 2026-10-31): the bundled OpenH264 encodes it with nothing
+    // installed, in MOV with PCM and in MP4 with AAC.
+    settings = {};
+    settings.width = 64;
+    settings.height = 48;
+    settings.frames = 48;
     settings.videoCodec = "h264";
-#ifdef BLOOM_OPENH264_TEST_RUNTIME
-    if (std::filesystem::is_directory(BLOOM_OPENH264_TEST_RUNTIME)) {
-        settings = {};
-        settings.width = 64;
-        settings.height = 48;
-        settings.frames = 48;
-        settings.videoCodec = "h264";
-        settings.profile = "high";
-        settings.container = "mov";
-        settings.audioCodec = "pcm_s16le";
-        settings.audioSamples = 96000;
-        EncodeSessionOptionsV1 openh264;
-        openh264.openh264Directory = BLOOM_OPENH264_TEST_RUNTIME;
-        (void)run(settings, directory / "export-h264.mov", std::move(openh264));
-        const auto render = std::filesystem::exists("/dev/dri/renderD128") ||
-                            std::filesystem::exists("/dev/dri/renderD129");
-        if (render) {
-            auto vaapiSettings = settings;
-            vaapiSettings.width = 128;
-            vaapiSettings.height = 128;
-            EncodeSessionOptionsV1 vaapi;
-            vaapi.vaapi = true;
-            try {
-                (void)run(vaapiSettings, directory / "export-h264-vaapi.mov", std::move(vaapi));
-            } catch (const std::runtime_error& error) {
-                std::cout << "SKIP: VA-API H.264 round trip — driver refused the encode context: "
-                          << error.what() << '\n';
-            }
-        } else {
-            std::cout << "SKIP: VA-API H.264 round trip — no render node\n";
+    settings.profile = "high";
+    settings.container = "mov";
+    settings.audioCodec = "pcm_s16le";
+    settings.audioSamples = 96000;
+    {
+        MediaProviderProvenanceV1 served;
+        (void)run(settings, directory / "export-h264.mov", {}, &served);
+        test::check(served.provider == kFfmpegProviderId && !served.fellBack(),
+                    "software H.264 is served by the FFmpeg worker's bundled OpenH264");
+        auto mp4 = settings;
+        mp4.container = "mp4";
+        mp4.audioCodec = "aac";
+        (void)run(mp4, directory / "export-h264.mp4");
+    }
+    // VA-API requested where no render node encodes falls back to OpenH264 without a refusal: the
+    // fallback is recorded in provenance, never shown.
+    {
+        auto absent = settings;
+        absent.vaapiDevice = "/dev/dri/renderD-absent";
+        EncodeSessionOptionsV1 vaapi;
+        vaapi.vaapi = true;
+        MediaProviderProvenanceV1 served;
+        (void)run(absent, directory / "export-h264-fallback.mov", std::move(vaapi), &served);
+        test::check(served.provider == kFfmpegProviderId && served.fellBack() &&
+                        served.fallbacks.front().provider == kFfmpegVaapiProviderId,
+                    "H.264 falls back from VA-API to the bundled OpenH264 silently");
+    }
+    if (std::filesystem::exists("/dev/dri/renderD128") ||
+        std::filesystem::exists("/dev/dri/renderD129")) {
+        auto vaapiSettings = settings;
+        vaapiSettings.width = 128;
+        vaapiSettings.height = 128;
+        EncodeSessionOptionsV1 vaapi;
+        vaapi.vaapi = true;
+        try {
+            (void)run(vaapiSettings, directory / "export-h264-vaapi.mov", std::move(vaapi));
+        } catch (const std::runtime_error& error) {
+            std::cout << "SKIP: VA-API H.264 round trip — driver refused the encode context: "
+                      << error.what() << '\n';
         }
     } else {
-        std::cout << "SKIP: H.264 round trip — Cisco OpenH264 binary is not staged; shim only\n";
+        std::cout << "SKIP: VA-API H.264 round trip — no render node\n";
     }
-#else
-    std::cout << "SKIP: H.264 round trip — Cisco OpenH264 binary is not staged; shim only\n";
-#endif
-    EncodeSessionV1 rejected({});
-    const auto unavailable = rejected.begin(settings);
-    test::check(unavailable && unavailable->reason == Error::Unavailable &&
-                    unavailable->detail == "H.264 encoder not installed",
-                "H264 typed unavailable");
     settings = {};
     settings.width = 64;
     settings.height = 48;
@@ -326,16 +336,7 @@ void chromaSampling(const std::filesystem::path& directory) {
     settings.frames = 12;
     settings.videoCodec = "h264";
     settings.profile = "high";
-#ifdef BLOOM_OPENH264_TEST_RUNTIME
-    if (std::filesystem::is_directory(BLOOM_OPENH264_TEST_RUNTIME)) {
-        EncodeSessionOptionsV1 openh264;
-        openh264.openh264Directory = BLOOM_OPENH264_TEST_RUNTIME;
-        (void)run(settings, directory / "red-square-h264.mov", std::move(openh264));
-    } else
-        std::cout << "SKIP: H.264 red square — Cisco OpenH264 binary is not staged\n";
-#else
-    std::cout << "SKIP: H.264 red square — Cisco OpenH264 binary is not staged\n";
-#endif
+    (void)run(settings, directory / "red-square-h264.mov");
     if (!std::filesystem::exists("/dev/dri/renderD128") &&
         !std::filesystem::exists("/dev/dri/renderD129")) {
         std::cout << "SKIP: VA-API red square — no render node\n";

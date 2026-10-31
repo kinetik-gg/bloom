@@ -457,14 +457,10 @@ ExportEncoderStatus probeExportEncoders(const ExportEncoderStatus& initial) {
     const auto support = output::h264EncoderSupportV1();
     status.h264Software = support.software;
     status.h264SoftwareReason = std::string(support.softwareReason);
-    if (support.software == output::H264EncoderV1::OpenH264)
-        status.openh264 = output::verifyH264RuntimeV1().installed
-                              ? ExportEncoderStatus::OpenH264::Installed
-                              : ExportEncoderStatus::OpenH264::NotInstalled;
-    else
-        status.openh264 = support.software == output::H264EncoderV1::None
-                              ? ExportEncoderStatus::OpenH264::NotInstalled
-                              : ExportEncoderStatus::OpenH264::NotNeeded;
+    // OpenH264 is bundled in the media worker on every platform; it is never missing.
+    status.openh264 = support.software == output::H264EncoderV1::OpenH264
+                          ? ExportEncoderStatus::OpenH264::Installed
+                          : ExportEncoderStatus::OpenH264::NotNeeded;
     status.mediaWorker = output::mediaWorkerAvailableV1();
     const auto vaapi = output::probeVaapiEncodeV1();
     status.vaapiH264 = support.hardwareVaapi && vaapi.h264;

@@ -209,8 +209,9 @@ FFmpeg ProRes is a non-authorized preview/workflow capability only. It is not ev
 authorization, certification, patent clearance, or delivery qualification. The worker resolves its
 own bundled shared libraries privately (Linux `$ORIGIN/lib`, macOS `@loader_path/lib` with
 `@rpath` install names, Windows DLLs beside the worker); the desktop binary receives no FFmpeg
-search path. VA-API is Linux-only; the macOS and Windows FFmpeg builds omit the Linux x86-64
-OpenH264 link-time stub, and Windows builds use FFmpeg's MSVC toolchain from an MSYS2 shell. Source, license, security, and review
+search path. VA-API is Linux-only. The bundled permissive codec libraries (ADR 0036) are static
+archives inside `libavcodec` on every platform, and Windows builds use FFmpeg's MSVC toolchain from
+an MSYS2 shell. Source, license, security, and review
 records remain under `dependencies/licenses/ffmpeg/` and the lock is the authority for the exact
 configuration.
 
@@ -999,8 +1000,7 @@ cases live under `tests/fixtures/media`; no binary media is checked in.
 Installed worker generations occupy `libexec/bloom/media/<provider-generation>/`, with private
 shared dependencies under their own `lib/`. Linux worker install rpath is exactly `$ORIGIN/lib`;
 CMake does not append link directories. The FFmpeg worker uses this same rpath in build and
-install trees, avoiding empty loader-search entries; its private libraries and Bloom OpenH264
-shim use `$ORIGIN`.
+install trees, avoiding empty loader-search entries; its private libraries use `$ORIGIN`.
 The synthetic test worker needs no codec library and is not installed. MEDIA-3 places the
 reviewed shared FFmpeg closure in its worker generation's private directory. The desktop must
 continue to pass `desktop-no-ffmpeg`; loader paths and codec-bearing worker targets must never
@@ -1814,48 +1814,30 @@ host. Strict delivery and Apple authorization remain gated by ADR 0020.
 | `PcmWavV1` | Signed little-endian PCM 16/24; BWF description when supplied | Byte-exact pinned worker; RF64 auto promotion; BW64 remains pending |
 | `TiffRgba16SrgbV1` | Single frames and numbered sequences | Exact decoded RGBA16 after the declared OCIO display/view conversion and quantization |
 | Worker-only capabilities | DNxHD; AAC; MOV, MXF, Matroska, WAV mux | Closed stream layouts; unsupported profiles or timing return typed failures |
-| `H264MovV1` | H.264 High MOV review encode via Cisco OpenH264 2.6.0 when verified; optional AAC or PCM; 30 Mbps default | 8-bit 4:2:0, one-second GOP, Rec.709 limited range; lossy `DecodedSemanticTolerance`; Review deliverable — not for archival |
-| H.264 hardware encode | H.264 High MOV via VA-API when the worker creates an encode context | Hardware execution key; no determinism claim; skipped with a typed reason when no `/dev/dri/renderD*` exists |
-| H.264/HEVC software encode | H.264 software is conditional; HEVC software remains unavailable | `H.264 encoder not installed` until the verified Cisco binary is present; HEVC remains typed unavailable |
+| `H264MovV1` / `H264Mp4V1` | H.264 High MOV or MP4 via the bundled OpenH264 2.6.0 (`libopenh264`); MOV carries PCM, MP4 AAC; 30 Mbps default | 8-bit 4:2:0, one-second GOP, Rec.709 limited range; lossy `DecodedSemanticTolerance`; Review deliverable — not for archival |
+| H.264 hardware encode | H.264 High MOV or MP4 via VA-API when the worker creates an encode context | Hardware execution key; no determinism claim; a refused or absent device falls back to OpenH264 inside the encode chain, recorded in provenance |
+| HEVC encode | VA-API HEVC Main/Main 10 only | HEVC remains typed unavailable without VA-API |
 
 The ProRes dialog, approval text, MOV comment and `MediaQcEvidenceV1` carry:
 
 > Decoded/encoded by FFmpeg; not an Apple-authorized ProRes implementation
 
 `apple_authorized=false` and `delivery_qualified=false` accompany that evidence. Preview export
-success does not establish an authorized pipeline. H.264 review evidence names `openh264 2.6.0`
-plus its verified digest, or `vaapi <driver>`. No output is presented as archival or delivery
-qualified.
+success does not establish an authorized pipeline. H.264 review evidence names the encoder that
+actually served the attempt (`openh264 2.6.0 bundled`, or `vaapi` after the chain's selection). No
+output is presented as archival or delivery qualified.
 
-OpenH264 policy is host-owned and Qt-free. The first install requires explicit consent to Cisco's
-binary license and stores `media/openh264-consent=2.6.0` in the per-user `Bloom.conf` beside the
-`openh264` directory (a Qt-free file, not the application's QSettings store); the entry is written
-once, through a temporary file, however often Bloom installs, and duplicate `[media]` groups left by
-earlier appends collapse to one. It never fetches at startup. The host supervises system `curl` for at most 60 seconds and 16 MiB, then `bunzip2`,
-verifies both archive and library SHA-256 values from the dependency lock, and atomically publishes
-`libopenh264.so.8` and `BINARY_LICENSE.txt` below the per-user `Kinetik/Bloom/openh264/2.6.0`
-directory. A locate action applies the same verification: it hashes the chosen file while copying it
-into a staging file beside the install (the artist's own file is never moved, and a copy across
-file systems works), publishes the staging file only when its digest matches, and stops between
-chunks when cancelled, leaving no staging file.
-
-Which H.264 encoder a platform uses is the export provider's answer, `output::h264EncoderSupportV1()`,
-a pure platform query that opens no file: VideoToolbox inside the macOS AVFoundation provider
-(nothing to install or consent to), Cisco OpenH264 or VA-API hardware on Linux x86-64, VA-API
-hardware only on Linux on other processors (Cisco publishes no binary there), and none yet on
-Windows, where the H.264 preset reports the worker as unavailable. The Export panel offers
-install, consent and Locate (the H.264 encoder dialog) only when the answer is OpenH264. Everything that touches the disk --
-`verifyH264RuntimeV1()` (the library's SHA-256), `vaapiRenderNodeAvailableV1()` (the
-`/dev/dri/renderD*` probe) and `locateH264RuntimeV1()` -- runs as a `BlockingIo` task through
-`ui::H264EncoderService`, which publishes the result to the dialog; Locate shows a busy bar and
-Cancel inside the dialog while it runs. The worker receives the directory and
-expected digest, prepends that verified directory to its private loader directory before FFmpeg
-use, and rejects a mismatch. Every worker and fixture-generator build also contains a Bloom-owned
-`libopenh264.so.8` API shim in the private `lib/` directory. The shim contains no codec code and
-keeps FFmpeg loadable when the Cisco binary is absent; it reports the typed `H.264 encoder not
-installed` state for software encode. Decode never needs the Cisco binary, and the shim is used
-for decode and fixture generation until a verified Cisco directory is available. The private
-superbuild stub is not a runtime path and no Cisco binary is bundled.
+OpenH264 is built from its pinned source release and linked into the worker's `libavcodec` on
+Linux, macOS and Windows (ADR 0036). Nothing is downloaded, verified at run time, consented to or
+installed: the FFmpeg worker's software handshake always declares H.264 encode, and the worker
+loads only its private libraries. Which H.264 encoder a platform prefers is the export provider's
+answer, `output::h264EncoderSupportV1()`, a pure platform query that opens no file: VideoToolbox
+inside the macOS AVFoundation provider, then the bundled FFmpeg worker; OpenH264 everywhere else,
+with VA-API hardware preferred on Linux when requested and a render node encodes. A Hardware
+preference never refuses a preset: the encode chain falls back from `ffmpeg-vaapi` to `ffmpeg`
+(OpenH264) at `begin()` and records the fallback in `MediaProviderProvenanceV1`.
+`verifyH264RuntimeV1()`, `locateH264RuntimeV1()` and `installH264RuntimeV1()` report the bundled
+encoder and touch no file; they remain only until the desktop deletes its former install flow.
 
 `host::SequenceExportRunnerV1` compiles one immutable snapshot. `output::CompositionOutputStreamV1`
 owns the codec clients, source-audio decoding and offline mix; host owns approvals and publication.

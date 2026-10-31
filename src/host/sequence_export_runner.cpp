@@ -232,31 +232,9 @@ struct detail::SequenceExportWorkV1 {
             s.videoCodec = "h264";
             s.container = request.preset == output::OutputPresetV1::H264Mp4V1 ? "mp4" : "mov";
             s.profile = "high";
+            // VA-API first when hardware is requested; the encode chain falls back to the bundled
+            // OpenH264 silently when no render node encodes (ADR 0035).
             request.worker.vaapi = request.hardware;
-            // Software H.264 needs Cisco's OpenH264 only where that is the platform's software
-            // encoder (Linux x86-64); macOS encodes H.264 with VideoToolbox.
-            if (!request.hardware &&
-                output::h264EncoderSupportV1().software == output::H264EncoderV1::OpenH264) {
-                const auto status = output::verifyH264RuntimeV1();
-                if (!status.installed) {
-                    require(request.openh264Consent, "H.264 encoder not installed",
-                            Error::Unavailable);
-                    const auto installed =
-                        output::installH264RuntimeV1(true, [&](const std::uint64_t progress) {
-                            context.reportProgress(
-                                {"Installing OpenH264", "Cisco binary", progress, 100});
-                            checkpoint();
-                        });
-                    require(installed.installed, installed.detail.c_str(), Error::Unavailable);
-                    request.worker.openh264Directory = installed.directory.string();
-                    request.worker.openh264Version = installed.version;
-                    request.worker.openh264Digest = installed.digest;
-                } else {
-                    request.worker.openh264Directory = status.directory.string();
-                    request.worker.openh264Version = status.version;
-                    request.worker.openh264Digest = status.digest;
-                }
-            }
         } else if (request.preset == output::OutputPresetV1::DnxhrMxfV1) {
             s.videoCodec = "dnxhd";
             s.container = "mxf";
@@ -294,12 +272,6 @@ struct detail::SequenceExportWorkV1 {
         analysis =
             std::make_unique<output::MediaOutputAnalysisV1>(checked(output::analyzeMediaOutputV1(
                 request.preset, std::move(s), display, output::outputLookEffectCountV1(*plan))));
-        if (request.preset == output::OutputPresetV1::H264MovV1) {
-            analysis->implementationNote +=
-                request.hardware ? "; encoder=vaapi vaapi-runtime-unqualified"
-                                 : "; encoder=openh264 " + request.worker.openh264Version +
-                                       " sha256=" + request.worker.openh264Digest;
-        }
         if (!settings().videoCodec.empty() && analysis->display != nullptr)
             mediaDisplay =
                 std::make_shared<OutputMediaDisplayCommandV1>(analysis->display, colorIntent());
@@ -456,6 +428,12 @@ struct detail::SequenceExportWorkV1 {
         }
         require(reopened.finalize() == qc.artifact && static_cast<bool>(lease.acceptVerification()),
                 "Staged artifact digest differs", Error::DigestMismatch);
+        // The encoder that actually served the attempt, after any silent VA-API fallback.
+        if (request.preset == output::OutputPresetV1::H264MovV1)
+            analysis->implementationNote +=
+                served.execution.implementation == media::provider::Implementation::Hardware
+                    ? "; encoder=vaapi vaapi-runtime-unqualified"
+                    : "; encoder=openh264 2.6.0 bundled";
         auto evidence =
             checked(output::makeMediaQcEvidenceV1(*analysis, qc, approvals.finalize(), &served));
         checkpoint();

@@ -34,7 +34,7 @@ readExportUserPresets(const std::filesystem::path& path);
 // Serialization shared with exportJobScript(): the 1.29 `settings` object as compact JSON.
 [[nodiscard]] std::string exportSettingsJson(const document::ExportOutputSettings& settings);
 
-// Probes this computer's encoders (OpenH264 runtime, VA-API render nodes and their encode entry
+// Probes this computer's encoders (VA-API render nodes and their encode entry
 // points through the media worker, the worker itself). Worker thread only.
 [[nodiscard]] ExportEncoderStatus probeExportEncoders(const ExportEncoderStatus& initial);
 

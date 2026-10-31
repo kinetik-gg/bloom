@@ -42,9 +42,9 @@ composition, so exports and renders of a format that can carry transparency keep
 Effects.
 
 A new job renders the composition's work area (or the whole composition when it has none) to one
-**H.264 MP4** output at `Exports/{name}.mp4` beside the project. If H.264 cannot run on this
-computer, the output starts as **ProRes 422 HQ MOV** and the panel says why H.264 was not used. The
-default is never an image sequence and never the last preset you used. An unsaved project has no
+**H.264 MP4** output at `Exports/{name}.mp4` beside the project. The H.264 encoder ships with
+Bloom, so there is nothing to install first. The default is never an image sequence and never the
+last preset you used. An unsaved project has no
 default destination; Start then says "Choose where to save this output".
 
 Each job has a range, set in **Render Settings** (**Work area**, **Whole composition**, **Custom**
@@ -85,9 +85,10 @@ offers, with **Project default** first, so a name cannot be mistyped. The bit ra
 audio sample rate and file-name pattern an output already has are kept and used; the panel does not
 edit them.
 
-- **H.264** uses Cisco OpenH264 after your consent (Bloom downloads Cisco OpenH264 2.6.0 only after
-  you accept Cisco's license and verifies its digest; **Locate** verifies a download you already
-  have) or VA-API hardware. No Cisco binary is bundled. Opening H.264 media never needs it.
+- **H.264** is encoded by OpenH264, which ships with Bloom on Linux, macOS and Windows; nothing is
+  downloaded or installed. With **Hardware** chosen on Linux, Bloom uses a VA-API render node when
+  one encodes H.264 and otherwise uses OpenH264 without asking. On macOS VideoToolbox encodes
+  first.
 - **HEVC** is hardware-only (VA-API). Without a VA-API render node that encodes HEVC, HEVC presets
   say **HEVC needs a VA-API render node with HEVC encode** and cannot start.
 - **ProRes** is written by FFmpeg; it is not an Apple-authorized ProRes implementation.

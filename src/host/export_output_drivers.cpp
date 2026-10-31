@@ -1105,7 +1105,6 @@ class MediaDriver final : public DriverBase {
             .profile = settings.format == ExportFormat::Wav ? std::string() : profile,
             .audio = settings.format == ExportFormat::Wav || settings.includeAudio,
             .hardware = hardware_,
-            .openh264Consent = false,
             .sampleRate = settings.audioSampleRate,
             .pcmCodec = settings.format == ExportFormat::Wav ? profile : "pcm_s16le",
             .bwfDescription = {},

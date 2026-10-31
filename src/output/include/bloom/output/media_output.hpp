@@ -35,18 +35,18 @@ struct H264RuntimeAvailabilityV1 {
     std::string detail;
 };
 // Which H.264 encoder this platform's export provider uses. A pure platform answer: it opens no
-// file and probes no device, so a dialog may ask it on the UI thread.
-// - macOS: VideoToolbox, inside the AVFoundation provider; nothing to install or consent to.
-// - Linux x86-64: Cisco OpenH264 (installed after consent, or located), or VA-API hardware.
-// - Linux on other processors: VA-API hardware only; Cisco publishes no binary there.
-// - Windows: none yet (the supervised FFmpeg worker is not available there).
+// file and probes no device, so a dialog may ask it on the UI thread. Nothing is ever installed:
+// - macOS: VideoToolbox inside the AVFoundation provider, then the bundled FFmpeg worker.
+// - Linux and Windows: the bundled OpenH264 inside the FFmpeg worker (Linux prefers VA-API
+//   hardware when a render node encodes, and falls back to OpenH264 silently).
+// `None` is no longer produced; it remains until the desktop removes its references.
 enum class H264EncoderV1 : std::uint8_t { None, VideoToolbox, OpenH264 };
 struct H264EncoderSupportV1 {
     // The encoder used without hardware.
-    H264EncoderV1 software = H264EncoderV1::None;
+    H264EncoderV1 software = H264EncoderV1::OpenH264;
     // The provider can encode on VA-API hardware when a render node exists.
     bool hardwareVaapi = false;
-    // Why software is None.
+    // Always empty: every platform has a software H.264 encoder.
     std::string_view softwareReason;
 };
 [[nodiscard]] H264EncoderSupportV1 h264EncoderSupportV1() noexcept;
@@ -65,9 +65,10 @@ struct VaapiEncodeProbeV1 {
 [[nodiscard]] VaapiEncodeProbeV1 probeVaapiEncodeV1(std::string workerExecutable = {});
 // Whether the supervised media worker executable exists for this build. Worker threads only.
 [[nodiscard]] bool mediaWorkerAvailableV1();
-// Verifies the installed OpenH264 binary (a SHA-256 of the library): worker only.
+// OpenH264 ships inside the FFmpeg worker, so these three always report the bundled encoder as
+// installed and touch no file. They only keep the desktop's former install flow compiling until
+// the UI removes it; the engine never calls them.
 [[nodiscard]] H264RuntimeAvailabilityV1 verifyH264RuntimeV1();
-// Verifies and installs a downloaded OpenH264 binary (hash and copy): worker only, cancellable.
 [[nodiscard]] H264RuntimeAvailabilityV1
 locateH264RuntimeV1(const std::filesystem::path& file, const std::function<bool()>& cancelled = {});
 [[nodiscard]] H264RuntimeAvailabilityV1

@@ -67,7 +67,6 @@ struct SequenceExportRequestV1 {
     std::string profile = "hq";
     bool audio = true;
     bool hardware = false;
-    bool openh264Consent = false;
     std::uint32_t sampleRate = 48000;
     std::string pcmCodec = "pcm_s16le", bwfDescription;
     std::filesystem::path assetBaseDirectory;

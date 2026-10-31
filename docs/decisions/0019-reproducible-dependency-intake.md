@@ -116,6 +116,10 @@ OpenH264 wrapper entry points, so all FFmpeg worker processes can load without t
 The host prepends a verified Cisco directory for worker encode, decode, and fixture-generation
 launches; only software H.264 encode requires that real binary.
 
+**Superseded for OpenH264 on 2026-10-31 by ADR 0036:** OpenH264 is a source-built static archive
+inside the worker's `libavcodec`; the runtime fetch, the shim and the lock's `runtimeFetch` record
+for it are removed. The schema record remains for a future non-redistributable component.
+
 ## Consequences
 
 - Normal Bloom builds become smaller and easier to reason about because they consume declared

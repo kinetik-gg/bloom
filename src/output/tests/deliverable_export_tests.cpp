@@ -10,7 +10,6 @@
 #include <array>
 #include <bit>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
-#include <bloom/media/provider/openh264_runtime.hpp>
 #include <bloom/media/video/session.hpp>
 #include <bloom/output/flat_exr_export_write.hpp>
 #include <bloom/output/media_output.hpp>
@@ -243,19 +242,12 @@ unsigned sample16(const media::provider::Bytes& bytes, std::size_t offset) {
     check(output::outputLookDescriptionV1(frame.identity()) ==
               "look: baked (1 look-tagged effects)",
           "review look evidence");
-#ifdef BLOOM_COLOR5_OPENH264_RUNTIME
-    // The Cisco OpenH264 binary is a consented runtime fetch, not a locked build input, so a
-    // checkout or CI runner without it still runs the deterministic EXR oracle above but cannot
-    // exercise the H.264 review encode.
-    const auto openh264Runtime =
-        media::provider::OpenH264Runtime(std::filesystem::path(BLOOM_COLOR5_OPENH264_RUNTIME))
-            .verify();
-    if (openh264Runtime.installed) {
+#ifdef BLOOM_OUTPUT_ENCODE_TESTS
+    // The H.264 review encode runs through the bundled OpenH264 in the media worker; nothing is
+    // installed first.
+    {
         using namespace media::provider;
         EncodeSessionOptionsV1 worker;
-        worker.openh264Directory = BLOOM_COLOR5_OPENH264_RUNTIME;
-        worker.openh264Version = OpenH264Runtime::version();
-        worker.openh264Digest = OpenH264Runtime::libraryDigest();
         EncodeSettingsV1 settings;
         settings.container = "mov";
         settings.videoCodec = "h264";
@@ -359,7 +351,7 @@ int main() {
         const auto review = evaluator.evaluate(plan, request, {});
         check(handoff.frame() && handoff.diagnostics().empty(),
               "handoff evaluates with external look bypassed");
-#ifdef BLOOM_COLOR5_OPENH264_RUNTIME
+#ifdef BLOOM_OUTPUT_ENCODE_TESTS
         check(review.frame() && review.diagnostics().empty(),
               "review look evaluates without diagnostics");
         check(std::abs(review.frame()->processImage().pixels()[0].red() -
@@ -375,7 +367,7 @@ int main() {
             std::string(color::kAcesCgV1BuiltinConfigName).c_str());
         testConfigBinding(request.colorIntent);
         exrOracle(*attempt, ledger, path.parent_path(), config);
-#ifdef BLOOM_COLOR5_OPENH264_RUNTIME
+#ifdef BLOOM_OUTPUT_ENCODE_TESTS
         reviewOracle(*review.frame(), path.parent_path(), config);
 #endif
     } catch (const std::exception& e) {

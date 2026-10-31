@@ -2,7 +2,6 @@
 #include <array>
 #include <bloom/media/provider/encode_session.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
-#include <bloom/media/provider/openh264_runtime.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 #include <chrono>
@@ -12,28 +11,23 @@
 
 namespace bloom::output {
 using namespace media::provider;
-H264RuntimeAvailabilityV1 verifyH264RuntimeV1() {
-    const auto status = OpenH264Runtime().verify();
-    return {.installed = status.installed,
-            .version = status.version,
-            .digest = status.digest,
-            .directory = status.directory,
-            .detail = status.detail};
+namespace {
+H264RuntimeAvailabilityV1 bundledOpenH264() {
+    return {.installed = true,
+            .version = "2.6.0",
+            .digest = {},
+            .directory = {},
+            .detail = "OpenH264 is bundled with Bloom"};
 }
+} // namespace
+H264RuntimeAvailabilityV1 verifyH264RuntimeV1() { return bundledOpenH264(); }
 H264EncoderSupportV1 h264EncoderSupportV1() noexcept {
 #if defined(__APPLE__)
     return {.software = H264EncoderV1::VideoToolbox, .hardwareVaapi = false, .softwareReason = {}};
 #elif defined(__linux__)
-    if (OpenH264Runtime::platformSupported())
-        return {.software = H264EncoderV1::OpenH264, .hardwareVaapi = true, .softwareReason = {}};
-    return {.software = H264EncoderV1::None,
-            .hardwareVaapi = true,
-            .softwareReason = "Cisco publishes no OpenH264 binary for this processor, so H.264 "
-                              "is encoded on VA-API hardware."};
+    return {.software = H264EncoderV1::OpenH264, .hardwareVaapi = true, .softwareReason = {}};
 #else
-    return {.software = H264EncoderV1::None,
-            .hardwareVaapi = false,
-            .softwareReason = "This platform has no H.264 encoder yet."};
+    return {.software = H264EncoderV1::OpenH264, .hardwareVaapi = false, .softwareReason = {}};
 #endif
 }
 bool vaapiRenderNodeAvailableV1() {
@@ -101,23 +95,12 @@ VaapiEncodeProbeV1 probeVaapiEncodeV1(std::string workerExecutable) {
 #endif
     return result;
 }
-H264RuntimeAvailabilityV1 locateH264RuntimeV1(const std::filesystem::path& file,
-                                              const std::function<bool()>& cancelled) {
-    const auto result = OpenH264Runtime().locate(file, cancelled);
-    return {.installed = result.installed,
-            .version = OpenH264Runtime::version(),
-            .digest = result.installed ? OpenH264Runtime::libraryDigest() : std::string{},
-            .directory = result.directory,
-            .detail = result.detail};
+H264RuntimeAvailabilityV1 locateH264RuntimeV1(const std::filesystem::path&,
+                                              const std::function<bool()>&) {
+    return bundledOpenH264();
 }
-H264RuntimeAvailabilityV1 installH264RuntimeV1(const bool explicitConsent,
-                                               const std::function<void(std::uint64_t)>& progress) {
-    const auto result = OpenH264Runtime().install(explicitConsent, progress);
-    return {.installed = result.installed,
-            .version = OpenH264Runtime::version(),
-            .digest = result.installed ? OpenH264Runtime::libraryDigest() : std::string{},
-            .directory = result.directory,
-            .detail = result.detail};
+H264RuntimeAvailabilityV1 installH264RuntimeV1(bool, const std::function<void(std::uint64_t)>&) {
+    return bundledOpenH264();
 }
 Result<MediaOutputAnalysisV1>
 analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,

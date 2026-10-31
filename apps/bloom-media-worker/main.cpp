@@ -6,7 +6,6 @@
 #else
 #include "ffmpeg_provider.hpp"
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
-#include <bloom/media/provider/openh264_runtime.hpp>
 #if !defined(_WIN32)
 #include <fcntl.h>
 #endif
@@ -20,7 +19,6 @@
 #include <bloom/platform/process_supervisor.hpp>
 #include <chrono>
 #include <cstdlib>
-#include <filesystem>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -54,8 +52,6 @@ int main(int argc, char** argv) {
 #else
     bool hardware = false;
     bool hardwareDecode = false;
-    std::string openh264Directory;
-    std::string openh264Digest;
     int stagedOutput = -1;
     for (int i = 1; i < argc; ++i) {
         const auto argument = std::string_view(argv[i]);
@@ -69,38 +65,16 @@ int main(int argc, char** argv) {
             retainedVideo = true;
         else if (argument == "--staged-output")
             stagedOutput = 5; // ADR 0033 section 16: ProcessSupervisor installs it as fd 5.
-        else if (argument == "--openh264-dir" && i + 1 < argc)
-            openh264Directory = argv[++i];
-        else if (argument == "--openh264-sha256" && i + 1 < argc)
-            openh264Digest = argv[++i];
         else
             return 2;
-    }
-    bool openh264 = false;
-    if (!openh264Directory.empty()) {
-        const auto status = provider::OpenH264Runtime(openh264Directory).verify();
-        openh264 = status.installed && status.digest == openh264Digest;
-        if (!openh264)
-            openh264Directory.clear();
-#if defined(__linux__)
-        else
-            setenv("LD_LIBRARY_PATH",
-                   (openh264Directory + ":" +
-                    (std::filesystem::path(argv[0]).parent_path() / "lib").string())
-                       .c_str(),
-                   1);
-#endif
     }
     if (hardwareDecode && (hardware || !retainedVideo))
         return 2; // Preview hardware decode is a retained, decode-only worker generation.
     hardware = hardware && ffmpeg::hardwareEncodeAvailable();
     // The decode-only VA-API handshake is device-neutral: the worker discovers the render node
     // when it opens the stream, and reports a typed refusal when none decodes it.
-    const auto handshake =
-        hardwareDecode
-            ? provider::ffmpegHardwareDecodeHandshake()
-            : provider::ffmpegHandshake(hardware, openh264, provider::OpenH264Runtime::version(),
-                                        openh264Digest);
+    const auto handshake = hardwareDecode ? provider::ffmpegHardwareDecodeHandshake()
+                                          : provider::ffmpegHandshake(hardware);
 #if defined(_WIN32)
     // Streamed staged publication (ADR 0033 section 16) inherits a descriptor; Windows exports
     // return chunks instead.

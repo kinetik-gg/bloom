@@ -164,10 +164,13 @@ void testDefaults() {
                chosen.destination.path == "Exports/{name}.mp4" &&
                chosen.destination.overwrite == document::ExportOverwritePolicy::AskBeforeReplacing,
            "the default output is H.264 MP4 at Exports/{name}.mp4, ask before replacing");
+    // H.264 ships with Bloom, so a probe without VA-API keeps the H.264 default; the fallback's
+    // destination still follows its own container.
     catalogue->setEncoderStatus(linuxEncoders(false, false));
     chosen = catalogue->defaultPreset();
-    expect(chosen.settings.format == document::ExportFormat::ProResMov &&
-               chosen.destination.path == "Exports/{name}.mov",
+    expect(chosen.settings.format == document::ExportFormat::H264Mp4 &&
+               host::defaultExportDestination(document::ExportFormat::ProResMov).path ==
+                   "Exports/{name}.mov",
            "the fallback's destination follows its container");
     expect(host::defaultExportDestination(document::ExportFormat::OpenExr).path ==
                "Exports/{name}.exr",
@@ -275,16 +278,26 @@ void testPresets() {
     expect(chosen.presetId == host::kExportDefaultVideoPresetId && !chosen.usedFallback &&
                chosen.preferredAvailability.available,
            "H.264 MP4 is the default where it is available");
+    // OpenH264 ships with Bloom: whatever a probe reports, H.264 MP4 stays the default and no
+    // preset offers an install (owner, 2026-10-31).
     catalogue->setEncoderStatus(linuxEncoders(false, false));
     chosen = catalogue->defaultPreset();
-    expect(chosen.presetId == host::kExportFallbackVideoPresetId && chosen.usedFallback &&
-               chosen.preferredAvailability.code ==
-                   host::ExportAvailabilityCode::EncoderNotInstalled &&
-               chosen.preferredAvailability.remedy == host::ExportRemedy::InstallOpenH264,
-           "ProRes 422 HQ is the fallback, with the H.264 reason recorded");
-    catalogue->setEncoderStatus(linuxEncoders(false, true));
-    expect(catalogue->defaultPreset().presetId == host::kExportDefaultVideoPresetId,
-           "VA-API H.264 keeps the default without OpenH264");
+    expect(chosen.presetId == host::kExportDefaultVideoPresetId && !chosen.usedFallback &&
+               chosen.preferredAvailability.available,
+           "H.264 MP4 stays the default without VA-API or a separate OpenH264 install");
+    for (const auto& preset : catalogue->snapshot()->presets)
+        expect(preset.platformAvailability.code !=
+                       host::ExportAvailabilityCode::EncoderNotInstalled &&
+                   preset.platformAvailability.remedy != host::ExportRemedy::InstallOpenH264 &&
+                   preset.platformAvailability.remedy != host::ExportRemedy::LocateOpenH264,
+               "no preset asks the artist to install an encoder: " + preset.id);
+    document::ExportOutputSettings h264Hardware;
+    h264Hardware.format = document::ExportFormat::H264Mp4;
+    h264Hardware.encoder = document::ExportEncoderPreference::Hardware;
+    const auto hardwareFallback = host::exportPlatformAvailability(h264Hardware, linuxEncoders());
+    expect(hardwareFallback.available && hardwareFallback.reason.empty() &&
+               hardwareFallback.remedy == host::ExportRemedy::None,
+           "a Hardware H.264 preference without VA-API falls back to OpenH264 silently");
 
     auto elsewhere = host::ExportPresetCatalogue::create(
         {.userDataDirectory = std::nullopt, .initialEncoders = {}});
@@ -714,15 +727,15 @@ void testReplaceConfirmation() {
 }
 
 // ADR 0035: every operating system exports. A computer whose only media provider is the bundled
-// FFmpeg worker (Windows today: no Media Foundation provider, no H.264 encoder) refuses nothing
-// for its platform, and no format FFmpeg serves is reported unavailable.
+// FFmpeg worker (Windows today: no Media Foundation provider, no VA-API) refuses nothing for its
+// platform, and no format FFmpeg serves is reported unavailable: H.264 comes from the bundled
+// OpenH264.
 host::ExportEncoderStatus ffmpegOnlyEncoders() {
     host::ExportEncoderStatus status;
     status.probed = true;
     status.mediaWorker = true;
-    status.h264Software = output::H264EncoderV1::None;
-    status.h264SoftwareReason = "This platform has no H.264 encoder yet.";
-    status.openh264 = host::ExportEncoderStatus::OpenH264::NotInstalled;
+    status.h264Software = output::H264EncoderV1::OpenH264;
+    status.openh264 = host::ExportEncoderStatus::OpenH264::Installed;
     return status;
 }
 
@@ -731,15 +744,13 @@ void testEveryPlatformExports() {
         {.userDataDirectory = std::nullopt, .initialEncoders = ffmpegOnlyEncoders()});
     for (const auto& preset : catalogue->snapshot()->presets) {
         const auto format = preset.settings.format;
-        const bool needsH264OrHevc = format == document::ExportFormat::H264Mov ||
-                                     format == document::ExportFormat::H264Mp4 ||
-                                     format == document::ExportFormat::HevcMov ||
-                                     format == document::ExportFormat::HevcMp4;
+        const bool needsHevc =
+            format == document::ExportFormat::HevcMov || format == document::ExportFormat::HevcMp4;
         expect(preset.platformAvailability.code !=
                        host::ExportAvailabilityCode::WorkerUnavailable &&
                    preset.platformAvailability.reason.find("Linux") == std::string::npos,
                "no preset is refused for its operating system: " + preset.id);
-        if (!needsH264OrHevc && format != document::ExportFormat::Dpx)
+        if (!needsHevc && format != document::ExportFormat::Dpx)
             expect(preset.platformAvailability.available &&
                        preset.platformAvailability.reason.empty(),
                    "the FFmpeg worker serves the preset with no unavailable reason: " + preset.id);
@@ -951,16 +962,8 @@ int main() {
         testVideoEndToEnd(document::ExportFormat::ProResMov, linuxEncoders(), "prores-mov");
         testFreeTextWorkingSpace("Linear Rec.709 (sRGB)");
         testFreeTextWorkingSpace("Linear P3-D65");
-        // H.264 MP4 on the encoder this computer has: OpenH264 when installed, else VA-API.
-        const bool openh264 = output::verifyH264RuntimeV1().installed;
-        const auto vaapi = output::probeVaapiEncodeV1();
-        if (openh264 || vaapi.h264) {
-            auto encoders = linuxEncoders(openh264, vaapi.h264);
-            encoders.vaapiRenderNode = vaapi.renderNode;
-            testVideoEndToEnd(document::ExportFormat::H264Mp4, encoders, "h264-mp4");
-        } else {
-            std::cout << "SKIP h264-mp4: no OpenH264 runtime and no VA-API H.264 encode here\n";
-        }
+        // H.264 MP4 end to end on the bundled OpenH264, with nothing installed.
+        testVideoEndToEnd(document::ExportFormat::H264Mp4, linuxEncoders(), "h264-mp4");
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

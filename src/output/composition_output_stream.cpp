@@ -2,7 +2,6 @@
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
-#include <bloom/media/provider/openh264_runtime.hpp>
 #include <bloom/media/provider/provider_chain.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/output/composition_output_stream.hpp>
@@ -327,13 +326,11 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
         const bool hardware =
             analysis.settings.videoCodec == "h264" &&
             analysis.implementationNote.find("encoder=vaapi") != std::string::npos;
-        const bool openh264 = analysis.settings.videoCodec == "h264" && !hardware;
         // The provider that actually served the attempt (ADR 0035); without one, the FFmpeg
         // worker's declaration for the analysed route.
         const auto hello = served != nullptr && !served->declarations.empty()
                                ? *served
-                               : ffmpegHandshake(hardware, openh264, OpenH264Runtime::version(),
-                                                 OpenH264Runtime::libraryDigest());
+                               : ffmpegHandshake(hardware);
         const bool videotoolbox = hello.execution.provider == "bloom.videotoolbox";
         evidence.execution = checked(digest(hello.execution));
         // Bind all declared ordered export components; no delivery or independent-reader claim.

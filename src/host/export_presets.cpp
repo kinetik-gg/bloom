@@ -45,10 +45,6 @@ bool needsWorker(const ExportFormat format) {
     return format != ExportFormat::Png && format != ExportFormat::OpenExr;
 }
 
-bool isH264(const ExportFormat format) {
-    return format == ExportFormat::H264Mov || format == ExportFormat::H264Mp4;
-}
-
 bool isHevc(const ExportFormat format) {
     return format == ExportFormat::HevcMov || format == ExportFormat::HevcMp4;
 }
@@ -409,30 +405,8 @@ ExportAvailability exportPlatformAvailability(const document::ExportOutputSettin
                                "HEVC needs a VA-API render node with HEVC encode");
         return available();
     }
-    if (isH264(format)) {
-        if (settings.encoder == ExportEncoderPreference::Hardware)
-            return encoders.vaapiH264 ? available()
-                                      : unavailable(ExportAvailabilityCode::HardwareEncoderMissing,
-                                                    "No VA-API render node exposes H.264 encode",
-                                                    ExportRemedy::ChooseSoftwareEncoder);
-        const bool software = encoders.h264Software != output::H264EncoderV1::None &&
-                              (encoders.openh264 == ExportEncoderStatus::OpenH264::Installed ||
-                               encoders.openh264 == ExportEncoderStatus::OpenH264::NotNeeded);
-        if (software)
-            return available();
-        if (settings.encoder == ExportEncoderPreference::Automatic && encoders.vaapiH264)
-            return available();
-        if (encoders.h264Software == output::H264EncoderV1::None)
-            return unavailable(ExportAvailabilityCode::NoQualifiedEncoder,
-                               encoders.h264SoftwareReason.empty()
-                                   ? std::string("No qualified H.264 encoder on this computer")
-                                   : encoders.h264SoftwareReason);
-        if (encoders.openh264 == ExportEncoderStatus::OpenH264::Checking)
-            return unavailable(ExportAvailabilityCode::Probing, "Checking OpenH264…");
-        return unavailable(ExportAvailabilityCode::EncoderNotInstalled,
-                           "H.264 needs Cisco OpenH264, which is not installed yet",
-                           ExportRemedy::InstallOpenH264);
-    }
+    // H.264 always has an encoder: the bundled OpenH264 in the media worker. A Hardware preference
+    // without a VA-API encoder falls back to it silently; the serving encoder is in provenance.
     return available();
 }
 
