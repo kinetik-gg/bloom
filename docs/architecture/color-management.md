@@ -102,7 +102,7 @@ BT.2408 and map HDR reference white to the same 1.0, so SDR and HDR sources comp
 without a gain node: 203 cd/m2 for PQ, and the 75% signal for HLG (whose scene light there is
 E = 0.26496 of the normalized BT.2100 range). Peak PQ (10,000 cd/m2) is therefore 49.26 and peak
 HLG (signal 1.0, E = 1) is 3.774. Exact-value tests pin both (`bloom.runtime.input-color-context`),
-and the colour/format accuracy chart encodes its HDR variants with the same convention.
+and the color/format accuracy chart encodes its HDR variants with the same convention.
 
 ### Synthesized Rec.2100 HLG input space
 
