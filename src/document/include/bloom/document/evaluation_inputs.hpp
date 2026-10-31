@@ -26,7 +26,8 @@ namespace bloom::document {
 //    exactly those; every other field, including one added later, stays an evaluation input until
 //    someone names it there. A forgotten classification therefore costs a re-render, never a stale
 //    frame. Today: a layer's name, label color, lock, shy flag and name-follows-source flag, a
-//    mask's name; an asset's name, folder, tags and Assets order.
+//    mask's name; an asset's name, folder, tags and Assets order; a keyframe's handle mode (the
+//    stored handle values are the evaluation inputs, the mode is presentation).
 // 4. Composition settings are listed in sameEvaluationInputs(Composition): duration, format and
 //    working color space are evaluation inputs; name, folder, work area, safe areas, timecode
 //    display and the viewer background color are presentation. A new Composition member must be
@@ -47,6 +48,11 @@ namespace bloom::document {
 // The record with every presentation field reset to its default (rule 3).
 [[nodiscard]] LayerOutputBoundary evaluationView(LayerOutputBoundary boundary);
 [[nodiscard]] AssetRecord evaluationView(AssetRecord asset);
+// A key with its handle mode reset (document 1.32). Auto and Aligned only decide how the stored
+// handles are later maintained; sampling reads the handles themselves.
+[[nodiscard]] ScalarKeyframe evaluationView(ScalarKeyframe keyframe) noexcept;
+[[nodiscard]] PathKeyframe evaluationView(PathKeyframe keyframe) noexcept;
+[[nodiscard]] AnimationCurveRecord evaluationView(AnimationCurveRecord record);
 
 // Whether two graphs present identical evaluation inputs (topology, nodes, parameters bindings,
 // stacks, and layer boundaries through evaluationView()).

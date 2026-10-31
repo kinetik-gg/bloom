@@ -202,6 +202,44 @@ void testEaseInOutAtExactThirds(Expectations& expectations) {
 // A colour curve is four component tables. The fixture below is the whole-value fixture this test
 // used before the whole-value projection was removed, spelled channel by channel at the same exact
 // times with the same values: the composed samples must not move.
+// Document 1.32: a key's handle mode is presentation metadata. Compilation copies handles verbatim
+// and never the mode, so the same stored handles sample bit-for-bit whatever the mode says.
+void testHandleModeIsRenderNeutral(Expectations& expectations) {
+    const auto build = [](const document::KeyframeHandleMode mode) {
+        document::ScalarAnimationCurve curve;
+        curve.id = document::AnimationCurveId::fromRaw(1);
+        for (std::uint64_t index = 0; index < 4; ++index) {
+            document::ScalarKeyframe key;
+            key.id = document::KeyframeId::fromRaw(index + 1);
+            key.time = core::RationalTime::fromInteger(static_cast<std::int64_t>(index) * 2);
+            key.value = index % 2 == 0 ? 0.25 : 0.9;
+            key.outgoingInterpolation = document::KeyframeInterpolation::EaseInOut;
+            key.outgoingHandle = {0.3, 0.1 * static_cast<double>(index)};
+            key.incomingHandle = {0.45, -0.05};
+            key.handleMode = mode;
+            curve.keyframes.push_back(key);
+        }
+        return curve;
+    };
+    const auto free = runtime::compileAnimationCurve(build(document::KeyframeHandleMode::Free));
+    bool identical = true;
+    for (const auto mode :
+         {document::KeyframeHandleMode::Aligned, document::KeyframeHandleMode::Auto}) {
+        const auto other = runtime::compileAnimationCurve(build(mode));
+        identical = identical && other == free;
+        for (std::int64_t numerator = 0; numerator <= 48; ++numerator) {
+            const auto at = *core::RationalTime::create(numerator, 8);
+            const auto a = runtime::sampleAnimationCurve(free, at);
+            const auto b = runtime::sampleAnimationCurve(other, at);
+            identical = identical && a.value && b.value &&
+                        std::bit_cast<std::uint64_t>(*a.value) ==
+                            std::bit_cast<std::uint64_t>(*b.value);
+        }
+    }
+    expectations.expect(identical,
+                        "compiled curves and sampled bits do not depend on a key's handle mode");
+}
+
 void testColor4Sampling(Expectations& expectations) {
     const auto channel = [](const std::uint64_t base, const double first, const double second,
                             const double third) {
@@ -508,6 +546,7 @@ int main() {
     testIndependentComponentSampling(expectations);
     testEaseInOutAtExactThirds(expectations);
     testEaseHandles(expectations);
+    testHandleModeIsRenderNeutral(expectations);
     testColor4Sampling(expectations);
     testValidationAndEnvironment(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

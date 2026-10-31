@@ -10,6 +10,7 @@ target_sources(
         extension_records.cpp
         data_block.cpp
         graph.cpp
+        keyframe_handles.cpp
         node_definition_registry.cpp
         node_layout.cpp
         layer_masks.cpp
@@ -34,6 +35,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/document/animation.hpp
+            include/bloom/document/keyframe_handles.hpp
             include/bloom/document/layer_source.hpp
             include/bloom/document/channel_nodes.hpp
             include/bloom/document/color_settings.hpp
@@ -126,6 +128,15 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.document.animation-model
         COMMAND bloom_document_animation_model_test
+        LABELS unit animation
+    )
+
+    add_executable(bloom_document_keyframe_handles_test tests/keyframe_handle_tests.cpp)
+    target_link_libraries(bloom_document_keyframe_handles_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_keyframe_handles_test)
+    bloom_add_test(
+        NAME bloom.document.keyframe-handles
+        COMMAND bloom_document_keyframe_handles_test
         LABELS unit animation
     )
 

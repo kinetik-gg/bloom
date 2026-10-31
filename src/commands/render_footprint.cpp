@@ -27,7 +27,12 @@ template <typename Keyframe>
 void componentChangeSpans(const std::vector<Keyframe>& before, const std::vector<Keyframe>& after,
                           const core::RationalTime duration, std::vector<RenderTimeSpan>& out,
                           const core::RationalTime low = {}) {
-    if (before == after)
+    // A key's handle mode is presentation (document 1.32): only its stored values can change a
+    // sample, so two keys that differ in mode alone are the same key here.
+    const auto same = [](const Keyframe& left, const Keyframe& right) {
+        return left == right || document::evaluationView(left) == document::evaluationView(right);
+    };
+    if (std::ranges::equal(before, after, same))
         return;
     if (before.empty() || after.empty()) {
         out.push_back({low, duration});
@@ -36,7 +41,9 @@ void componentChangeSpans(const std::vector<Keyframe>& before, const std::vector
     const auto collect = [&](const std::vector<Keyframe>& keys,
                              const std::vector<Keyframe>& other) {
         for (std::size_t index = 0; index < keys.size(); ++index) {
-            if (std::ranges::find(other, keys[index]) != other.end())
+            if (std::ranges::any_of(other, [&](const Keyframe& candidate) {
+                    return same(candidate, keys[index]);
+                }))
                 continue;
             const auto start = index == 0 ? low : keys[index - 1].time;
             const auto end = index + 1 == keys.size() ? duration : keys[index + 1].time;

@@ -124,6 +124,31 @@ keyframeInterpolationFromToken(std::string_view token) noexcept;
 [[nodiscard]] std::optional<KeyframeEasing>
 keyframeEasingFromToken(std::string_view token) noexcept;
 
+// How a key's two ease handles relate (document 1.32). The mode is stored per key on scalar,
+// component and Path keys and is presentation-only metadata: the STORED handle values are what
+// sampling reads, so changing the mode alone never changes a rendered pixel.
+//   Free     the handles are independent (the behavior of every earlier document).
+//   Aligned  editing one handle keeps the other collinear through the key: its length is kept
+//            and its direction follows.
+//   Auto     Blender's Auto Clamped handles, computed from the neighboring keys and recomputed
+//            whenever a neighbor's time or value changes (see document/keyframe_handles.hpp).
+// The enumerator values are part of the persisted vocabulary and never move.
+enum class KeyframeHandleMode : std::uint8_t {
+    Free = 0,
+    Aligned = 1,
+    Auto = 2,
+};
+
+[[nodiscard]] constexpr bool isValidKeyframeHandleMode(KeyframeHandleMode mode) noexcept {
+    return static_cast<std::uint8_t>(mode) <= static_cast<std::uint8_t>(KeyframeHandleMode::Auto);
+}
+
+// The stable lowercase tokens shared by the project format, Python and MCP: "free", "aligned",
+// "auto". An unknown enumerator yields an empty view, an unknown token nullopt.
+[[nodiscard]] std::string_view keyframeHandleModeToken(KeyframeHandleMode mode) noexcept;
+[[nodiscard]] std::optional<KeyframeHandleMode>
+keyframeHandleModeFromToken(std::string_view token) noexcept;
+
 // The default ease handle. `time` is a fraction of the segment's duration measured from the key
 // the handle belongs to; `value` is an offset from that key's own value. The defaults (1/3, 0)
 // are exactly the fixed handles the pre-handle EaseInOut carried, which is why a document written
@@ -173,6 +198,8 @@ struct ScalarKeyframe {
     // The easing equation's parameters for this key's OUTGOING segment (document 1.30). Kept on
     // every key, like Blender's BezTriple, so switching a key between modes never loses them.
     KeyframeEasingParameters easing{};
+    // Document 1.32. Presentation metadata; see KeyframeHandleMode.
+    KeyframeHandleMode handleMode = KeyframeHandleMode::Free;
 
     friend bool operator==(const ScalarKeyframe&, const ScalarKeyframe&) = default;
 };
@@ -251,6 +278,7 @@ struct PathKeyframe {
     KeyframeHandle outgoingHandle{};
     KeyframeHandle incomingHandle{};
     KeyframeEasingParameters easing{};
+    KeyframeHandleMode handleMode = KeyframeHandleMode::Free;
 
     friend bool operator==(const PathKeyframe&, const PathKeyframe&) = default;
 };

@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <functional>
 #include <span>
+#include <type_traits>
 #include <utility>
+#include <variant>
 
 namespace bloom::document {
 
@@ -59,6 +61,33 @@ AssetRecord evaluationView(AssetRecord asset) {
     return asset;
 }
 
+ScalarKeyframe evaluationView(ScalarKeyframe keyframe) noexcept {
+    keyframe.handleMode = KeyframeHandleMode::Free;
+    return keyframe;
+}
+
+PathKeyframe evaluationView(PathKeyframe keyframe) noexcept {
+    keyframe.handleMode = KeyframeHandleMode::Free;
+    return keyframe;
+}
+
+AnimationCurveRecord evaluationView(AnimationCurveRecord record) {
+    std::visit(
+        [](auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (kWholeValueAnimationCurve<Curve>) {
+                for (auto& key : curve.keyframes)
+                    key.handleMode = KeyframeHandleMode::Free;
+            } else {
+                for (auto& component : curve.components)
+                    for (auto& key : component.keyframes)
+                        key.handleMode = KeyframeHandleMode::Free;
+            }
+        },
+        record);
+    return record;
+}
+
 bool sameEvaluationGraph(const CanonicalGraph& left, const CanonicalGraph& right) {
     if (!sameRecords(left.nodes(), right.nodes()) || !sameRecords(left.edges(), right.edges()) ||
         left.compositionOutput() != right.compositionOutput() ||
@@ -104,7 +133,10 @@ bool sameEvaluationInputs(const Composition& left, const Composition& right) {
         return true;
     // nodeGroups is presentation whole; nodeLayout only through mute.
     return sameRecords(left.parameters().records(), right.parameters().records()) &&
-           sameRecords(left.animationCurves().records(), right.animationCurves().records()) &&
+           sameRecords(left.animationCurves().records(), right.animationCurves().records(),
+                       [](const AnimationCurveRecord& a, const AnimationCurveRecord& b) {
+                           return sameEvaluationRecord(a, b);
+                       }) &&
            sameEvaluationGraph(left.graph(), right.graph()) &&
            sameEvaluationLayout(left.nodeLayout(), right.nodeLayout());
 }

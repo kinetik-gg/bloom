@@ -1,4 +1,5 @@
 #include <bloom/document/animation.hpp>
+#include <bloom/document/keyframe_handles.hpp>
 
 #include <algorithm>
 #include <array>
@@ -49,7 +50,8 @@ template <typename Keyframe> [[nodiscard]] bool validHandles(const Keyframe& key
 }
 
 template <typename Keyframe> [[nodiscard]] bool validEasing(const Keyframe& keyframe) noexcept {
-    return bloom::document::isValidKeyframeEasing(keyframe.easing);
+    return bloom::document::isValidKeyframeEasing(keyframe.easing) &&
+           bloom::document::isValidKeyframeHandleMode(keyframe.handleMode);
 }
 
 template <typename Curve> void normalizeFinalInterpolation(Curve& curve) noexcept {
@@ -225,8 +227,14 @@ template <typename Curve, typename Keyframe>
     if (position != curve.keyframes.end() && position->time == keyframe.time) {
         return false;
     }
+    // Document 1.32: a sequence with Aligned or Auto keys keeps its handles consistent.
+    const bool settles = keyframe.handleMode != bloom::document::KeyframeHandleMode::Free ||
+                         bloom::document::hasNonFreeHandleMode(curve.keyframes);
+    auto before = settles ? curve.keyframes : decltype(curve.keyframes){};
     curve.keyframes.insert(position, std::move(keyframe));
     normalizeFinalInterpolation(curve);
+    if (settles)
+        bloom::document::settleKeyframeHandles(curve.keyframes, before);
     return true;
 }
 
@@ -245,9 +253,14 @@ template <typename Curve, typename Keyframe>
         return false;
     }
 
+    const bool settles = keyframe.handleMode != bloom::document::KeyframeHandleMode::Free ||
+                         bloom::document::hasNonFreeHandleMode(curve.keyframes);
+    auto before = settles ? curve.keyframes : decltype(curve.keyframes){};
     *current = std::move(keyframe);
     std::ranges::sort(curve.keyframes, {}, &Keyframe::time);
     normalizeFinalInterpolation(curve);
+    if (settles)
+        bloom::document::settleKeyframeHandles(curve.keyframes, before);
     return true;
 }
 
@@ -263,8 +276,12 @@ template <typename Curve>
     if (keyframe == curve.keyframes.end()) {
         return false;
     }
+    const bool settles = bloom::document::hasNonFreeHandleMode(curve.keyframes);
+    auto before = settles ? curve.keyframes : decltype(curve.keyframes){};
     curve.keyframes.erase(keyframe);
     normalizeFinalInterpolation(curve);
+    if (settles)
+        bloom::document::settleKeyframeHandles(curve.keyframes, before);
     return true;
 }
 
@@ -328,6 +345,27 @@ std::optional<KeyframeEasing> keyframeEasingFromToken(const std::string_view tok
     for (std::size_t index = 0; index < kEasingTokens.size(); ++index)
         if (kEasingTokens[index] == token)
             return static_cast<KeyframeEasing>(index);
+    return std::nullopt;
+}
+
+std::string_view keyframeHandleModeToken(const KeyframeHandleMode mode) noexcept {
+    switch (mode) {
+    case KeyframeHandleMode::Free:
+        return "free";
+    case KeyframeHandleMode::Aligned:
+        return "aligned";
+    case KeyframeHandleMode::Auto:
+        return "auto";
+    }
+    return {};
+}
+
+std::optional<KeyframeHandleMode>
+keyframeHandleModeFromToken(const std::string_view token) noexcept {
+    for (const auto mode :
+         {KeyframeHandleMode::Free, KeyframeHandleMode::Aligned, KeyframeHandleMode::Auto})
+        if (keyframeHandleModeToken(mode) == token)
+            return mode;
     return std::nullopt;
 }
 
@@ -694,8 +732,12 @@ bool AnimationCurveStore::eraseKeyframe(const AnimationCurveId curveId,
     if (found == curve->keyframes.end()) {
         return false;
     }
+    const bool settles = bloom::document::hasNonFreeHandleMode(curve->keyframes);
+    auto before = settles ? curve->keyframes : decltype(curve->keyframes){};
     curve->keyframes.erase(found);
     normalizeFinalInterpolation(*curve);
+    if (settles)
+        bloom::document::settleKeyframeHandles(curve->keyframes, before);
     // A component's final key may be removed when another component still owns the grouped curve.
     // The command layer erases the grouped record or converts the parameter to a constant when no
     // component remains; the store reports the successful local mutation here.
