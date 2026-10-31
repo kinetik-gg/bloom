@@ -1,4 +1,5 @@
 #include <bloom/runtime/animation_sampling.hpp>
+#include <bloom/runtime/keyframe_easing.hpp>
 
 #include <bloom/core/floating_point.hpp>
 #include <bloom/core/rational_interval.hpp>
@@ -36,6 +37,26 @@ interpolationMode(bloom::document::KeyframeInterpolation mode) noexcept {
         return CompiledKeyframeInterpolation::Linear;
     case bloom::document::KeyframeInterpolation::EaseInOut:
         return CompiledKeyframeInterpolation::EaseInOut;
+    case bloom::document::KeyframeInterpolation::Sine:
+        return CompiledKeyframeInterpolation::Sine;
+    case bloom::document::KeyframeInterpolation::Quad:
+        return CompiledKeyframeInterpolation::Quad;
+    case bloom::document::KeyframeInterpolation::Cubic:
+        return CompiledKeyframeInterpolation::Cubic;
+    case bloom::document::KeyframeInterpolation::Quart:
+        return CompiledKeyframeInterpolation::Quart;
+    case bloom::document::KeyframeInterpolation::Quint:
+        return CompiledKeyframeInterpolation::Quint;
+    case bloom::document::KeyframeInterpolation::Expo:
+        return CompiledKeyframeInterpolation::Expo;
+    case bloom::document::KeyframeInterpolation::Circ:
+        return CompiledKeyframeInterpolation::Circ;
+    case bloom::document::KeyframeInterpolation::Back:
+        return CompiledKeyframeInterpolation::Back;
+    case bloom::document::KeyframeInterpolation::Bounce:
+        return CompiledKeyframeInterpolation::Bounce;
+    case bloom::document::KeyframeInterpolation::Elastic:
+        return CompiledKeyframeInterpolation::Elastic;
     }
     return static_cast<CompiledKeyframeInterpolation>(255);
 }
@@ -48,7 +69,8 @@ template <typename Keyframes> struct ScalarCurveView {
 [[nodiscard]] bool supportedInterpolation(const CompiledKeyframeInterpolation mode) noexcept {
     return mode == CompiledKeyframeInterpolation::Hold ||
            mode == CompiledKeyframeInterpolation::Linear ||
-           mode == CompiledKeyframeInterpolation::EaseInOut;
+           mode == CompiledKeyframeInterpolation::EaseInOut ||
+           bloom::runtime::isEasingInterpolation(mode);
 }
 
 // Every compiled curve a sampler validates is a SCALAR table: a vector or colour parameter is
@@ -73,7 +95,8 @@ validateForSampling(const Curve& curve,
         // out-of-range handle is rejected on every request time, so acceptance cannot depend on
         // which segment the request happens to land in.
         if (!bloom::document::isValidKeyframeHandle(keyframe.outgoingHandle) ||
-            !bloom::document::isValidKeyframeHandle(keyframe.incomingHandle)) {
+            !bloom::document::isValidKeyframeHandle(keyframe.incomingHandle) ||
+            !bloom::document::isValidKeyframeEasing(keyframe.easing)) {
             return AnimationSamplingError::InvalidCurve;
         }
     }
@@ -252,10 +275,10 @@ AnimationSampleResult<double> sampleCurve(const Curve& curve, const core::Ration
                                          CompiledKeyframeInterpolation::Hold) {
         return endpoint(leftKeyframe.value, leftKeyframe.id);
     }
-    const bool eased = interpolationMode(leftKeyframe.outgoingInterpolation) ==
-                       CompiledKeyframeInterpolation::EaseInOut;
-    if (!eased && interpolationMode(leftKeyframe.outgoingInterpolation) !=
-                      CompiledKeyframeInterpolation::Linear) {
+    const auto mode = interpolationMode(leftKeyframe.outgoingInterpolation);
+    const bool eased = mode == CompiledKeyframeInterpolation::EaseInOut;
+    const bool equation = isEasingInterpolation(mode);
+    if (!eased && !equation && mode != CompiledKeyframeInterpolation::Linear) {
         return {std::nullopt, AnimationSamplingError::UnsupportedInterpolation, leftKeyframe.id};
     }
 
@@ -264,6 +287,16 @@ AnimationSampleResult<double> sampleCurve(const Curve& curve, const core::Ration
         return {std::nullopt, AnimationSamplingError::InvalidInterval, leftKeyframe.id};
     }
     double shared = *factor.value();
+    if (equation) {
+        // Blender's easing equations (sampling semantics 3). The exact interval factor is the
+        // equation's normalized time; only Elastic reads the segment's length in seconds.
+        const double duration = right->time.toSeconds() - leftKeyframe.time.toSeconds();
+        const double value = sampleEasingEquation(mode, leftKeyframe.easing, leftKeyframe.value,
+                                                  right->value, duration, shared);
+        if (!std::isfinite(value))
+            return {std::nullopt, AnimationSamplingError::NonFiniteResult, leftKeyframe.id};
+        return {value, AnimationSamplingError::None, leftKeyframe.id};
+    }
     if (eased) {
         // A key whose handles are both bitwise default takes the pre-handle path VERBATIM -- the
         // closed-form Smoothstep factor and the shared Mix -- which is why every document written
@@ -480,9 +513,9 @@ std::optional<document::PathValue> samplePathCurve(const CompiledPathCurve& curv
     // scalar sampler's own.
     const CompiledScalarCurve progress{curve.id,
                                        {{from.id, from.time, 0.0, from.outgoingInterpolation,
-                                         from.outgoingHandle, from.incomingHandle},
+                                         from.outgoingHandle, from.incomingHandle, from.easing},
                                         {to.id, to.time, 1.0, CompiledKeyframeInterpolation::Linear,
-                                         to.outgoingHandle, to.incomingHandle}}};
+                                         to.outgoingHandle, to.incomingHandle, to.easing}}};
     const auto sampled = sampleAnimationCurve(progress, time);
     if (!sampled || !sampled.value)
         return std::nullopt;

@@ -45,6 +45,7 @@ target_sources(
         kit/range_selector.cpp
         kit/slider.cpp
         kit/split_handle.cpp
+        kit/swatch_button.cpp
         kit/switch_control.cpp
         kit/theme.cpp
         kit/thumbnail.cpp
@@ -97,6 +98,7 @@ target_sources(
             include/bloom/ui/kit/inline_edit.hpp
             include/bloom/ui/kit/text_field.hpp
             include/bloom/ui/kit/value_expression.hpp
+            include/bloom/ui/kit/swatch_button.hpp
             include/bloom/ui/kit/switch_control.hpp
             include/bloom/ui/kit/tab_bar.hpp
             include/bloom/ui/kit/task_dialog.hpp
@@ -175,12 +177,16 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/folder-open.svg
         kit/third_party/phosphor-icons/regular/lightning.svg
         kit/third_party/phosphor-icons/regular/export.svg
+        kit/third_party/phosphor-icons/regular/broom.svg
+        kit/third_party/phosphor-icons/regular/ghost.svg
+        kit/third_party/phosphor-icons/regular/funnel-simple.svg
         kit/third_party/phosphor-icons/regular/plugs-connected.svg
         kit/third_party/phosphor-icons/regular/terminal-window.svg
         kit/third_party/phosphor-icons/regular/cursor.svg
         kit/third_party/phosphor-icons/regular/diamond.svg
         kit/third_party/phosphor-icons/regular/dots-three-vertical.svg
         kit/third_party/phosphor-icons/regular/eyedropper.svg
+        kit/third_party/phosphor-icons/regular/chart-line.svg
         kit/third_party/phosphor-icons/regular/selection.svg
         kit/third_party/phosphor-icons/regular/square-half.svg
         kit/third_party/phosphor-icons/regular/align-left.svg
@@ -199,7 +205,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/film-strip.svg
         kit/third_party/phosphor-icons/regular/folder.svg
         kit/third_party/phosphor-icons/regular/gear.svg
-        kit/third_party/phosphor-icons/regular/graph.svg
+        kit/third_party/phosphor-icons/regular/tree-structure.svg
         kit/third_party/phosphor-icons/regular/hand-grabbing.svg
         kit/third_party/phosphor-icons/regular/hand.svg
         kit/third_party/phosphor-icons/regular/image.svg
@@ -256,6 +262,9 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/folder-open-bold.svg
         kit/third_party/phosphor-icons/bold/lightning-bold.svg
         kit/third_party/phosphor-icons/bold/export-bold.svg
+        kit/third_party/phosphor-icons/bold/broom-bold.svg
+        kit/third_party/phosphor-icons/bold/ghost-bold.svg
+        kit/third_party/phosphor-icons/bold/funnel-simple-bold.svg
         kit/third_party/phosphor-icons/bold/plugs-connected-bold.svg
         kit/third_party/phosphor-icons/bold/terminal-window-bold.svg
         kit/third_party/phosphor-icons/bold/cursor-bold.svg
@@ -263,6 +272,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/dots-three-vertical-bold.svg
         kit/third_party/phosphor-icons/bold/eye-bold.svg
         kit/third_party/phosphor-icons/bold/eyedropper-bold.svg
+        kit/third_party/phosphor-icons/bold/chart-line-bold.svg
         kit/third_party/phosphor-icons/bold/selection-bold.svg
         kit/third_party/phosphor-icons/bold/square-half-bold.svg
         kit/third_party/phosphor-icons/bold/align-left-bold.svg
@@ -280,7 +290,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/film-strip-bold.svg
         kit/third_party/phosphor-icons/bold/folder-bold.svg
         kit/third_party/phosphor-icons/bold/gear-bold.svg
-        kit/third_party/phosphor-icons/bold/graph-bold.svg
+        kit/third_party/phosphor-icons/bold/tree-structure-bold.svg
         kit/third_party/phosphor-icons/bold/hand-bold.svg
         kit/third_party/phosphor-icons/bold/hand-grabbing-bold.svg
         kit/third_party/phosphor-icons/bold/image-bold.svg
@@ -325,6 +335,9 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/folder-open-fill.svg
         kit/third_party/phosphor-icons/fill/lightning-fill.svg
         kit/third_party/phosphor-icons/fill/export-fill.svg
+        kit/third_party/phosphor-icons/fill/broom-fill.svg
+        kit/third_party/phosphor-icons/fill/ghost-fill.svg
+        kit/third_party/phosphor-icons/fill/funnel-simple-fill.svg
         kit/third_party/phosphor-icons/fill/plugs-connected-fill.svg
         kit/third_party/phosphor-icons/fill/terminal-window-fill.svg
         kit/third_party/phosphor-icons/fill/cursor-fill.svg
@@ -332,6 +345,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/dots-three-vertical-fill.svg
         kit/third_party/phosphor-icons/fill/eye-fill.svg
         kit/third_party/phosphor-icons/fill/eyedropper-fill.svg
+        kit/third_party/phosphor-icons/fill/chart-line-fill.svg
         kit/third_party/phosphor-icons/fill/selection-fill.svg
         kit/third_party/phosphor-icons/fill/square-half-fill.svg
         kit/third_party/phosphor-icons/fill/align-left-fill.svg
@@ -349,7 +363,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/film-strip-fill.svg
         kit/third_party/phosphor-icons/fill/folder-fill.svg
         kit/third_party/phosphor-icons/fill/gear-fill.svg
-        kit/third_party/phosphor-icons/fill/graph-fill.svg
+        kit/third_party/phosphor-icons/fill/tree-structure-fill.svg
         kit/third_party/phosphor-icons/fill/hand-fill.svg
         kit/third_party/phosphor-icons/fill/hand-grabbing-fill.svg
         kit/third_party/phosphor-icons/fill/image-fill.svg
@@ -587,10 +601,16 @@ target_sources(
         timeline_mask_rows.cpp
         timeline_matte_cell.cpp
         timeline_editor_menus.cpp
+        timeline_editor_keys.cpp
+        timeline_layer_fields.cpp
+        timeline_layer_labels.cpp
+        timeline_reveal.cpp
         timeline_layer_drop.cpp
         timeline_frame_math.cpp
         timeline_ruler.cpp
+        timeline_graph_input.cpp
         timeline_graph_math.cpp
+        timeline_graph_menu.cpp
         timeline_graph_view.cpp
         timeline_keyframe_gestures.cpp
         timeline_work_area.cpp
@@ -599,6 +619,7 @@ target_sources(
         viewer_overlays.cpp
         viewer_overlays_text.cpp
         viewer_editor.cpp
+        viewer_display_view_memory.cpp
         viewer_editor_chrome.cpp
         viewer_editor_controls.cpp
         viewer_editor_menus.cpp
@@ -648,6 +669,7 @@ target_sources(
             include/bloom/ui/composition_preview_gpu_scene_stage.hpp
             include/bloom/ui/composition_preview_pipeline.hpp
             include/bloom/ui/composition_session.hpp
+            include/bloom/ui/viewer_display_view_memory.hpp
             include/bloom/ui/editor_area.hpp
             include/bloom/ui/editor_registry.hpp
             include/bloom/ui/editor_native_surface.hpp

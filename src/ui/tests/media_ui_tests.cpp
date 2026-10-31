@@ -441,14 +441,14 @@ void run() {
             role == "loopMode" ? "propertiesImageLoopMode" : "propertiesImageColorSpace";
         checkEnums(properties.findChild<ui::kit::KDropdown*>(object), names);
     }
+    // Task N1, item 2: a source card carries no preview, so the worker only prepares the Assets
+    // panel's own thumbnails; waiting means waiting for that request to settle.
     const auto waitThumbnail = [&] {
         QElapsedTimer wait;
         wait.start();
-        while ((controller.thumbnailsPending() || controller.nodeThumbnail(source).isNull()) &&
-               wait.elapsed() < 15000)
+        while (controller.thumbnailsPending() && wait.elapsed() < 15000)
             QTest::qWait(10);
         require(!controller.thumbnailsPending(), "latest thumbnail request completes");
-        require(!controller.nodeThumbnail(source).isNull(), "node worker thumbnail arrives");
     };
     const auto renderCard = [&] {
         const auto rect = card->boundingRect();
@@ -462,13 +462,23 @@ void run() {
     waitThumbnail();
     // Sources were hashed once at import; later refreshes verify by file identity only.
     const auto verifiedReads = platform::sourceReadWork().fullReads;
-    const auto bright = renderCard();
-    const int cx = bright.width() / 2;
-    const int cy =
-        ui::kit::px(ui::kit::Size::NodeTitleBand) + ui::kit::px(ui::kit::Size::ImageThumbnail) / 2;
-    require(bright.pixelColor(cx, cy).lightness() >
-                ui::kit::color(ui::kit::Color::SurfaceSunken).lightness() + 75,
-            "decoded image is visibly brighter than the sunken thumbnail cell");
+    // The header's trailing badge: where a source card says its asset cannot be read.
+    const auto warningBadge = [&](const QImage& pixels) {
+        const int side = ui::kit::px(ui::kit::Size::IconSmall);
+        const int right = static_cast<int>(card->cardRect().width()) -
+                          ui::kit::px(ui::kit::Spacing::S);
+        const int top = (ui::kit::px(ui::kit::Size::NodeTitleBand) - side) / 2;
+        int warm = 0;
+        for (int y = top; y < top + side; ++y)
+            for (int x = right - side; x < right; ++x) {
+                const auto pixel = pixels.pixelColor(x, y);
+                if (pixel.red() > pixel.blue() + 60)
+                    ++warm;
+            }
+        return warm;
+    };
+    require(!card->assetProblem() && warningBadge(renderCard()) == 0,
+            "a readable source shows no warning badge");
     document::AssetId sequence;
     for (const auto& record : session.snapshot().project().assets())
         if (record.kind == document::AssetKind::Sequence)
@@ -488,7 +498,6 @@ void run() {
     require(cardRange && cardRange->text() == "2 frames · 1–2", "card sequence range readout");
     const auto* range = properties.findChild<ui::kit::KLabel*>("propertiesImageRange");
     require(range && range->text() == cardRange->text(), "Properties and card range agree");
-    const auto firstFrame = controller.nodeThumbnail(source);
     const QPersistentModelIndex stableAssetRow(tree->model()->index(0, 0));
     QSignalSpy assetChanges(&controller, &ui::AssetController::changed);
     const auto nextFrame = core::RationalTime::create(1, 24);
@@ -496,21 +505,11 @@ void run() {
     waitThumbnail();
     require(platform::sourceReadWork().fullReads == verifiedReads,
             "edits, asset rebinding and time changes re-read no verified source");
-    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() <
-                firstFrame.pixelColor(0, 0).lightness() - 75,
-            "sequence thumbnail follows session time");
-    require(session.setCurrentTime(core::RationalTime::fromInteger(0)), "return sequence time");
-    waitThumbnail();
-    require(controller.nodeThumbnail(source).cacheKey() == firstFrame.cacheKey(),
-            "returning to a frame reuses the content and frame proxy cache");
     for (int i = 0; i < 100; ++i)
         static_cast<void>(session.setCurrentTime(i % 2 ? core::RationalTime{} : *nextFrame));
-    require(session.setCurrentTime(*nextFrame), "latest burst time");
     waitThumbnail();
-    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() < 75,
-            "time bursts converge to the newest sequence frame");
     require(assetChanges.empty() && stableAssetRow.isValid(),
-            "time-only node previews preserve Assets rows and emit no asset change");
+            "time changes decode no node preview, preserve Assets rows and emit no asset change");
     const auto setSource = [&](std::string_view role, document::ParameterValue value) {
         const auto* parameter = ui::node_editor::parameterForRole(
             *session.composition()->graph().findNode(source), *session.composition(), role);
@@ -518,25 +517,10 @@ void run() {
                     session.setParameterValue(parameter->id, std::move(value), "Set source"),
                 "source timing edit");
     };
-    const auto frameTwo = core::RationalTime::create(2, 24);
-    require(frameTwo && session.setCurrentTime(*frameTwo), "frame after sequence end");
-    waitThumbnail();
-    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() < 75,
-            "Hold clamps to last member");
     setSource("loopMode", std::int64_t{1});
-    waitThumbnail();
-    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() > 180,
-            "Loop wraps to first member");
     setSource("loopMode", std::int64_t{2});
-    waitThumbnail();
-    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() > 180,
-            "Ping-pong reverses to first member");
     setSource("startFrame", std::int64_t{3});
-    waitThumbnail();
-    require(controller.nodeThumbnail(source).pixelColor(0, 0).lightness() > 180,
-            "time before Start Frame holds first member");
     require(session.undo() && session.undo() && session.undo(), "restore source timing parameters");
-    require(session.setCurrentTime(core::RationalTime::fromInteger(0)), "restore sequence time");
     cardAsset->chooseIndex(cardAsset->findData(QString::number(asset.value())));
     waitThumbnail();
     // Timeline installs this exact typed target; its drop must create the Layer/Merge topology.
@@ -584,14 +568,8 @@ void run() {
     selector = properties.findChild<ui::kit::KDropdown*>("propertiesImageAsset");
     require(selector && selector->currentText() == "Missing asset" && selector->mutedValue(),
             "missing Properties asset remains explicit");
-    const auto missingCard = renderCard();
-    int glyphPixels = 0;
-    for (int y = cy - 10; y <= cy + 10; ++y)
-        for (int x = cx - 10; x <= cx + 10; ++x)
-            if (missingCard.pixelColor(x, y).lightness() >
-                ui::kit::color(ui::kit::Color::SurfaceSunken).lightness() + 25)
-                ++glyphPixels;
-    require(glyphPixels > 5, "missing thumbnail paints a visible warning glyph");
+    require(card->assetProblem() && warningBadge(renderCard()) > 5,
+            "a missing asset paints a warning badge in the source card's header");
     require(session.undo(), "asset removal is undoable");
     document::AssetId still;
     for (const auto& record : session.snapshot().project().assets())
@@ -600,15 +578,15 @@ void run() {
     cardAsset->chooseIndex(cardAsset->findData(QString::number(still.value())));
     waitThumbnail();
     require(QFile::remove(directory.filePath("still.png")), "remove fixture media file");
-    require(nextFrame && session.setCurrentTime(*nextFrame), "refresh after file disappears");
+    // Freshness follows document changes, never the playhead (bug #401): an edit refreshes.
+    setSource("loopMode", std::int64_t{1});
     timer.restart();
     while (!controller.missing(still) && timer.elapsed() < 15000)
         QTest::qWait(10);
-    require(controller.missing(still) && controller.nodeThumbnail(source).isNull(),
+    require(controller.missing(still) && controller.thumbnail(still).isNull(),
             "unreadable asset never reuses a stale decoded proxy");
-    const auto unreadable = renderCard();
-    require(unreadable.pixelColor(cx, cy).lightness() < bright.pixelColor(cx, cy).lightness(),
-            "unreadable source replaces the decoded pixels with the missing state");
+    require(card->assetProblem() && warningBadge(renderCard()) > 5,
+            "an unreadable source shows the warning badge");
     controller.cancel();
     bridge.beginShutdown();
     scheduler.beginShutdown();
@@ -616,6 +594,79 @@ void run() {
     while (!scheduler.isQuiescent() && timer.elapsed() < 15000)
         QTest::qWait(10);
     require(scheduler.isQuiescent(), "media tasks shut down safely");
+}
+// Bug #401 / task N1, item 2: playback asks the media worker for nothing. With 25 image-sequence
+// layers, 120 playback ticks start no thumbnail, probe or freshness rescan and read no source file.
+void playbackStartsNoMediaJobs() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "playback media directory");
+    QStringList firsts;
+    QImage frame(32, 16, QImage::Format_RGBA8888);
+    for (int sequence = 0; sequence < 25; ++sequence)
+        for (int index = 1; index <= 3; ++index) {
+            frame.fill(QColor::fromHsv(sequence * 14, 120, 60 + index * 40));
+            const auto path = directory.filePath(
+                QStringLiteral("plate%1.%2.png").arg(sequence).arg(index, 4, 10, QLatin1Char('0')));
+            require(frame.save(path), "generate sequence member");
+            if (index == 1)
+                firsts.push_back(path);
+        }
+    runtime::TaskScheduler scheduler;
+    ui::ProjectHost host(scheduler);
+    ui::CompositionSession session(*host.liveDocumentAndStack().first,
+                                   *host.liveDocumentAndStack().second, host.lowestCompositionId());
+    if (session.composition() == nullptr) {
+        commands::Transaction seed("Seed playback composition", session.snapshot().revision());
+        seed.emplace<commands::AddComposition>("Main", document::CompositionFormat{},
+                                               core::RationalTime::fromInteger(10));
+        const auto seeded = session.executeTransaction(std::move(seed));
+        const auto id = seeded.outputId<document::CompositionId>(commands::kAddCompositionOutput);
+        require(id.has_value() && session.setComposition(*id), "playback composition seed");
+    }
+    ui::TaskUiBridge bridge(scheduler);
+    ui::AssetController controller(session, host, scheduler, bridge);
+    controller.importFiles(firsts, std::nullopt);
+    QElapsedTimer timer;
+    timer.start();
+    while ((controller.busy() || session.snapshot().project().assets().size() < 25) &&
+           timer.elapsed() < 30000)
+        QTest::qWait(10);
+    require(session.snapshot().project().assets().size() == 25, "25 sequences import");
+    commands::Transaction layers("Add Layers", session.snapshot().revision());
+    for (const auto& asset : session.snapshot().project().assets())
+        layers.emplace<commands::AddImageLayer>(session.compositionId(), asset.id);
+    require(session.executeTransaction(std::move(layers)).succeeded(), "25 sequence layers");
+    timer.restart();
+    while ((controller.busy() || controller.thumbnailsPending()) && timer.elapsed() < 30000)
+        QTest::qWait(10);
+    require(!controller.thumbnailsPending(), "the media worker settles before playback");
+    const auto before = platform::sourceReadWork();
+    int started = 0;
+    for (int tick = 0; tick < 120; ++tick) {
+        const auto time = core::RationalTime::create(tick % 48, 24);
+        require(time.has_value(), "playback tick");
+        static_cast<void>(session.setCurrentTime(*time));
+        QApplication::processEvents();
+        if (controller.thumbnailsPending() || controller.busy())
+            ++started;
+    }
+    // Longer than any delayed check would wait, so a deferred job would show up here too.
+    timer.restart();
+    while (timer.elapsed() < 1500) {
+        QTest::qWait(20);
+        if (controller.thumbnailsPending() || controller.busy())
+            ++started;
+    }
+    const auto after = platform::sourceReadWork();
+    require(started == 0, "120 playback ticks start no media job");
+    require(after.fullReads == before.fullReads && after.identityChecks == before.identityChecks,
+            "120 playback ticks probe and hash no source file");
+    controller.cancel();
+    bridge.beginShutdown();
+    scheduler.beginShutdown();
+    timer.restart();
+    while (!scheduler.isQuiescent() && timer.elapsed() < 15000)
+        QTest::qWait(10);
 }
 } // namespace
 int main(int argc, char** argv) {
@@ -625,6 +676,7 @@ int main(int argc, char** argv) {
         compositionDrops();
         run();
         partialBatchImport();
+        playbackStartsNoMediaJobs();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

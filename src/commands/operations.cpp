@@ -1,7 +1,9 @@
 #include <bloom/commands/operations.hpp>
+#include <bloom/commands/node_layout_placement.hpp>
 
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/layer_source.hpp>
 #include <bloom/document/layer_stack.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/project.hpp>
@@ -550,33 +552,10 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
         }
     }
 
-    // Structured layer creation owns two new cards. Anchor the Layer Output to the Merge it feeds
-    // and the source to the Layer Output, then use the same gap-aware spatial index for each card.
-    // The existing layout is never rewritten; a crowded row grows down, then up, and only then
-    // into the next column.
-    const auto conservative = document::kConservativeNodeCardSize;
-    const auto mergeId = graph.layerStack().nodeId();
-    const auto defaults = document::defaultNodeLayout(graph.nodes());
-    const auto mergePosition = composition.nodeLayout().contains(mergeId)
-                                   ? composition.nodeLayout().at(mergeId).position
-                                   : defaults.at(mergeId).position;
-    const auto gap = document::kNodeLayoutSpacing;
-    auto layerPreferred =
-        document::Vec2d{mergePosition.x - conservative.width - gap, mergePosition.y};
-    auto occupied = composition.nodeLayout();
-    for (const auto& existing : graph.nodes())
-        if (existing.id != ids->sourceNodeId && existing.id != ids->layerOutputNodeId &&
-            !occupied.contains(existing.id))
-            occupied.emplace(existing.id, defaults.at(existing.id));
-    const auto layerPosition =
-        document::findNearestFreeNodePosition(occupied, {}, conservative, layerPreferred, gap);
-    occupied[ids->layerOutputNodeId] = {layerPosition, 128.0, false, false};
-    const auto sourcePreferred =
-        document::Vec2d{layerPosition.x - conservative.width - gap, layerPosition.y};
-    const auto sourcePosition =
-        document::findNearestFreeNodePosition(occupied, {}, conservative, sourcePreferred, gap);
-    composition.nodeLayout()[ids->sourceNodeId] = {sourcePosition, 128.0, false, false};
-    composition.nodeLayout()[ids->layerOutputNodeId] = {layerPosition, 128.0, false, false};
+    // Structured layer creation owns two new cards: the Layer Output goes in the layer column at
+    // its stack position (above the layer under it) and its source on the same row to the left,
+    // each moved off any card it would touch. The existing layout is never rewritten.
+    placeLayerCards(composition, ids->layerOutputNodeId, ids->sourceNodeId);
     std::vector<OperationOutput> outputs{
         {std::string(outputNames.layer), DurableObjectId{ids->layerId}},
         {std::string(outputNames.slot), DurableObjectId{ids->slotId}},
@@ -720,8 +699,10 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
     if (!composition || !asset)
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                          "Image asset or composition does not exist");
+    // The layer shows its source's name and follows it (document 1.30).
     const std::string name =
-        asset->kind == document::AssetKind::Sequence
+        !asset->name.empty() ? asset->name
+        : asset->kind == document::AssetKind::Sequence
             ? asset->manifest.pattern
             : asset->locator.path.substr(asset->locator.path.find_last_of('/') + 1);
     const bool video = asset->kind == document::AssetKind::Video;
@@ -767,10 +748,8 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
                                      "positionParameter", "anchorParameter", "scaleParameter",
                                      "rotationParameter", "opacityParameter", "blendModeParameter",
                                      "imageToLayerEdge", "layerToStackEdge"});
-    if (added.status != OperationStatus::Applied || asset->kind == document::AssetKind::Image)
+    if (added.status != OperationStatus::Applied)
         return added;
-    // ADR 0024: timed media starts at its natural length (capped by the composition), with the
-    // media as its content extent, so after its last frame the layer shows nothing.
     std::optional<document::LayerId> layerId;
     std::optional<document::NodeId> imageNode;
     for (const auto& output : added.outputs) {
@@ -780,6 +759,12 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
             imageNode = std::get<document::NodeId>(output.id);
     }
     auto* layer = layerId ? composition->graph().findLayer(*layerId) : nullptr;
+    if (layer != nullptr)
+        layer->nameFollowsSource = !asset->name.empty();
+    if (asset->kind == document::AssetKind::Image)
+        return added;
+    // ADR 0024: timed media starts at its natural length (capped by the composition), with the
+    // media as its content extent, so after its last frame the layer shows nothing.
     if (layer == nullptr || !imageNode)
         return added;
     layer->timing.contentExtent = document::SourceLayerExtent{*imageNode};
@@ -1040,6 +1025,8 @@ OperationResult SetCompositionName::apply(document::Draft& draft) const {
         return OperationResult::noChange();
     }
     composition->setName(name_);
+    // Layers nesting this composition that still follow their source show the new name.
+    (void)document::refreshLayerNamesFromSources(draft.project());
     return OperationResult::applied();
 }
 

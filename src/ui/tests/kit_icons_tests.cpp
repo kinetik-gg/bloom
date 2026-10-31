@@ -81,7 +81,8 @@ void testEveryIconIdRendersAtEverySizeInEveryWeight(Expectations& expectations) 
     // The four media footer/kind glyphs extend the curated vocabulary by four, and #376's preset
     // Rename (pencil-simple) by one, the Viewer's region-of-interest toggle (selection) by one, and
     // its Transparency Grid toggle (square-half) by one, the context bar by nine, and the Assets
-    // redesign by two net (FolderOpen, RamPreview and Search in; the film-strip Sequence id out).
+    // redesign by two net (FolderOpen, RamPreview and Search in; the film-strip Sequence id out),
+    // and the Timeline layer table by two (Shy and LabelFilter).
     expectations.expect(kit::iconIds().size() >= 30 && kit::iconIds().size() <= 96,
                         "the curated vocabulary stays a curated vocabulary");
 }

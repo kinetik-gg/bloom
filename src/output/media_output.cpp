@@ -129,13 +129,10 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
     const bool h264 = preset == OutputPresetV1::H264MovV1 || preset == OutputPresetV1::H264Mp4V1;
     const bool hevc = preset == OutputPresetV1::HevcMovV1 || preset == OutputPresetV1::HevcMp4V1;
     const bool mp4 = preset == OutputPresetV1::H264Mp4V1 || preset == OutputPresetV1::HevcMp4V1;
-#if defined(__APPLE__)
-    // The preset is ProRes regardless of which provider name the settings carry; the macOS
-    // provider spells it "prores", while the shared EncodeSettingsV1 default remains "prores_ks".
+    // The preset is ProRes whichever provider spelling the settings carry: VideoToolbox spells it
+    // "prores", FFmpeg "prores_ks" (the shared EncodeSettingsV1 default). The encode session
+    // translates to the serving provider's spelling (ADR 0035).
     const bool proresCodec = settings.videoCodec == "prores" || settings.videoCodec == "prores_ks";
-#else
-    const bool proresCodec = settings.videoCodec == "prores_ks";
-#endif
     if ((!prores && !dnx && !pcm && !h264 && !hevc) || !valid(settings) ||
         (prores && (!proresCodec || settings.container != "mov")) ||
         (dnx && (settings.videoCodec != "dnxhd" || settings.container != "mxf")) ||

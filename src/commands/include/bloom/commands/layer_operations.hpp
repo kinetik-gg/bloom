@@ -79,6 +79,38 @@ class SetLayerLocked final : public Operation {
     document::LayerId layer_;
     bool value_;
 };
+// Document 1.30: the After Effects Shy switch. It only decides whether the layer table lists the
+// layer while its shy filter is on, so it is presentation and never invalidates a render or cache.
+class SetLayerShy final : public Operation {
+  public:
+    SetLayerShy(document::CompositionId composition, document::LayerId layer, bool value)
+        : composition_(composition), layer_(layer), value_(value) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] bool renderAffecting() const noexcept override { return false; }
+
+  private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+    bool value_;
+};
+// Document 1.30: whether the layer shows its source's name. Turning it on renames the layer to the
+// source's current name and is refused for a layer without a source; turning it off keeps the
+// current name. Renaming the layer (bloom.layer.rename) turns it off. Presentation only.
+class SetLayerNameFollowsSource final : public Operation {
+  public:
+    SetLayerNameFollowsSource(document::CompositionId composition, document::LayerId layer,
+                              bool value)
+        : composition_(composition), layer_(layer), value_(value) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] bool renderAffecting() const noexcept override { return false; }
+
+  private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+    bool value_;
+};
 class SetLayerLabelColor final : public Operation {
   public:
     SetLayerLabelColor(document::CompositionId composition, document::LayerId layer,

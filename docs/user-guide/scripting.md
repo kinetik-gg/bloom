@@ -77,7 +77,9 @@ built on the same command as the UI action, so it validates, labels and undoes t
 Project Settings > Color is not a document edit, so it is not an operation: MCP's
 `project.set-color-settings` tool and Python's `Host.set_color_settings(config, working_space=None)`
 choose the OCIO configuration (`"neutral"`, `"aces"` or `"current"`) and working color space
-exactly as the dialog does. Like the dialog, the change is not undoable, marks the project dirty
+exactly as the dialog does, and return the resulting `config`, the stored working-space id
+(`workingSpace` / `working_space`) and its label (`workingSpaceLabel` / `working_space_label`, for
+example `lin_rec709_scene` reads "Linear Rec.709 (sRGB)"). Like the dialog, the change is not undoable, marks the project dirty
 and changes how every composition renders. In the desktop application's Script editor,
 `Host.set_color_settings` answers `unavailable`: use Project Settings > Color there (agents use
 the MCP tool, which the window applies).
@@ -118,8 +120,7 @@ Nothing replaces a file silently: an unattended script sets the output's overwri
 `replace` or calls `export.confirm-replace`. `bloom-cli export` renders a saved project's queue
 headlessly, prints the verification and import results as JSON and exits non-zero unless every
 selected job succeeds; `--replace` confirms existing destinations and `--save` writes asset imports
-back to the project. Export runs on Linux in this version; elsewhere the session calls answer
-`bloom.export.platform-not-supported`.
+back to the project. Export runs on Linux, macOS and Windows.
 
 `bloom-cli render`, the Python render call and MCP render keep their request shapes but run as
 transient, unsaved export jobs on the same runner as the queue, so every rendered frame passes the

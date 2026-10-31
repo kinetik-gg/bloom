@@ -64,8 +64,9 @@ video to the config's sRGB-texture space (`srgb_rec709_display` in Bloom Neutral
 in ACES 1.3 CG): the R'G'B' is interpreted with the sRGB display transfer, exactly as players and
 Bloom's own 8-bit stills are shown, so through the default sRGB view footage matches a player's
 decode (`-vf scale=in_color_matrix=bt709:in_range=tv:out_range=full`) and matches Bloom's sRGB
-stills without adjustment. Under the ACES config the default view still applies the ACES output
-transform, so video there matches Bloom's stills rather than a player. Before document 1.28, Auto
+stills without adjustment. Under the ACES config the Viewer also starts on the untone-mapped sRGB
+view, so video there matches a player too; the configuration's own default view (used by exports
+that name no view, and by thumbnails) still applies the ACES output transform. Before document 1.28, Auto
 resolved these streams to the config's Rec.709 video space, which in Bloom Neutral was the
 scene-linear `lin_rec709_scene`: the encoded R'G'B' entered the working space as linear light and
 the display encoded it again, so video looked pale ([ADR 0032](../decisions/0032-sdr-video-colour-default.md)).
@@ -158,6 +159,14 @@ content. The working-space picker is populated from the selected config, with th
 role preselected. External `config.ocio` and `.ocioz` references remain explicit durable locators;
 `$OCIO` is only a suggested picker path and is never an evaluation fallback.
 
+A working space is stored by its id and shown by a label from one mapping,
+`host::workingColorSpaceLabel()`: Bloom Neutral's `lin_rec709_scene` reads "Linear Rec.709 (sRGB)",
+the ACES CG config's own name for the same space, and every other id (already a name) reads as
+itself. Project Settings, the composition working-space pickers, the Viewer probe tooltip and the
+effect color-space tooltip show the label; MCP `project.set-color-settings` and Python
+`Host.set_color_settings` return both (`workingSpace`/`workingSpaceLabel`,
+`working_space`/`working_space_label`). The label changes no stored id, schema or config revision.
+
 Authored Solid, Text, and Shape colors are numeric values in the effective working space. The color
 picker edits sRGB-encoded values and converts through the selected config's `sRGB - Texture` color
 space. Changing the working space re-interprets existing numbers; “convert existing colors” is the
@@ -243,16 +252,39 @@ color operation used that config; the fixed v1 Solid-to-process path does not. A
 
 At config resolution Bloom enumerates the active `(display, view, colourSpaceId)` pairs once. The
 public list is bounded to 64 displays and 32 views per display; a larger config is refused with a
-typed diagnostic rather than being partially exposed to the UI. Each entry marks the config's
-default pair. Bloom Neutral's `srgb_rec709_display / srgb_rec709_display` pair remains the default,
-so its existing display-processor identity and packed goldens are unchanged. The ACES CG list
-includes the `Rec.1886 Rec.709 - Display / ACES 1.0 - SDR Video` review pair and its sRGB display
-counterpart.
+typed diagnostic rather than being partially exposed to the UI. Each entry marks two pairs:
 
-The Viewer footer stores the selected pair under a revision-scoped, per-viewer QSettings key and
-includes it in `PreviewRequestIdentity`, the RAM-preview key, and display-preparation identities.
-Changing it therefore re-prepares display pixels without invalidating the working-space process
-cache. The color picker's inverse remains pinned to the config's sRGB authoring pair; it is not
+- `isDefault`, the config's own default (`getDefaultDisplay()` and `getDefaultView()` for the
+  process space). `ResolvedBloomNeutralConfig::displayName()`/`viewName()` return it. Exports and
+  output analysis that name no display or view, asset thumbnails, and the color picker's inverse
+  use it, so their pixels and identities are unchanged.
+- `isViewerDefault`, the pair the Viewer starts on: the default display with a view that applies
+  no tone mapping. Bloom does not take the config's default view for the Viewer, because a config
+  may default to a look or tone map: the ACES 1.3 CG built-in defaults to `ACES 1.0 - SDR Video`,
+  which made a plain linear-sRGB comp look graded before the artist chose anything. The view is
+  identified by its name or its view transform's name, ignoring case and punctuation:
+  `Un-tone-mapped` (the OCIO ACES configs), then `Standard` (the Blender convention). A view whose
+  color space is data (`Raw`) never qualifies. A config with no identifiable view (any future
+  external config included) keeps its own default pair for the Viewer.
+
+Bloom Neutral's `srgb_rec709_display / srgb_rec709_display` pair is both, so its existing
+display-processor identity and packed goldens are unchanged. Under ACES 1.3 CG the Viewer starts on
+`sRGB - Display / Un-tone-mapped`, which shows scene-linear 18% gray as sRGB code value 0.4614.
+The ACES CG list also includes the `Rec.1886 Rec.709 - Display / ACES 1.0 - SDR Video` review pair
+and its sRGB display counterpart.
+
+The Viewer includes the selected pair in `PreviewRequestIdentity`, the RAM-preview key, and
+display-preparation identities. Changing it therefore re-prepares display pixels without
+invalidating the working-space process cache. The choice is session state, never document truth
+(it changes no revision, history entry or export): `CompositionSession` owns a
+`ViewerDisplayViewMemory` that remembers the last chosen pair per project and per config revision.
+It survives composition switches and Viewer re-creation; for a saved project it is also stored in
+QSettings under `viewer/project-display-view/<SHA-256 of the project path>/<config revision>`, so it
+returns when the project is reopened. The application begins the memory for each installed project
+(New or Open) before rebinding the session, and moves it to the new path after a successful Save
+As. An unsaved project keeps its choice in memory only. A project with no remembered pair (new, or
+saved before this behavior) starts on the Viewer default. The earlier per-Viewer
+`viewer/display-view/<revision>/<area>` keys are no longer read. The color picker's inverse remains pinned to the config's sRGB authoring pair; it is not
 changed by the review display selection.
 
 The footer's Look toggle is a viewer-only request setting. When off, viewer evaluation sets

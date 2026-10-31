@@ -9,8 +9,9 @@ show so colors have an unambiguous interpretation.
 Open File → Project Settings… → Color, then:
 
 1. Choose **Bloom Neutral v1** for the default Rec.709 scene-linear workflow, or choose **ACES 1.3
-   CG (OCIO built-in)** for the ACES pipeline.
+   CG (OCIO built-in)** for the ACES pipeline. New projects use Bloom Neutral v1.
 2. Choose the working color space. Bloom preselects the configuration's `scene_linear` role. In
+   Bloom Neutral this is **Linear Rec.709 (sRGB)** (saved in the project as `lin_rec709_scene`). In
    the ACES CG configuration this is normally **ACEScg**; **ACES2065-1** is also available when a
    composition specifically needs it.
 3. Review the read-only config name, revision digest, and display list before applying.
@@ -35,16 +36,30 @@ existing colors** command when preserving their previous appearance is required.
 
 The Viewer and PNG output transform from the effective working space to the selected display/view.
 Flat EXR keeps scene-linear pixels and writes the working-space id plus its primaries in the EXR
-header. Projects that stay on `lin_rec709_scene` retain Bloom's earlier reference-display and output
-goldens.
+header. Projects that stay on Linear Rec.709 (sRGB) (`lin_rec709_scene`) retain Bloom's earlier
+reference-display and output goldens.
+
+## What the Viewer shows by default
+
+The Viewer starts on plain sRGB: the working image is converted to sRGB and encoded for the display,
+with no tone mapping and no look. Under Bloom Neutral that is its single **sRGB** view. Under ACES
+1.3 CG it is **sRGB - Display / Un-tone-mapped**, not the configuration's own default view (**ACES
+1.0 - SDR Video**, the ACES tone map, which compresses highlights and changes contrast). A linear
+sRGB image therefore looks the same in the Viewer under either configuration until you choose a
+review view.
 
 ## Review the show through the intended display
 
 For an ACES CG review, open the Viewer footer's **Display / View** menu and choose **Rec.1886
-Rec.709 - Display / ACES 1.0 - SDR Video**. The choice is remembered per Viewer and per config
-revision; changing the project color configuration returns the menu to that config's default.
+Rec.709 - Display / ACES 1.0 - SDR Video** (or **sRGB - Display / ACES 1.0 - SDR Video** on an sRGB
+monitor). Bloom remembers the choice for that project: it stays when you switch compositions, open
+another Viewer, or close and reopen the project, and it moves with the project on Save As. Each
+project keeps its own choice per color configuration; a project with no remembered choice (a new
+project, or one saved by an earlier Bloom) starts on the plain sRGB view. The choice is stored with
+your Bloom preferences, not in the `.bloom` file, so it never changes what the project renders.
 This is a review transform only: it changes Viewer and RAM Preview pixels, never the working-space
-process image or export output.
+process image or export output. Export presets keep their own display and view; for example,
+**Review H.264** always uses **Rec.1886 Rec.709 - Display / ACES 1.0 - SDR Video**.
 
 If the composition contains a look-tagged OCIO File Transform, switch on the footer's **Look**
 toggle to include it while reviewing, or switch it off to inspect the underlying grade. The toggle

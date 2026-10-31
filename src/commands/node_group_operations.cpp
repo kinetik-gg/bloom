@@ -82,6 +82,17 @@ OperationResult RenameGroup::apply(document::Draft& draft) const {
     return OperationResult::applied();
 }
 
+std::string_view SetGroupColor::typeId() const noexcept { return "bloom.node-group.set-color"; }
+OperationResult SetGroupColor::apply(document::Draft& draft) const {
+    const auto target = findGroup(draft, compositionId_, groupId_);
+    if (!target.group)
+        return detail::invalidTarget();
+    if (target.group->color == color_)
+        return OperationResult::noChange();
+    target.group->color = color_;
+    return OperationResult::applied();
+}
+
 std::string_view SetGroupMembers::typeId() const noexcept { return "bloom.node-group.set-members"; }
 OperationResult SetGroupMembers::apply(document::Draft& draft) const {
     const auto target = findGroup(draft, compositionId_, groupId_);

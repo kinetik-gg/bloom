@@ -48,7 +48,8 @@ file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg_provider_fixtures.ipp" bloom_ffm
 set(bloom_encode_fixture_source "${PROJECT_SOURCE_DIR}/src/media/provider/tests/encode_tests.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${bloom_encode_fixture_source}")
 file(SHA256 "${bloom_encode_fixture_source}" bloom_ffmpeg_encode_fixture_digest)
-# FFmpeg remains private to the Linux worker. The host sees only codec-free manifests.
+# FFmpeg is the bundled provider on every platform and the last link of each platform's provider
+# chain (ADR 0035). It stays private to this worker; the host sees only codec-free manifests.
 set(bloom_ffmpeg_build_id "ffmpeg-v1:${bloom_media_build_digest}")
 target_sources(bloom_media_provider PRIVATE "${PROJECT_SOURCE_DIR}/src/media/provider/ffmpeg_manifest.cpp")
 target_compile_definitions(bloom_media_provider PRIVATE
@@ -57,10 +58,40 @@ target_compile_definitions(bloom_media_provider PRIVATE
     BLOOM_FFMPEG_FIXTURE_ID="${bloom_ffmpeg_fixture_digest}"
     BLOOM_FFMPEG_ENCODE_FIXTURE_ID="${bloom_ffmpeg_encode_fixture_digest}"
     BLOOM_MEDIA_OS="${CMAKE_SYSTEM_NAME}" BLOOM_MEDIA_ARCH="${CMAKE_SYSTEM_PROCESSOR}")
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+# Linux and every qualified build require the locked FFmpeg prefix. A macOS or Windows
+# developer-system build without an FFmpeg package builds no FFmpeg worker; its provider chain then
+# has only the platform provider, which a release build never ships.
+set(bloom_ffmpeg_worker OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
     bloom_find_dependency(FFmpeg)
-    set(BLOOM_OPENH264_SHIM_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/lib")
-    add_subdirectory(openh264_shim)
+    set(bloom_ffmpeg_worker ON)
+else()
+    find_package(FFmpeg QUIET CONFIG)
+    if(FFmpeg_FOUND)
+        set(bloom_ffmpeg_worker ON)
+    else()
+        message(STATUS "FFmpeg package not found: this developer build has no FFmpeg media worker")
+    endif()
+endif()
+# Installed worker generations, relative to the install prefix (media_workers.cpp resolves the
+# same places relative to the running executable).
+if(WIN32)
+    set(bloom_media_install_root "bin/media")
+elseif(APPLE)
+    set(bloom_media_install_root "Bloom.app/Contents/libexec/bloom/media")
+else()
+    set(bloom_media_install_root "libexec/bloom/media")
+endif()
+if(bloom_ffmpeg_worker)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(BLOOM_OPENH264_SHIM_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/lib")
+        add_subdirectory(openh264_shim)
+        # FFmpeg's libopenh264 wrapper links the Linux import stub; Cisco's runtime binary or the
+        # shim satisfies it at run time.
+        set(bloom_ffmpeg_openh264_link "${BLOOM_DEPENDENCY_PREFIX}/lib/libopenh264.so")
+    else()
+        set(bloom_ffmpeg_openh264_link)
+    endif()
     # The declared-sampling reopen comparison (tolerance profile v2): the encoder's output
     # conversion and the verifier's reference, shared by both provider builds and its unit test.
     add_library(bloom_media_ffmpeg_reopen_compare STATIC ffmpeg_reopen_compare.cpp)
@@ -72,42 +103,82 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(bloom_media_ffmpeg_worker_provider PRIVATE bloom_media_provider bloom_platform_process
                           bloom_media_ffmpeg_reopen_compare
                           FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample
-                          "${BLOOM_DEPENDENCY_PREFIX}/lib/libopenh264.so")
+                          ${bloom_ffmpeg_openh264_link})
     bloom_enable_warnings(bloom_media_ffmpeg_worker_provider)
     add_executable(bloom-media-worker main.cpp)
-    add_dependencies(bloom-media-worker bloom_openh264_shim)
     target_link_libraries(bloom-media-worker PRIVATE bloom_media_provider bloom_media_ffmpeg_worker_provider
                           bloom_media_openh264_runtime bloom_platform_process)
     bloom_enable_warnings(bloom-media-worker)
-    target_compile_definitions(bloom_media_worker_host PRIVATE BLOOM_ENCODE_WORKER="$<TARGET_FILE:bloom-media-worker>")
-    target_compile_definitions(bloom_media_video PRIVATE BLOOM_VIDEO_WORKER="$<TARGET_FILE:bloom-media-worker>")
-    set_target_properties(bloom-media-worker PROPERTIES BUILD_RPATH_USE_ORIGIN TRUE BUILD_WITH_INSTALL_RPATH TRUE
-                          INSTALL_RPATH "$ORIGIN/lib" INSTALL_RPATH_USE_LINK_PATH FALSE)
-    # Copy the shared intake closure beside the build and installed worker. Do not expose a
-    # codec library search path to the desktop or rely on the caller's LD_LIBRARY_PATH.
-    file(GLOB bloom_ffmpeg_shared "${BLOOM_DEPENDENCY_PREFIX}/lib/libav*.so*"
-         "${BLOOM_DEPENDENCY_PREFIX}/lib/libswresample.so*" "${BLOOM_DEPENDENCY_PREFIX}/lib/libswscale.so*")
-    file(COPY ${bloom_ffmpeg_shared} DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/lib")
-    find_program(bloom_patchelf patchelf REQUIRED)
-    file(GLOB bloom_ffmpeg_private "${CMAKE_CURRENT_BINARY_DIR}/lib/libav*.so*"
-         "${CMAKE_CURRENT_BINARY_DIR}/lib/libswresample.so*" "${CMAKE_CURRENT_BINARY_DIR}/lib/libswscale.so*")
-    foreach(bloom_ffmpeg_library IN LISTS bloom_ffmpeg_private)
-        if(NOT IS_SYMLINK "${bloom_ffmpeg_library}")
-            execute_process(COMMAND "${bloom_patchelf}" --set-rpath "$ORIGIN" "${bloom_ffmpeg_library}"
-                            COMMAND_ERROR_IS_FATAL ANY)
+    target_compile_definitions(bloom_media_worker_host
+                               PRIVATE BLOOM_FFMPEG_WORKER_BUILD="$<TARGET_FILE:bloom-media-worker>")
+    set(bloom_ffmpeg_install_dir "${bloom_media_install_root}/ffmpeg-v1")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_dependencies(bloom-media-worker bloom_openh264_shim)
+        set_target_properties(bloom-media-worker PROPERTIES BUILD_RPATH_USE_ORIGIN TRUE BUILD_WITH_INSTALL_RPATH TRUE
+                              INSTALL_RPATH "$ORIGIN/lib" INSTALL_RPATH_USE_LINK_PATH FALSE)
+        # Copy the shared intake closure beside the build and installed worker. Do not expose a
+        # codec library search path to the desktop or rely on the caller's LD_LIBRARY_PATH.
+        file(GLOB bloom_ffmpeg_shared "${BLOOM_DEPENDENCY_PREFIX}/lib/libav*.so*"
+             "${BLOOM_DEPENDENCY_PREFIX}/lib/libswresample.so*" "${BLOOM_DEPENDENCY_PREFIX}/lib/libswscale.so*")
+        file(COPY ${bloom_ffmpeg_shared} DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/lib")
+        find_program(bloom_patchelf patchelf REQUIRED)
+        file(GLOB bloom_ffmpeg_private "${CMAKE_CURRENT_BINARY_DIR}/lib/libav*.so*"
+             "${CMAKE_CURRENT_BINARY_DIR}/lib/libswresample.so*" "${CMAKE_CURRENT_BINARY_DIR}/lib/libswscale.so*")
+        foreach(bloom_ffmpeg_library IN LISTS bloom_ffmpeg_private)
+            if(NOT IS_SYMLINK "${bloom_ffmpeg_library}")
+                execute_process(COMMAND "${bloom_patchelf}" --set-rpath "$ORIGIN" "${bloom_ffmpeg_library}"
+                                COMMAND_ERROR_IS_FATAL ANY)
+            endif()
+        endforeach()
+        install(TARGETS bloom_openh264_shim
+                LIBRARY DESTINATION "${bloom_ffmpeg_install_dir}/lib"
+                RUNTIME DESTINATION "${bloom_ffmpeg_install_dir}/lib")
+        install(FILES ${bloom_ffmpeg_private} DESTINATION "${bloom_ffmpeg_install_dir}/lib")
+    elseif(APPLE)
+        # The dylibs live in the worker's private lib/ inside the bundle and are found through the
+        # worker's @loader_path/lib rpath. The superbuild installs them with @rpath install names
+        # (--install-name-dir=@rpath), so they are copied unmodified and keep their signatures.
+        set_target_properties(bloom-media-worker PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE
+                              INSTALL_RPATH "@loader_path/lib" INSTALL_RPATH_USE_LINK_PATH FALSE)
+        file(GLOB bloom_ffmpeg_shared "${BLOOM_DEPENDENCY_PREFIX}/lib/libav*.dylib"
+             "${BLOOM_DEPENDENCY_PREFIX}/lib/libswresample*.dylib" "${BLOOM_DEPENDENCY_PREFIX}/lib/libswscale*.dylib")
+        if(BLOOM_DEPENDENCY_MODE STREQUAL "qualified")
+            foreach(bloom_ffmpeg_library IN LISTS bloom_ffmpeg_shared)
+                if(NOT IS_SYMLINK "${bloom_ffmpeg_library}")
+                    execute_process(COMMAND otool -D "${bloom_ffmpeg_library}"
+                                    OUTPUT_VARIABLE bloom_ffmpeg_install_name COMMAND_ERROR_IS_FATAL ANY)
+                    if(NOT bloom_ffmpeg_install_name MATCHES "\n@rpath/")
+                        message(FATAL_ERROR "qualified mode: ${bloom_ffmpeg_library} has no @rpath "
+                                            "install name; rebuild the FFmpeg prefix")
+                    endif()
+                endif()
+            endforeach()
         endif()
-    endforeach()
-    install(TARGETS bloom-media-worker RUNTIME DESTINATION libexec/bloom/media/ffmpeg-v1)
-    install(TARGETS bloom_openh264_shim
-            LIBRARY DESTINATION libexec/bloom/media/ffmpeg-v1/lib
-            RUNTIME DESTINATION libexec/bloom/media/ffmpeg-v1/lib)
-    install(FILES ${bloom_ffmpeg_private} DESTINATION libexec/bloom/media/ffmpeg-v1/lib)
+        file(COPY ${bloom_ffmpeg_shared} DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/lib")
+        file(GLOB bloom_ffmpeg_private "${CMAKE_CURRENT_BINARY_DIR}/lib/lib*.dylib")
+        install(FILES ${bloom_ffmpeg_private} DESTINATION "${bloom_ffmpeg_install_dir}/lib")
+    elseif(WIN32)
+        # Windows resolves DLLs from the executable's own directory first, so the FFmpeg DLLs sit
+        # beside the worker in its private generation directory and never beside Bloom.exe.
+        file(GLOB bloom_ffmpeg_private "${BLOOM_DEPENDENCY_PREFIX}/bin/av*.dll"
+             "${BLOOM_DEPENDENCY_PREFIX}/bin/swresample*.dll" "${BLOOM_DEPENDENCY_PREFIX}/bin/swscale*.dll")
+        add_custom_command(TARGET bloom-media-worker POST_BUILD
+                           COMMAND ${CMAKE_COMMAND} -E copy_if_different ${bloom_ffmpeg_private}
+                                   "$<TARGET_FILE_DIR:bloom-media-worker>"
+                           VERBATIM)
+        install(FILES ${bloom_ffmpeg_private} DESTINATION "${bloom_ffmpeg_install_dir}")
+    endif()
+    install(TARGETS bloom-media-worker RUNTIME DESTINATION "${bloom_ffmpeg_install_dir}")
+else()
+    # Developer build without FFmpeg: keep the target name other directories order their tests
+    # after, with nothing to build.
+    add_custom_target(bloom-media-worker)
 endif()
 
 if(APPLE)
-    # The macOS worker loads exactly one provider generation: the Apple-framework VideoToolbox/
-    # AVFoundation provider. There is no bundled third-party codec, so the worker links system
-    # frameworks directly and installs into its own generation directory.
+    # The platform provider generation: the Apple-framework VideoToolbox/AVFoundation provider, first
+    # in the macOS chain ahead of the bundled FFmpeg worker. It links system frameworks only and
+    # installs into its own generation directory inside the bundle.
     target_sources(bloom_media_provider
                    PRIVATE "${PROJECT_SOURCE_DIR}/src/media/provider/videotoolbox_manifest.cpp")
     target_compile_definitions(bloom_media_provider PRIVATE
@@ -126,16 +197,15 @@ if(APPLE)
     bloom_enable_warnings(bloom_media_videotoolbox_worker_provider)
     target_compile_options(bloom_media_videotoolbox_worker_provider
                            PRIVATE -Wno-deprecated-declarations -Wno-old-style-cast)
-    add_executable(bloom-media-worker main.cpp)
-    target_compile_definitions(bloom-media-worker PRIVATE BLOOM_VIDEOTOOLBOX_WORKER)
-    target_link_libraries(bloom-media-worker
+    add_executable(bloom-media-videotoolbox-worker main.cpp)
+    target_compile_definitions(bloom-media-videotoolbox-worker PRIVATE BLOOM_VIDEOTOOLBOX_WORKER)
+    target_link_libraries(bloom-media-videotoolbox-worker
         PRIVATE bloom_media_provider bloom_media_videotoolbox_worker_provider bloom_platform_process)
-    bloom_enable_warnings(bloom-media-worker)
-    target_compile_definitions(bloom_media_worker_host
-                               PRIVATE BLOOM_ENCODE_WORKER="$<TARGET_FILE:bloom-media-worker>")
-    target_compile_definitions(bloom_media_video
-                               PRIVATE BLOOM_VIDEO_WORKER="$<TARGET_FILE:bloom-media-worker>")
-    install(TARGETS bloom-media-worker RUNTIME DESTINATION libexec/bloom/media/videotoolbox-v1)
+    bloom_enable_warnings(bloom-media-videotoolbox-worker)
+    target_compile_definitions(bloom_media_worker_host PRIVATE
+        BLOOM_NATIVE_WORKER_BUILD="$<TARGET_FILE:bloom-media-videotoolbox-worker>")
+    install(TARGETS bloom-media-videotoolbox-worker
+            RUNTIME DESTINATION "${bloom_media_install_root}/videotoolbox-v1")
 
     if(BUILD_TESTING)
         include(BloomTesting)

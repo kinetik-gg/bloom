@@ -32,6 +32,13 @@ enum class ProjectColorConfig : std::uint8_t {
 [[nodiscard]] std::span<const std::string_view>
 projectWorkingColorSpaces(ProjectColorConfig config);
 
+// The name an artist reads for a working color space id. Bloom Neutral's scene-linear Rec.709
+// space is stored by its interchange identifier lin_rec709_scene and reads "Linear Rec.709
+// (sRGB)", the ACES config's own name for the same space; every other id is already a name and
+// comes back unchanged. Display only: the stored id, the config and its revision never change.
+// The dialogs, the Viewer probe, MCP and Python read-back all use this one mapping.
+[[nodiscard]] std::string_view workingColorSpaceLabel(std::string_view id) noexcept;
+
 struct ProjectColorResolution final {
     std::optional<document::ColorSettings> settings;
     // Why `settings` is absent, for people.

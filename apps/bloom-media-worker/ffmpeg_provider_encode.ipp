@@ -1,6 +1,53 @@
 // Included only by ffmpeg_provider.cpp: all codec and container types stay in that TU.
 namespace bloom::media::ffmpeg {
 namespace {
+// 64-bit stdio offsets: `long` is 32 bits on Windows, which would cap the spool at 2 GiB.
+std::int64_t spoolTell(std::FILE* file) {
+#if defined(_WIN32)
+    return _ftelli64(file);
+#else
+    return std::ftell(file);
+#endif
+}
+bool spoolSeek(std::FILE* file, const std::int64_t offset, const int whence) {
+#if defined(_WIN32)
+    return _fseeki64(file, offset, whence) == 0;
+#else
+    if (offset > std::numeric_limits<long>::max() || offset < std::numeric_limits<long>::min())
+        return false;
+    return std::fseek(file, static_cast<long>(offset), whence) == 0;
+#endif
+}
+// A private, unnamed-on-close spool. The C runtime's tmpfile() may create its file in the root of
+// the current drive on Windows; use the user's temporary directory and delete-on-close instead.
+std::FILE* privateSpool() {
+#if defined(_WIN32)
+    wchar_t directory[MAX_PATH + 1] = {};
+    wchar_t name[MAX_PATH + 1] = {};
+    if (GetTempPathW(MAX_PATH + 1, directory) == 0 ||
+        GetTempFileNameW(directory, L"blm", 0, name) == 0)
+        return nullptr;
+    const HANDLE handle =
+        CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                    FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        DeleteFileW(name);
+        return nullptr;
+    }
+    const int descriptor =
+        _open_osfhandle(reinterpret_cast<std::intptr_t>(handle), _O_RDWR | _O_BINARY);
+    if (descriptor < 0) {
+        CloseHandle(handle);
+        return nullptr;
+    }
+    std::FILE* file = _fdopen(descriptor, "w+b");
+    if (file == nullptr)
+        _close(descriptor);
+    return file;
+#else
+    return std::tmpfile();
+#endif
+}
 struct PrivateMediaFile {
     std::FILE* file = nullptr;
     std::uint64_t size = 0, limit = 0;
@@ -16,7 +63,7 @@ struct PrivateMediaFile {
                 ::close(own);
         } else
 #endif
-            file = std::tmpfile();
+            file = privateSpool();
         require(file != nullptr, "Cannot create private media spool", Error::Io);
     }
     ~PrivateMediaFile() { std::fclose(file); }
@@ -24,7 +71,7 @@ struct PrivateMediaFile {
     PrivateMediaFile& operator=(const PrivateMediaFile&) = delete;
     static int write(void* opaque, const std::uint8_t* data, int count) {
         auto& self = *static_cast<PrivateMediaFile*>(opaque);
-        const auto position = std::ftell(self.file);
+        const auto position = spoolTell(self.file);
         if (position < 0 || count < 0 || static_cast<std::uint64_t>(position) > self.limit ||
             static_cast<std::uint64_t>(count) > self.limit - static_cast<std::uint64_t>(position))
             return AVERROR(ENOSPC);
@@ -45,12 +92,10 @@ struct PrivateMediaFile {
         if (whence == AVSEEK_SIZE)
             return static_cast<std::int64_t>(self.size);
         whence &= ~AVSEEK_FORCE;
-        if (offset > std::numeric_limits<long>::max() ||
-            offset < std::numeric_limits<long>::min() ||
-            (whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) ||
-            std::fseek(self.file, static_cast<long>(offset), whence) != 0)
+        if ((whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) ||
+            !spoolSeek(self.file, offset, whence))
             return AVERROR(EIO);
-        const auto position = std::ftell(self.file);
+        const auto position = spoolTell(self.file);
         return position < 0 || static_cast<std::uint64_t>(position) > self.limit ? AVERROR(EIO)
                                                                                  : position;
     }

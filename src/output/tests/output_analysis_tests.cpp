@@ -155,8 +155,8 @@ void testPresetIdentityAndSchemaMatrix(Expectations& expectations) {
     expectations.expect(
         tiff && tiff->serializedId == "TiffRgba16SrgbV1" && tiff->version == 1 &&
             tiff->outputPixelSemanticsProfileId == "bloom.output.tiff-rgba16-srgb.semantic.v1" &&
-            (tiffAvailability.available || !tiffAvailability.reason.empty()),
-        "the TIFF preset identity is frozen and missing platforms explain availability");
+            tiffAvailability.available && tiffAvailability.reason.empty(),
+        "the TIFF preset identity is frozen and the FFmpeg worker serves it on every platform");
     expectations.expect(!output::outputPresetIdentityV1(enumWithBits<Preset>(0xFFU)),
                         "an unknown preset fails closed");
 

@@ -129,18 +129,18 @@ void migration() {
         auto text = encode(makeDocument(timecode, 0));
         // A 1.24 file has no field order or timecode type.
         text = replaceRegex(text, R"(,\s*"fieldOrder": \d+,\s*"timecodeType": \d+)", "");
-        text = replaceRegex(text, R"("minor": 29(\s*\}))", "\"minor\": 24$1");
+        text = replaceRegex(text, R"("minor": 31(\s*\}))", "\"minor\": 24$1");
         stripExportQueueV1_29(text);
         auto operation = memory();
         auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
         expect(static_cast<bool>(parsed), "1.24 video fixture parses");
         if (!parsed)
             continue;
-        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 29},
+        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 24}, {1, 31},
                                                  kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 5,
-               "1.24 to the current schema runs the video-metadata, channel-set, folder and "
-               "video-colour-default steps");
+        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 7,
+               "1.24 to the current schema runs the video-metadata, channel-set, folder, "
+               "video-colour-default, export-queue, easing and node-group-colour steps");
         if (migrated.outcome() != MigrationOutcome::Migrated)
             continue;
         const auto decoded = decodeDocumentEnvelope(*migrated.migratedRoot());
@@ -169,7 +169,7 @@ void videoColourDefaultMigration() {
             throw std::logic_error("video color default commit");
         auto text = encode(document);
         const auto current = encode(document);
-        text = replaceRegex(text, R"("minor": 29(\s*\}))", "\"minor\": 27$1");
+        text = replaceRegex(text, R"("minor": 31(\s*\}))", "\"minor\": 27$1");
         stripExportQueueV1_29(text);
         auto operation = memory();
         auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
@@ -177,10 +177,10 @@ void videoColourDefaultMigration() {
         if (!parsed)
             continue;
         const auto older = decodeDocumentEnvelope(parsed.document()->root());
-        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 27}, {1, 29},
+        const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 27}, {1, 31},
                                                  kProductionDocumentMigrationSteps, {}, operation);
-        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 2,
-               "1.27 to 1.29 runs the version-only step and the export-queue step");
+        expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 4,
+               "1.27 to 1.31 runs the version-only steps and the export-queue step");
         if (migrated.outcome() != MigrationOutcome::Migrated)
             continue;
         const auto upgraded = decodeDocumentEnvelope(*migrated.migratedRoot());
@@ -193,7 +193,7 @@ void videoColourDefaultMigration() {
             continue;
         const auto saved = decodeDocumentEnvelope(reparsed.document()->root());
         expect(saved && upgraded && *saved.value() == *upgraded.value(),
-               "a migrated 1.27 document equals the same project saved at 1.29");
+               "a migrated 1.27 document equals the same project saved at 1.30");
     }
 }
 

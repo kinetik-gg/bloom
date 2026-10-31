@@ -249,8 +249,9 @@ void testUngroupingAndMenus() {
         const auto frameMenu = std::unique_ptr<QMenu>(f.editor.contextMenuForTest(false, id));
         expect(actionNamed(*frameMenu, QStringLiteral("nodeUngroupAction")) != nullptr &&
                    actionNamed(*frameMenu, QStringLiteral("nodeGroupRenameAction")) != nullptr &&
-                   frameMenu->actions().size() == 2,
-               "a frame's own menu offers exactly Ungroup and Rename");
+                   frameMenu->findChild<QMenu*>(QStringLiteral("nodeGroupColorMenu")) != nullptr &&
+                   frameMenu->actions().size() == 3,
+               "a frame's own menu offers exactly Ungroup, Rename and Color");
     }
     const auto layout = f.session.composition()->nodeLayout();
     const auto before = f.stack.size();

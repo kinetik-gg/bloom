@@ -1,6 +1,7 @@
 #include <bloom/ui/kit/surfaces.hpp>
 #pragma once
 
+#include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/preferences_aware.hpp>
 
@@ -18,6 +19,9 @@
 #include <QString>
 #include <QWidget>
 
+#include <array>
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -36,6 +40,7 @@ namespace bloom::ui {
 
 namespace kit {
 class KColorPicker;
+class KIconToggle;
 class KSplitHandle;
 } // namespace kit
 
@@ -152,7 +157,23 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     void setKeyframesVisible(bool visible);
     void setSnappingEnabled(bool enabled);
     void setGraphEditorEnabled(bool enabled);
+    // The master Shy toggle: hides layers whose Shy switch is on from the layer list (After
+    // Effects' Hide Shy Layers). Layout only; per composition, under timeline/hide-shy-layers/<id>.
+    void setHideShyLayers(bool hide);
+    void loadHideShyLayers();
+    [[nodiscard]] static QString hideShySetting(document::CompositionId composition);
+    void setLabelFilter(std::set<int> labels);
+    // timeline_editor_keys.cpp: After Effects' Timeline keys (property reveals, J/K, [ and ]).
+    void createTimelineKeys();
+    void revealProperties(int reveal, bool additive);
+    void stepToKeyframe(bool forward);
+    void editTimingAtPlayhead(int edit);
+    [[nodiscard]] std::vector<document::LayerId> keyTargetLayers() const;
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    // The hosted header's split never reaches past the panel: below the layer table's own minimum
+    // width the header keeps its menus, the graph toggle and Fullscreen inside the visible panel.
+    void resizeEvent(QResizeEvent* event) override;
     void updateScrollRange();
     // #380: where an Assets or file drop at `position` lands (timeline_layer_drop.cpp): a row in
     // the layer stack, a row and a time over the lanes, otherwise on top at the playhead.
@@ -160,6 +181,14 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     void indicateLayerDrop(const std::optional<LayerDropHit>& hit);
 
     std::set<document::LayerId> expandedLayers_;
+    // A layer with a reveal shows only these parameters (A, P, S, R, T, U, UU, M, E).
+    std::map<document::LayerId, std::set<document::ParameterId>> revealed_;
+    std::set<int> labelFilter_;
+    bool hideShyLayers_ = false;
+    std::vector<QAction*> keyActions_;
+    QPointer<QWidget> keyWindow_;
+    std::optional<std::int64_t> lastRevealKeyMs_;
+    bool lastRevealWasKeyed_ = false;
     std::set<document::ParameterId> expandedParameters_;
     std::set<std::pair<document::LayerId, QString>> collapsedGroups_;
     CompositionSession& session_;
@@ -177,6 +206,10 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     QAction* keyframesAction_ = nullptr;
     QAction* graphAction_ = nullptr;
     QAction* snapAction_ = nullptr;
+    // T1: the right pane's keyframes/graph switch (Shift+F3, After Effects) behind the header
+    // toggle beside Fullscreen, and Easy Ease / In / Out (F9, Shift+F9, Ctrl+Shift+F9).
+    QAction* graphPaneAction_ = nullptr;
+    std::array<QAction*, 3> easeActions_{};
     QWidget* footerLeft_ = nullptr;
     bool timecodeFormat_ = false;
     bool keyframesVisible_ = true;
@@ -248,6 +281,20 @@ class TimelineLayerStack final : public kit::KListSurface {
     [[nodiscard]] int insertionRowAt(int y) const noexcept;
     // The Accent insertion line (`timelineLayerInsertionIndicator`) above `row`; -1 hides it.
     void showInsertionIndicator(int row);
+    // A group, parameter or component row the artist clicked stays highlighted while the session
+    // selection is still the one that click made (its layer, or exactly that row's keys).
+    [[nodiscard]] bool rowHighlighted(int row) const;
+    [[nodiscard]] int hoveredRowForTest() const noexcept { return hoveredRow_; }
+    // Selects row `row` as a click does: a layer, a group (its layer), or a parameter and all of
+    // its keys.
+    void selectRow(int row);
+    // The label menu for `layer` (the selected layers when it is one of them) under `anchor`.
+    void openLabelMenu(document::LayerId layer, QWidget* anchor);
+    // #401: work the column does per document state, not per playback tick.
+    struct Work final {
+        std::uint64_t layerRowBinds = 0;
+    };
+    [[nodiscard]] Work work() const noexcept { return work_; }
 
   Q_SIGNALS:
     // Emitted whenever this column's own viewport height changes, so the editor can re-derive the
@@ -257,9 +304,11 @@ class TimelineLayerStack final : public kit::KListSurface {
     void expansionRequested(document::LayerId layer);
     void groupExpansionRequested(document::LayerId layer, QString group);
     void parameterExpansionRequested(document::ParameterId parameter);
+    void rowHighlightsChanged();
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
+    void leaveEvent(QEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
@@ -276,13 +325,31 @@ class TimelineLayerStack final : public kit::KListSurface {
     void updateRenameGeometry();
     // Label Color > Custom…: the kit colour picker popup under the row, committing one "Set Layer
     // Label Color" step when it closes with a different colour (Escape keeps the old one).
-    void openLabelColorPicker(int row, document::LayerId layer);
+    void openLabelColorPicker(int row, std::vector<document::LayerId> layers);
     void commitLabelColor();
+    [[nodiscard]] std::vector<document::LayerId> actionLayers(document::LayerId layer) const;
+    void toggleShy(document::LayerId layer);
+    void setHoveredRow(int row);
+    void updateRowStates();
+    struct RowKey final {
+        document::LayerId layer;
+        TimelineLayerEntry::Kind kind = TimelineLayerEntry::Kind::Layer;
+        document::ParameterId parameter;
+        std::optional<document::AnimationComponent> component;
+        QString group;
+        document::LayerMaskId mask;
+        friend bool operator==(const RowKey&, const RowKey&) = default;
+    };
+    [[nodiscard]] static RowKey rowKey(const TimelineLayerEntry& entry);
+    std::optional<RowKey> selectedRow_;
+    CompositionSelection selectionAtSelect_;
+    int hoveredRow_ = -1;
+    Work work_;
     QPointer<QLineEdit> renameEditor_;
     kit::KColorPicker* labelPicker_ = nullptr;
     QWidget* labelPickerAnchor_ = nullptr;
     document::CompositionId labelPickerComposition_{};
-    document::LayerId labelPickerLayer_{};
+    std::vector<document::LayerId> labelPickerLayers_{};
     QColor labelPickerInitial_;
     bool labelPickerOpen_ = false;
     bool labelPickerCancelled_ = false;
@@ -339,6 +406,8 @@ class TimelineLaneRegion final : public QWidget {
     void setGraphEditorEnabled(bool enabled);
     [[nodiscard]] bool graphEditorEnabled() const noexcept { return graphEditor_; }
     [[nodiscard]] TimelineGraphView* graphViewForTest() const noexcept { return graphView_; }
+    // The timeline's Easy Ease actions, handed to the graph view for its key menu.
+    void setGraphEaseActions(const std::array<QAction*, 3>& actions);
     // A drop from Assets or the file manager (#380): the Accent time marker
     // (`timelineDropTimeMarker`) where the layers would start and the insertion line
     // (`timelineDropRowLine`) above `row` (-1: none). nullopt time hides the marker.
@@ -347,6 +416,10 @@ class TimelineLaneRegion final : public QWidget {
         return dropTime_;
     }
     [[nodiscard]] int dropMarkerRowForTest() const noexcept { return dropRow_; }
+    // The layer stack's answer for a clicked group or property row, so both halves of the row
+    // wear the one selected-row wash.
+    void setRowHighlight(std::function<bool(int)> highlighted);
+    void syncRowHighlights();
 
     // #358 work counters: playback moves only the playhead strips, and a collapsed layer's key
     // summary is computed once per document state rather than once per paint.
@@ -384,6 +457,7 @@ class TimelineLaneRegion final : public QWidget {
     QWidget* keyframeArea_ = nullptr;
     TimelineKeyframePanel* keyframePanel_ = nullptr;
     TimelineGraphView* graphView_ = nullptr;
+    std::array<QAction*, 3> graphEaseActions_{};
     struct RangeDrag {
         document::LayerId layer;
         document::Revision revision;
@@ -408,6 +482,7 @@ class TimelineLaneRegion final : public QWidget {
     bool keyframesVisible_ = true;
     bool snapping_ = true;
     bool graphEditor_ = false;
+    std::function<bool(int)> rowHighlighted_;
     CompositionSession& session_;
     // Scrubbing a lane goes through the ruler's own scrub path, not a second copy of it.
     TimelineRuler& ruler_;
@@ -428,9 +503,20 @@ class TimelineColumnHeaders final : public QWidget {
     // The honest reason the toggle cell at `x` is inert, or an empty string for the text columns.
     // Same seam, same reason, as TimelineLayerStack::toolTipAt().
     [[nodiscard]] static QString toolTipAtX(int x);
+    void setLabelFilterActive(bool active);
+    void setHideShy(bool hide);
+
+  Q_SIGNALS:
+    void labelFilterRequested(QPoint globalPosition);
+    void hideShyToggled(bool hide);
 
   protected:
     bool event(QEvent* event) override;
+
+  private:
+    kit::KIconToggle* labelFilter_ = nullptr;
+    kit::KIconToggle* hideShy_ = nullptr;
+    bool labelFilterActive_ = false;
 };
 
 } // namespace bloom::ui

@@ -68,6 +68,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [Workspace presets](user-guide/workspace-presets.md) — the Workspace picker, your own layouts and how the Export panel opens.
 - [The status bar](user-guide/status-bar.md) — the labelled groups along the bottom of the window.
 - [The Viewer](user-guide/viewer.md) — moving layers directly, including the Shift axis lock.
+- [Keyframe interpolation, easing and layer names](user-guide/keyframe-easing.md) — Blender's easing
+  curves, Easy Ease, shy layers and layer names that follow their source.
 - [Scripting Bloom with Python](user-guide/python.md) — Python package, transactions and embedding.
 - [Using Bloom from an agent](user-guide/mcp.md) — stdio MCP tools and request limits.
 - [When a composition cannot render](user-guide/compile-failures.md) — the status bar's Details popup and what to do.

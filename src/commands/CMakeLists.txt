@@ -4,6 +4,7 @@ target_sources(
     bloom_commands
     PRIVATE
         animation_operations.cpp
+        keyframe_easing_operations.cpp
         command_stack.cpp
         operations.cpp
         parameter_source.cpp
@@ -22,6 +23,7 @@ target_sources(
         layer_timing_gesture.cpp
         node_editor_operations.cpp
         node_layout_arrange.cpp
+        node_layout_placement.cpp
         parameter_reset_operations.cpp
         project_item_operations.cpp
         video_source_operations.cpp
@@ -54,6 +56,7 @@ target_sources(
             include/bloom/commands/layer_timing_gesture.hpp
             include/bloom/commands/node_editor_operations.hpp
             include/bloom/commands/node_layout_arrange.hpp
+            include/bloom/commands/node_layout_placement.hpp
             include/bloom/commands/parameter_reset_operations.hpp
             include/bloom/commands/project_item_operations.hpp
             include/bloom/commands/video_source_operations.hpp

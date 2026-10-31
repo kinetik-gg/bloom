@@ -6,12 +6,14 @@ target_sources(
         animation.cpp
         color_settings.cpp
         document.cpp
+        evaluation_inputs.cpp
         extension_records.cpp
         data_block.cpp
         graph.cpp
         node_definition_registry.cpp
         node_layout.cpp
         layer_masks.cpp
+        layer_source.cpp
         channel_nodes.cpp
         layer_stack.cpp
         new_project.cpp
@@ -32,10 +34,12 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/document/animation.hpp
+            include/bloom/document/layer_source.hpp
             include/bloom/document/channel_nodes.hpp
             include/bloom/document/color_settings.hpp
             include/bloom/document/composition_settings.hpp
             include/bloom/document/document.hpp
+            include/bloom/document/evaluation_inputs.hpp
             include/bloom/document/export_queue.hpp
             include/bloom/document/extension_records.hpp
             include/bloom/document/data_block.hpp

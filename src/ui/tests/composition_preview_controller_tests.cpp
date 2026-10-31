@@ -2,6 +2,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -1169,6 +1170,7 @@ bloom::document::NodeId firstGraphNode(const bloom::ui::CompositionSession& sess
 
 #include "composition_preview_controller_01_layout.ipp"
 #include "composition_preview_controller_01b_groups.ipp"
+#include "composition_preview_controller_01c_presentation.ipp"
 #include "composition_preview_controller_02_snapshot.ipp"
 #include "composition_preview_controller_03_split.ipp"
 #include "composition_preview_controller_04_retention.ipp"
@@ -1206,6 +1208,7 @@ int main(int argc, char** argv) {
         testQualifiedDisplayReadinessAndFailClosed(expectations);
         testLayoutEditRetainsEvaluationWork(expectations);
         testGroupCommandsRetainEvaluationWork(expectations);
+        testPresentationEditsRetainEvaluationWork(expectations);
         testPixelMixedAndRebindAdvanceEvaluation(expectations);
         testInFlightFrameSurvivesLayoutEdit(expectations);
         testInFlightFrameRejectedAfterPixelEdit(expectations);

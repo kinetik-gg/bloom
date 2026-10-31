@@ -336,8 +336,9 @@ void testSearchKeyboardAndMenus() {
     expect(selected && selected->typeId == document::kLayerOutputNodeType &&
                f.stack.size() == history + 1 &&
                f.session.composition()->nodeLayout().at(selected->id).position ==
-                   document::Vec2d{cursorScene.x(), cursorScene.y()},
-           "Enter adds the selected registry kind at the Tab cursor scene position");
+                   document::Vec2d{cursorScene.x() - node_editor::kCardMinimumWidth / 2.0,
+                                   cursorScene.y() - node_editor::kCardHeaderHeight / 2.0},
+           "Enter adds the selected registry kind with its title band under the Tab cursor");
     f.editor.openAddSearch({550, 450}, global, document::NodeInputRef{selected->id, "image"}, {});
     popup = search(f);
     field = popup->findChild<QLineEdit*>();

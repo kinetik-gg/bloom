@@ -138,9 +138,8 @@ composition unable to render also appears in the MCP Server editor's activity li
 verification and Viewer priority as the Export editor; they are never saved. Nothing replaces an
 existing file silently: pass `"overwrite":"replace"` or confirm with `export.confirm-replace`.
 Stopping the server or quitting stops the jobs an agent started this way, never jobs started with
-`export.start`, which belong to the Export editor. On macOS and Windows render, export, capture and
-`export.start*` answer `bloom.mcp.export-unavailable` with `PlatformNotSupported`, as the Export
-editor does; every other tool works on all three systems.
+`export.start`, which belong to the Export editor. Every tool, including render, export and
+capture, works on Linux, macOS and Windows.
 
 ### Streamable HTTP
 
@@ -199,7 +198,7 @@ Use `tools/call` with `name` and `arguments`:
 | `capture` | Optional `composition` and `frame` (defaults: the context composition at the context time; on stdio the session's composition at frame 0). Renders one PNG at composition resolution through the still export route, with the Viewer's display and view in the desktop application, and returns it as MCP `image` content. A PNG larger than about 2.9 MiB is returned as a `resource_link` to the file with the notice `bloom.mcp.capture-too-large-for-inline`. Captures go to an `mcp-captures` folder in Bloom's per-user cache, which keeps the newest 16. |
 | `export.start`, `export.start-all`, `export.pause`, `export.resume`, `export.stop`, `export.stop-all`, `export.retry`, `export.confirm-replace` | The export queue's session commands (`jobs`, `job`, `output`). Each returns `accepted`, the queue revision and, when refused, the availability code and reason. |
 | `export.status`, `export.events`, `export.log`, `export.presets`, `export.script` | The queue snapshot (optionally `sinceRevision`), terminal events after `afterSequence`, a job's run log, the presets available on this computer, and a script that recreates a job (`format` `cli-json` or `python`). |
-| `project.set-color-settings` | `config` (`neutral` Bloom Neutral v1, `aces` ACES 1.3 CG, or `current` to keep the project's own, the only choice for an external configuration) and optional `workingSpace` (neutral: `lin_rec709_scene`; aces: `ACEScg`, `ACES2065-1`, `Linear Rec.709 (sRGB)`, `Linear P3-D65`, `Linear Rec.2020`; omitted keeps the project's when the configuration stays, else the first). Project Settings > Color as the dialog applies it. Not undoable and not in the history: it marks the project dirty and changes how every composition renders. Returns `code` `updated` or `no-change` with the resulting `config` and `workingSpace`; `invalid-config` and `invalid-settings` (a working space the configuration does not offer) return `succeeded: false`; a read-only project answers `bloom.mcp.read-only`. In the desktop application the window applies it (`bloom.mcp.ui-unbound` if it does not offer it). |
+| `project.set-color-settings` | `config` (`neutral` Bloom Neutral v1, `aces` ACES 1.3 CG, or `current` to keep the project's own, the only choice for an external configuration) and optional `workingSpace` (neutral: `lin_rec709_scene`, shown as Linear Rec.709 (sRGB); aces: `ACEScg`, `ACES2065-1`, `Linear Rec.709 (sRGB)`, `Linear P3-D65`, `Linear Rec.2020`; omitted keeps the project's when the configuration stays, else the first). Project Settings > Color as the dialog applies it. Not undoable and not in the history: it marks the project dirty and changes how every composition renders. Returns `code` `updated` or `no-change` with the resulting `config`, `workingSpace` (the stored id) and `workingSpaceLabel` (the name Project Settings shows); `invalid-config` and `invalid-settings` (a working space the configuration does not offer) return `succeeded: false`; a read-only project answers `bloom.mcp.read-only`. In the desktop application the window applies it (`bloom.mcp.ui-unbound` if it does not offer it). |
 | `export.wait` | Optional `job` and `timeoutMs`: waits until the job (or the whole queue) is finished, with progress when the request carries a progress token. |
 
 For example:

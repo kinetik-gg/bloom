@@ -72,6 +72,25 @@ class UnclassifiedRename final : public Operation {
     }
 };
 
+// #399: changes an evaluation input (the first layer's opacity) while declaring `neutral`.
+class FadeOp final : public Operation {
+  public:
+    explicit FadeOp(const double opacity, const bool declaredNeutral = false)
+        : opacity_(opacity), declaredNeutral_(declaredNeutral) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.test.fade"; }
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override {
+        auto& parameters = draft.project().findComposition(kCompositionId)->parameters();
+        return parameters.setSource(kOpacityId, ConstantValueSource{opacity_})
+                   ? OperationResult::applied()
+                   : OperationResult::rejected(OperationIssueCode::InvalidValue, "No opacity");
+    }
+    [[nodiscard]] bool renderAffecting() const noexcept override { return !declaredNeutral_; }
+
+  private:
+    double opacity_;
+    bool declaredNeutral_;
+};
+
 // TEMPORAL-1: an operation that proves a finite footprint but does not change the document (so it
 // can be layered many times in one transaction) without depending on a real layer command.
 class FootprintOp final : public Operation {
@@ -441,6 +460,8 @@ void testRenderAffectingPublication(TestContext& test) {
     const auto renameResult = stack.execute(std::move(rename));
     test.expect(renameResult.changed() && published(CommandEventKind::RevisionChanged),
                 "a successful unclassified transaction publishes RevisionChanged");
+    test.expect(!renameResult.renderAffecting && !renameResult.affectedTimes.has_value(),
+                "#399: a project rename is proven render-neutral without declaring it");
 
     events.clear();
     Transaction repeat("Repeat rename", document.snapshot().revision());
@@ -455,8 +476,30 @@ void testRenderAffectingPublication(TestContext& test) {
     Transaction unclassified("Unclassified custom", document.snapshot().revision());
     unclassified.emplace<UnclassifiedRename>();
     const auto unclassifiedResult = stack.execute(std::move(unclassified));
-    test.expect(unclassifiedResult.changed() && unclassifiedResult.renderAffecting,
-                "an unclassified custom operation defaults to render-affecting");
+    test.expect(unclassifiedResult.changed() && !unclassifiedResult.renderAffecting,
+                "#399: an unclassified operation that changed only presentation is proven "
+                "render-neutral");
+
+    events.clear();
+    Transaction fade("Unclassified fade", document.snapshot().revision());
+    fade.emplace<FadeOp>(0.25);
+    const auto fadeResult = stack.execute(std::move(fade));
+    test.expect(fadeResult.changed() && fadeResult.renderAffecting,
+                "an unclassified operation that changed an evaluation input is render-affecting");
+
+    Transaction mislabelled("Mislabelled fade", document.snapshot().revision());
+    mislabelled.emplace<FadeOp>(0.75, true);
+    const auto mislabelledResult = stack.execute(std::move(mislabelled));
+    test.expect(mislabelledResult.changed() && mislabelledResult.renderAffecting &&
+                    !mislabelledResult.affectedTimes.has_value() &&
+                    !mislabelledResult.affectedComposition.has_value(),
+                "#399: a render-neutral declaration that changed an evaluation input fails "
+                "closed to a whole render");
+    const auto mislabelledUndo = stack.undo();
+    test.expect(mislabelledUndo.changed() && mislabelledUndo.renderAffecting,
+                "undo of a failed-closed declaration stays render-affecting");
+    test.expect(stack.work().evaluationInputProofs >= 4,
+                "every applied transaction ran the evaluation-input proof");
 }
 
 void testAtomicTransactionUndoAndRedo(TestContext& test) {

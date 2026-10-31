@@ -112,7 +112,12 @@ KValueField::KValueField(QWidget* parent) : QWidget(parent) {
     });
 }
 
+// #401: the setters below are called on every projection, including once per playback tick. An
+// unchanged setting does nothing at all -- no geometry request, no repaint -- so a time change
+// costs a field only the repaint its own new number needs.
 void KValueField::setCompact(const bool compact) {
+    if (compact_ == compact)
+        return;
     compact_ = compact;
     if (compact) {
         setMinimumWidth(px(Size::PropertiesFieldMinWidth));
@@ -136,6 +141,8 @@ void KValueField::setStepper(const bool stepper) {
 }
 
 void KValueField::setLabel(const QString& label) {
+    if (label_ == label)
+        return;
     label_ = label;
     updateGeometry();
     if (editing_)
@@ -146,6 +153,8 @@ void KValueField::setLabel(const QString& label) {
 QString KValueField::label() const { return label_; }
 
 void KValueField::setUnit(const QString& unit) {
+    if (unit_ == unit)
+        return;
     unit_ = unit;
     if (editing_) {
         // The unit's column is reserved inside the editor's own text margins, so changing it while
@@ -159,6 +168,8 @@ void KValueField::setUnit(const QString& unit) {
 QString KValueField::unit() const { return unit_; }
 
 void KValueField::setSpecialValueText(const QString& text) {
+    if (specialValueText_ == text)
+        return;
     specialValueText_ = text;
     updateGeometry();
     update();
@@ -167,7 +178,7 @@ void KValueField::setSpecialValueText(const QString& text) {
 QString KValueField::specialValueText() const { return specialValueText_; }
 
 void KValueField::setPresentation(const ValueFieldPresentation& presentation) {
-    if (interactionActive_)
+    if (interactionActive_ || this->presentation() == presentation)
         return;
     setIntegerMode(presentation.integer);
     setDisplayScale(presentation.displayScale);
@@ -200,6 +211,8 @@ void KValueField::setRange(const double minimum, const double maximum) {
                         valueFieldSaturatingInteger(std::floor(maximum)));
         return;
     }
+    if (minimum_ == minimum && maximum_ == std::max(maximum, minimum))
+        return;
     minimum_ = minimum;
     maximum_ = std::max(maximum, minimum);
     commitValue(value_);
@@ -224,7 +237,10 @@ void KValueField::setSingleStep(const double step) {
 double KValueField::singleStep() const noexcept { return step_; }
 
 void KValueField::setDecimals(const int decimals) {
-    decimals_ = integer_ ? 0 : std::clamp(decimals, 0, 9);
+    const int next = integer_ ? 0 : std::clamp(decimals, 0, 9);
+    if (decimals_ == next)
+        return;
+    decimals_ = next;
     updateGeometry();
     update();
 }
@@ -277,6 +293,8 @@ void KValueField::setIntegerMode(const bool integer) {
 void KValueField::setIntegerRange(const std::int64_t minimum, const std::int64_t maximum) {
     if (!integer_)
         setIntegerMode(true);
+    else if (integerMinimum_ == minimum && integerMaximum_ == std::max(minimum, maximum))
+        return;
     integerMinimum_ = minimum;
     integerMaximum_ = std::max(minimum, maximum);
     minimum_ = static_cast<double>(integerMinimum_);

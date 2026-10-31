@@ -229,8 +229,13 @@ void testComponentsAndGroups() {
     const auto grouped = ui::arrangeNodes(composition, groupedSizes);
     expect(grouped.at(NodeId::fromRaw(1)).x == grouped.at(NodeId::fromRaw(2)).x,
            "group members remain in one rank");
-    expect(std::abs(grouped.at(NodeId::fromRaw(1)).y - grouped.at(NodeId::fromRaw(2)).y) == 136.0,
-           "group members remain contiguous with the card gap");
+    const auto gap = std::abs(grouped.at(NodeId::fromRaw(1)).y - grouped.at(NodeId::fromRaw(2)).y) -
+                     120.0;
+    expect(gap >= document::kNodeLayoutSpacing &&
+               gap < document::kNodeLayoutSpacing + document::kNodeLayoutGrid,
+           "group members remain contiguous with the four-grid-step card gap");
+    expect(grouped.at(NodeId::fromRaw(3)).x > grouped.at(NodeId::fromRaw(1)).x,
+           "the output sits right of its inputs");
 }
 
 void testValueDriverChain() {

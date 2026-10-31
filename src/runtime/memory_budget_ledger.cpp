@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <limits>
@@ -384,22 +385,23 @@ std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) 
             ++pools;
             retainedTotal += static_cast<long double>(cache.retained ? cache.retained() : 0);
         }
-        const auto available = effectiveAvailableBytes(state_.machine);
+        const auto available = poolAvailableLocked(state_.machine);
         const auto margin = memoryPressureMarginBytes(*ramHeadroom_);
-        const auto growthFloor = saturatedAdd(*ramHeadroom_, margin);
-        const bool stall = state_.machine.memoryStall;
+        const auto restoreFloor = saturatedAdd(*ramHeadroom_, margin);
+        // Pools never grow into memory already admitted to active work.
+        const auto growthFloor = saturatedAdd(restoreFloor, activeWorkClaims_);
+        // A severe memory stall counts only while available memory is already within the
+        // headroom plus margin. Stalls, swap traffic or full swap while memory is plentiful are not
+        // caused by these caches and never shrink them or block their growth.
+        const bool stall = state_.machine.memoryStall && available < restoreFloor;
         std::size_t bytes = own;
         if (available >= growthFloor && !stall) {
             bytes = saturatedAdd(own, (available - growthFloor) / std::max<std::size_t>(1, pools));
         } else if ((available < *ramHeadroom_ || stall) && retainedTotal > 0) {
-            // Under the headroom: the deficit plus the margin. Under pressure the machine is
-            // swapping or stalling even if available memory looks sufficient (another process may
-            // be the one pushed into swap), so give back at least one margin per applied sample
-            // until the pressure stops.
-            auto shortfall = available < *ramHeadroom_ ? growthFloor - available : std::size_t{0};
-            if (stall)
-                shortfall = std::max(shortfall, margin);
-            const auto deficit = static_cast<long double>(shortfall);
+            // Only the deficit: what brings available memory back to headroom plus margin. Each
+            // pool gives back its share, least recently used entries first; never a whole pool
+            // (a user purge is the only full clear).
+            const auto deficit = static_cast<long double>(restoreFloor - available);
             const auto cut = static_cast<std::size_t>(
                 std::min(static_cast<long double>(own),
                          deficit * static_cast<long double>(own) / retainedTotal));
@@ -558,15 +560,74 @@ std::size_t MemoryBudgetLedger::pressureDeficit(const MachineMemorySample& sampl
     const std::lock_guard lock(mutex_);
     if (!ramHeadroom_ || !sample.availableBytes)
         return 0;
-    const auto available = effectiveAvailableBytes(sample);
+    const auto available = poolAvailableLocked(sample);
     const auto deficit = available < *ramHeadroom_ ? *ramHeadroom_ - available : std::size_t{0};
-    return sample.memoryStall ? std::max(deficit, memoryPressureMarginBytes(*ramHeadroom_))
-                              : deficit;
+    const auto restoreFloor =
+        saturatedAdd(*ramHeadroom_, memoryPressureMarginBytes(*ramHeadroom_));
+    return sample.memoryStall && available < restoreFloor
+               ? std::max(deficit, restoreFloor - available)
+               : deficit;
+}
+
+void MemoryBudgetLedger::requestHostTrim() noexcept {
+    const std::lock_guard lock(mutex_);
+    releasedSinceTake_ = std::numeric_limits<std::size_t>::max();
 }
 
 std::size_t MemoryBudgetLedger::takeReleasedBytes() noexcept {
     const std::lock_guard lock(mutex_);
     return std::exchange(releasedSinceTake_, 0);
+}
+
+std::size_t MemoryBudgetLedger::poolAvailableLocked(const MachineMemorySample& machine) const {
+    auto available = effectiveAvailableBytes(machine);
+    // Inside a memory-limited cgroup the machine can have plenty free while the process's own
+    // domain is full: the room left there (limit minus usage that clean page cache cannot cover)
+    // bounds what pools may hold.
+    const auto& process = state_.process;
+    for (std::size_t index = 0; index < process.domains.size(); ++index) {
+        const auto& domain = process.domains[index];
+        if (domain.kind != ProcessMemoryLimitKind::Finite || !domain.currentBytes)
+            continue;
+        const auto used = processMemoryDomainUnreclaimableBytes(process, index);
+        available = std::min(available, domain.limitBytes - std::min(domain.limitBytes, used));
+    }
+    return available;
+}
+
+std::size_t MemoryBudgetLedger::reclaim(const std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
+    if (bytes == 0)
+        return 0;
+    std::vector<std::pair<const Cache*, std::size_t>> held;
+    long double total = 0;
+    for (const auto& [owner, cache] : caches_) {
+        if (cache.kind != MemoryBudgetOwnerKind::ReusableRetention || !cache.retained)
+            continue;
+        const auto own = cache.retained();
+        held.emplace_back(&cache, own);
+        total += static_cast<long double>(own);
+    }
+    if (total <= 0)
+        return 0;
+    const auto before = reusableRetainedLocked();
+    for (const auto& [cache, own] : held) {
+        // Round each share up so the pools together give back at least `bytes`.
+        const auto share = static_cast<std::size_t>(
+            std::min(static_cast<long double>(own),
+                     std::ceil(static_cast<long double>(bytes) * static_cast<long double>(own) /
+                               total)));
+        cache->applyBudget(own - share);
+    }
+    const auto after = reusableRetainedLocked();
+    const auto released = before > after ? before - after : std::size_t{0};
+    releasedSinceTake_ = saturatedAdd(releasedSinceTake_, released);
+    return released;
+}
+
+void MemoryBudgetLedger::setActiveWorkClaims(const std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
+    activeWorkClaims_ = bytes;
 }
 
 std::optional<std::size_t> MemoryBudgetLedger::ramHeadroom() const {
@@ -714,8 +775,8 @@ std::uint64_t defaultVramHeadroomBytes() noexcept {
 }
 
 std::size_t memoryPressureMarginBytes(const std::size_t headroom) noexcept {
-    constexpr std::size_t minimum = std::size_t{512} * 1024U * 1024U;
-    return std::max(minimum, headroom / 4);
+    constexpr std::size_t minimum = std::size_t{256} * 1024U * 1024U;
+    return std::max(minimum, headroom / 8);
 }
 
 std::size_t effectiveAvailableBytes(const MachineMemorySample& sample) noexcept {

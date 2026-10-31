@@ -815,10 +815,28 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
            emitFloat64Member(state, "value", handle.value) && state.ok(writer.endObject());
 }
 
+// Document 1.30: a key's easing-equation parameters, emitted ONLY when non-default, after the
+// handles, so every older key re-encodes byte-identically apart from the schema minor.
+[[nodiscard]] bool
+emitKeyframeEasing(EmitState& state,
+                   const bloom::document::KeyframeEasingParameters& easing) noexcept {
+    if (bloom::document::isDefaultKeyframeEasing(easing))
+        return true;
+    auto& writer = state.writer;
+    const PathScope easingScope(state, "easing");
+    return state.ok(writer.memberName("easing")) && state.ok(writer.beginObject()) &&
+           state.ok(writer.memberName("mode")) &&
+           state.ok(writer.stringValue(bloom::document::keyframeEasingToken(easing.easing))) &&
+           emitFloat64Member(state, "back", easing.back) &&
+           emitFloat64Member(state, "amplitude", easing.amplitude) &&
+           emitFloat64Member(state, "period", easing.period) && state.ok(writer.endObject());
+}
+
 template <typename Keyframe>
 [[nodiscard]] bool emitKeyframeHandles(EmitState& state, const Keyframe& key) noexcept {
     return emitKeyframeHandle(state, "outgoingHandle", key.outgoingHandle) &&
-           emitKeyframeHandle(state, "incomingHandle", key.incomingHandle);
+           emitKeyframeHandle(state, "incomingHandle", key.incomingHandle) &&
+           emitKeyframeEasing(state, key.easing);
 }
 
 [[nodiscard]] bool
@@ -831,6 +849,18 @@ emitInterpolation(EmitState& state,
         return state.ok(state.writer.stringValue("linear"));
     case bloom::document::KeyframeInterpolation::EaseInOut:
         return state.ok(state.writer.stringValue("ease-in-out"));
+    case bloom::document::KeyframeInterpolation::Sine:
+    case bloom::document::KeyframeInterpolation::Quad:
+    case bloom::document::KeyframeInterpolation::Cubic:
+    case bloom::document::KeyframeInterpolation::Quart:
+    case bloom::document::KeyframeInterpolation::Quint:
+    case bloom::document::KeyframeInterpolation::Expo:
+    case bloom::document::KeyframeInterpolation::Circ:
+    case bloom::document::KeyframeInterpolation::Back:
+    case bloom::document::KeyframeInterpolation::Bounce:
+    case bloom::document::KeyframeInterpolation::Elastic:
+        return state.ok(
+            state.writer.stringValue(bloom::document::keyframeInterpolationToken(interpolation)));
     }
     return false;
 }
@@ -1487,6 +1517,13 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
             return false;
         if (!emitLayerTiming(state, boundary.timing) || !emitLayerMasks(state, boundary))
             return false;
+        // Document 1.30: presentation flags, each written only when set.
+        if (boundary.shy &&
+            (!state.ok(writer.memberName("shy")) || !state.ok(writer.booleanValue(true))))
+            return false;
+        if (boundary.nameFollowsSource && (!state.ok(writer.memberName("nameFollowsSource")) ||
+                                           !state.ok(writer.booleanValue(true))))
+            return false;
         if (!emitRetainedTrailing(state)) {
             return false;
         }
@@ -1639,8 +1676,19 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
                 !emitFloat64Member(state, "y", record.padding.y) || !emitRetainedTrailing(state))
                 return false;
         }
-        if (!state.ok(writer.endObject()) || !emitRetainedTrailing(state) ||
-            !state.ok(writer.endObject()))
+        if (!state.ok(writer.endObject()))
+            return false;
+        // Document 1.31: the optional frame colour, written only when the frame has one.
+        if (record.color) {
+            if (!state.ok(writer.memberName("color")) || !state.ok(writer.beginArray()))
+                return false;
+            for (const auto channel : *record.color)
+                if (!state.ok(writer.integerValue(channel)))
+                    return false;
+            if (!state.ok(writer.endArray()))
+                return false;
+        }
+        if (!emitRetainedTrailing(state) || !state.ok(writer.endObject()))
             return false;
     }
     return state.ok(writer.endArray());

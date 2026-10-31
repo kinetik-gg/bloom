@@ -189,8 +189,8 @@ enum class AudioSourceCheck { Matches, MissingOrChanged, Cancelled };
 }
 
 // Prune aliasing preview images too: erasing a map entry alone does not release its pixels.
-template <typename Cache, typename Assets, typename Nodes>
-std::size_t trimProxyStorage(Cache& cache, Assets& assets, Nodes& nodes, const std::size_t limit) {
+template <typename Cache, typename Assets>
+std::size_t trimProxyStorage(Cache& cache, Assets& assets, const std::size_t limit) {
     std::size_t bytes = 0;
     for (const auto& [key, image] : cache)
         bytes += proxyByteCost(image);
@@ -204,7 +204,6 @@ std::size_t trimProxyStorage(Cache& cache, Assets& assets, Nodes& nodes, const s
                 preview.image = {};
     };
     trimAliases(assets);
-    trimAliases(nodes);
     return bytes;
 }
 
@@ -441,16 +440,6 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
                                  AudioProcessingAdmission audioAdmission)
     : QObject(parent), session_(session), host_(host), scheduler_(scheduler), bridge_(bridge),
       mediaDiskCache_(mediaDiskCache), audioAdmission_(std::move(audioAdmission)) {
-    // Source freshness is independent of the playhead frequency. A burst of time changes
-    // requests one delayed check, without cancelling active work or rebuilding unchanged rows.
-    freshnessTimer_.setSingleShot(true);
-    freshnessTimer_.setInterval(1000);
-    connect(&freshnessTimer_, &QTimer::timeout, this, [this] {
-        assetsDirty_ = true;
-        previewDirty_ = true;
-        if (!previewPending_)
-            startThumbnails();
-    });
     auto& ledger = runtime::processMemoryBudgetLedger();
     ledger.registerCache(
         &proxyCacheBytes_, kProxyCacheByteCapacity, [this] { return proxyCacheBytes_; },
@@ -462,7 +451,7 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
             }
             previous = bytes;
             const auto before = proxyCacheBytes_;
-            proxyCacheBytes_ = trimProxyStorage(thumbnailCache_, previews_, nodePreviews_, bytes);
+            proxyCacheBytes_ = trimProxyStorage(thumbnailCache_, previews_, bytes);
             if (proxyCacheBytes_ != before)
                 QTimer::singleShot(0, this, &AssetController::changed);
         });
@@ -490,15 +479,16 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
     session_.setAssetController(this);
     connect(&bridge_, &TaskUiBridge::resultsAvailable, this, &AssetController::poll);
     connect(&session_, &CompositionSession::snapshotChanged, this, &AssetController::refresh);
-    connect(&session_, &CompositionSession::currentTimeChanged, this,
-            &AssetController::refreshNodeThumbnails);
+    // The playhead is deliberately not connected (task N1, item 2; bug #401). Source cards carry
+    // no per-node preview, and source freshness is checked on every snapshot and composition
+    // change (refresh()), so a playback tick or a scrub starts no job, probes no file and hashes
+    // nothing here.
     connect(&session_, &CompositionSession::compositionChanged, this, &AssetController::refresh);
     connect(&host_, &ProjectHost::sessionReplaced, this, [this] {
         dragToken_ = QUuid::createUuid().toByteArray();
         cancel();
         base_.reset();
         previews_.clear();
-        nodePreviews_.clear();
         thumbnailCache_.clear();
         waveforms_.clear();
         audioBuffers_.clear();
@@ -533,7 +523,6 @@ AssetController::~AssetController() {
 }
 bool AssetController::acceptsEdits() const { return host_.canSave(); }
 void AssetController::cancel() {
-    freshnessTimer_.stop();
     pendingReloads_.clear();
     previewDirty_ = false;
     if (busy_)
@@ -552,7 +541,6 @@ void AssetController::setCachePurgeGate(const bool gated) {
         return;
     cachePurgeGate_ = gated;
     if (gated) {
-        freshnessTimer_.stop();
         ++contentGeneration_;
         assetsDirty_ = true;
         previewDirty_ = true;
@@ -733,10 +721,6 @@ QString AssetController::audioDiagnostic(document::AssetId id) const {
 QImage AssetController::thumbnail(document::AssetId id) const {
     const auto found = previews_.find(id);
     return found == previews_.end() ? QImage{} : found->second.image;
-}
-QImage AssetController::nodeThumbnail(document::NodeId id) const {
-    const auto found = nodePreviews_.find(id);
-    return found == nodePreviews_.end() ? QImage{} : found->second.image;
 }
 QString AssetController::inputColorSpaceDisplay(const document::AssetId id) const {
     const auto found = previews_.find(id);
@@ -1078,29 +1062,14 @@ void AssetController::refresh() {
             emit changed();
         }
     }
-    freshnessTimer_.stop();
     ++contentGeneration_;
     assetsDirty_ = true;
     previewDirty_ = true;
-    nodePreviews_.clear();
-    emit nodeThumbnailsChanged();
     if (previewPending_) {
         preview_.cancel();
         return;
     }
     startThumbnails();
-}
-
-void AssetController::refreshNodeThumbnails() {
-    if (!freshnessTimer_.isActive())
-        freshnessTimer_.start();
-    // Preserve the visible picture while one bounded job finishes. Time changes replace a single
-    // newest request; they neither cancel useful asset preparation nor rebuild Assets rows.
-    if (!timeDependentNodes_ && !assetsDirty_ && !previewPending_)
-        return;
-    previewDirty_ = true;
-    if (!previewPending_)
-        startThumbnails();
 }
 
 void AssetController::startThumbnails() {
@@ -1120,7 +1089,6 @@ void AssetController::startThumbnails() {
     const bool includeAssets = assetsDirty_;
     const auto snapshot = session_.snapshot();
     const auto directory = baseDirectory();
-    const auto time = session_.currentTime();
     const auto capturedColor = runtime::captureEvaluationColorIntent(session_.colorIntent());
     if (!capturedColor) {
         emit diagnostic(tr("Media thumbnail color intent could not be captured"));
@@ -1137,9 +1105,8 @@ void AssetController::startThumbnails() {
     request.usesPurgeableCaches = true;
     auto submission = scheduler_.submit<std::shared_ptr<Thumbnails>>(
         std::move(request),
-        [snapshot, directory, time, rate, colorIntent, includeAssets,
-         compositionId = session_.compositionId(), cached = thumbnailCache_,
-         cachedNodes = nodePreviews_,
+        [snapshot, directory, rate, colorIntent, includeAssets,
+         cached = thumbnailCache_,
          cachedAudio = includeAssets ? [this] {
              auto buffers = audioBuffers_;
              buffers.insert(audioDeliveryBuffers_.begin(), audioDeliveryBuffers_.end());
@@ -1153,50 +1120,6 @@ void AssetController::startThumbnails() {
          proxyOwner = &proxyCacheBytes_,
          audioOwner = &decodedAudioBytes_,
          audioAdmission = audioAdmission_](runtime::TaskContext& context) mutable {
-            const auto* composition = snapshot.project().findComposition(compositionId);
-            std::vector<runtime::CompiledImageSource> sources;
-            if (composition)
-                for (const auto& node : composition->graph().nodes()) {
-                    if (context.isCancellationRequested())
-                        return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
-                    if (node.typeId != "bloom.image-source" && node.typeId != "bloom.video-source")
-                        continue;
-                    runtime::CompiledImageSource source;
-                    source.sourceNodeId = node.id;
-                    for (const auto& binding : node.parameters) {
-                        const auto* parameter = composition->parameters().find(binding.parameterId);
-                        const auto* constant =
-                            parameter
-                                ? std::get_if<document::ConstantValueSource>(&parameter->source)
-                                : nullptr;
-                        if (!constant)
-                            continue;
-                        if (binding.role == "asset") {
-                            if (const auto* id = std::get_if<std::string>(&constant->value))
-                                if (const auto* asset =
-                                        snapshot.project().findAsset(document::AssetId::fromRaw(
-                                            QString::fromStdString(*id).toULongLong())))
-                                    source.asset = *asset;
-                        } else if (const auto* integer =
-                                       std::get_if<std::int64_t>(&constant->value)) {
-                            if (binding.role == "startFrame")
-                                source.startFrame = *integer;
-                            if (binding.role == "loopMode")
-                                source.loopMode = *integer;
-                            if (binding.role == "colorSpace")
-                                source.colorSpace = *integer;
-                        } else if (binding.role == "inputColorSpaceId") {
-                            if (const auto* value = std::get_if<std::string>(&constant->value))
-                                source.inputColorSpaceId = *value;
-                        } else if (binding.role == "premultiply") {
-                            if (const auto* value = std::get_if<bool>(&constant->value))
-                                source.premultiply = *value;
-                        }
-                    }
-                    if (includeAssets ||
-                        (source.asset && source.asset->kind == document::AssetKind::Sequence))
-                        sources.push_back(std::move(source));
-                }
             auto results = std::make_shared<Thumbnails>();
             std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> thumbnailDisplay;
             std::string thumbnailDisplayIdentity = "unavailable";
@@ -1213,10 +1136,6 @@ void AssetController::startThumbnails() {
                     }
                 }
             }
-            results->timeDependentNodes = std::ranges::any_of(sources, [](const auto& source) {
-                return source.asset && source.asset->kind == document::AssetKind::Sequence;
-            });
-            results->nodes = std::move(cachedNodes);
             results->cache = std::move(cached);
             // The proxy cache carries over from the previous run, so its byte account has to carry
             // over with it: starting from zero here would let the map grow past the capacity by
@@ -1246,7 +1165,7 @@ void AssetController::startThumbnails() {
                 if (cost <= limit)
                     results->cache.insert_or_assign(key, image);
                 results->proxyBytes =
-                    trimProxyStorage(results->cache, results->assets, results->nodes, limit);
+                    trimProxyStorage(results->cache, results->assets, limit);
             };
             const auto decode = [&](const runtime::CompiledImageSource& source,
                                     const core::RationalTime sampleTime) {
@@ -1358,8 +1277,7 @@ void AssetController::startThumbnails() {
                     {.phase = "Media thumbnails",
                      .subphase = "Decoding proxies",
                      .completed = ++completed,
-                     .total = (includeAssets ? snapshot.project().assets().size() : 0) +
-                              sources.size()});
+                     .total = includeAssets ? snapshot.project().assets().size() : 0});
             };
             if (includeAssets)
                 for (const auto& asset : snapshot.project().assets()) {
@@ -1790,23 +1708,10 @@ void AssetController::startThumbnails() {
                     if (const auto found = results->assets.find(asset.id);
                         found != results->assets.end() && !found->second.missing)
                         found->second.fileBytes = sourceFileBytes(asset, directory, context);
-                    results->proxyBytes = trimProxyStorage(results->cache, results->assets,
-                                                           results->nodes, proxyLimit());
+                    results->proxyBytes =
+                        trimProxyStorage(results->cache, results->assets, proxyLimit());
                     progress();
                 }
-            for (const auto& source : sources) {
-                if (context.isCancellationRequested())
-                    return runtime::TaskResult<std::shared_ptr<Thumbnails>>::cancelled();
-                if (source.asset && source.asset->kind == document::AssetKind::Video) {
-                    const auto asset = results->assets.find(source.asset->id);
-                    if (asset != results->assets.end())
-                        results->nodes.insert_or_assign(source.sourceNodeId, asset->second);
-                } else
-                    results->nodes.insert_or_assign(source.sourceNodeId, decode(source, time));
-                results->proxyBytes =
-                    trimProxyStorage(results->cache, results->assets, results->nodes, proxyLimit());
-                progress();
-            }
             return runtime::TaskResult<std::shared_ptr<Thumbnails>>::succeeded(std::move(results));
         });
     if (submission.accepted()) {
@@ -1973,7 +1878,6 @@ void AssetController::poll() {
             previewPending_ = false;
             const bool currentContent = previewContentGeneration_ == contentGeneration_;
             if (currentContent && result->value().has_value() && *result->value()) {
-                timeDependentNodes_ = (*result->value())->timeDependentNodes;
                 const auto samePreview = [](const auto& left, const auto& right) {
                     return left.first == right.first && left.second.key == right.second.key &&
                            left.second.image.cacheKey() == right.second.image.cacheKey() &&
@@ -2003,18 +1907,16 @@ void AssetController::poll() {
                     audioBuffers_ = std::move((*result->value())->audioBuffers);
                     audioDeliveryBuffers_ = std::move((*result->value())->audioDeliveryBuffers);
                 }
-                nodePreviews_ = std::move((*result->value())->nodes);
                 thumbnailCache_ = std::move((*result->value())->cache);
                 auto& ledger = runtime::processMemoryBudgetLedger();
-                proxyCacheBytes_ = trimProxyStorage(thumbnailCache_, previews_, nodePreviews_,
+                proxyCacheBytes_ = trimProxyStorage(thumbnailCache_, previews_,
                                                     ledger.cacheByteBudget(&proxyCacheBytes_));
                 decodedAudioBytes_ =
                     trimAudioStorage(audioBuffers_, ledger.cacheByteBudget(&decodedAudioBytes_));
                 if (assetsChanged)
                     emit changed();
-                emit nodeThumbnailsChanged();
             }
-            if (previewDirty_ && !assetsDirty_ && !timeDependentNodes_)
+            if (previewDirty_ && !assetsDirty_)
                 previewDirty_ = false;
             if (previewDirty_)
                 startThumbnails();

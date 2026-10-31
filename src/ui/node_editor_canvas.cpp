@@ -72,6 +72,7 @@ void NodeGraphicsView::zoomAboutViewportPoint(const QPointF viewportPoint, const
     about *= QTransform::fromTranslate(viewportPoint.x(), viewportPoint.y());
     setTransform(transform() * about);
     viewAdjusted_ = true;
+    Q_EMIT viewChanged();
 }
 
 void NodeGraphicsView::zoomStep(const int notches) {
@@ -95,6 +96,7 @@ bool NodeGraphicsView::applyCenteredScale(const QRectF& bounds, const double sca
     framed *= QTransform::fromScale(clamped, clamped);
     framed *= QTransform::fromTranslate(view.center().x(), view.center().y());
     setTransform(framed);
+    Q_EMIT viewChanged();
     return true;
 }
 
@@ -158,6 +160,7 @@ void NodeGraphicsView::showEvent(QShowEvent* event) {
 
 void NodeGraphicsView::resizeEvent(QResizeEvent* event) {
     QGraphicsView::resizeEvent(event);
+    Q_EMIT viewChanged();
     // The Viewer's Fit recomputes its rectangle from the available area on every paint, so a
     // resized Viewer stays fitted. This canvas keeps that behavior for the same state: while the
     // artist has not moved the view, a resize re-frames the graph. Once they have, the view is
@@ -224,6 +227,7 @@ void NodeGraphicsView::mouseMoveEvent(QMouseEvent* event) {
     const QPointF delta = event->position() - panOrigin_;
     setTransform(panBaseTransform_ * QTransform::fromTranslate(delta.x(), delta.y()));
     viewAdjusted_ = true;
+    Q_EMIT viewChanged();
     event->accept();
 }
 

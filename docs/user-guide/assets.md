@@ -20,7 +20,7 @@ A slim strip at the top of the panel sums up the selection. With one item it sho
 (for a composition, a small render of its first frame; its symbol until a picture is ready), the
 name with how often it is used, and one line of facts to skim, such as
 `Sequence · 2048 × 858 · 0:00:16:02 · 386 f · 24 fps · sRGB · Straight`. Hover over a fact for the
-whole sentence. The color space has its plain name, such as **sRGB** or **Linear Rec.709**; when
+whole sentence. The color space has its plain name, such as **sRGB** or **Linear Rec.709 (sRGB)**; when
 Bloom had to assume the color of an untagged video, or a file is missing, that line turns orange
 and its tooltip says why. With several items selected the strip counts them and their kinds; with
 nothing selected it says what the project holds, such as `7 items · 5 sequences · 2 compositions`.

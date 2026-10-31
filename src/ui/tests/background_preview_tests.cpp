@@ -370,13 +370,23 @@ void testYieldsAndKeepsCancelledHandleUntilTerminal(Expectations& expectations) 
     SessionFixture fixture(makeTestProject("Speculation cancellation", time(7, 25)));
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "opening ready");
     WorkerGate gate;
+    // Every later speculative frame waits here until the end of the test, so what the cache holds
+    // at each check depends only on the cancelled first frame, never on how far the idle timer
+    // got under load.
+    WorkerGate later;
+    std::atomic<int> calls = 0;
     std::atomic<bool> cancelled = false;
     auto prepare = [&](const document::Snapshot& snapshot,
                        const runtime::PreviewRequestIdentity& identity, std::size_t limit,
                        const std::vector<runtime::SnapshotParameterOverride>& override,
                        runtime::TaskContext& context) {
-        gate.enterAndWait();
-        cancelled = context.isCancellationRequested();
+        if (calls.fetch_add(1) == 0) {
+            gate.enterAndWait();
+            if (context.isCancellationRequested())
+                cancelled = true; // Sticky: a later frame cannot overwrite the observation.
+        } else {
+            later.enterAndWait();
+        }
         return fixture.pipelineFixture.pipeline(snapshot, identity, limit, override, context);
     };
     ui::BackgroundPreviewController background(fixture.session, fixture.controller,
@@ -416,6 +426,7 @@ void testYieldsAndKeepsCancelledHandleUntilTerminal(Expectations& expectations) 
     fixture.controller.beginInteractiveScrub();
     background.fillNextFrame();
     expectations.expect(fixture.frameCache->size() == 2, "no fill while scrub remains armed");
+    later.release();
     background.beginShutdown();
     fixture.controller.notifyScrubEnded();
     finishFixture(fixture, expectations);
@@ -767,6 +778,57 @@ void testIdleCausesNoFillAndPlayDrivesReadAhead(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+// Uncached playback: every tick that misses the cache asks for foreground work. That must not
+// cancel the read-ahead (it is preparing exactly the frames playback needs next), or playback never
+// gets ahead of the playhead. A read-ahead frame held in flight across several ticks still lands,
+// and no frame is prepared twice.
+void testPlaybackTicksKeepReadAhead(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Read-ahead survives ticks", time(6, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    fixture.frameCache->clear();
+    std::mutex mutex;
+    std::vector<core::RationalTime> order;
+    WorkerGate gate;
+    auto prepare = [&](const document::Snapshot& snapshot,
+                       const runtime::PreviewRequestIdentity& identity, std::size_t limit,
+                       const std::vector<runtime::SnapshotParameterOverride>& override,
+                       runtime::TaskContext& context) {
+        bool first = false;
+        {
+            std::lock_guard lock(mutex);
+            order.push_back(identity.time);
+            first = order.size() == 1;
+        }
+        if (first)
+            gate.enterAndWait();
+        return fixture.pipelineFixture.pipeline(snapshot, identity, limit, override, context);
+    };
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge, prepare);
+    fixture.controller.setPlaybackActive(true);
+    expectations.expect(waitUntil([&] { return gate.entered(); }),
+                        "the first read-ahead frame is in flight");
+    for (int tick = 0; tick < 3; ++tick) {
+        emit fixture.controller.foregroundWorkRequested(); // A playback tick's cache miss.
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    gate.release();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 6; }),
+                        "the read-ahead fills the range while playback ticks ask for foreground "
+                        "work");
+    {
+        std::lock_guard lock(mutex);
+        const auto first = order.front();
+        expectations.expect(std::count(order.begin(), order.end(), first) == 1 &&
+                                order.size() == 6,
+                            "the frame in flight across the ticks landed: no frame was cancelled "
+                            "and prepared again");
+    }
+    fixture.controller.setPlaybackActive(false);
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -775,6 +837,7 @@ int main(int argc, char** argv) {
     Expectations expectations;
     try {
         testIdleCausesNoFillAndPlayDrivesReadAhead(expectations);
+        testPlaybackTicksKeepReadAhead(expectations);
         testPointerPressCancelsBeforePreviewChanges(expectations);
         testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(expectations);
         testVisibleAdmissionAndSupersession(expectations);

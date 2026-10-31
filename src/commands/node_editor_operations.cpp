@@ -3,6 +3,7 @@
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/node_editor_operations.hpp>
+#include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/project.hpp>
@@ -11,53 +12,6 @@
 #include <utility>
 
 namespace bloom::commands {
-namespace {
-document::Vec2d nodePosition(const document::Composition& composition, const document::NodeId id) {
-    if (const auto found = composition.nodeLayout().find(id);
-        found != composition.nodeLayout().end())
-        return found->second.position;
-    return document::defaultNodeLayout(composition.graph().nodes()).at(id).position;
-}
-
-void placeConnectedNode(document::Composition& composition, const document::NodeId node,
-                        const std::optional<document::InputPortRef>& input,
-                        const std::optional<document::OutputPortRef>& output,
-                        std::optional<document::NodeId> pendingSource = {}) {
-    const auto connected = input
-                               ? std::optional(std::visit(
-                                     [](const auto& port) {
-                                         if constexpr (std::is_same_v<std::decay_t<decltype(port)>,
-                                                                      document::NodeInputRef>)
-                                             return port.nodeId;
-                                         else
-                                             return port.stackNodeId;
-                                     },
-                                     *input))
-                           : output ? std::optional(output->nodeId)
-                                    : std::nullopt;
-    if (!connected)
-        return;
-    const auto anchorPosition = nodePosition(composition, *connected);
-    const auto gap = document::kNodeLayoutSpacing;
-    const auto& size = document::kConservativeNodeCardSize;
-    const auto preferred =
-        input ? document::Vec2d{anchorPosition.x - size.width - gap, anchorPosition.y}
-              : document::Vec2d{anchorPosition.x + size.width + gap, anchorPosition.y};
-    auto occupied = composition.nodeLayout();
-    const auto defaults = document::defaultNodeLayout(composition.graph().nodes());
-    for (const auto& existing : composition.graph().nodes())
-        if (existing.id != node && !occupied.contains(existing.id))
-            occupied.emplace(existing.id, defaults.at(existing.id));
-    occupied.erase(node);
-    if (pendingSource)
-        occupied.erase(*pendingSource);
-    const auto placement =
-        document::findNearestFreeNodePosition(occupied, {}, size, preferred, gap);
-    auto record = composition.nodeLayout().at(node);
-    record.position = placement;
-    composition.nodeLayout()[node] = record;
-}
-} // namespace
 
 OperationResult
 checkAddEditorNodeEligibility(const document::Snapshot& snapshot,
@@ -200,6 +154,10 @@ OperationResult AddCompositionSource::apply(document::Draft& draft) const {
     auto renamed = RenameLayer(composition_, layerId, name).apply(draft);
     if (renamed.status == OperationStatus::Rejected)
         return renamed;
+    // The nested layer shows its composition's name and follows it (document 1.30).
+    if (auto* target = draft.project().findComposition(composition_))
+        if (auto* layer = target->graph().findLayer(layerId))
+            layer->nameFollowsSource = true;
     auto range = SetLayerRange(composition_, layerId, {}, duration).apply(draft);
     if (range.status == OperationStatus::Rejected)
         return range;
@@ -209,9 +167,7 @@ OperationResult AddCompositionSource::apply(document::Draft& draft) const {
             .apply(draft);
     if (extent.status == OperationStatus::Rejected)
         return extent;
-    placeConnectedNode(*composition, layerNode, document::LayerStackInputRef{*merge, {}, "content"},
-                       {}, sourceNode);
-    placeConnectedNode(*composition, sourceNode, document::NodeInputRef{layerNode, "image"}, {});
+    placeLayerCards(*composition, layerNode, sourceNode);
     added.outputs.push_back({"layer", layerId});
     return added;
 }
@@ -227,7 +183,12 @@ OperationResult AddEditorNode::apply(document::Draft& draft) const {
     // had not made. Wiring is now theirs: source output into a Layer node's image input, Layer
     // output into Merge, which is what creates the stack slot. The TIMELINE's Add menu still builds
     // a whole layer, because a layer is what it is about.
-    auto added = AddNode(composition_, type_, position_).apply(draft);
+    // Task N1, item 3: the card lands at the cursor. AddNode keeps that point whenever it is clear
+    // of the cards the editor measured, and otherwise moves it just past its neighbour; a link
+    // dragged out of a socket no longer re-anchors the new card beside the node it came from.
+    AddNode add(composition_, type_, position_);
+    add.setMeasuredSizes(sizes_);
+    auto added = add.apply(draft);
     constexpr std::string_view nodeOutput = kAddNodeOutput;
     if (added.status == OperationStatus::Rejected)
         return added;
@@ -248,7 +209,6 @@ OperationResult AddEditorNode::apply(document::Draft& draft) const {
     if (!definition)
         return result;
     const auto& graph = draft.project().findComposition(composition_)->graph();
-    placeConnectedNode(*draft.project().findComposition(composition_), *node, input_, output_);
     if (input_) {
         const auto kind = graph.inputKind(*input_);
         for (const auto& port : definition->outputs) {

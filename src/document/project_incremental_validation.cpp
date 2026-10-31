@@ -107,6 +107,7 @@ std::vector<CompositionId> Composition::nestedReferences() const {
     return buildNestedReferences(content());
 }
 
+// A new shell member belongs here AND in sameEvaluationInputs(Composition) (#399).
 bool Composition::sameShell(const Composition& other) const noexcept {
     return id_ == other.id_ && name_ == other.name_ && duration_ == other.duration_ &&
            format_ == other.format_ && workArea_ == other.workArea_ &&

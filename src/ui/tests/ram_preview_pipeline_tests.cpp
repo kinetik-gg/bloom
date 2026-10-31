@@ -329,9 +329,9 @@ void testControllerFiniteEditKeepsRetainedHalf(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
-// The memory-budget stop is bounded: the first eviction ends the run at the prefix that fits, the
-// sibling already in flight is detached rather than allowed to churn the prefix, and the pipeline
-// never oversubscribes.
+// A memory-budget-limited run never stops for memory: it fills the whole range in order, the
+// cache keeps the newest frames that fit (least recently used eviction), the run ends
+// PartialBudget, and the pipeline never oversubscribes.
 void testControllerBudgetStopsBounded(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM Budget Both", timeAt(24, 25)));
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
@@ -363,15 +363,16 @@ void testControllerBudgetStopsBounded(Expectations& expectations) {
     expectations.expect(fixture.frameCache->size() == 3,
                         "the cache holds exactly what its budget allows");
     expectations.expect(ram.playableSpan().has_value() && ram.playableSpan()->frameCount == 3 &&
-                            ram.retainedFrameIndices() == std::vector<std::uint64_t>{1, 2, 3},
-                        "post-insert eviction retains the actual interior span, never a prefix");
+                            ram.retainedFrameIndices() == std::vector<std::uint64_t>{21, 22, 23},
+                        "least-recently-used eviction keeps the newest frames that fit");
     expectations.expect(finishedCompleted, "a budget-limited run reports partial completion");
     expectations.expect(ram.peakInFlightFrames() <= ui::RamPreviewPipeline::kMaxInFlight,
                         "the budget stop never overscheduled past the two-frame bound");
-    expectations.expect(ram.preparedFrameCount() == 3 && fixture.coordinator.calls() >= base + 3 &&
-                            fixture.coordinator.calls() <= base + 4,
-                        "the foreground frame is reused, three results are consumed and only the "
-                        "already-started sibling may prepare before eviction detaches it");
+    expectations.expect(ram.preparedFrameCount() >= 23 && ram.preparedFrameCount() <= 24 &&
+                            fixture.coordinator.calls() >= base + 23 &&
+                            fixture.coordinator.calls() <= base + 24,
+                        "every frame of the range is prepared once (the foreground frame may be "
+                        "reused)");
     finishFixture(fixture, expectations);
 }
 

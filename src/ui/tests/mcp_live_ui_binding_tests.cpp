@@ -177,7 +177,6 @@ void testBinding() {
         script.waitingForViewerPolls = 1000000;
         world.backend->push(script);
         host::ExportEncoderStatus encoders;
-        encoders.exportPlatform = true;
         world.presets = host::ExportPresetCatalogue::create(
             {.userDataDirectory = std::nullopt, .initialEncoders = encoders});
         f.projectHost.configureExportQueue(

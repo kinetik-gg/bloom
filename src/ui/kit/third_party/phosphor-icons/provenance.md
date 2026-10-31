@@ -1,6 +1,6 @@
 # Phosphor Icons Provenance
 
-Reviewed: 2026-10-30
+Reviewed: 2026-10-31
 
 ## Component
 
@@ -44,6 +44,9 @@ binds the already vendored `film-strip`, so the three `cube` files are no longer
 Issue #376 (Composition Settings preset rename) downloaded the same pinned archive on 2026-10-25,
 verified its SHA-256 above from the downloaded bytes, and extracted `pencil-simple` in regular,
 fill and bold from `assets/` without modification.
+The timeline Graph Editor polish (lane T1, 2026-10-31) verified the same pinned archive's SHA-256
+above from the downloaded bytes and extracted `chart-line` in regular, fill and bold from `assets/`
+without modification, for the timeline's keyframes/graph toggle.
 The table and manifest below cover the actual complete checked-in subset, including those
 pre-existing exceptions; they do not claim that those exceptions are upstream-identical.
 
@@ -51,7 +54,7 @@ pre-existing exceptions; they do not claim that those exceptions are upstream-id
 
 ADR 0010 and `docs/ux/visual-language.md` require a curated, pinned subset rather than the
 complete catalog: the upstream release carries 1248 icons in six weights (7488 files), and Bloom
-embeds 76 of them in three weights (228 files). The three weights are exactly the three the
+embeds 80 of them in three weights (240 files). The three weights are exactly the three the
 Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp`):
 
 - `regular` -- the resting interface weight, and the default of every non-role call.
@@ -61,7 +64,7 @@ Kinetik icon roles name (`kit::IconRole`, `src/ui/include/bloom/ui/kit/icons.hpp
 Task VIEW-1 completed the `bold` subset. It previously held five files (the timeline's own
 toggles); `IconRole::Chrome` asks for Bold on every chrome glyph in the application, so a partial
 subset would have rendered some chrome icons blank. All three weights are now complete over the
-same 76 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
+same 80 assets, which is also what makes `kit::iconResourcePath()` a total mapping with no per-id
 exception list. The other three upstream weights (`thin`, `light`, `duotone`) are deliberately not
 vendored, because no Kinetik icon role names one.
 
@@ -101,6 +104,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/dots-three-vertical.svg` | `85fdecd2193efcd7e80a83607b66d2680fef8f3d1e93380c26f9851b24edbd01` |
 | `regular/download-simple.svg` | `6450d3cf43dd9364eab343f1ada9bf4a77a85ded6e62d76deb17606ebfd62388` |
 | `regular/eyedropper.svg` | `87cad5a974a6f152cc7dce67fd6c41fdc21f75d59bed20508b68c95f65d9ebc5` |
+| `regular/chart-line.svg` | `8a432fac53ae887b1726a96462aa8ea285e714b8e480261751361e4d6b2b226f` |
 | `regular/selection.svg` | `5fff68fdc60d81f1855302416481dc69fe9f0abfbb353d3bc43f2c24150ab8d4` |
 | `regular/square-half.svg` | `09f561de8c5e6ed831723a1bc8f6f987fb453928a0028a3f95a0366bae055768` |
 | `regular/align-left.svg` | `37cf5a3b41f55b36b33623f5a987e3b4b6c4494e0c0ff46f5f16df8e305a39ab` |
@@ -120,7 +124,8 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/folder-simple-plus.svg` | `723f8e4e8503114a0dcddeb18e5a5726b7ab87473a88510626289d57848a8779` |
 | `regular/folder.svg` | `4a882bcd4a91ae0a01887024f08d358932f183b6b171e87a3e48c5910364d507` |
 | `regular/gear.svg` | `5c0cb3ba307c72babf78d952d9140c682ff30307fedc7fbb87c9a293c1e2fd64` |
-| `regular/graph.svg` | `0a863bd9d39960eb220400400332ee1b3ada0e6ce309b89b202bb0784e4e28aa` |
+| `regular/tree-structure.svg` | `435126c4983113a50be7a20eae30d149b57e0419e531cb0c3ea8a5acddbeedf3` |
+| `regular/broom.svg` | `e0805212cc05dd85c80cad8a62684a6705b2a8329ced7c2363d74747d01c3fb4` |
 | `regular/hand-grabbing.svg` | `5c07fc19f6101a86c10cfa3cb4685c388cd0b89a69aa46caa92e44b5ba599977` |
 | `regular/hand.svg` | `b845c51acbe69c5ac2ec208c5648806f33c0a86b06d2dfa53ebe599ccb0f9c65` |
 | `regular/image.svg` | `642a0575f7b5a7ea2f5fefa6f27a5dc57683911845b85213a7e33652c2a3179d` |
@@ -183,6 +188,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/download-simple-fill.svg` | `ffd45964adc39f8e0027ebd66ea6c843fb8e5a21290a78ef6940436f7d292466` |
 | `fill/eye-fill.svg` | `86381b51cb6f305019503b4c5d4b02fe8df5941bab3f1475ee873006a8708420` |
 | `fill/eyedropper-fill.svg` | `8fb839f52aaadbe156dc9982deab2288c1e23fe335d65f7a638ba21ac8078037` |
+| `fill/chart-line-fill.svg` | `9528e485b685eca0c75dee314feb5f8cff3a0728325cfe811034e20af6aa9934` |
 | `fill/selection-fill.svg` | `39c98d739e03eecf38da5ccceb1093ca3b45826ee98a187e99bac2c3923fd8a2` |
 | `fill/square-half-fill.svg` | `b7de8273c0735917754a13552d4a1d84f5e4cbe40c8c1458e84ca1c4d0644628` |
 | `fill/align-left-fill.svg` | `704fc89bcaebb23f08b74b65cbb14b2c00d3a1f9409bc8f4790560f555afc65a` |
@@ -201,7 +207,8 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/folder-open-fill.svg` | `4524c115cb08d9879eea06001d470f36156fd12a6b0abdd2b59025d6a05936d2` |
 | `fill/folder-simple-plus-fill.svg` | `b28aea1a66bd889e532c9f6b672d5199ac97bd3785bcc1fca7d115e943c1ff65` |
 | `fill/gear-fill.svg` | `564f53f72b0bd4371dc14a3d39a3fcf4c5a1a74d285eb56fff465a954f993ec8` |
-| `fill/graph-fill.svg` | `73eea2682fd6c43d58d448107bd01c65cd662c3890bea8d28b39964031bdd110` |
+| `fill/tree-structure-fill.svg` | `017c075836959342432111139a8c3cdca57d49f5a07545fb3764dba6a8539ff4` |
+| `fill/broom-fill.svg` | `ad930cea491e00b5c742f4a97668b5bd96eecdb312adc26fe2f7007f8acbc139` |
 | `fill/hand-fill.svg` | `9a1598a0dce127935ad97ede769c77629f422de7a1eabe54b4ec1b2d0c19369b` |
 | `fill/hand-grabbing-fill.svg` | `df9ace3ad62fe54f8f876b140c2824a7cf1ae55a087cd31649f3c562e465a39b` |
 | `fill/image-fill.svg` | `8cbeb0cac6e7f683e08d8a71a5db21c10435c39d0487c3277b75b146a86abf42` |
@@ -264,6 +271,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/download-simple-bold.svg` | `213b1d74439be031407a09958efc541c87158922a3a57e4dee785dddeef3f955` |
 | `bold/eye-bold.svg` | `766b10b6ed7d8a899a76ba28f3f066ca49e8ce0a75ae68b65bfec0e615d8130d` |
 | `bold/eyedropper-bold.svg` | `84cca4e37e3c813098a0b4dada7bfce670c56ad5ec0e924d0e3002e7218b7786` |
+| `bold/chart-line-bold.svg` | `ffff5add2c0384a6e4e2f661fd3784c4facfdc9d8bfe98d8467d710a6261b29c` |
 | `bold/selection-bold.svg` | `bca7ab4688ca03ed591ba3cfba90bda277b25596b649898388c51aebc7742fb3` |
 | `bold/square-half-bold.svg` | `2f8165874291b521ab54da329ffeb2628a0ba7cb20a38e4e81eaa23f6815c230` |
 | `bold/align-left-bold.svg` | `dcae6ce0e634a7ff0bca9a151d1d0767d1333828aa542e8fac9dc213a47f65b4` |
@@ -282,7 +290,8 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/folder-open-bold.svg` | `dfdcc48a3ea3549f597ac5826111f067e2889c9f555f5d9b1a387786d092d15e` |
 | `bold/folder-simple-plus-bold.svg` | `bd87b2d0c73989f5a434a627ba5ee13929305c9bb4dcab28e3581bb8655a423c` |
 | `bold/gear-bold.svg` | `b70f71ce6d08d59ee13575d7278737ff6dc2011adb5d126c9090641bc783fdd2` |
-| `bold/graph-bold.svg` | `967c65d7659edbaf8ccdad545b8b8c9408805bf2c167377984a6c78e84a46690` |
+| `bold/tree-structure-bold.svg` | `90c8d2346b3ae9395bd5ecb4fc1b9710c918a8fc1ea9c0e0f9d2f57894ff5287` |
+| `bold/broom-bold.svg` | `1832df84481164eb448b996befd705f87d61f6917a1b632d515ecff9a6b08028` |
 | `bold/hand-bold.svg` | `901ad6b152b237edf30c5713e0676f1cfd3142672e209b3efc3062b23836a62a` |
 | `bold/hand-grabbing-bold.svg` | `6304ebb420306735baf4131a3c57724e738763ec15e65d6ccf6d97406e684946` |
 | `bold/image-bold.svg` | `d99ef65cc79a3db6a0b213c878238e06689ef701285f207629b49868808b852e` |
@@ -336,3 +345,13 @@ modification.
 The Export panel icon (2026-10-30) downloaded the same pinned archive, verified its SHA-256 above
 from the downloaded bytes, and extracted `export` in regular, fill and bold from `assets/` without
 modification.
+The Node editor icon (2026-10-31) downloaded the same pinned archive, verified its SHA-256 above
+from the downloaded bytes, and extracted `tree-structure` in regular, fill and bold from `assets/`
+without modification. It replaces `graph` everywhere the Node editor is named, so the three `graph`
+files are no longer embedded. The same intake extracted `broom` in regular, fill and bold, without
+modification, for the Node editor footer's Arrange button.
+
+The Timeline layer table (lane T2, 2026-10-31) downloaded the same pinned archive, verified its
+SHA-256 above from the downloaded bytes, and extracted `ghost` (the Shy switch and the master Shy
+toggle; the pinned release has no peeking-figure glyph) and `funnel-simple` (the label filter) in
+regular, fill and bold from `assets/` without modification.

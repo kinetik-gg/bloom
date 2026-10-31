@@ -91,8 +91,9 @@ std::string_view outputState(const host::ExportOutputState state) {
 }
 
 std::string_view route(const host::ExportDeviceRoute value) {
-    constexpr std::array<std::string_view, 5> names{"none", "gpu", "waiting-for-viewer",
-                                                    "recovering-gpu", "cpu-reference"};
+    constexpr std::array<std::string_view, 6> names{"none",           "gpu",
+                                                    "waiting-for-viewer", "recovering-gpu",
+                                                    "cpu-reference",  "waiting-for-memory"};
     return names[static_cast<std::size_t>(value)];
 }
 

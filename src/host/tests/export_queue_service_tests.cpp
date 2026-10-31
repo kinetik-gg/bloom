@@ -62,7 +62,6 @@ std::string fileUri(const std::filesystem::path& path) { return "file://" + path
 
 host::ExportEncoderStatus linuxEncoders(const bool openh264 = true, const bool vaapi = false) {
     host::ExportEncoderStatus status;
-    status.exportPlatform = true;
     status.probed = true;
     status.mediaWorker = true;
     status.h264Software = output::H264EncoderV1::OpenH264;
@@ -291,10 +290,8 @@ void testPresets() {
         {.userDataDirectory = std::nullopt, .initialEncoders = {}});
     chosen = elsewhere->defaultPreset();
     expect(chosen.presetId == host::kExportDefaultVideoPresetId && !chosen.usedFallback &&
-               chosen.preferredAvailability.code ==
-                   host::ExportAvailabilityCode::PlatformNotSupported &&
-               chosen.preferredAvailability.reason == "Export runs on Linux in this version",
-           "without an export platform the job still gets H.264 MP4 with the platform reason");
+               chosen.preferredAvailability.code == host::ExportAvailabilityCode::Probing,
+           "before the first probe the job gets H.264 MP4 and is only checking encoders");
 
     const auto snapshot = catalogue->snapshot();
     bool categoriesOrdered = true;
@@ -716,29 +713,55 @@ void testReplaceConfirmation() {
            "Refuse blocks Start while the destination exists");
 }
 
-void testPlatformNotSupported() {
-    Fixture f("platform", host::ExportEncoderStatus{});
+// ADR 0035: every operating system exports. A computer whose only media provider is the bundled
+// FFmpeg worker (Windows today: no Media Foundation provider, no H.264 encoder) refuses nothing
+// for its platform, and no format FFmpeg serves is reported unavailable.
+host::ExportEncoderStatus ffmpegOnlyEncoders() {
+    host::ExportEncoderStatus status;
+    status.probed = true;
+    status.mediaWorker = true;
+    status.h264Software = output::H264EncoderV1::None;
+    status.h264SoftwareReason = "This platform has no H.264 encoder yet.";
+    status.openh264 = host::ExportEncoderStatus::OpenH264::NotInstalled;
+    return status;
+}
+
+void testEveryPlatformExports() {
+    const auto catalogue = host::ExportPresetCatalogue::create(
+        {.userDataDirectory = std::nullopt, .initialEncoders = ffmpegOnlyEncoders()});
+    for (const auto& preset : catalogue->snapshot()->presets) {
+        const auto format = preset.settings.format;
+        const bool needsH264OrHevc = format == document::ExportFormat::H264Mov ||
+                                     format == document::ExportFormat::H264Mp4 ||
+                                     format == document::ExportFormat::HevcMov ||
+                                     format == document::ExportFormat::HevcMp4;
+        expect(preset.platformAvailability.code !=
+                       host::ExportAvailabilityCode::WorkerUnavailable &&
+                   preset.platformAvailability.reason.find("Linux") == std::string::npos,
+               "no preset is refused for its operating system: " + preset.id);
+        if (!needsH264OrHevc && format != document::ExportFormat::Dpx)
+            expect(preset.platformAvailability.available &&
+                       preset.platformAvailability.reason.empty(),
+                   "the FFmpeg worker serves the preset with no unavailable reason: " + preset.id);
+    }
+    Fixture f("every-platform", ffmpegOnlyEncoders());
     const auto job = f.addJob(png(), "Exports/x.png");
-    f.service->pump();
-    const auto start = f.service->canStart(job);
-    expect(!start.available && start.code == ExportUnavailableCode::PlatformNotSupported &&
-               start.reason == "Export runs on Linux in this version",
-           "Start answers PlatformNotSupported off Linux");
-    expect(f.service->availability(ExportCommand::StartAll).code ==
-               ExportUnavailableCode::PlatformNotSupported,
-           "Start All answers PlatformNotSupported");
-    expect(f.service->availability(job, ExportCommand::EditJob).available,
-           "the queue stays fully editable");
+    expect(f.startable(job), "Start is available: " + f.service->canStart(job).reason);
+    expect(f.service->availability(ExportCommand::StartAll).available, "Start All is available");
     host::ExportTransientJobRequest transient;
     transient.composition = f.composition();
     transient.range = {document::ExportRangeKind::Frame, 0, 0};
     transient.settings = png();
     transient.destination = {"external", fileUri(f.folder / "t.png"),
                              document::ExportOverwritePolicy::Replace};
-    const auto refused = f.service->submitTransient(transient);
-    expect(!refused.accepted &&
-               refused.availability.code == ExportUnavailableCode::PlatformNotSupported,
-           "a transient job answers PlatformNotSupported too");
+    const auto submitted = f.service->submitTransient(transient);
+    expect(submitted.accepted,
+           "a transient job is accepted on every platform: " + submitted.availability.reason);
+    if (submitted.accepted && submitted.job) {
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(*submitted.job)->state); }),
+               "the transient job finishes");
+        (void)f.service->acknowledgeTransient(*submitted.job);
+    }
 }
 
 void testTransient() {
@@ -923,7 +946,7 @@ int main() {
         testLifecycle();
         testZeroHostCapacityRefusal();
         testReplaceConfirmation();
-        testPlatformNotSupported();
+        testEveryPlatformExports();
         testTransient();
         testVideoEndToEnd(document::ExportFormat::ProResMov, linuxEncoders(), "prores-mov");
         testFreeTextWorkingSpace("Linear Rec.709 (sRGB)");

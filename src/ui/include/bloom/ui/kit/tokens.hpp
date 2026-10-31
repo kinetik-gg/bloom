@@ -102,7 +102,18 @@ enum class Color : std::uint8_t {
     ComponentY,
     ComponentZ,
     ComponentW,
+    // T1: the graph editor's single-value curve strokes. Each single-value curve on the canvas takes
+    // the next of these in curve order (cycling), so opacity beside rotation reads as two curves
+    // rather than one gold line twice. Gold, orchid, teal, orange, lavender: none is a component
+    // hue (red, green, sky blue), Accent, or another's neighbour.
+    GraphCurve1,
+    GraphCurve2,
+    GraphCurve3,
+    GraphCurve4,
+    GraphCurve5,
 };
+// How many GraphCurve tokens the single-value palette cycles through.
+inline constexpr int kGraphCurvePaletteSize = 5;
 
 // The four-step surface ladder, darkest first. "hover = surface + 1 step" and "pressed =
 // surface - 1 step" walk exactly this ladder; a raised surface (popup, dialog, drag) also steps up
@@ -262,10 +273,15 @@ enum class Size : int {
     IconLarge = 20,
     TitleBar = 34,
     TimelineBar = 20,
-    TimelineToggleColumn = 4 * ToggleCell + 3 * static_cast<int>(Spacing::XS),
+    // The layer table's leading switch strip: Video, Audio, Solo and Lock, then the Label square
+    // (After Effects' A/V Features and Label columns), five ToggleCells with XS gaps.
+    TimelineToggleColumn = 5 * ToggleCell + 4 * static_cast<int>(Spacing::XS),
+    // The switch cells after the name (Shy): one ToggleCell and its XS gap.
+    TimelineSwitchColumn = ToggleCell + static_cast<int>(Spacing::XS),
     TimelineNameMin = 120,
     TimelineNameDefault = 280,
-    TimelineLeftColumn = TimelineToggleColumn + TimelineNameDefault + 3 * DropdownWidth,
+    TimelineLeftColumn =
+        TimelineToggleColumn + TimelineNameDefault + TimelineSwitchColumn + 3 * DropdownWidth,
     TimelineColumn = 100,
     TimelineWorkArea = 10,
     // task TL-FIX2: the layer-table/lanes divider's draggable hit zone. KSplitHandle paints one

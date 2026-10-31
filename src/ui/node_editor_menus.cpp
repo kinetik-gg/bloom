@@ -6,6 +6,8 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
+#include <QIcon>
+#include <QPixmap>
 #include <QPalette>
 #include <QResizeEvent>
 #include <QSettings>
@@ -14,6 +16,7 @@
 #include <QToolButton>
 #include <algorithm>
 #include <array>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/search_popup.hpp>
@@ -32,10 +35,10 @@ class AddShapeMenuNode final : public commands::Operation {
   public:
     AddShapeMenuNode(document::CompositionId composition, document::ShapeKind kind,
                      document::Vec2d position, std::optional<document::InputPortRef> input,
-                     std::optional<document::OutputPortRef> output)
+                     std::optional<document::OutputPortRef> output, document::NodeCardSizes sizes)
         : composition_(composition), kind_(kind),
           add_(composition, std::string(document::kShapeSourceNodeType), position, std::move(input),
-               std::move(output)) {}
+               std::move(output), std::move(sizes)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override {
         return "bloom.node.add-shape-at-cursor";
     }
@@ -74,6 +77,26 @@ class AddShapeMenuNode final : public commands::Operation {
     document::ShapeKind kind_;
     AddEditorNode add_;
 };
+
+// Every card's measured extent, which Arrange and Add place against instead of the command-side
+// estimate.
+[[nodiscard]] NodeCardSizes measuredNodeSizes(const NodeGraphicsScene& scene) {
+    NodeCardSizes sizes;
+    for (auto* item : scene.items()) {
+        const auto* card = dynamic_cast<const node_editor::NodeItem*>(item);
+        if (card == nullptr)
+            continue;
+        const auto rect = card->cardRect();
+        sizes.emplace(card->id(), document::NodeCardSize{rect.width(), rect.height()});
+    }
+    return sizes;
+}
+
+// Task N1, item 3: a new card lands AT the cursor -- its title band centred under the pointer, the
+// point the artist was looking at -- rather than with its corner there.
+[[nodiscard]] document::Vec2d cardOriginAtCursor(const QPointF cursor) {
+    return {cursor.x() - kCardMinimumWidth / 2.0, cursor.y() - kCardHeaderHeight / 2.0};
+}
 
 document::NodeLayoutRecord layoutFor(const document::Composition& composition,
                                      const document::NodeId id) {
@@ -259,20 +282,6 @@ void NodeGraphEditor::renameSelectedLayer() {
     showStatus(tr("Only a layer node can be renamed"));
 }
 
-namespace {
-[[nodiscard]] NodeCardSizes measuredNodeSizes(const NodeGraphicsScene& scene) {
-    NodeCardSizes sizes;
-    for (auto* item : scene.items()) {
-        const auto* card = dynamic_cast<const node_editor::NodeItem*>(item);
-        if (card == nullptr)
-            continue;
-        const auto rect = card->cardRect();
-        sizes.emplace(card->id(), document::NodeCardSize{rect.width(), rect.height()});
-    }
-    return sizes;
-}
-} // namespace
-
 void NodeGraphEditor::arrangeAllNodes() {
     if (!scene_->canSubmit() || session_.composition() == nullptr) {
         showStatus(tr("Node command submission is unavailable"));
@@ -445,7 +454,7 @@ void NodeGraphEditor::selectLinkedDownstream() {
 QString NodeGraphEditor::addNodeRefusal(const document::Snapshot& snapshot,
                                         const std::string& typeId) const {
     const auto result = checkAddEditorNodeEligibility(snapshot, session_.compositionId(), typeId,
-                                                      {addPosition_.x(), addPosition_.y()});
+                                                      cardOriginAtCursor(addPosition_));
     return result.issues.empty() ? QString{}
                                  : QString::fromStdString(result.issues.front().message);
 }
@@ -483,9 +492,8 @@ void NodeGraphEditor::populateAddMenu(QMenu* menu,
                     connect(item, &QAction::triggered, this, [this, kind] {
                         commands::Transaction transaction("Add Node", addRevision_);
                         transaction.emplace<AddShapeMenuNode>(
-                            session_.compositionId(), kind,
-                            document::Vec2d{addPosition_.x(), addPosition_.y()}, addInput_,
-                            addOutput_);
+                            session_.compositionId(), kind, cardOriginAtCursor(addPosition_),
+                            addInput_, addOutput_, measuredNodeSizes(*scene_));
                         const auto result = scene_->submit(std::move(transaction));
                         if (const auto id = result.outputId<document::NodeId>("editorNode");
                             result.succeeded() && id)
@@ -525,6 +533,11 @@ void NodeGraphEditor::populateAddMenu(QMenu* menu,
 void NodeGraphEditor::refreshAddMenuState() {
     const auto snapshot = session_.snapshot();
     addRevision_ = snapshot.revision();
+    // The header's Add has no canvas point under the pointer (the pointer is on the menu), so its
+    // card lands in the middle of what the canvas is showing.
+    addPosition_ = view_->sceneFromViewport(QRectF(view_->viewport()->rect()).center());
+    addInput_.reset();
+    addOutput_.reset();
     for (const auto& [item, typeId] : addMenuItems_) {
         if (scene_->canSubmit()) {
             const auto refusal = addNodeRefusal(snapshot, typeId);
@@ -562,6 +575,40 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
             if (auto* frame = dynamic_cast<NodeGroupItem*>(scene_->findNodeGroupItem(id)))
                 frame->startRename();
         });
+        // Task N1, item 5: the frame's colour, from the same eight label swatches a Timeline
+        // layer's Label Color offers, or none for the neutral frame. One SetGroupColor each.
+        auto* colors = menu->addMenu(tr("Color"));
+        colors->setObjectName(QStringLiteral("nodeGroupColorMenu"));
+        const auto current = session_.composition()->nodeGroups().at(*group).color;
+        const auto setColor = [this, id = *group](std::optional<std::array<std::uint8_t, 3>> rgb) {
+            if (!scene_->canSubmit() || session_.composition() == nullptr)
+                return;
+            commands::Transaction transaction("Set Node Group Color",
+                                              session_.snapshot().revision());
+            transaction.emplace<commands::SetGroupColor>(session_.compositionId(), id, rgb);
+            (void)scene_->submit(std::move(transaction));
+        };
+        auto* none = colors->addAction(tr("None"));
+        none->setObjectName(QStringLiteral("nodeGroupColorNoneAction"));
+        none->setCheckable(true);
+        none->setChecked(!current.has_value());
+        connect(none, &QAction::triggered, this, [setColor] { setColor(std::nullopt); });
+        int number = 0;
+        for (const auto token :
+             {kit::Color::Label1, kit::Color::Label2, kit::Color::Label3, kit::Color::Label4,
+              kit::Color::Label5, kit::Color::Label6, kit::Color::Label7, kit::Color::Label8}) {
+            const auto color = kit::color(token);
+            const std::array<std::uint8_t, 3> rgb{static_cast<std::uint8_t>(color.red()),
+                                                  static_cast<std::uint8_t>(color.green()),
+                                                  static_cast<std::uint8_t>(color.blue())};
+            QPixmap swatch(kit::px(kit::Size::IconMedium), kit::px(kit::Size::IconMedium));
+            swatch.fill(color);
+            auto* item = colors->addAction(QIcon(swatch), tr("Label %1").arg(++number));
+            item->setObjectName(QStringLiteral("nodeGroupColorAction.%1").arg(number));
+            item->setCheckable(true);
+            item->setChecked(current == rgb);
+            connect(item, &QAction::triggered, this, [setColor, rgb] { setColor(rgb); });
+        }
         return menu;
     }
     if (nodeMenu) {
@@ -827,7 +874,7 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
         QString refusal;
         const auto result = checkAddEditorNodeEligibility(
             snapshot, session_.compositionId(), definition.key.typeId,
-            {scenePosition.x(), scenePosition.y()}, addInput_, addOutput_);
+            cardOriginAtCursor(scenePosition), addInput_, addOutput_);
         if (!result.issues.empty())
             refusal = QString::fromStdString(result.issues.front().message);
         else if (!scene_->canSubmit() && definition.key.typeId != document::kSolidSourceNodeType &&
@@ -854,8 +901,8 @@ void NodeGraphEditor::addNode(const QString& type) {
     // the artist makes themselves.
     commands::Transaction transaction("Add Node", addRevision_);
     transaction.emplace<AddEditorNode>(session_.compositionId(), type.toStdString(),
-                                       document::Vec2d{addPosition_.x(), addPosition_.y()},
-                                       addInput_, addOutput_);
+                                       cardOriginAtCursor(addPosition_), addInput_, addOutput_,
+                                       measuredNodeSizes(*scene_));
     const auto result = scene_->submit(std::move(transaction));
     if (const auto id = result.outputId<document::NodeId>("editorNode"); result.succeeded() && id)
         session_.selectNode(*id);
@@ -1233,6 +1280,18 @@ void NodeGraphEditor::buildFooter() {
     footerSelectionLabel_->setTypeRole(kit::TypeRole::UiSmall);
     footerSelectionLabel_->setTone(kit::Color::Muted);
     layout->addWidget(footerSelectionLabel_);
+
+    // Task N1, item 13: Arrange at the footer's right edge, a labelled button like the Viewer
+    // footer's RAM Preview -- the same Arrange All the View menu and Ctrl+Shift+A run, through the
+    // same ArrangeNodes command.
+    footerArrangeButton_ = new kit::KButton(kit::IconId::Arrange, tr("Arrange"), this);
+    footerArrangeButton_->setObjectName(QStringLiteral("nodeArrangeButton"));
+    footerArrangeButton_->setAccessibleName(tr("Arrange All"));
+    footerArrangeButton_->setToolTip(
+        tr("Arrange All (%1)")
+            .arg(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A).toString(QKeySequence::NativeText)));
+    connect(footerArrangeButton_, &kit::KButton::clicked, this, [this] { arrangeAllNodes(); });
+    layout->addWidget(footerArrangeButton_);
 
     connect(&session_, &CompositionSession::selectionChanged, this,
             &NodeGraphEditor::refreshSelectionReadout);

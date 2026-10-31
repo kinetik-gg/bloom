@@ -16,9 +16,11 @@ inline constexpr std::string_view kMaskFeatherRowRole = "mask-feather";
 inline constexpr std::string_view kMaskExpansionRowRole = "mask-expansion";
 inline constexpr std::string_view kMaskOpacityRowRole = "mask-opacity";
 
+// With `reveal`, only the listed mask parameters show (the group opens; no row, no group).
 void appendMaskEntries(const CompositionSession& session, const TimelineLayerEntry& layer,
                        const std::set<std::pair<document::LayerId, QString>>& collapsedGroups,
-                       std::vector<TimelineLayerEntry>& rows);
+                       std::vector<TimelineLayerEntry>& rows,
+                       const std::set<document::ParameterId>* reveal = nullptr);
 
 // The collapse key of the Masks group.
 [[nodiscard]] QString maskGroupKey();

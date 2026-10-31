@@ -46,6 +46,7 @@
 #include <QGraphicsProxyWidget>
 #include <QGraphicsSceneHoverEvent>
 #include <QGraphicsSceneMouseEvent>
+#include <QGraphicsView>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QMenu>
@@ -191,6 +192,18 @@ QString socketKindName(document::SocketValueKind kind);
 // back, since NodeEdgeItem::shape() strokes path() itself rather than assuming any one geometry.
 QPainterPath linkPath(QPointF start, QPointF end, LinkStyle style);
 
+// Diagnostic counters for the playback path (bug #401): how many times a card rebuilt a selector's
+// items, and how many cards re-read their values for a time change. A playhead move must rebuild
+// no selector and touch only the visible cards whose values move with time.
+struct NodeCardRefreshCounters final {
+    std::size_t selectorRebuilds = 0;
+    std::size_t timeRefreshes = 0;
+};
+inline NodeCardRefreshCounters& nodeCardRefreshCounters() {
+    static NodeCardRefreshCounters counters;
+    return counters;
+}
+
 class SocketItem final : public QGraphicsItem {
   public:
     SocketItem(document::NodeId node, QString name, document::SocketValueKind kind,
@@ -227,6 +240,11 @@ class SocketItem final : public QGraphicsItem {
     // bottom. This is what ConnectPorts takes as its `insertBefore`, so the caret the artist saw
     // and the order the command writes are the same decision.
     [[nodiscard]] std::optional<document::LayerSlotId> slotInsertionAt(QPointF localPoint) const;
+    // Where, in this socket's own coordinates, the link that ends at `ref` attaches. An ordinary
+    // socket is one point, its centre. Merge's ordered multi-input gives every stack slot its own
+    // point -- the middle of that slot's segment -- so each layer plugs in at its own place along
+    // the pill instead of every link converging on the pill's centre.
+    [[nodiscard]] QPointF anchorFor(const document::InputPortRef& ref) const;
     // The pill's painted extent along the card's edge; kSocketDiameter for an ordinary round
     // socket.
     [[nodiscard]] qreal pillLength() const;
@@ -264,6 +282,9 @@ class SocketItem final : public QGraphicsItem {
     document::SocketValueKind kind;
     std::optional<document::InputPortRef> input;
     std::optional<document::OutputPortRef> output;
+    // True when a link (an edge or a driver binding) ends or starts here. A collapsed card keeps
+    // only its linked sockets, as a folded Blender node does.
+    bool linked = false;
 
   protected:
     void hoverEnterEvent(QGraphicsSceneHoverEvent* event) override;
@@ -289,12 +310,20 @@ class NodeItem final : public QGraphicsObject {
                 if (node)
                     refreshValues(*node, *composition);
             });
+        // A driven value moves with time, so a fresh driven answer reaches only the cards that
+        // carry one, only where a view shows them, and never rebuilds a selector (bug #401).
         if (session_)
             connect(session_, &CompositionSession::drivenValuesChanged, this, [this] {
+                if (!timeVarying_)
+                    return;
+                if (!shownInAView()) {
+                    timeStale_ = true;
+                    return;
+                }
                 const auto* composition = session_->composition();
                 const auto* node = composition ? composition->graph().findNode(id_) : nullptr;
                 if (node)
-                    refreshValues(*node, *composition);
+                    refreshTimeValues(*node, *composition);
             });
         setData(kNodeItemKindRole, QStringLiteral("node"));
         setData(kNodeStableIdRole, QVariant::fromValue<qulonglong>(id.value()));
@@ -366,6 +395,11 @@ class NodeItem final : public QGraphicsObject {
             if (const auto* asset = session_->snapshot().project().findAsset(imageAsset_))
                 title_ = imageAssetDisplayName(*asset);
         eyebrow_ = nodeEyebrow(composition, node);
+        timeVarying_ = std::ranges::any_of(node.parameters, [&](const auto& binding) {
+            const auto* parameter = composition.parameters().find(binding.parameterId);
+            return parameter != nullptr &&
+                   !std::holds_alternative<document::ConstantValueSource>(parameter->source);
+        });
         if (reroute_) {
             // A dot has no name on it, so its tooltip is where the kind it carries is said.
             const auto kind = composition.graph().rerouteKind(node.id, registry);
@@ -395,6 +429,36 @@ class NodeItem final : public QGraphicsObject {
                               const document::Composition& composition) {
         refreshValues(node, composition);
     }
+    // The playhead's refresh (bug #401): the same readback, minus every selector rebuild -- a
+    // selector's items follow the snapshot and the assets, never the time.
+    void refreshTimeValues(const document::NodeRecord& node,
+                           const document::Composition& composition) {
+        ++nodeCardRefreshCounters().timeRefreshes;
+        timeOnly_ = true;
+        refreshValues(node, composition);
+        timeOnly_ = false;
+        timeStale_ = false;
+    }
+    // True when a value on this card can change with the session time alone: one of its
+    // parameters is animated, driven or otherwise not a constant. Only these cards follow the
+    // playhead.
+    [[nodiscard]] bool timeVarying() const noexcept { return timeVarying_; }
+    // Set when a time change skipped this card because it was outside every view; the next view
+    // change brings it up to date.
+    void setTimeStale(const bool stale) noexcept { timeStale_ = stale; }
+    [[nodiscard]] bool timeStale() const noexcept { return timeStale_; }
+    // True while some visible view of this card's scene shows any part of it.
+    [[nodiscard]] bool shownInAView() const {
+        if (scene() == nullptr)
+            return false;
+        for (const auto* view : scene()->views())
+            if (view != nullptr && view->isVisible() &&
+                view->mapToScene(view->viewport()->rect())
+                    .boundingRect()
+                    .intersects(sceneBoundingRect()))
+                return true;
+        return false;
+    }
 
     [[nodiscard]] bool hasInputSocket() const {
         return std::ranges::any_of(sockets_,
@@ -420,15 +484,40 @@ class NodeItem final : public QGraphicsObject {
     [[nodiscard]] std::pair<QRectF, QRectF> titleBandRects() const {
         const QFontMetricsF metrics(kit::font(kit::TypeRole::UiSmall));
         const auto categoryWidth = metrics.horizontalAdvance(eyebrow_);
-        const auto right = width_ - kCardPadding -
-                           (layout_.muted ? kit::px(kit::Size::IconSmall) + kCardPadding : 0);
-        const QRectF category(right - categoryWidth, 0, categoryWidth, kCardHeaderHeight);
-        return {
-            {kCardPadding, 0,
-             std::max(0.0, category.left() - kit::px(kit::Spacing::PropertyGutter) - kCardPadding),
-             kCardHeaderHeight},
-            category};
+        const qreal badge = kit::px(kit::Size::IconSmall) + kCardPadding;
+        const auto right = width_ - kCardPadding - (layout_.muted ? badge : 0.0) -
+                           (assetProblem() ? badge : 0.0);
+        const qreal header = headerHeight();
+        const QRectF category(right - categoryWidth, 0, categoryWidth, header);
+        const qreal left = collapseToggleRect().right() + kit::px(kit::Spacing::XS);
+        return {{left, 0,
+                 std::max(0.0, category.left() - kit::px(kit::Spacing::PropertyGutter) - left),
+                 header},
+                category};
     }
+    // The header's own height: the title band, or the whole card once it is collapsed (a collapsed
+    // card grows past the band only when its linked sockets need the room).
+    [[nodiscard]] qreal headerHeight() const {
+        return layout_.collapsed ? std::max(kCardHeaderHeight, height_) : kCardHeaderHeight;
+    }
+    // The disclosure caret at the head of the title band (task N1, item 6). A press inside it
+    // collapses or expands the card through SetNodeCollapsed -- the same command Node > Collapse
+    // issues -- instead of starting a move.
+    [[nodiscard]] QRectF collapseToggleRect() const {
+        const qreal side = kit::px(kit::Size::IconSmall);
+        return {kCardPadding, (headerHeight() - side) / 2.0, side, side};
+    }
+    // True when `local` (card coordinates) is on the caret: its icon box, half-open on the right
+    // and bottom so the title band just past it stays a grab point for moving the card.
+    [[nodiscard]] bool onCollapseToggle(const QPointF local) const {
+        const QRectF box = collapseToggleRect();
+        return !reroute_ && local.x() >= box.left() && local.x() < box.right() &&
+               local.y() >= box.top() && local.y() < box.bottom();
+    }
+    [[nodiscard]] bool collapsed() const noexcept { return layout_.collapsed; }
+    // True for an Image, Video or Audio source whose asset is gone, gapped or unreadable: the
+    // header shows a warning badge for it.
+    [[nodiscard]] bool assetProblem() const;
     [[nodiscard]] qreal parameterRowHeight() const { return rowHeight_; }
     void setPrimary(bool primary) {
         primary_ = primary;
@@ -528,7 +617,9 @@ class NodeItem final : public QGraphicsObject {
     void hoverMoveEvent(QGraphicsSceneHoverEvent* event) override {
         if (authoringEnabled_)
             setCursor(std::abs(event->pos().x() - width_) <= 6 ? Qt::SizeHorCursor
-                                                               : Qt::OpenHandCursor);
+                      : onCollapseToggle(event->pos())
+                          ? Qt::ArrowCursor
+                          : Qt::OpenHandCursor);
         QGraphicsObject::hoverMoveEvent(event);
     }
 
@@ -1459,7 +1550,7 @@ class NodeItem final : public QGraphicsObject {
                 continue;
             }
             if (row.selector != nullptr) {
-                if (row.kind == document::ParameterValueKind::String && session_)
+                if (row.kind == document::ParameterValueKind::String && session_ && !timeOnly_)
                     if (const auto* stored = std::get_if<std::string>(value)) {
                         // FEEDBACK-1's live value edits reach the font selector too: `value` is
                         // the live override when one is staged and the committed constant
@@ -1495,6 +1586,7 @@ class NodeItem final : public QGraphicsObject {
                                     parameter->schemaKey ==
                                         document::kCryptomatteLayerParameterSchemaKey)) {
                             if (const auto* node = composition.graph().findNode(id_)) {
+                                ++nodeCardRefreshCounters().selectorRebuilds;
                                 if (parameter->schemaKey == document::kImagePartParameterSchemaKey)
                                     refreshImagePartSelector(*row.selector, *session_, *node);
                                 else if (parameter->schemaKey ==
@@ -1515,6 +1607,7 @@ class NodeItem final : public QGraphicsObject {
                             refreshAudioAssetSelector(*row.selector, *session_,
                                                       QString::fromStdString(*stored));
                         } else {
+                            ++nodeCardRefreshCounters().selectorRebuilds;
                             (videoSource_ ? refreshVideoAssetSelector : refreshImageAssetSelector)(
                                 *row.selector, *session_, QString::fromStdString(*stored));
                         }
@@ -1968,6 +2061,8 @@ class NodeItem final : public QGraphicsObject {
         }
         const QFontMetricsF titleMetrics(kit::font(kit::TypeRole::Ui));
         minimumWidth_ = std::max(minimumWidth_, (kCardPadding + kCardPadding) +
+                                                    kit::px(kit::Size::IconSmall) +
+                                                    kit::px(kit::Spacing::XS) +
                                                     titleMetrics.horizontalAdvance(title_) +
                                                     kit::px(kit::Spacing::PropertyGutter) +
                                                     rowMetrics.horizontalAdvance(eyebrow_));
@@ -1990,15 +2085,28 @@ class NodeItem final : public QGraphicsObject {
                 else
                     outputHeight += socket->rowHeight();
             }
-        const qreal thumbnailHeight =
-            shapeSource_ || imageSource_ || audioSource_ ? kit::px(kit::Size::ImageThumbnail) : 0;
-        parameterRowsTop_ = kCardHeaderHeight + socketHeight + thumbnailHeight;
+        parameterRowsTop_ = kCardHeaderHeight + socketHeight;
+        // A collapsed card (task N1, item 6) is its header alone, as a Blender node folded with
+        // its disclosure caret: only the sockets that carry a link stay, spread along its two
+        // edges, and the card grows past the band only when those need the room.
+        const qreal collapsedPitch = kit::px(kit::Spacing::XS);
+        const auto collapsedExtent = [&](const bool inputs) {
+            qreal extent = 0.0;
+            int count = 0;
+            for (const auto* socket : sockets_)
+                if (socket->input.has_value() == inputs && socket->linked) {
+                    extent += socket->pillLength();
+                    ++count;
+                }
+            return count == 0 ? 0.0
+                              : extent + static_cast<qreal>(count + 1) * collapsedPitch;
+        };
         // A card with no parameter rows is exactly its header: no empty body lip below it, which
         // would read as a clipped row rather than as a node that simply has nothing to edit.
         const qreal height =
             layout_.collapsed
-                ? kCardHeaderHeight
-                : kCardHeaderHeight + socketHeight + outputHeight + thumbnailHeight +
+                ? std::max({kCardHeaderHeight, collapsedExtent(true), collapsedExtent(false)})
+                : kCardHeaderHeight + socketHeight + outputHeight +
                       (rowCount > 0.0
                            ? rowCount * (rowHeight + kCardRowGap) - kCardRowGap + kCardPadding
                            : 0.0);
@@ -2042,25 +2150,28 @@ class NodeItem final : public QGraphicsObject {
             placeRow(label, y);
             y += rowHeight + kCardRowGap;
         }
-        const auto inputCount = std::ranges::count_if(
-            sockets_, [](const auto* socket) { return socket->input.has_value(); });
-        const auto outputCount = static_cast<std::ptrdiff_t>(sockets_.size()) - inputCount;
-        int inputIndex = 0;
-        int outputIndex = 0;
         qreal inputY = kCardHeaderHeight, outputY = y;
+        // Collapsed: each edge's linked sockets are centred as one column on the card's height.
+        qreal collapsedInputY = (height_ - collapsedExtent(true)) / 2.0 + collapsedPitch;
+        qreal collapsedOutputY = (height_ - collapsedExtent(false)) / 2.0 + collapsedPitch;
         for (auto* socket : sockets_) {
             const bool input = socket->input.has_value();
-            const int edgeIndex = input ? inputIndex++ : outputIndex++;
+            if (layout_.collapsed) {
+                socket->setVisible(socket->linked);
+                if (!socket->linked)
+                    continue;
+                auto& top = input ? collapsedInputY : collapsedOutputY;
+                socket->setPos(input ? 0 : width_, top + socket->pillLength() / 2.0);
+                top += socket->pillLength() + collapsedPitch;
+                continue;
+            }
+            socket->setVisible(true);
             const qreal rowExtent = socket->rowHeight();
             auto& socketY = input ? inputY : outputY;
             const auto parameter = parameterSocketY_.find(socket->name);
             const qreal center = parameter != parameterSocketY_.end() ? parameter->second
                                                                       : socketY + rowExtent / 2.0;
-            socket->setPos(input ? 0 : width_,
-                           layout_.collapsed
-                               ? kCardHeaderHeight * static_cast<qreal>(edgeIndex + 1) /
-                                     static_cast<qreal>((input ? inputCount : outputCount) + 1)
-                               : center);
+            socket->setPos(input ? 0 : width_, center);
             if (parameter == parameterSocketY_.end())
                 socketY += rowExtent;
         }
@@ -2102,6 +2213,9 @@ class NodeItem final : public QGraphicsObject {
     document::AssetId imageAsset_;
     bool primary_ = false;
     bool authoringEnabled_ = false;
+    bool timeOnly_ = false;
+    bool timeVarying_ = false;
+    bool timeStale_ = false;
     std::vector<SocketItem*> sockets_;
     std::set<QString> linkedInputs_;
     // Which parameter role each control edits. Keyed by widget because that is what the proxy sweep
@@ -2162,6 +2276,8 @@ class NodeGroupItem final : public QGraphicsObject {
     [[nodiscard]] QRectF frameRect() const { return {pos(), size_}; }
     [[nodiscard]] QRectF titleRect() const { return {0.0, 0.0, size_.width(), kGroupTitleHeight}; }
     [[nodiscard]] document::Vec2d padding() const noexcept { return padding_; }
+    // The frame's tint, or an invalid colour for the neutral frame.
+    [[nodiscard]] QColor color() const { return color_; }
 
     void startRename();
     void setAuthoringEnabled(bool enabled);
@@ -2177,6 +2293,7 @@ class NodeGroupItem final : public QGraphicsObject {
     QString title_;
     std::set<document::NodeId> members_;
     document::Vec2d padding_{};
+    QColor color_;
     QSizeF size_;
     QGraphicsProxyWidget* renameProxy_ = nullptr;
     bool authoringEnabled_ = false;
@@ -2189,7 +2306,10 @@ class NodeEdgeItem final : public QGraphicsPathItem {
     void updatePath();
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override;
     [[nodiscard]] QPainterPath shape() const override;
-    [[nodiscard]] QRectF boundingRect() const override { return shape().boundingRect(); }
+    [[nodiscard]] QRectF boundingRect() const override;
+    // The pen paint() strokes with: the socket kind's ink (emphasized while hovered or while an
+    // end is selected), at kit::kNodeLinkWidth screen pixels whatever the zoom.
+    [[nodiscard]] QPen linkPen() const;
     void emphasize(bool enabled) {
         hovered_ = enabled;
         update();

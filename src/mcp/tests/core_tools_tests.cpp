@@ -18,6 +18,7 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -296,6 +297,13 @@ void liveSeams() {
     result = server.call("project.set-color-settings", R"({"config":"aces"})");
     expect(contains(result, R"("code":"updated")") && colour.has_value(),
            "project.set-color-settings reaches the port: " + result);
+    expect(contains(result, R"("workingSpace":"ACEScg")") &&
+               contains(result, R"("workingSpaceLabel":"ACEScg")"),
+           "project.set-color-settings reads back the working space id and label: " + result);
+    result = server.call("project.set-color-settings", R"({"config":"neutral"})");
+    expect(contains(result, R"("workingSpace":"lin_rec709_scene")") &&
+               contains(result, R"json("workingSpaceLabel":"Linear Rec.709 (sRGB)")json"),
+           "Bloom Neutral reads back lin_rec709_scene labelled Linear Rec.709 (sRGB): " + result);
     result = server.call("events", R"({"sinceRevision":0})");
     expect(contains(result, R"("kind":"project.saved")"), "events list project.saved: " + result);
 }
@@ -338,7 +346,6 @@ void retiredTransientJobs() {
         }
     } release{queue, captures};
     host::ExportEncoderStatus encoders;
-    encoders.exportPlatform = true;
     encoders.probed = true;
     queue = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
         .session = *server.session->hostSession(),
@@ -375,6 +382,11 @@ void retiredTransientJobs() {
     expect(contains(status, R"("recentTransientJobs":[{"id":)" + id) &&
                contains(status, R"("transient":true)"),
            "export.status lists the retired transient job: " + status);
+    // The refusal codes are named by enumerator, not by position: ADR 0035 retired value 23, and
+    // the codes after it must keep their own names.
+    expect(contains(status, R"("code":"DestinationCheckPending")") &&
+               !contains(status, R"("code":"Unknown")"),
+           "export.status names the codes after the retired gap correctly: " + status);
     const auto wait = server.call("export.wait", R"({"job":)" + id + R"(,"timeoutMs":1000})");
     expect(contains(wait, R"("finished":true)"), "export.wait finds the retired job: " + wait);
 
@@ -406,12 +418,71 @@ void retiredTransientJobs() {
 
 } // namespace
 
+// Document 1.30 read-back: query kind=layers, kind=keyframes and kind=enums carry the easing
+// equations, their parameters and the shy / nameFollowsSource layer flags the new operations write.
+std::string firstMatch(const std::string& text, const std::string& pattern) {
+    std::smatch match;
+    return std::regex_search(text, match, std::regex(pattern)) ? match[1].str() : std::string{};
+}
+
+template <typename Server> std::string revisionOf(Server& server) {
+    return firstMatch(server.call("query", R"({"kind":"project"})"), R"re("revision":(\d+))re");
+}
+
+void animationReadBack() {
+    Headless server;
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    auto result = transact(R"({"op":"bloom.layer.add-solid","args":{"composition":1,)"
+                           R"("name":"Solid","color":[1,0,0,1]}})");
+    expect(contains(result, R"("isError":false)"), "the solid fixture applies: " + result);
+    const auto layers = server.call("query", R"({"kind":"layers","composition":1})");
+    const auto layer = firstMatch(layers, R"re("records":\[\{"id":(\d+))re");
+    expect(!layer.empty() && contains(layers, R"("shy":false)") &&
+               contains(layers, R"("nameFollowsSource":false)"),
+           "layers read back with their presentation flags: " + layers);
+    const auto nodes = server.call("query", R"({"kind":"nodes","composition":1})");
+    const auto opacity = firstMatch(nodes, R"re("opacity":(\d+))re");
+    expect(!opacity.empty(), "the layer's opacity parameter is addressable: " + nodes);
+    for (const auto* at : {R"(0,"value":0.0)", R"(12,"value":1.0)"})
+        static_cast<void>(transact(
+            R"({"op":"bloom.animation.set-keyframe-at-time-for-parameter","args":{"composition":1,)"
+            R"("parameter":)" +
+            opacity + R"(,"time":)" + at + "}}"));
+    auto keyframes = server.call("query", R"({"kind":"keyframes","composition":1})");
+    const auto curve = firstMatch(keyframes, R"re("curve":(\d+))re");
+    const auto key = firstMatch(keyframes, R"re("keys":\[\{"id":(\d+))re");
+    expect(!curve.empty() && !key.empty() && contains(keyframes, R"("interpolation":"linear")"),
+           "keyframes read back with their interpolation token: " + keyframes);
+    result = transact(R"({"op":"bloom.animation.set-keyframes-easing","args":{"composition":1,)"
+                      R"("keys":[[)" +
+                      curve + "," + key +
+                      R"(]],"interpolation":"elastic","ease":"out","amplitude":2.0}},)"
+                      R"({"op":"bloom.layer.set-shy","args":{"composition":1,"layer":)" +
+                      layer + R"(,"shy":true}})");
+    keyframes = server.call("query", R"({"kind":"keyframes","composition":1})");
+    expect(contains(keyframes, R"("interpolation":"elastic")") &&
+               contains(keyframes, R"("interpolationId":12)") &&
+               contains(keyframes, R"("ease":"out")") && contains(keyframes, R"("amplitude":2)"),
+           "set-keyframes-easing reads back mode and parameters: " + result + keyframes);
+    expect(contains(server.call("query", R"({"kind":"layers","composition":1})"), R"("shy":true)"),
+           "set-shy reads back");
+    const auto enums = server.call("query", R"({"kind":"enums"})");
+    expect(contains(enums, R"("token":"bounce")") && contains(enums, R"("label":"Bezier")") &&
+               contains(enums, R"("token":"in-out")") &&
+               contains(enums, R"("label":"Easy Ease Out")"),
+           "the interpolation, ease and Easy Ease tables are listed: " + enums);
+}
+
 int main() {
     try {
         exportWithoutQueue();
         unboundSeams();
         liveSeams();
         retiredTransientJobs();
+        animationReadBack();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;

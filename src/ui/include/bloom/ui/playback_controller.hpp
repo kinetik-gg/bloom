@@ -82,8 +82,9 @@ class PlaybackController final : public QObject {
     void pause();
     void toggle();
     // Takes effect on the NEXT tick; it never moves session time by itself, so toggling looping
-    // mid-run neither restarts nor re-seeks playback. Turning looping off while a run is already
-    // past the end is not a case that exists: the run pauses the moment it reaches the last frame.
+    // mid-run neither restarts nor re-seeks playback. Turning looping off mid-run keeps the passes
+    // already played: the run finishes the pass it is in and pauses on the work area's last frame.
+    // The audio mixer follows the same toggle in place, without a device restart.
     void setLooping(bool looping);
 
     // Advances playback by one tick using the injected clock's current reading. Production wires
@@ -105,6 +106,8 @@ class PlaybackController final : public QObject {
     void handleSnapshotChanged();
     void handleAudioCompletion(std::uint64_t generation, bool playing, bool transportStarted);
     void useWallClock();
+    // Hands the mixer the work area's frame-grid loop (or no loop) so audio wraps with the video.
+    void publishAudioLoop();
     void scheduleTick(std::chrono::nanoseconds untilNextFrame);
 
     CompositionSession& session_;
@@ -119,6 +122,9 @@ class PlaybackController final : public QObject {
     core::RationalTime runRangeStart_{}, runRangeEnd_{};
     // Elapsed/audio-derived offset from the fixed run origin, never accumulated timer ticks.
     std::uint64_t appliedOffset_ = 0;
+    // Whole loop passes already played when looping was turned off mid-run (a multiple of the
+    // work-area frame count), so the non-looping end test starts from the current pass.
+    std::uint64_t completedPassFrames_ = 0;
     std::optional<std::uint64_t> lastAppliedFrameIndex_;
     // Guards handleCurrentTimeChanged()'s scrub-during-playback detection: set around
     // PlaybackController's own session_.setCurrentTime() call so that signal is not mistaken for

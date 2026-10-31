@@ -20,6 +20,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/host/font_catalogue.hpp>
+#include <bloom/host/project_color_choice.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>

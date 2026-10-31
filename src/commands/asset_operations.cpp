@@ -2,6 +2,7 @@
 #include <array>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/core/file_uri.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/media/audio/audio.hpp>
@@ -685,7 +686,8 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
                         document::kLayerOutputNodeSchemaVersion}) ||
         !graph.addLayerOutput({*layerOutputNodeId,
                                *layerId,
-                               asset->locator.path,
+                               // The layer shows its source's name and follows it (document 1.30).
+                               asset->name.empty() ? asset->locator.path : asset->name,
                                std::string(document::kLayerOutputAudioOutputPort),
                                std::nullopt,
                                true,
@@ -709,6 +711,7 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
     // ADR 0024: the audio is the layer's content extent and the range ends with it (capped by the
     // composition), so after its last sample the layer is silent.
     if (auto* boundary = graph.findLayer(*layerId); boundary != nullptr) {
+        boundary->nameFollowsSource = !asset->name.empty();
         boundary->timing.contentExtent = document::SourceLayerExtent{*sourceNodeId};
         const auto rate = composition->format().frameRate();
         if (asset->duration > core::RationalTime{} && asset->duration < composition->duration()) {
@@ -738,29 +741,7 @@ OperationResult AddAudioLayer::apply(document::Draft& draft) const {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Audio output could not be connected");
     }
-    const auto card = document::kConservativeNodeCardSize;
-    const auto defaults = document::defaultNodeLayout(graph.nodes());
-    const auto mergeId = graph.layerStack().nodeId();
-    const auto mergePosition = composition->nodeLayout().contains(mergeId)
-                                   ? composition->nodeLayout().at(mergeId).position
-                                   : defaults.at(mergeId).position;
-    const auto gap = document::kNodeLayoutSpacing;
-    const auto layerPreferred =
-        document::Vec2d{mergePosition.x - card.width - gap, mergePosition.y};
-    auto occupied = composition->nodeLayout();
-    for (const auto& existing : graph.nodes())
-        if (existing.id != *sourceNodeId && existing.id != *layerOutputNodeId &&
-            !occupied.contains(existing.id))
-            occupied.emplace(existing.id, defaults.at(existing.id));
-    const auto layerPosition =
-        document::findNearestFreeNodePosition(occupied, {}, card, layerPreferred, gap);
-    occupied[*layerOutputNodeId] = {layerPosition, 128.0, false, false};
-    const auto sourcePreferred =
-        document::Vec2d{layerPosition.x - card.width - gap, layerPosition.y};
-    const auto sourcePosition =
-        document::findNearestFreeNodePosition(occupied, {}, card, sourcePreferred, gap);
-    composition->nodeLayout()[*sourceNodeId] = {sourcePosition, 128.0, false, false};
-    composition->nodeLayout()[*layerOutputNodeId] = {layerPosition, 128.0, false, false};
+    placeLayerCards(*composition, *layerOutputNodeId, *sourceNodeId);
     return OperationResult::applied({{"layer", *layerId},
                                      {"slot", *slotId},
                                      {"audioNode", *sourceNodeId},

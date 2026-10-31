@@ -1,5 +1,7 @@
 #include <bloom/project/document_reconstruct.hpp>
 
+#include <bloom/document/layer_source.hpp>
+
 #include <bloom/document/animation.hpp>
 #include <bloom/document/extension_records.hpp>
 #include <bloom/document/graph.hpp>
@@ -144,7 +146,8 @@ ReconstructDocumentResult ReconstructDocumentResult::failure(ReconstructionRejec
     return out;
 }
 
-ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) {
+ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope,
+                                              const bool inferLayerNameFollowsSource) {
     if (const auto rejection = validateDecodedNodeVersions(envelope); rejection.has_value()) {
         return ReconstructDocumentResult::failure(*rejection);
     }
@@ -213,6 +216,8 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) 
     }
 
     project.setExportQueue(std::move(envelope.exportQueue));
+    if (inferLayerNameFollowsSource)
+        document::inferLayerNameFollowsSource(project);
 
     const auto validation = project.validate();
     if (!validation.ok()) {

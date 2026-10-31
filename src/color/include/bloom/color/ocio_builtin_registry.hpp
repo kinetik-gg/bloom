@@ -85,7 +85,12 @@ struct DisplayViewEntry final {
     std::string display;
     std::string view;
     std::string colourSpaceId;
+    // The config's own default pair. Export, thumbnails and the color picker's inverse use it.
     bool isDefault = false;
+    // The pair the Viewer starts on: the default display with a view that applies no tone mapping
+    // ("Un-tone-mapped" under the ACES configs), or the config default when none is identifiable.
+    // Exactly one entry is marked. Bloom Neutral's single pair is both.
+    bool isViewerDefault = false;
 
     friend bool operator==(const DisplayViewEntry&, const DisplayViewEntry&) = default;
 };

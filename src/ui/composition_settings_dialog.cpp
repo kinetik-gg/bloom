@@ -3,6 +3,7 @@
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/safe_parse.hpp>
 #include <bloom/document/persisted_text.hpp>
+#include <bloom/host/project_color_choice.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -351,8 +352,9 @@ CompositionSettingsDialog::CompositionSettingsDialog(
                 : 0;
         if (current < 0 && initial_.workingColorSpaceId) {
             // A space this configuration does not list stays selectable rather than vanishing.
-            const auto text = QString::fromStdString(*initial_.workingColorSpaceId);
-            workingSpace_->addItem(text, text);
+            const auto& id = *initial_.workingColorSpaceId;
+            workingSpace_->addItem(QString::fromUtf8(host::workingColorSpaceLabel(id)),
+                                   QString::fromStdString(id));
             workingSpace_->setCurrentIndex(workingSpace_->count() - 1);
         } else {
             workingSpace_->setCurrentIndex(std::max(0, current));

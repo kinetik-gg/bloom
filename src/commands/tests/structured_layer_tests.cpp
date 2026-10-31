@@ -1,4 +1,5 @@
 #include "command_test_support.hpp"
+#include <bloom/commands/node_layout_placement.hpp>
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/sha256.hpp>
@@ -758,12 +759,14 @@ void testManyCreatedLayersUseCollisionFreeSlots(TestContext& test) {
     const auto clearOf = [&](const NodeId left, const NodeId right) {
         const auto& leftPosition = compositionAfter.nodeLayout().at(left).position;
         const auto& rightPosition = compositionAfter.nodeLayout().at(right).position;
-        constexpr auto size = document::kConservativeNodeCardSize;
+        // Each card at the extent placement measures it by (task N1): the command-side estimate.
+        const auto leftSize = estimatedNodeCardSize(compositionAfter, left);
+        const auto rightSize = estimatedNodeCardSize(compositionAfter, right);
         constexpr auto gap = document::kNodeLayoutSpacing;
-        return leftPosition.x >= rightPosition.x + size.width + gap ||
-               rightPosition.x >= leftPosition.x + size.width + gap ||
-               leftPosition.y >= rightPosition.y + size.height + gap ||
-               rightPosition.y >= leftPosition.y + size.height + gap;
+        return leftPosition.x >= rightPosition.x + rightSize.width + gap ||
+               rightPosition.x >= leftPosition.x + leftSize.width + gap ||
+               leftPosition.y >= rightPosition.y + rightSize.height + gap ||
+               rightPosition.y >= leftPosition.y + leftSize.height + gap;
     };
     std::set<NodeId> createdNodes;
     for (const auto [source, layer] : created) {

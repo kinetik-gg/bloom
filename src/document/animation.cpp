@@ -1,6 +1,7 @@
 #include <bloom/document/animation.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 #include <string_view>
@@ -28,9 +29,7 @@ using bloom::document::Vec2AnimationCurve;
 using bloom::document::Vec3AnimationCurve;
 
 [[nodiscard]] bool validInterpolation(const KeyframeInterpolation interpolation) noexcept {
-    return interpolation == KeyframeInterpolation::Hold ||
-           interpolation == KeyframeInterpolation::Linear ||
-           interpolation == KeyframeInterpolation::EaseInOut;
+    return bloom::document::isValidKeyframeInterpolation(interpolation);
 }
 
 // "Value is representable". Every stored key is a ScalarKeyframe -- a scalar curve's own or one
@@ -49,6 +48,10 @@ template <typename Keyframe> [[nodiscard]] bool validHandles(const Keyframe& key
            bloom::document::isValidKeyframeHandle(keyframe.incomingHandle);
 }
 
+template <typename Keyframe> [[nodiscard]] bool validEasing(const Keyframe& keyframe) noexcept {
+    return bloom::document::isValidKeyframeEasing(keyframe.easing);
+}
+
 template <typename Curve> void normalizeFinalInterpolation(Curve& curve) noexcept {
     if (!curve.keyframes.empty()) {
         curve.keyframes.back().outgoingInterpolation = KeyframeInterpolation::Linear;
@@ -64,7 +67,8 @@ template <typename Curve> [[nodiscard]] bool curveCanEnterStore(const Curve& cur
     for (std::size_t index = 0; index < curve.keyframes.size(); ++index) {
         const auto& keyframe = curve.keyframes[index];
         if (!keyframe.id.isValid() || !ids.insert(keyframe.id).second || !finiteValue(keyframe) ||
-            !validHandles(keyframe) || !validInterpolation(keyframe.outgoingInterpolation)) {
+            !validHandles(keyframe) || !validEasing(keyframe) ||
+            !validInterpolation(keyframe.outgoingInterpolation)) {
             return false;
         }
         if (index > 0 && !(curve.keyframes[index - 1].time < keyframe.time)) {
@@ -78,7 +82,7 @@ template <typename Curve> [[nodiscard]] bool curveCanEnterStore(const Curve& cur
     for (std::size_t index = 0; index < curve.keyframes.size(); ++index) {
         const auto& keyframe = curve.keyframes[index];
         if (!keyframe.id.isValid() || !finiteValue(keyframe) || !validHandles(keyframe) ||
-            !validInterpolation(keyframe.outgoingInterpolation) ||
+            !validEasing(keyframe) || !validInterpolation(keyframe.outgoingInterpolation) ||
             (index > 0 && !(curve.keyframes[index - 1].time < keyframe.time))) {
             return false;
         }
@@ -133,6 +137,10 @@ template <typename Curve> void validateCurve(const Curve& curve, ValidationResul
             result.add(ValidationCode::InvalidValue, keyframePath + ".handle",
                        "Keyframe handle time must be within [0, 1] and its value offset finite");
         }
+        if (!validEasing(keyframe)) {
+            result.add(ValidationCode::InvalidValue, keyframePath + ".easing",
+                       "Keyframe easing parameters must be finite with a non-negative amplitude");
+        }
         if (!validInterpolation(keyframe.outgoingInterpolation)) {
             result.add(ValidationCode::InvalidInterpolation,
                        keyframePath + ".outgoingInterpolation",
@@ -174,6 +182,10 @@ void validateComponentCurve(const ComponentAnimationCurve& curve, const std::str
         if (!validHandles(keyframe)) {
             result.add(ValidationCode::InvalidValue, keyframePath + ".handle",
                        "Keyframe handle time must be within [0, 1] and its value offset finite");
+        }
+        if (!validEasing(keyframe)) {
+            result.add(ValidationCode::InvalidValue, keyframePath + ".easing",
+                       "Keyframe easing parameters must be finite with a non-negative amplitude");
         }
         if (!validInterpolation(keyframe.outgoingInterpolation)) {
             result.add(ValidationCode::InvalidInterpolation,
@@ -285,6 +297,44 @@ namespace bloom::document {
 
 bool isValidKeyframeHandle(const KeyframeHandle& handle) noexcept {
     return std::isfinite(handle.value) && handle.time >= 0.0 && handle.time <= 1.0;
+}
+
+namespace {
+constexpr std::array<std::string_view, 13> kInterpolationTokens{
+    "hold",  "linear", "ease-in-out", "sine", "quad",   "cubic",  "quart",
+    "quint", "expo",   "circ",        "back", "bounce", "elastic"};
+constexpr std::array<std::string_view, 4> kEasingTokens{"auto", "in", "out", "in-out"};
+} // namespace
+
+std::string_view keyframeInterpolationToken(const KeyframeInterpolation mode) noexcept {
+    const auto index = static_cast<std::size_t>(mode);
+    return index < kInterpolationTokens.size() ? kInterpolationTokens[index] : std::string_view{};
+}
+
+std::optional<KeyframeInterpolation>
+keyframeInterpolationFromToken(const std::string_view token) noexcept {
+    for (std::size_t index = 0; index < kInterpolationTokens.size(); ++index)
+        if (kInterpolationTokens[index] == token)
+            return static_cast<KeyframeInterpolation>(index);
+    return std::nullopt;
+}
+
+std::string_view keyframeEasingToken(const KeyframeEasing easing) noexcept {
+    const auto index = static_cast<std::size_t>(easing);
+    return index < kEasingTokens.size() ? kEasingTokens[index] : std::string_view{};
+}
+
+std::optional<KeyframeEasing> keyframeEasingFromToken(const std::string_view token) noexcept {
+    for (std::size_t index = 0; index < kEasingTokens.size(); ++index)
+        if (kEasingTokens[index] == token)
+            return static_cast<KeyframeEasing>(index);
+    return std::nullopt;
+}
+
+bool isValidKeyframeEasing(const KeyframeEasingParameters& parameters) noexcept {
+    return isValidKeyframeEasingMode(parameters.easing) && std::isfinite(parameters.back) &&
+           std::isfinite(parameters.amplitude) && parameters.amplitude >= 0.0 &&
+           std::isfinite(parameters.period);
 }
 
 namespace {

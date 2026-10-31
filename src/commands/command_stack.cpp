@@ -1,6 +1,7 @@
 #include "layer_lock.hpp"
 #include "render_footprint.hpp"
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/document/evaluation_inputs.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -317,6 +318,8 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
     // True as soon as an applied render-affecting operation did NOT prove a finite footprint, which
     // makes the transaction's affected time the conservative whole render.
     bool wholeRender = false;
+    // Whether any applied render-affecting operation published its own finite footprint.
+    bool publishedFootprint = false;
     std::optional<AffectedTimeFootprint> affectedTimes;
     // Issue #355. The one composition whose parameter/animation-only operations deferred their
     // footprint to a single before/after diff once every operation has applied.
@@ -365,6 +368,7 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
         // that reported NoChange contributes nothing, so a layout edit beside it stays layout-only.
         if (operationResult.status == OperationStatus::Applied && operation->renderAffecting()) {
             renderAffecting = true;
+            publishedFootprint = publishedFootprint || operationResult.affectedTimes.has_value();
             const auto scope = operationResult.affectedTimes.has_value()
                                    ? std::optional(operationResult.affectedTimes->compositionId)
                                    : operation->renderScope();
@@ -425,6 +429,29 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
             }
         }
         ++operationIndex;
+    }
+
+    // #399. Render impact is proven from the document, not only declared by the operations. A
+    // transaction whose before and after present identical evaluation inputs
+    // (document/evaluation_inputs.hpp) is render-neutral whatever its operations left at the
+    // conservative default -- a layer rename, a label color, a group frame, a field added later
+    // to a presentation record -- so caches keyed on the retained evaluation snapshot stay valid.
+    // Explicit evidence an operation published (a finite footprint, identity remaps) is kept as
+    // published. The proof also checks the opt-outs: a transaction whose operations all declared
+    // themselves render-neutral but which changed an evaluation input fails closed to a whole
+    // render.
+    if (changed) {
+        ++work_.evaluationInputProofs;
+        const bool sameInputs =
+            document::sameEvaluationInputs(before.project(), std::as_const(draft).project());
+        if (sameInputs && !publishedFootprint) {
+            renderAffecting = false;
+        } else if (!sameInputs && !renderAffecting) {
+            renderAffecting = true;
+            wholeRender = true;
+            remapsValid = false;
+            renderScopeKnown = false;
+        }
     }
 
     if (changed && renderAffecting && !wholeRender && remapsValid && parameterScope.has_value()) {

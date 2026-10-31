@@ -484,10 +484,21 @@ GpuProcessingPhasePolicy::reserve(const GpuProcessingPhaseEnvelope& envelope,
     }
     if (grant.status == render::GpuProcessingPhaseAdmission::AwaitingCapacity &&
         grant.domain != render::GpuProcessingPhaseDomain::RequestCount) {
-        // Evict reusable retention first; the waiting request retries on the release.
-        const auto needed = grant.domain == render::GpuProcessingPhaseDomain::Device
-                                ? request->deviceWorkingBytes + request->minimumExecutorBytes
-                                : request->fixedHostBytes + 3 * request->minimumSourceBytes;
+        // Evict reusable retention first; the waiting request retries on the release. Ask only
+        // for the shortfall: the need minus what is free in that domain now.
+        const bool device = grant.domain == render::GpuProcessingPhaseDomain::Device;
+        const auto need = device ? request->deviceWorkingBytes + request->minimumExecutorBytes
+                                 : request->fixedHostBytes + 3 * request->minimumSourceBytes;
+        const auto counters = budget_.snapshot();
+        const auto capacity = device ? counters.deviceCapacityBytes : counters.hostCapacityBytes;
+        const auto claims = device ? counters.totalDeviceClaimBytes : counters.totalHostClaimBytes;
+        const auto free = capacity ? subtractSaturating(*capacity, claims) : std::uint64_t{0};
+        const auto needed = std::max<std::uint64_t>(subtractSaturating(need, free), 1);
+        {
+            const std::lock_guard lock(mutex_);
+            lastAwaitingNeed_ = AwaitingNeed{.domain = grant.domain, .bytes = need,
+                                             .shortfallBytes = needed, .at = now};
+        }
         std::vector<RetentionReclaimer> reclaimers;
         {
             const std::lock_guard lock(reclaimerMutex_);
@@ -623,6 +634,11 @@ std::string describeAdmission(const render::GpuProcessingPhaseGrant& grant,
          << " hostReady=" << capacity.hostReady << " deviceReady=" << capacity.deviceReady
          << " revision=" << capacity.admissionRevision;
     return text.str();
+}
+std::optional<GpuProcessingPhasePolicy::AwaitingNeed>
+GpuProcessingPhasePolicy::lastAwaitingNeed() const noexcept {
+    const std::lock_guard lock(mutex_);
+    return lastAwaitingNeed_;
 }
 MemoryHeadroom GpuProcessingPhasePolicy::headroom() const noexcept {
     const std::lock_guard lock(mutex_);

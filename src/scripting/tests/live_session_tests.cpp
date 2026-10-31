@@ -1,5 +1,7 @@
 #include <atomic>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/color_settings.hpp>
+#include <bloom/host/bloom_neutral_profile.hpp>
 #include <bloom/scripting/facade.hpp>
 #include <bloom/scripting/render.hpp>
 #include <chrono>
@@ -121,12 +123,28 @@ void exercise() {
             "Cancelled render never starts native work");
 }
 
+// The headless new-project path (bloom-cli, bloom-mcp and Python's bloom.Host) creates Bloom
+// Neutral v1, exactly as the application's File > New does.
+void newProjectUsesBloomNeutral() {
+    auto created = scripting::Session::createNew();
+    require(static_cast<bool>(created), "Create a headless new project");
+    auto session = std::move(created).takeSession();
+    const auto* settings = session->hostSession()->colorSettings();
+    require(settings != nullptr &&
+                *settings ==
+                    document::makeBloomNeutralColorSettingsV1(host::kBloomNeutralV1ConfigDigest) &&
+                settings->processColorSpaceId == "lin_rec709_scene",
+            "A headless new project uses Bloom Neutral v1 (lin_rec709_scene)");
+    require(session->renderSourceSnapshot().colorSettings == *settings,
+            "The headless render source reads the same Neutral settings");
+}
+
 void savedColorIntent() {
     auto created = scripting::Session::createNew();
     require(static_cast<bool>(created), "Create color export session");
     auto session = std::move(created).takeSession();
     auto settings = *session->hostSession()->colorSettings();
-    // A new session starts on the qualified built-in ACES configuration.
+    // A new session starts on the qualified built-in Bloom Neutral v1 configuration.
     const auto* builtIn = std::get_if<document::BuiltInOcioConfigLocator>(&settings.ocioConfig.locator);
     require(builtIn != nullptr, "New session uses the built-in OCIO configuration");
     const std::string configUri = builtIn->uri;
@@ -203,6 +221,7 @@ void savedColorIntent() {
 int main() {
     try {
         exercise();
+        newProjectUsesBloomNeutral();
         savedColorIntent();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

@@ -42,6 +42,12 @@ bloom_add_test(
     TIMEOUT 30
 )
 
+add_executable(bloom_commands_layer_presentation_test layer_presentation_tests.cpp)
+target_link_libraries(bloom_commands_layer_presentation_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_layer_presentation_test)
+bloom_add_test(NAME bloom.commands.layer-presentation COMMAND bloom_commands_layer_presentation_test
+    LABELS commands unit TIMEOUT 30)
+
 add_executable(bloom_commands_node_test node_operations_tests.cpp)
 target_link_libraries(bloom_commands_node_test PRIVATE bloom_commands)
 bloom_enable_warnings(bloom_commands_node_test)
@@ -59,6 +65,12 @@ add_executable(bloom_commands_render_footprint_test render_footprint_tests.cpp)
 target_link_libraries(bloom_commands_render_footprint_test PRIVATE bloom_commands)
 bloom_enable_warnings(bloom_commands_render_footprint_test)
 bloom_add_test(NAME bloom.commands.render-footprint COMMAND bloom_commands_render_footprint_test
+               LABELS commands unit)
+
+add_executable(bloom_commands_evaluation_inputs_test evaluation_inputs_tests.cpp)
+target_link_libraries(bloom_commands_evaluation_inputs_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_evaluation_inputs_test)
+bloom_add_test(NAME bloom.commands.evaluation-inputs COMMAND bloom_commands_evaluation_inputs_test
                LABELS commands unit)
 
 add_executable(bloom_commands_composition_test composition_operations_tests.cpp)

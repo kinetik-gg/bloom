@@ -235,6 +235,12 @@ bool CompositionPreviewController::backgroundWorkAllowed() const noexcept {
            session_.transformInteractionOverrides().empty() && !ramPreviewProgress_.has_value();
 }
 
+bool CompositionPreviewController::playbackReadAheadAllowed() const noexcept {
+    return colorIntentCaptured_ && !shuttingDown_ && !cachePurgeGate_ &&
+           !interactiveTimeChangeArmed_ && !session_.valueEditActive() &&
+           session_.transformInteractionOverrides().empty() && !ramPreviewProgress_.has_value();
+}
+
 PreviewFrameCache& CompositionPreviewController::frameCache() const noexcept {
     return *frameCache_;
 }

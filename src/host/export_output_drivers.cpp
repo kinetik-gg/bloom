@@ -139,6 +139,33 @@ class DriverBase : public ExportOutputDriver {
         expected_ = exportExpectedPreservation(input_.output.record.settings);
     }
 
+    // A frame waiting for capacity waits for the Viewer only while the Viewer is actually
+    // rendering (a Viewer request waiting or admitted within the activity window); otherwise it
+    // is a memory wait, after reusable caches already gave back what they could.
+    [[nodiscard]] ExportDeviceRoute capacityWaitRoute() const {
+        if (const auto* policy = waitPolicy()) {
+            const auto viewer = policy->viewerPriority();
+            if (viewer.waiting || viewer.active)
+                return ExportDeviceRoute::WaitingForViewer;
+        }
+        return ExportDeviceRoute::WaitingForMemory;
+    }
+    [[nodiscard]] ExportDeviceRoute liveRoute(const ExportDeviceRoute route) const {
+        return route == ExportDeviceRoute::WaitingForViewer ||
+                       route == ExportDeviceRoute::WaitingForMemory
+                   ? capacityWaitRoute()
+                   : route;
+    }
+    [[nodiscard]] std::optional<std::uint64_t> memoryNeededBytes() const override {
+        if (const auto* policy = waitPolicy())
+            if (const auto need = policy->lastAwaitingNeed())
+                return need->bytes;
+        return std::nullopt;
+    }
+    [[nodiscard]] const runtime::GpuProcessingPhasePolicy* waitPolicy() const {
+        return dependencies_.gpu ? dependencies_.gpu->processingPhasePolicy().get() : nullptr;
+    }
+
     void log(const runtime::DiagnosticSeverity severity, std::string code, std::string message,
              std::optional<std::uint64_t> frame = std::nullopt) {
         log_.push_back(
@@ -367,7 +394,7 @@ class ImageDriver final : public DriverBase {
                             frame.index);
                     capacity_.refused(OutputAnalysisCapacityWaitV1::Clock::now(),
                                       processingPolicy());
-                    route_ = ExportDeviceRoute::WaitingForViewer;
+                    route_ = capacityWaitRoute();
                     frame.awaitingCapacity = true;
                     frame.externalWait = true;
                     frame.refusedAtEpoch = releaseEpoch_;
@@ -441,7 +468,7 @@ class ImageDriver final : public DriverBase {
     [[nodiscard]] std::optional<std::uint64_t> currentFrame() const override {
         return done_ ? std::nullopt : std::optional(next_);
     }
-    [[nodiscard]] ExportDeviceRoute route() const override { return route_; }
+    [[nodiscard]] ExportDeviceRoute route() const override { return liveRoute(route_); }
 
   private:
     using CompileHandle =
@@ -695,7 +722,7 @@ class ImageDriver final : public DriverBase {
                             describeProcessingReservationsV1(processingPolicy()),
                         next_);
                 capacity_.refused(OutputAnalysisCapacityWaitV1::Clock::now(), processingPolicy());
-                route_ = ExportDeviceRoute::WaitingForViewer;
+                route_ = capacityWaitRoute();
                 return;
             case OutputAnalysisCapacityRefusalV1::NeverFits:
                 log(runtime::DiagnosticSeverity::Error, "export.capacity.never-fits",
@@ -1153,8 +1180,7 @@ class MediaDriver final : public DriverBase {
         return input_.range.first + runner_->encodedFrames();
     }
     [[nodiscard]] ExportDeviceRoute route() const override {
-        return runner_ && runner_->waitingForCapacity() ? ExportDeviceRoute::WaitingForViewer
-                                                        : route_;
+        return runner_ && runner_->waitingForCapacity() ? capacityWaitRoute() : liveRoute(route_);
     }
 
   private:

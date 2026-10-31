@@ -197,6 +197,17 @@ bloom_add_test(
     TIMEOUT 30
 )
 
+add_executable(bloom_runtime_keyframe_easing_test keyframe_easing_tests.cpp)
+target_link_libraries(bloom_runtime_keyframe_easing_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_keyframe_easing_test)
+bloom_enable_strict_floating_point(bloom_runtime_keyframe_easing_test)
+bloom_add_test(
+    NAME bloom.runtime.keyframe_easing
+    COMMAND bloom_runtime_keyframe_easing_test
+    LABELS runtime unit primitives
+    TIMEOUT 30
+)
+
 bloom_add_test(
     NAME bloom.runtime.curve_compilation
     COMMAND bloom_runtime_curve_compilation_test

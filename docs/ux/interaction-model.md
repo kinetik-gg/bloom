@@ -16,7 +16,9 @@ hosts reach with a modifier — bare letters belong to tools.
 ## Rules
 
 - **One meaning per key per editor.** A key does not change meaning depending on what is selected.
-- **A modifier-free letter is a tool, not a command**, except Timeline B/N range marks. Commands that destroy, duplicate, or toggle
+- **A modifier-free letter is a tool, not a command**, except the Timeline's own keys (the B/N range
+  marks and After Effects' A, P, S, R, T, U, M, E, J and K; see "Timeline keys"), which answer only
+  while the Timeline holds focus or no widget does. Commands that destroy, duplicate, or toggle
   state take a modifier or live in a menu.
 - **A command may live in a menu without owning a key.** Mute, collapse, and dissolve are exactly
   that: they are in the node context menu and bind nothing.
@@ -403,13 +405,13 @@ as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
 | `Home` | Fit the graph (alias) |
 | Middle drag | Pan |
 | Wheel | Zoom about the pointer |
-| `Tab` | Open the Add search at the pointer |
+| `Tab` | Open the Add search; the new card lands with its title under the pointer |
 | `Ctrl+A` | Select all nodes |
 | `Delete` / `Backspace` | Remove the selection |
 | `Ctrl+D` | Duplicate the selection and start placing it |
 | `Ctrl+G` | Group the selection in a node group |
 | `Ctrl+Shift+G` | Ungroup every node group the selection is in |
-| `Ctrl+Shift+A` | Arrange all nodes left to right, then fit the graph |
+| `Ctrl+Shift+A` | Arrange all nodes like the layer stack (output on the right), then fit the graph |
 | `Ctrl+Alt+A` | Arrange the selected induced subgraph in place |
 | `Enter` | Rename the selected layer node |
 | Double-click a layer node | Rename it |
@@ -418,12 +420,14 @@ as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
 | Left drag on a card | Move the selection |
 | Left drag on a group frame | Move every member of that group |
 | Left drag on a card's right edge | Resize the card |
+| Click a card's header caret | Collapse or expand that card |
 | Left drag from a socket | Connect, rewire, or disconnect |
 | `Ctrl` + right drag | Cut every wire crossed |
 | `Shift` + right drag | Add a reroute on the wire crossed |
 | Right-click a card, a group frame, a link, or the canvas | Context menu |
 
-Mute, collapse, and dissolve are context-menu commands in this editor and bind no key. A group's own
+Mute, collapse, and dissolve are context-menu commands in this editor and bind no key; collapse is
+also the caret at the head of every card's title. The footer's Arrange button runs Arrange All. A group's own
 `Rename` is likewise a menu command and a double-click: `Enter` keeps its one meaning, so it never
 becomes "rename whichever thing is selected".
 
@@ -444,7 +448,7 @@ Invert bind no new keys; Arrange uses the two explicit node-canvas bindings belo
 | View | Frame Selected | Frames exactly the selected cards; frames the whole graph if nothing is selected |
 | View | Grid Snapping | Toggles grid snapping (see below); the same toggle the footer's switch offers |
 | View | Link Style | Spline / Straight / Angled (see below); the same choice the footer's dropdown offers |
-| View → Organize | Arrange All | Lays out every node, fits the graph, and commits one `MoveNodes` transaction |
+| View → Organize | Arrange All | Lays out every node like the layer stack, fits the graph, and commits one `MoveNodes` transaction; the footer's Arrange button runs the same command |
 | View → Organize | Arrange Selection | Lays out the selected induced subgraph in place and commits one `MoveNodes` transaction |
 | Select | None | Clears the selection |
 | Select | Invert | Selects every unselected node, deselecting every selected one |
@@ -524,6 +528,15 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | `Ctrl+C` / `Ctrl+V` with parameter lanes focused | Copy selected keys / paste onto the same parameters with the earliest copied time at the playhead |
 | Right-click key | Hold, Linear, Ease In-Out, or Delete for the complete key selection |
 | `Escape` during key drag or box selection | Cancel the gesture without a document edit |
+| Graph Editor: drag key or handle | Preview live -- the curve, the value readouts and the Viewer follow the pointer through the session's preview overrides; one transaction and one Undo on release |
+| Graph Editor: `Shift` during key drag | Lock to time-only or value-only, whichever axis dominates the displacement (snapping follows Snap to Frames) |
+| Graph Editor: `Shift` during handle drag | Snap the handle's on-screen angle to 45 degree steps; in the Speed Graph, lock to influence-only or speed-only |
+| Graph Editor: `Alt` during handle drag / `Alt`-drag key | Break the handle pair / duplicate the keys at the destination |
+| Graph Editor: right-click key | Interpolation (Constant, Linear, Bezier), Easing (two or more keys: Linear, Constant, then Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Bounce and Elastic, each Ease In / Ease Out / Ease In-Out, one `SetKeyframesEasing` per pick), Easy Ease, Easy Ease In, Easy Ease Out, Delete |
+| `F9` / `Shift+F9` / `Ctrl+Shift+F9` with the timeline focused | Easy Ease / Easy Ease In / Easy Ease Out on the selected keys (`ApplyEasyEase`): 33.33% influence, zero speed, one Undo |
+| `Shift+F3` or the graph toggle beside Fullscreen | Switch the right pane between keyframes and the graph |
+| Graph Editor: `F` / double-click the value gutter | Fit the selected keys (all keys when none) on both axes / fit all curves |
+| Graph Editor: wheel / middle-drag | Zoom values about the pointer / pan time and values together |
 | `B` / `N` | Set work-area start / exclusive end at the playhead |
 | Drag work-area grips / double-click strip | Set frame-snapped range / reset to full duration |
 | Drag bar edge / body | Trim one endpoint / move the layer (start time, in and out together, so content and keys move with it); commit once on release, Escape cancels |
@@ -535,6 +548,12 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | Drag row | Reorder stable slots at the insertion indicator |
 | Double-click name | Inline rename in the name label's bounds; Return, Escape, Tab or focus loss commits changed text once, unchanged text creates no transaction, an empty name is refused with its reason |
 | Right-click row | Duplicate, Delete, Rename, Blending, Label Color, Split at Playhead |
+| Click a row's Label square | The label menu under it: Default, Label 1 to Label 8, Custom… and Select Label Group. On a selected layer it labels every selected layer (one undoable step) |
+| Label menu → Select Label Group | Selects every layer of the composition with that layer's label |
+| Click the header's label filter | Its menu: All Labels, then Default, Label 1 to Label 8 and Custom, each checkable; the list shows only layers with a checked label (none checked: every layer). Panel state, cleared on a composition change |
+| Click a row's Shy switch | Marks the layer shy, or not (the selected layers when it is one of them) |
+| Click the header's Shy toggle (Hide Shy Layers) | Hides shy layers from the layer list and shows them again; they still render. Per composition, persisted with the workspace UI state in `timeline/hide-shy-layers/<id>` (not in the project) |
+| Click a group, parameter or component row | Selects it: a group selects its layer; a parameter or component row selects every key it shows (or the parameter, with none). It keeps the selected-row wash, in both halves, while that selection stands |
 | Right-click empty layer-table space | Add submenu (existing Solid, Text and shape actions); direct Keyframes, Graph Editor, Snap to Frames, Zoom to Fit, Select All and Deselect All actions. Opening or dismissing the menu preserves selection |
 | `Ctrl+wheel` over ruler or lanes | Zoom time about the pointer; the pointer's time stays fixed until a composition boundary clamps the range |
 | `Shift+wheel` or horizontal wheel | Scroll the visible time range |
@@ -548,6 +567,32 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | Drop Assets items elsewhere in the Timeline | Adds them on top, starting at the playhead |
 | `Alt` held at the drop | Sequences several items end to end (After Effects' Sequence Layers) instead of starting them together |
 | Drop files or folders onto the Timeline | Imports them (the import progress modal), then makes layers of what was imported at the same place, as one more undoable step |
+
+### Timeline keys
+
+After Effects' Timeline keys. They are `Qt::WidgetWithChildrenShortcut` actions on the Timeline,
+so they answer while the layer table, the lanes or the graph hold focus, and also when no widget in
+the window holds focus; a text or value field being typed in keeps its letters.
+
+| Binding | Action |
+| --- | --- |
+| `A` / `P` / `S` / `R` / `T` | Show only Anchor / Position / Scale / Rotation / Opacity, directly under the layer; the same key again closes it |
+| `U` / `U` `U` | Show the keyed properties / the properties that differ from a new layer (keyed, or a constant other than its default; Position's default is the composition center; every mask path) |
+| `M` / `E` | Show each mask's path / the node feeding the layer and the value nodes driving it (Bloom has no effects stack; these are what process the layer) |
+| `Shift` + any of those | Add it to what shows, or take it away when it all already shows |
+| `J` / `K` | Playhead to the previous / next key the Timeline shows (collapsed summaries and shown property rows) |
+| `[` / `]` | Move the layer so its in point / its last frame is at the playhead (one Move Layer step) |
+| `Alt+[` / `Alt+]` | Trim the in point to the playhead / the out point so the playhead's frame is the last (one Trim Layer step) |
+
+They act on the selected layers, or on every listed layer when none is selected; `[`/`]` skip a
+locked layer. A reveal is editor state like expansion: clicking the layer's twirl closes it and the
+next twirl shows every property. Clashes: R, E, P and T are also the Rectangle, Ellipse, Pen and
+Text tool letters, but those are read only while a Viewer or the Toolbar holds focus (not window
+shortcuts), so each key has one meaning per focused panel, as in After Effects (where the
+Composition panel's tools take other letters). K, M, S and A appear elsewhere only with a modifier
+(`Ctrl+K` Split, `Ctrl+Alt+K` Composition Settings, `Ctrl+M` Add to Export Queue, `Ctrl+S` Save,
+`Ctrl+A` Select All); bare M (Nodes mute) is retired. J, U, `[`, `]`, `Alt+[` and `Alt+]` were
+unbound.
 
 ### Layer drops
 
@@ -609,10 +654,11 @@ path where a window manager claims Alt-drag. Its object names are `layerStartFra
 `layerAfterModeDropdown` and `layerTimeRemapSwitch`.
 
 Bar magnetic targets are other layers' in/out points, the playhead and work-area edges. A guide
-marks the chosen target. Empty lane space retains ruler scrubbing. Visibility, solo and lock cells
-commit their boundary commands; audio and Parent columns stay hidden. A label menu offers eight
-presets, Custom… (the kit color picker popup under the row, committing one Set Layer Label Color
-step when it closes with a new color; Escape keeps the old one) and Kind Default. Name editing consumes text/navigation keys before
+marks the chosen target. Empty lane space retains ruler scrubbing. Visibility, audio, solo and lock
+cells commit their boundary commands. The label menu (the Label square or Right-click → Label
+Color) offers Default, eight presets, Custom… (the kit color picker popup under the row,
+committing one Set Layer Label Color step when it closes with a new color; Escape keeps the old
+one) and Select Label Group; the current label is checked. Name editing consumes text/navigation keys before
 Timeline commands. Parenting remains separate work.
 
 New object names: `timelineSetWorkAreaStartAction`, `timelineSetWorkAreaEndAction`,

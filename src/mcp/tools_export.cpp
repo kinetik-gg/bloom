@@ -41,38 +41,64 @@ std::string_view outputStateName(const host::ExportOutputState state) {
     return index < names.size() ? names[index] : "unknown";
 }
 
+// By enumerator, never by position: the numeric values keep gaps (23 was retired by ADR 0035).
 std::string_view unavailableName(const host::ExportUnavailableCode code) {
-    constexpr std::array<std::string_view, 27> names{
-        "None",
-        "NotApplicable",
-        "ShuttingDown",
-        "NoProject",
-        "ReadOnlyProject",
-        "UnknownJob",
-        "UnknownOutput",
-        "AlreadyActive",
-        "NotActive",
-        "NotRendering",
-        "NotPaused",
-        "NotFinished",
-        "NoEnabledOutputs",
-        "PreflightBlocked",
-        "LockedWhileRunning",
-        "LastOutput",
-        "QueueFull",
-        "OutputLimitReached",
-        "NothingToStart",
-        "NothingToStop",
-        "NothingFinished",
-        "NotPublished",
-        "CompositionMissing",
-        "PlatformNotSupported",
-        "NeedsReplaceConfirmation",
-        "NothingToConfirm",
-        "DestinationCheckPending",
-    };
-    const auto index = static_cast<std::size_t>(code);
-    return index < names.size() ? names[index] : "Unknown";
+    using Code = host::ExportUnavailableCode;
+    switch (code) {
+    case Code::None:
+        return "None";
+    case Code::NotApplicable:
+        return "NotApplicable";
+    case Code::ShuttingDown:
+        return "ShuttingDown";
+    case Code::NoProject:
+        return "NoProject";
+    case Code::ReadOnlyProject:
+        return "ReadOnlyProject";
+    case Code::UnknownJob:
+        return "UnknownJob";
+    case Code::UnknownOutput:
+        return "UnknownOutput";
+    case Code::AlreadyActive:
+        return "AlreadyActive";
+    case Code::NotActive:
+        return "NotActive";
+    case Code::NotRendering:
+        return "NotRendering";
+    case Code::NotPaused:
+        return "NotPaused";
+    case Code::NotFinished:
+        return "NotFinished";
+    case Code::NoEnabledOutputs:
+        return "NoEnabledOutputs";
+    case Code::PreflightBlocked:
+        return "PreflightBlocked";
+    case Code::LockedWhileRunning:
+        return "LockedWhileRunning";
+    case Code::LastOutput:
+        return "LastOutput";
+    case Code::QueueFull:
+        return "QueueFull";
+    case Code::OutputLimitReached:
+        return "OutputLimitReached";
+    case Code::NothingToStart:
+        return "NothingToStart";
+    case Code::NothingToStop:
+        return "NothingToStop";
+    case Code::NothingFinished:
+        return "NothingFinished";
+    case Code::NotPublished:
+        return "NotPublished";
+    case Code::CompositionMissing:
+        return "CompositionMissing";
+    case Code::NeedsReplaceConfirmation:
+        return "NeedsReplaceConfirmation";
+    case Code::NothingToConfirm:
+        return "NothingToConfirm";
+    case Code::DestinationCheckPending:
+        return "DestinationCheckPending";
+    }
+    return "Unknown";
 }
 
 std::string_view routeName(const host::ExportDeviceRoute route) {
@@ -87,6 +113,8 @@ std::string_view routeName(const host::ExportDeviceRoute route) {
         return "recovering-gpu";
     case host::ExportDeviceRoute::CpuReference:
         return "cpu-reference";
+    case host::ExportDeviceRoute::WaitingForMemory:
+        return "waiting-for-memory";
     }
     return "none";
 }
@@ -229,6 +257,13 @@ McpProgress progressOf(const host::ExportJobView& job) {
         progress.total = static_cast<double>(job.progress.framesTotal);
     if (job.progress.route == host::ExportDeviceRoute::WaitingForViewer)
         progress.message = "Waiting for the Viewer";
+    else if (job.progress.route == host::ExportDeviceRoute::WaitingForMemory)
+        progress.message =
+            job.progress.memoryNeededBytes
+                ? "Waiting for memory: " +
+                      std::to_string((*job.progress.memoryNeededBytes + (1ULL << 20) - 1) >> 20) +
+                      " MiB needed"
+                : std::string("Waiting for memory");
     else if (job.state == host::ExportJobState::Rendering && job.progress.currentFrame)
         progress.message = "Rendering frame " + std::to_string(job.progress.framesCompleted + 1) +
                            " of " + std::to_string(job.progress.framesTotal);

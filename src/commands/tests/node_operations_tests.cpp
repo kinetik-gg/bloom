@@ -1187,9 +1187,9 @@ void testNodeGroups(TestContext& test) {
 }
 
 // LAYOUT-1: the card-layout and node-group commands opt out of render effect; every other node
-// command keeps the conservative render-affecting default. The classification is declared per
-// operation, never inferred from which document field the operation writes -- SetNodeMuted writes
-// nodeLayout and layer.enabled together, and must stay render-affecting.
+// command keeps the conservative render-affecting default. Since #399 the command stack also
+// proves the impact from the document's field classification (evaluation_inputs_tests.cpp), which
+// is why SetNodeMuted -- it writes the one evaluated node-layout field -- stays render-affecting.
 void testRenderAffectingClassification(TestContext& test) {
     {
         Fixture fixture;

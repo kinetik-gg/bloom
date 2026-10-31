@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-10-25
+Updated: 2026-10-31
 
 ## Geometry and transform levels
 
@@ -150,6 +150,8 @@ comparison only:
    to that component. Different components may therefore be at different key intervals.
 6. For an interior `EaseInOut` segment, transform that component's factor before mixing, exactly as
    described below. An empty component returns its typed default value.
+7. For an interior easing-equation segment (`Sine` ... `Elastic`), evaluate the equation over the
+   exact interval factor as described under **Easing equations** below.
 
 The interval factor is derived as an exact non-negative rational. Products and differences of valid
 signed 64-bit rational components require at most 256-bit unsigned magnitude. Bloom therefore uses
@@ -174,9 +176,12 @@ Endpoints stay exact: the transform maps `0` to exactly `0` and `1` to exactly `
 exact thirds it is exactly `7/27` and `20/27`, and at the exact midpoint exactly `1/2`. Only the
 segment's LEFT key decides its mode, so a `Hold` key is unaffected by an eased neighbor.
 
-`kAnimationSamplingSemanticsVersion` is `2`. It enters compiled-plan compatibility and cache
+`kAnimationSamplingSemanticsVersion` is `3`. It enters compiled-plan compatibility and cache
 identity alongside scalar, evaluator, and image primitive versions; it moved from `1` when
-`EaseInOut` and the `Color4Curve` table made sampling able to produce values version 1 could not.
+`EaseInOut` and the `Color4Curve` table made sampling able to produce values version 1 could not,
+and from `2` to `3` when the easing equations below made it able to produce values version 2 could
+not. Every version-2 key (Hold, Linear, Bezier) samples bit-for-bit as before; only the version
+number in plan compatibility and frame identity moved.
 
 ### Ease handles
 
@@ -224,6 +229,90 @@ Sampling branches on a BITWISE default test, not an arithmetic one:
 Compiled curves carry both handles on every compiled scalar and component key, and compilation
 copies them verbatim; a handle edit therefore changes the operand a memoized operation was keyed on
 and the frame is re-evaluated.
+
+### Interpolation names
+
+The artist-facing names follow Blender. The enumerator names, numeric ids and file tokens are
+stable and never move:
+
+| Id | `KeyframeInterpolation` | Token | Shown as |
+| --- | --- | --- | --- |
+| 0 | `Hold` | `hold` | Constant |
+| 1 | `Linear` | `linear` | Linear |
+| 2 | `EaseInOut` | `ease-in-out` | Bezier |
+| 3 | `Sine` | `sine` | Sinusoidal |
+| 4 | `Quad` | `quad` | Quadratic |
+| 5 | `Cubic` | `cubic` | Cubic |
+| 6 | `Quart` | `quart` | Quartic |
+| 7 | `Quint` | `quint` | Quintic |
+| 8 | `Expo` | `expo` | Exponential |
+| 9 | `Circ` | `circ` | Circular |
+| 10 | `Back` | `back` | Back |
+| 11 | `Bounce` | `bounce` | Bounce |
+| 12 | `Elastic` | `elastic` | Elastic |
+
+`KeyframeEasing` is `Auto` (0, `auto`), `In` (1, `in`), `Out` (2, `out`), `InOut` (3, `in-out`).
+Python and MCP accept `constant` and `bezier` as aliases for `hold` and `ease-in-out`; MCP
+`query kind=enums` returns these tables with their labels.
+
+### Easing equations
+
+Ids 3-12 are Blender's easing equations: Robert Penner's equations in the exact forms Blender's
+`BLI_easing` implements and its F-Curve evaluation calls, including Blender's Expo (shifted and
+rescaled by `2^-10` so it starts and ends exactly on its keys) and Blender's Elastic (an amplitude
+below the segment's change scales the swing and fades in over the first quarter period instead of
+jumping). Each equation reads the segment's LEFT key's `KeyframeEasingParameters`, which every
+scalar, component and Path key carries (like Blender's BezTriple, they persist across mode changes):
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `easing` | `Auto` | Which end eases: `In`, `Out`, `InOut`, or Blender's `Auto` -- `Out` for Back, Bounce and Elastic, `In` for every other equation |
+| `back` | `1.70158` | Back's overshoot. Any finite value |
+| `amplitude` | `0.8` | Elastic's amplitude in the curve's own value units (a Path key's progress runs 0 -> 1). Finite, zero or more |
+| `period` | `4.1 / 24` s | Elastic's period in SECONDS. Any finite value; exactly `0` is Blender's automatic period, `0.3` of the segment (`0.45` for In-Out) |
+
+The period is in seconds, not frames, because Bloom key times are exact rational seconds and a
+composition's frame rate can change under its keys; the default is Blender's 4.1 frames at Blender's
+default 24 fps. A UI may present it in the composition's frames. Validity is one predicate,
+`isValidKeyframeEasing`, asked by the store, document validation, the decoder and
+`validateForSampling` alike, so an invalid parameter is refused at every request time.
+
+With `u` the exact interval factor, `b` and `c` the left value and the change, and `d` the segment's
+duration in seconds (`right.time.toSeconds() - left.time.toSeconds()`), Blender's
+`f(time = u * d, begin = b, change = c, duration = d)` reduces exactly to the forms in
+`runtime/keyframe_easing.cpp`; only Elastic reads `d`, where Blender multiplies `time * duration`.
+The arithmetic is IEEE double in a fixed operation order under the strict floating-point flags.
+`sin`, `cos`, `2^x` and `asin` are not taken from the platform `libm`, whose last bits differ between
+Linux, macOS and Windows: they are Bloom kernels written from `+ - * /`, `floor`, `ldexp` and `sqrt`
+(all exactly rounded by IEEE 754) -- exact quarter-turn reduction and Taylor polynomials -- so a
+sample is a pure function of its operands on every platform. They agree with `libm` to about 1e-15.
+
+Every route that renders -- interactive viewer preview, RAM preview, still, range and video export,
+headless and scripted render -- resolves animated parameters on the host through this one sampler
+before any CPU or GPU image work, so the CPU reference and GPU routes see the same bits; no GPU
+kernel samples curves. `bloom.runtime.keyframe_easing` pins each equation and mode at the segment
+fractions 1/8 ... 7/8, 1/3 and 2/3 against an independent transcription of Blender's formulas
+(Elastic additionally across amplitudes below and above the change, an automatic period, a
+zero-change segment and a two-second segment).
+
+### Easy Ease
+
+After Effects' Easy Ease (F9) gives the selected keys 33.33% influence and zero speed on both sides;
+Easy Ease In (Shift+F9) only on the incoming side and Easy Ease Out (Ctrl+Shift+F9) only on the
+outgoing side. Bloom maps it onto its handle model exactly:
+
+- The eased side's segment becomes Bezier (`EaseInOut`), and the eased key's handle on that side is
+  `{time: 1/3, value: 0}` -- 1/3 of the segment is AE's 33.33% influence, and a zero value offset is
+  zero speed. This is bitwise the default handle, so a segment eased on both ends samples through
+  the exact Smoothstep path.
+- The far side of a segment that was not already Bezier gets the linear-speed handle: the left key's
+  outgoing `{1/3, +c/3}` or the right key's incoming `{1/3, -c/3}`, with `c` the segment's change (a
+  Path segment's progress change is 1). Control points on the chord leave that end at the speed it
+  had. A far side that was already Bezier keeps its handle.
+- A first key has no incoming side and a last key no outgoing side; they are skipped, not refused.
+
+`ApplyEasyEase` (`bloom.animation.easy-ease`, `side` `both`/`in`/`out`) is one undoable step over the
+whole selection; re-applying it to an already eased side is no change.
 
 ## Compiled Plan And Evaluation
 
@@ -291,7 +380,8 @@ The command surface is typed by curve value kind:
 
 ### Multi-key commands
 
-`MoveKeyframes`, `DeleteKeyframes`, `SetKeyframesInterpolation` and `PasteKeyframes` are Qt-free
+`MoveKeyframes`, `DeleteKeyframes`, `SetKeyframesInterpolation`, `SetKeyframesEasing`,
+`ApplyEasyEase` and `PasteKeyframes` are Qt-free
 operations in `animation_operations`. Each UI batch is one transaction against the revision frozen
 at gesture start (or the current revision for a menu/clipboard action), with one undo entry.
 
@@ -299,7 +389,9 @@ at gesture start (or the current revision for a menu/clipboard action), with one
 | --- | --- |
 | `MoveKeyframes` | Accepts stable curve/key addresses with destination times. Stages and sorts complete curves, permitting selected keys to exchange their original times. Duplicate addresses, occupied final times and non-representable times reject the whole transaction. Under [layer-owned time](#layer-time) a key's clock is its layer or content clock, so admission no longer requires `[0, duration)`; the Timeline clamps moves to the composition interval projected onto the key's clock. IDs and values are preserved; final outgoing interpolation is normalized to Linear |
 | `DeleteKeyframes` | Removes the complete addressed selection across value kinds. If a curve becomes empty, restores a constant holding its earliest pre-delete key's value and erases the curve atomically |
-| `SetKeyframesInterpolation` | Applies Hold, Linear or Ease In-Out to the complete selection. Final keys remain canonical Linear; no effective change creates no history entry |
+| `SetKeyframesInterpolation` | Applies any interpolation -- Constant, Linear, Bezier or an easing equation -- to the complete selection. Final keys remain canonical Linear; no effective change creates no history entry |
+| `SetKeyframesEasing` | Writes the ease mode, Back overshoot and Elastic amplitude/period on the selection, optionally switching the interpolation in the same step. An absent field keeps its value; a non-finite value or negative amplitude rejects the whole batch. A component-less vector or color address edits every component's key at that time |
+| `ApplyEasyEase` | After Effects' Easy Ease, In or Out on the selection; see **Easy Ease** |
 | `PasteKeyframes` | Accepts original parameter IDs, exact destination times, typed values and interpolation. Allocates new IDs, creates compatible animation for constant parameters, and rejects missing/driven targets, invalid values and occupied times without publishing a partial result |
 
 All four value kinds (Scalar, Vec2, Vec3 and Color4) use the same batch paths. A staged collision does
@@ -443,8 +535,8 @@ snapshots are installed but before the ordinary refresh signals. The foreground 
 detaches its active handle, clears any pending request and the frame cache, and resets its displayed
 and request state there, so an old document's queued completion can never publish or cache pixels
 under a colliding numeric key; the normal evaluation/composition signals then build the new
-document's request. RAM preview and background caching already cancel on those signals and discard
-their old completions the same way.
+document's request. Background caching cancels on those signals; a RAM preview run ends on the
+composition switch that accompanies a rebind. Both discard their old completions the same way.
 
 ### Sequence Export
 
@@ -491,8 +583,9 @@ frame status. Proxy painting uses the existing smooth image transform into the c
 Policy and resolved resolution are preview request/cache identity inputs, not process semantics.
 The existing proxy extent reaches evaluation and display preparation unchanged; identity goldens
 and export resolution remain unchanged. RAM preview uses the same controller-resolved factor and
-policy for every request and cache lookup. A policy or Auto factor change cancels an active RAM
-preview run, keeping completed cached frames and requiring a new run at the new resolution. Single
+policy for every request and cache lookup. A policy or Auto factor change (for example a Viewer
+resize) rescans an active RAM preview run at the new factor: the run continues and fills the range
+at the new resolution; the old factor's frames never count toward it. Single
 frame and frame-range exports always evaluate at Full, independently of the Viewer preference.
 
 ### RAM Preview
@@ -556,12 +649,11 @@ never described as a retained prefix.
 revision.** `CompositionSession::snapshot()` and `snapshotChanged()` remain the live document and UI
 truth: every applied command advances them. Beside them the session retains
 `evaluationSnapshot()`, the newest genuine snapshot whose render-relevant content the preview has
-evaluated, and publishes `evaluationChanged()` only when it actually moves. A command whose own
-result metadata proves it changed no rendered pixel -- the three card-layout commands, `MoveNodes`,
-`SetNodeCollapsed` and `SetNodeWidth`, and only those -- leaves `evaluationSnapshot()` on the
-previous genuine snapshot, so the prepared frame, the frame-cache key and the compiled plan keep one
-real revision instead of one per drag. Every other command, an unknown or unclassified one included,
-advances `evaluationSnapshot()` to live, so the default stays conservative. The retained snapshot is
+evaluated, and publishes `evaluationChanged()` only when it actually moves. A command whose result
+proves it changed no rendered pixel (`CommandResult::renderAffecting == false`) leaves
+`evaluationSnapshot()` on the previous genuine snapshot, so the prepared frame, the frame-cache key,
+the compiled plan and the operation cache keep one real revision instead of one per drag. Every
+other command advances `evaluationSnapshot()` to live. The retained snapshot is
 never a re-stamped revision: it is one the session actually read from the document, and nested-plan
 `sourceRevision` and `ProcessFrameIdentity` keep naming it. A cache entry becomes unreachable when
 the session no longer accepts its own revision for its own time, and is pruned then -- never by a
@@ -575,6 +667,34 @@ re-decoding it, but never inserts a source entry on a miss, and derived operatio
 overridden plans, gesture frame-cache insertion, and disk-cache reads and writes stay bypassed. An
 explicit evaluation bypass (`request.bypassOperationCache`, distinct from the preview frame-cache
 refresh described here) disables even that read-only reuse.
+
+**Which edits are render-neutral (#399).** The command stack does not take an operation's word for
+it. After applying a transaction it compares the project before and after through the document's
+one field classification, `document::sameEvaluationInputs()`
+(`src/document/include/bloom/document/evaluation_inputs.hpp`), and a transaction that changed no
+evaluation input is render-neutral whatever its operations declared. Moving, collapsing or resizing
+a node card, framing nodes in a group and the group's name, padding or color, a layer's name, label
+color, lock, shy flag and name-follows-source flag, a mask's name, composition name, folder, work area, safe areas, timecode display
+and viewer background, the project name, asset names, folders, tags and order, and the export queue
+are presentation: saved, undoable and dirtying, but invisible to the plan and to every cache. Undo
+and redo replay the impact stored with the history entry, so they are neutral too. Selection,
+current time and panel state are session state and never reach the document at all. The comparison
+runs on shared immutable storage first, so an edit pays only for the composition it touched. The
+proof also checks declarations the other way: a transaction whose operations all declared
+themselves render-neutral but which changed an evaluation input fails closed to a whole render.
+An operation that publishes its own finite footprint keeps it as published.
+
+A field is classified where it lives. Presentation collections (node groups, asset folders, the
+export queue, the project name) are skipped whole, so any field added to them -- a group frame
+color, for example -- is presentation by construction. Node layout is presentation except `muted`,
+which the compiler reads only through `document::nodeMuted()`, so a new card field such as a
+collapse state is presentation by construction too. Records that mix both kinds name their
+presentation fields in `evaluationView()`; every unnamed field, including one added later, stays an
+evaluation input, so a missed classification costs a re-render and never a stale frame. A name is
+presentation only while nothing evaluated refers to it: every evaluation reference in the document
+is by stable id, and text an evaluated node resolves by name (a channel expression naming a
+channel) is a parameter value and therefore an evaluation input. A feature that makes an evaluated
+value read a layer, node or group name must move that name into the evaluation inputs.
 
 **Time-indexed provenance, and two distinct signals.** TEMPORAL-2A replaced the single retained
 snapshot with `evaluationSnapshotForTime(t)`: a sorted, full-cover list of spans, each naming the
@@ -692,8 +812,9 @@ own button) prepares the composition's work-area frame range with at most two re
 reporting "Caching 42/240" in the window status bar and cancellable with Escape. The numerator is
 currently retained exact frame-grid samples, including valid preexisting entries, rather than
 insertion attempts. Its tooltip separately reports successful preparations this run and the longest
-contiguous cached span. Only a still-current fully retained range autoplays, from its beginning;
-a budget-limited partial range stops and leaves ordinary manual work-area playback available. Frames already cached are counted without being rendered again, so a
+contiguous cached span. A still-current fully retained range autoplays from its beginning; a range
+that outgrew memory ends PartialBudget and plays too, Play rendering the missing frames ahead of
+the playhead. Frames already cached are counted without being rendered again, so a
 second RAM preview of an unedited range is immediate. The range is the persisted half-open work
 area when set, otherwise `[0, duration)`, read through `CompositionSession::workArea()`. Playback
 starts inside and loops over those same frame indices. The start frame is included and the end
@@ -713,6 +834,16 @@ untouched. A frame outside the work area can still be displayed; it is simply no
 active RAM run adapts rather than cancels: the in-flight frame is allowed to land (retained only if
 still in range), the run rebases onto the new range, and only missing frames are submitted, so an
 expansion or shift fills just the entering interval and a fully cached shrink evaluates nothing.
+
+A run ends only on an explicit cancel (Escape, RAM Preview or Numpad 0 again, Stop, Purge) or a
+composition switch (owner decision, 2026-10-31). Everything else adapts: a render-affecting edit
+(`evaluationChanged`, or `documentEvaluationChanged` over the whole range) rescans and prepares only
+the frames it changed, keeping every still-valid frame; a late result from a revision the session
+has left, or a stale insert, rescans; a frame that fails or is cancelled by other work is retried up
+to three times and then skipped; retained frames lost for a non-memory reason (an expired resident
+lease, a cleared cache) are prepared again (at most eight rescans a run); memory never ends a run.
+Playhead moves, selection, panel focus, timeline scroll or zoom and `foregroundWorkRequested` do not
+touch a run. A run that could not keep every frame ends PartialBudget and still plays.
 Background fill follows the same rule through `workAreaChanged()`; the automatic pass, its budget,
 priority and yielding behavior are otherwise unchanged, and a range edit never turns itself into an
 explicit RAM command.
@@ -868,6 +999,15 @@ the UI transport maps that exact position through `FrameTimeMapping` and never a
 its wall-clock timer. Pausing stops the engine, scrubbing seeks then pauses, and a composition or
 revision change clears the old clips before a new mix is accepted.
 
+Looping keeps audio and pictures on one period. The transport wraps pictures with an exact modulo
+of the work area's frame count and hands the mixer the same frame-grid range,
+[first valid frame, last valid frame + 1); the mixer wraps the audio inside that range on its own
+thread while `positionNow()` stays unwrapped, so every pass is audible and repeated wraps never
+drift under either master clock. Turning looping off mid-run keeps the passes already played: the
+run finishes the pass it is in and pauses on the last frame, and the mixer keeps that pass's offset.
+Turning it on mid-run, or changing the work area, updates the mixer's range in place or with the
+work-area re-anchor described above ([Media I/O](media-io.md#preview-engine-and-synchronization)).
+
 If there is no resolved audio clip, audio playback is disabled, or the backend cannot start, the
 transport falls back to its existing wall-clock frame schedule. That fallback is explicit and keeps
 RAM Preview's prefill and cache behavior unchanged. Mix publication is revision-guarded, so a
@@ -938,6 +1078,18 @@ The parent linear inverse is reconstructed from evaluated polygon edges and the 
 rotation/scale. This includes rotated, mirrored and non-uniformly scaled ancestors and resulting
 shear. See [Transform Parenting](layer-graph-model.md#transform-parenting). Pointer updates derive
 values from the frozen bases and total displacement, never rounded intermediate edits.
+
+The graph editor's key and handle drags use the same channel without a gesture-local copy of the
+curve: each pointer move builds the exact transaction the release will commit (`MoveKeyframes` and
+`SetKeyframeValues`, `SetKeyframeHandles`, or a copy-drag's `PasteKeyframes`) and hands it to
+`CompositionSession::previewKeyframeTransaction()`, which applies it to a scratch
+`Draft::isolatedFrom()` of the live snapshot that no document owns. The previewed curves are what the
+graph draws; `effective*Value()` samples them, so the timeline and Properties readouts follow; and
+one override per previewed parameter at the playhead rides `valueEditOverrides()`, so the Viewer
+renders the drag as an interactive edit. A refused or locked edit previews nothing. More than eight
+previewed parameters leave the Viewer on the committed frame until release. The release clears the
+preview and commits that same transaction as one Undo entry; a revision change, Escape or a rebind
+discards it.
 
 The preview channel is session-only and reusable by future shape/text interactions:
 

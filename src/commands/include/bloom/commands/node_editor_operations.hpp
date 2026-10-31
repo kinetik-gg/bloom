@@ -32,11 +32,13 @@ class AddCompositionSource final : public Operation {
 
 class AddEditorNode final : public Operation {
   public:
+    // `sizes` are the card extents the editor measured; cards it omits use the estimate.
     AddEditorNode(document::CompositionId composition, std::string type, document::Vec2d position,
                   std::optional<document::InputPortRef> input = {},
-                  std::optional<document::OutputPortRef> output = {})
+                  std::optional<document::OutputPortRef> output = {},
+                  document::NodeCardSizes sizes = {})
         : composition_(composition), type_(std::move(type)), position_(position),
-          input_(std::move(input)), output_(std::move(output)) {}
+          input_(std::move(input)), output_(std::move(output)), sizes_(std::move(sizes)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override {
         return "bloom.node.add-at-cursor";
     }
@@ -48,6 +50,7 @@ class AddEditorNode final : public Operation {
     document::Vec2d position_;
     std::optional<document::InputPortRef> input_;
     std::optional<document::OutputPortRef> output_;
+    document::NodeCardSizes sizes_;
 };
 
 // Task FIX1, item I: inserts a reroute INTO an existing link, in one transaction and therefore one

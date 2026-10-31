@@ -17,6 +17,26 @@ compiledInterpolation(const document::KeyframeInterpolation mode) noexcept {
         return CompiledKeyframeInterpolation::Linear;
     case document::KeyframeInterpolation::EaseInOut:
         return CompiledKeyframeInterpolation::EaseInOut;
+    case document::KeyframeInterpolation::Sine:
+        return CompiledKeyframeInterpolation::Sine;
+    case document::KeyframeInterpolation::Quad:
+        return CompiledKeyframeInterpolation::Quad;
+    case document::KeyframeInterpolation::Cubic:
+        return CompiledKeyframeInterpolation::Cubic;
+    case document::KeyframeInterpolation::Quart:
+        return CompiledKeyframeInterpolation::Quart;
+    case document::KeyframeInterpolation::Quint:
+        return CompiledKeyframeInterpolation::Quint;
+    case document::KeyframeInterpolation::Expo:
+        return CompiledKeyframeInterpolation::Expo;
+    case document::KeyframeInterpolation::Circ:
+        return CompiledKeyframeInterpolation::Circ;
+    case document::KeyframeInterpolation::Back:
+        return CompiledKeyframeInterpolation::Back;
+    case document::KeyframeInterpolation::Bounce:
+        return CompiledKeyframeInterpolation::Bounce;
+    case document::KeyframeInterpolation::Elastic:
+        return CompiledKeyframeInterpolation::Elastic;
     }
     return CompiledKeyframeInterpolation::Linear;
 }
@@ -29,7 +49,7 @@ void compileComponent(const document::ComponentAnimationCurve& component,
     for (const auto& keyframe : component.keyframes)
         target.push_back({keyframe.id, keyframe.time, keyframe.value,
                           compiledInterpolation(keyframe.outgoingInterpolation),
-                          keyframe.outgoingHandle, keyframe.incomingHandle});
+                          keyframe.outgoingHandle, keyframe.incomingHandle, keyframe.easing});
 }
 
 } // namespace
@@ -40,7 +60,7 @@ CompiledScalarCurve compileAnimationCurve(const document::ScalarAnimationCurve& 
     for (const auto& keyframe : curve.keyframes) {
         keyframes.push_back({keyframe.id, keyframe.time, keyframe.value,
                              compiledInterpolation(keyframe.outgoingInterpolation),
-                             keyframe.outgoingHandle, keyframe.incomingHandle});
+                             keyframe.outgoingHandle, keyframe.incomingHandle, keyframe.easing});
     }
     return {curve.id, std::move(keyframes)};
 }
@@ -76,7 +96,8 @@ CompiledPathCurve compileAnimationCurve(const document::PathAnimationCurve& curv
     for (const auto& keyframe : curve.keyframes)
         result.keyframes.push_back({keyframe.id, keyframe.time, keyframe.value,
                                     compiledInterpolation(keyframe.outgoingInterpolation),
-                                    keyframe.outgoingHandle, keyframe.incomingHandle});
+                                    keyframe.outgoingHandle, keyframe.incomingHandle,
+                                    keyframe.easing});
     return result;
 }
 

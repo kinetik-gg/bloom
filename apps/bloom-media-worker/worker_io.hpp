@@ -7,6 +7,11 @@
 #include <cerrno>
 #include <poll.h>
 #include <unistd.h>
+#elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 namespace bloom::media::worker {
 inline provider::Result<provider::Message>
@@ -29,6 +34,21 @@ read(std::chrono::milliseconds idleTimeout = std::chrono::milliseconds{0}) {
                                              "Worker idle lifetime expired"};
             if (errno != EINTR)
                 return provider::Unavailable{provider::Error::Io, "Worker input poll failed"};
+        }
+    }
+#elif defined(_WIN32)
+    // Anonymous/named pipe stdin: wait for readable bytes or a closed pipe in short steps.
+    if (idleTimeout.count() > 0) {
+        const auto deadline = std::chrono::steady_clock::now() + idleTimeout;
+        auto* input = GetStdHandle(STD_INPUT_HANDLE);
+        while (true) {
+            DWORD available = 0;
+            if (!PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr) || available > 0)
+                break; // data, or a closed pipe the read below reports
+            if (std::chrono::steady_clock::now() >= deadline)
+                return provider::Unavailable{provider::Error::Timeout,
+                                             "Worker idle lifetime expired"};
+            Sleep(5);
         }
     }
 #else

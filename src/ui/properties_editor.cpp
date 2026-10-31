@@ -49,6 +49,7 @@
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QStringList>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QVariant>
 
@@ -235,13 +236,23 @@ PropertiesEditor::PropertiesEditor(CompositionSession& session, QWidget* parent)
             &PropertiesEditor::refreshLiveValues);
     connect(&session_, &CompositionSession::compositionChanged, this, &PropertiesEditor::rebuild);
     connect(&session_, &CompositionSession::selectionChanged, this, &PropertiesEditor::rebuild);
-    connect(&session_, &CompositionSession::currentTimeChanged, this,
-            &PropertiesEditor::configureMergeInputs);
     // Every animated row shows its curve's value at the session time, and its keyframe diamond
     // says whether a key sits there. Neither question has the same answer at two different times,
     // but the rows themselves do not change: a playhead move refreshes values in place (#358).
-    connect(&session_, &CompositionSession::currentTimeChanged, this,
-            &PropertiesEditor::refreshValues);
+    // #401: playback moves the playhead once per frame, so the refresh is coalesced to one per
+    // event-loop turn, and the Merge input list (rebuilt from
+    // scratch) is only re-read when a Merge is what the panel shows.
+    connect(&session_, &CompositionSession::currentTimeChanged, this, [this] {
+        if (timeRefreshPending_)
+            return;
+        timeRefreshPending_ = true;
+        QTimer::singleShot(0, this, [this] {
+            timeRefreshPending_ = false;
+            if (!mergeInputsPanel_->isHidden())
+                configureMergeInputs();
+            refreshValues();
+        });
+    });
 
     rebuild();
 }

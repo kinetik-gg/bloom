@@ -61,6 +61,10 @@ struct FrameDecodeProvenance final {
     bool fallback = false;
     // "software", "vaapi", or "software (fallback: <typed reason>)".
     std::string description = "software";
+    // The serving provider (ADR 0035): "ffmpeg", "ffmpeg-vaapi" or the platform framework's id.
+    // When the platform framework was retired for this source, `nativeFallback` names why.
+    std::string provider = "ffmpeg";
+    std::string nativeFallback;
 };
 struct FrameDecodeRoute final {
     // Interactive preview may use a discovered VA-API decoder for H.264/HEVC. The request is
@@ -141,6 +145,12 @@ class VideoDecodeSession final {
          std::uint64_t position, std::uint32_t count, const Cancel& cancel,
          const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot = {},
          bool retainWorker = false, bool hardware = false);
+    provider::WorkerReply
+    callWorker(provider::MediaWorkerPool& workers, const provider::ProviderDeclaration& declaration,
+               const provider::ProbeResult* source, std::uint32_t stream, std::uint64_t position,
+               std::uint32_t count, const Cancel& cancel,
+               const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot,
+               bool retainWorker);
     [[nodiscard]] provider::Result<std::shared_ptr<const platform::ReadOnlyFileSnapshot>>
     sourceRevision(std::optional<provider::Digest> expected, const Cancel& cancel,
                    const SourceRevisionAccess& access) const;

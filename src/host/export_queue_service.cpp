@@ -481,12 +481,14 @@ struct Pump final {
         progress.outputCount = static_cast<std::uint32_t>(runner.outputs().size());
         progress.currentFrame = runner.currentFrame();
         progress.route = runner.route();
+        progress.memoryNeededBytes = runner.memoryNeededBytes();
         progress.fraction = progress.framesTotal == 0
                                 ? std::nullopt
                                 : std::optional(static_cast<double>(progress.framesCompleted) /
                                                 static_cast<double>(progress.framesTotal));
         const bool excluded = job.state == ExportJobState::Paused ||
-                              progress.route == ExportDeviceRoute::WaitingForViewer;
+                              progress.route == ExportDeviceRoute::WaitingForViewer ||
+                              progress.route == ExportDeviceRoute::WaitingForMemory;
         if (excluded && !job.excludedSince)
             job.excludedSince = now;
         if (!excluded && job.excludedSince) {
@@ -1186,9 +1188,6 @@ ExportTransientSubmitResult ExportQueueService::submitTransient(ExportTransientJ
         return result;
     };
     const auto catalogue = s.dependencies.presets->snapshot();
-    if (!catalogue->encoders.exportPlatform)
-        return refuse(ExportUnavailableCode::PlatformNotSupported,
-                      "Export runs on Linux in this version");
     if (s.runner == ExportRunnerState::ShuttingDown)
         return refuse(ExportUnavailableCode::ShuttingDown, "Bloom is shutting down");
     if (!s.snapshot)
@@ -1215,10 +1214,7 @@ ExportTransientSubmitResult ExportQueueService::submitTransient(ExportTransientJ
     if (availability && s.colorSettings)
         availability = exportProjectAvailability(output.settings, *s.colorSettings);
     if (!availability)
-        return refuse(availability.code == ExportAvailabilityCode::PlatformNotSupported
-                          ? ExportUnavailableCode::PlatformNotSupported
-                          : ExportUnavailableCode::PreflightBlocked,
-                      availability.reason);
+        return refuse(ExportUnavailableCode::PreflightBlocked, availability.reason);
     const auto resolved =
         resolveDestination(job, output, detail::destinationContext(s, job, nullptr));
     if (!resolved.issues.empty())

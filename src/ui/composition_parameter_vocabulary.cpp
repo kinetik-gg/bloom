@@ -10,6 +10,7 @@
 #include <optional>
 #include <tuple>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/host/project_color_choice.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -424,8 +425,8 @@ void refreshColorSpaceSelector(kit::KDropdown& selector, const CompositionSessio
     selector.setItemText(0, automatic);
     selector.setItemToolTip(
         0, effect ? QObject::tr("Composition working color space: %1")
-                        .arg(QString::fromStdString(
-                            std::string(session.colorIntent().workingColorSpaceId)))
+                        .arg(QString::fromUtf8(host::workingColorSpaceLabel(
+                            session.colorIntent().workingColorSpaceId)))
            : sourceLegacyInputColorSpace(session, node) != 0
                ? QObject::tr("The source's legacy Color Space choice overrides the asset input "
                              "color space")

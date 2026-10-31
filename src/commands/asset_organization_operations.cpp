@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/document/layer_source.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <set>
 #include <tuple>
@@ -168,6 +169,8 @@ OperationResult RenameAsset::apply(document::Draft& draft) const {
     if (asset->name == name_)
         return OperationResult::noChange();
     asset->name = name_;
+    // Layers made from this asset that still follow their source show the new name.
+    (void)document::refreshLayerNamesFromSources(draft.project());
     return OperationResult::applied();
 }
 OperationResult MoveAssets::apply(document::Draft& draft) const {

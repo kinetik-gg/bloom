@@ -171,6 +171,9 @@ class CompositionPreviewController final : public QObject {
     currentLayerBounds(PreparedPreviewFrameHandle frame = nullptr) const;
     [[nodiscard]] bool isShuttingDown() const noexcept;
     [[nodiscard]] bool backgroundWorkAllowed() const noexcept;
+    // Playback read-ahead may run beside the playback request itself: it is blocked only by a
+    // gesture (scrub, value edit, transform override), a purge or a RAM preview run.
+    [[nodiscard]] bool playbackReadAheadAllowed() const noexcept;
     [[nodiscard]] PreviewFrameCache& frameCache() const noexcept;
     [[nodiscard]] const std::shared_ptr<PreviewFrameTrace>& frameTrace() const noexcept {
         return trace_;

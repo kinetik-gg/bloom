@@ -2,9 +2,9 @@
 #include <array>
 #include <bloom/media/provider/ffmpeg_launch.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/media/provider/media_workers.hpp>
 #if defined(__APPLE__)
 #include <bloom/media/provider/videotoolbox_manifest.hpp>
-#include <mach-o/dyld.h>
 #endif
 #include <bloom/media/video/session.hpp>
 #include <bloom/platform/cache_directory.hpp>
@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <new>
 #include <thread>
 #include <type_traits>
@@ -87,21 +88,15 @@ bool VideoDecodeSession::hardwareDecodePossible() {
 
 namespace {
 using namespace provider;
-// The video read provider is chosen by platform: the Apple-framework VideoToolbox provider on
-// macOS, FFmpeg elsewhere. The host and its worker build the same handshake, so validation agrees.
-Handshake providerHandshake() {
-#if defined(__APPLE__)
-    return videoToolboxHandshake();
-#else
-    return ffmpegHandshake();
-#endif
-}
+// The video read providers (ADR 0035): the bundled FFmpeg worker on every platform, preceded by
+// the platform media framework where Bloom has one (VideoToolbox on macOS). The host and each
+// worker build the same handshake, so validation agrees.
 PipelineQualificationV1 providerPipeline(const ProviderDeclaration& declaration) {
 #if defined(__APPLE__)
-    return videoToolboxPipeline(declaration);
-#else
-    return ffmpegPipeline(declaration);
+    if (declaration.execution.provider == "bloom.videotoolbox")
+        return videoToolboxPipeline(declaration);
 #endif
+    return ffmpegPipeline(declaration);
 }
 // Waits for a session-level lock while honouring cancellation; queued requests never see Busy.
 bool acquire(std::unique_lock<std::timed_mutex>& lock, const Cancel& cancel) {
@@ -131,9 +126,16 @@ struct VideoDecodeSession::State {
         std::condition_variable completed;
     };
     std::filesystem::path path;
-    Handshake hello = providerHandshake();
+    Handshake hello = ffmpegHandshake();
     CapabilityRegistry registry;
     MediaWorkerPool pool;
+    // The platform media framework's read provider, tried before FFmpeg for the operations it
+    // declares. Present only for the default worker on a platform with a native worker; retired
+    // for this session after its first failure, after which FFmpeg serves every request.
+    Handshake nativeHello;
+    std::unique_ptr<MediaWorkerPool> nativePool;
+    std::atomic<bool> nativeRetired{false};
+    std::string nativeFallback;
     // Preview-only VA-API decode generation (Linux). Created on first eligible request and
     // permanently retired for this session after its first typed hardware refusal.
     Handshake hardwareHello;
@@ -171,8 +173,8 @@ struct VideoDecodeSession::State {
           workerLaunched(launched), quota(std::move(limits)), spoolDirectory(std::move(directory)),
           retirement(std::move(owner)) {
         if (!quota)
-            quota = std::make_shared<platform::FileSnapshotQuota>(
-                defaultSourceSnapshotQuotaBytes(), 8);
+            quota =
+                std::make_shared<platform::FileSnapshotQuota>(defaultSourceSnapshotQuotaBytes(), 8);
         if (spoolDirectory.empty()) {
             if (const auto cache = platform::userCacheDirectory("bloom"))
                 spoolDirectory = *cache / "video-source-snapshots";
@@ -180,6 +182,22 @@ struct VideoDecodeSession::State {
         for (const auto& declaration : hello.declarations) {
             (void)registry.registerProvider(declaration);
             (void)registry.qualifyPipeline(providerPipeline(declaration));
+        }
+        if (const auto native = nativeWorkerExecutable();
+            !native.empty() && workerExecutable == ffmpegWorkerExecutable() &&
+            regularFileExists(native)) {
+            nativeHello = nativeMediaHandshake();
+            for (const auto& declaration : nativeHello.declarations) {
+                (void)registry.registerProvider(declaration);
+                (void)registry.qualifyPipeline(providerPipeline(declaration));
+            }
+            WorkerPoolOptions o;
+            o.process.executable = native;
+            o.expected = nativeHello;
+            o.capacity = 1;
+            o.timeout = std::chrono::seconds(30);
+            o.launched = workerLaunched;
+            nativePool = std::make_unique<MediaWorkerPool>(std::move(o));
         }
 #if defined(__linux__)
         hardwareHello = ffmpegHardwareDecodeHandshake();
@@ -217,8 +235,21 @@ struct VideoDecodeSession::State {
         const std::lock_guard lock(hardwareMutex);
         return hardwareFallback;
     }
+    void retireNative(std::string reason) {
+        // Called with `mutex` held by the failing call; the pool is released after its reply.
+        if (nativeRetired.exchange(true))
+            return;
+        const std::lock_guard lock(hardwareMutex);
+        nativeFallback = std::string(nativeMediaProviderId()) + " " + std::move(reason);
+    }
+    [[nodiscard]] std::string nativeFallbackReason() {
+        const std::lock_guard lock(hardwareMutex);
+        return nativeFallback;
+    }
     void releaseRetainedWorkers() {
         pool.releaseRetained();
+        if (nativePool)
+            nativePool->releaseRetained();
         const std::lock_guard lock(hardwareMutex);
         if (hardwarePool)
             hardwarePool->releaseRetained();
@@ -248,34 +279,7 @@ VideoDecodeSession::VideoDecodeSession(
                                      std::move(spoolDirectory), std::move(retirement),
                                      std::move(launched))) {}
 VideoDecodeSession::~VideoDecodeSession() = default;
-std::string VideoDecodeSession::defaultWorker() {
-#if defined(__linux__)
-    std::error_code error;
-    const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
-    if (!error) {
-        const auto installed = executable.parent_path().parent_path() /
-                               "libexec/bloom/media/ffmpeg-v1/bloom-media-worker";
-        if (std::filesystem::is_regular_file(installed, error) && !error)
-            return installed.string();
-    }
-#elif defined(__APPLE__)
-    // Installed macOS worker: <Bloom.app>/Contents/libexec/bloom/media/videotoolbox-v1/.
-    char path[4096] = {};
-    std::uint32_t size = sizeof(path);
-    if (_NSGetExecutablePath(path, &size) == 0) {
-        std::error_code error;
-        const auto installed = std::filesystem::path(path).parent_path().parent_path() /
-                               "libexec/bloom/media/videotoolbox-v1/bloom-media-worker";
-        if (std::filesystem::is_regular_file(installed, error) && !error)
-            return installed.string();
-    }
-#endif
-#ifdef BLOOM_VIDEO_WORKER
-    return BLOOM_VIDEO_WORKER;
-#else
-    return {};
-#endif
-}
+std::string VideoDecodeSession::defaultWorker() { return ffmpegWorkerExecutable(); }
 WorkerReply
 VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t stream,
                          std::uint64_t position, std::uint32_t count, const Cancel& cancel,
@@ -286,17 +290,45 @@ VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t str
         return Unavailable{Error::Cancelled, "Video request cancelled"};
     if (source && stream >= source->streams.size())
         return Unavailable{Error::InvalidValue, "Video stream does not exist"};
+    const auto declared = [&](const Handshake& hello) {
+        return std::ranges::find_if(hello.declarations, [&](const auto& d) {
+            return d.capability.role == role &&
+                   (!source || role == Role::DemuxIndex ||
+                    mediaCodecFamilyV1(d.capability.codec) ==
+                        mediaCodecFamilyV1(source->streams[stream].codec));
+        });
+    };
+    // Platform media framework first (ADR 0035); a failure retires it for this session and the
+    // same request is answered by FFmpeg. Cancellation and a changed source end the request.
+    if (!hardware && state_->nativePool && !state_->nativeRetired.load()) {
+        const auto& hello = state_->nativeHello;
+        if (const auto found = declared(hello); found != hello.declarations.end()) {
+            auto reply = callWorker(*state_->nativePool, *found, source, stream, position, count,
+                                    cancel, nullptr, false);
+            const auto* error = std::get_if<Unavailable>(&reply);
+            if (error == nullptr || !mediaFallbackPermittedV1(*error))
+                return reply;
+            state_->retireNative(error->detail);
+            std::cerr << "Bloom media: " << nativeMediaProviderId() << " read failed ("
+                      << error->detail << "); FFmpeg serves this source\n";
+        }
+    }
     auto* workers = hardware ? state_->hardwareWorkers() : &state_->pool;
     if (!workers)
         return Unavailable{Error::Unavailable, "Hardware video decode is retired for this source"};
-    const auto& declarations =
-        hardware ? state_->hardwareHello.declarations : state_->hello.declarations;
-    const auto found = std::ranges::find_if(declarations, [&](const auto& d) {
-        return d.capability.role == role && (!source || role == Role::DemuxIndex ||
-                                             d.capability.codec == source->streams[stream].codec);
-    });
-    if (found == declarations.end())
+    const auto& hello = hardware ? state_->hardwareHello : state_->hello;
+    const auto found = declared(hello);
+    if (found == hello.declarations.end())
         return Unavailable{Error::Unavailable, "No qualified video read capability"};
+    return callWorker(*workers, *found, source, stream, position, count, cancel, snapshot,
+                      retainWorker);
+}
+WorkerReply VideoDecodeSession::callWorker(
+    MediaWorkerPool& workers, const ProviderDeclaration& declaration, const ProbeResult* source,
+    const std::uint32_t stream, const std::uint64_t position, const std::uint32_t count,
+    const Cancel& cancel, const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot,
+    const bool retainWorker) {
+    const auto* found = &declaration;
     auto attempt = state_->registry.begin(providerPipeline(*found));
     if (const auto* error = std::get_if<Unavailable>(&attempt))
         return *error;
@@ -311,8 +343,8 @@ VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t str
         request.width = source->streams[stream].width;
         request.height = source->streams[stream].height;
     }
-    return workers->call(std::get<MediaAttempt>(attempt), 0, std::move(request), snapshot, cancel,
-                         retainWorker);
+    return workers.call(std::get<MediaAttempt>(attempt), 0, std::move(request), snapshot, cancel,
+                        retainWorker);
 }
 namespace {
 struct SnapshotRetirement final : render::detail::PackedHostRetirementNode {
@@ -559,6 +591,16 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
             provenance.description =
                 "software (fallback: " + state_->hardwareFallbackReason() + ")";
         }
+        const bool native =
+            !usedHardware && state_->nativePool && !state_->nativeRetired.load() &&
+            stream < source.streams.size() &&
+            declaresMediaOperationV1(state_->nativeHello,
+                                     {MediaDirectionV1::Decode, source.streams[stream].codec, {}});
+        provenance.provider = usedHardware ? std::string(kFfmpegVaapiProviderId)
+                              : native     ? std::string(nativeMediaProviderId())
+                                           : std::string(kFfmpegProviderId);
+        if (state_->nativeRetired.load())
+            provenance.nativeFallback = state_->nativeFallbackReason();
         return provenance;
     };
     const auto publish = [&](const FrameDecodeProvenance& provenance) {

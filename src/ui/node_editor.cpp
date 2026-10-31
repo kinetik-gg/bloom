@@ -42,6 +42,7 @@
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStyleOptionGraphicsItem>
+#include <QTimer>
 #include <QVariant>
 #include <QWheelEvent>
 
@@ -255,6 +256,30 @@ void NodeGraphicsScene::refreshValues() {
     }
 }
 
+void NodeGraphicsScene::refreshTimeValues(const bool staleOnly) {
+    const auto* composition =
+        session_ == nullptr
+            ? nullptr
+            : session_->snapshot().project().findComposition(session_->compositionId());
+    if (composition == nullptr)
+        return;
+    QRectF shown;
+    for (const auto* view : views())
+        if (view != nullptr && view->isVisible())
+            shown = shown.united(view->mapToScene(view->viewport()->rect()).boundingRect());
+    for (auto* item : items()) {
+        auto* card = dynamic_cast<NodeItem*>(item);
+        if (card == nullptr || !card->timeVarying() || (staleOnly && !card->timeStale()))
+            continue;
+        if (!shown.intersects(card->sceneBoundingRect())) {
+            card->setTimeStale(true);
+            continue;
+        }
+        if (const auto* node = composition->graph().findNode(card->id()))
+            card->refreshTimeValues(*node, *composition);
+    }
+}
+
 QGraphicsItem* NodeGraphicsScene::findNodeItem(const document::NodeId nodeId) const {
     const auto matching = items();
     const auto found = std::ranges::find_if(matching, [nodeId](const auto* item) {
@@ -434,8 +459,6 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
             scene_->refreshValues();
             scene_->update();
         });
-        connect(controller, &AssetController::nodeThumbnailsChanged, this,
-                [this] { scene_->update(); });
     }
     if (auto* cryptomatte = session_.cryptomatteController())
         connect(cryptomatte, &CryptomatteController::changed, scene_,
@@ -450,13 +473,21 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     // an animated cell shows the curve's value AT the session time and its diamond says whether a
     // key sits there, so both have to follow the time or the canvas quietly disagrees with the
     // Properties panel and the timeline about what the frame currently holds.
-    connect(&session_, &CompositionSession::currentTimeChanged, scene_,
-            &NodeGraphicsScene::refreshValues);
+    // ... but only the cards whose values move with time, coalesced into one refresh per display
+    // frame, and none at all while the panel is hidden (bug #401).
+    timeRefresh_ = new QTimer(this);
+    timeRefresh_->setSingleShot(true);
+    timeRefresh_->setInterval(0);
+    connect(timeRefresh_, &QTimer::timeout, scene_, [this] { scene_->refreshTimeValues(); });
+    connect(&session_, &CompositionSession::currentTimeChanged, this,
+            &NodeGraphEditor::scheduleTimeRefresh);
     connect(scene_, &QGraphicsScene::selectionChanged, this,
             &NodeGraphEditor::sceneSelectionChanged);
     connect(view_, &NodeGraphicsView::contextMenuRequested, this,
             &NodeGraphEditor::showContextMenu);
 
+    connect(view_, &NodeGraphicsView::viewChanged, scene_,
+            [this] { scene_->refreshTimeValues(true); });
     connect(view_, &NodeGraphicsView::canvasKeyPressed, this, &NodeGraphEditor::handleCanvasKey);
     connect(view_, &NodeGraphicsView::canvasFocusLost, scene_, &NodeGraphicsScene::cancelGesture);
     connect(scene_, &NodeGraphicsScene::addSearchRequested, this, &NodeGraphEditor::openAddSearch);
@@ -481,6 +512,23 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
 }
 
 NodeGraphEditor::~NodeGraphEditor() { scene_->blockSignals(true); }
+
+void NodeGraphEditor::scheduleTimeRefresh() {
+    if (!isVisible()) {
+        hiddenTimeChange_ = true;
+        return;
+    }
+    if (!timeRefresh_->isActive())
+        timeRefresh_->start();
+}
+
+void NodeGraphEditor::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    if (hiddenTimeChange_) {
+        hiddenTimeChange_ = false;
+        scene_->refreshTimeValues();
+    }
+}
 
 NodeGraphicsScene* NodeGraphEditor::graphScene() const noexcept { return scene_; }
 

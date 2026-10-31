@@ -97,9 +97,6 @@ StatusText jobStatus(const host::ExportJobView& job) {
             return {tr("Checking where it saves\u2026"), qs(start.reason), StatusTone::Neutral};
         case host::ExportUnavailableCode::NeedsReplaceConfirmation:
             return {tr("Waiting for your OK"), qs(start.reason), StatusTone::Neutral};
-        case host::ExportUnavailableCode::PlatformNotSupported:
-            // Editing works everywhere; only running is a Linux feature in this version.
-            return {tr("Queued"), qs(start.reason), StatusTone::Neutral};
         default:
             return {needsLocation(job) ? tr("Needs output") : tr("Needs attention"),
                     qs(start.reason), StatusTone::Neutral};
@@ -116,6 +113,14 @@ StatusText jobStatus(const host::ExportJobView& job) {
                     tr("Export uses only spare time while the Viewer plays. It continues when "
                        "playback stops."),
                     StatusTone::Neutral};
+        case host::ExportDeviceRoute::WaitingForMemory: {
+            const auto needed = job.progress.memoryNeededBytes;
+            return {tr("Waiting for memory"),
+                    needed ? tr("Waiting for memory: %1 GB needed")
+                                 .arg(static_cast<double>(*needed) / 1e9, 0, 'f', 1)
+                           : tr("Waiting for other work to release memory"),
+                    StatusTone::Neutral};
+        }
         case host::ExportDeviceRoute::RecoveringGpu:
             return {tr("Reconnecting GPU"), {}, StatusTone::Active};
         case host::ExportDeviceRoute::CpuReference:
@@ -219,7 +224,8 @@ QString elapsedText(const host::ExportJobProgress& progress) {
 QString remainingText(const host::ExportJobProgress& progress) {
     // No estimate exists while the Viewer holds the GPU, and none before enough frames finished.
     if (!progress.remaining.has_value() ||
-        progress.route == host::ExportDeviceRoute::WaitingForViewer)
+        progress.route == host::ExportDeviceRoute::WaitingForViewer ||
+        progress.route == host::ExportDeviceRoute::WaitingForMemory)
         return {};
     return QCoreApplication::translate("ExportPanel", "about %1 left")
         .arg(clockText(*progress.remaining));

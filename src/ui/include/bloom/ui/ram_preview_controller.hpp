@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 namespace bloom::ui {
@@ -119,6 +120,10 @@ class RamPreviewController final : public QObject {
     // Refresh at the autoplay boundary, including external callbacks/rebinds and expired leases.
     [[nodiscard]] bool isFullRangeRetained();
     [[nodiscard]] bool canAutoPlay();
+    // A still-current run that ended PartialBudget (the range outgrew memory): playback starts
+    // anyway from the range start, and Play's read-ahead renders the rest ahead of the playhead
+    // while the cache evicts least-recently-used frames. Output length is never limited by RAM.
+    [[nodiscard]] bool canPlayPartial();
     [[nodiscard]] bool isCaching() const noexcept { return caching_; }
     // Live exact-grid retention and requested range size. Coverage follows cache mutations after
     // completion too; preparedFrameCount()/lastCompletion() alone describe historical work.
@@ -239,6 +244,17 @@ class RamPreviewController final : public QObject {
     std::uint64_t generation_ = 0;
     std::uint64_t runSerial_ = 0;
     std::optional<Completion> retentionLoss_;
+    // Memory evicted or refused some of this run's frames. A RAM preview never stops for memory:
+    // it keeps filling (the cache evicts its least recently used frames) and ends PartialBudget.
+    bool partialForMemory_ = false;
+    // A frame that fails is retried this many times, then skipped; a run rescans after losing
+    // retained frames for non-memory reasons at most kLossRescans times.
+    static constexpr int kFrameRetries = 3;
+    static constexpr int kLossRescans = 8;
+    std::unordered_map<std::uint64_t, int> frameFailures_;
+    int lossRescans_ = 0;
+    void retryFrame(std::uint64_t frameIndex, std::uint64_t serial);
+    void rescanAfterLoss();
     // A cache insert can remove an expired entry and retain its exact replacement before it
     // returns. Judge removals after that transaction, when the final coverage is known.
     std::map<std::uint64_t, Completion> pendingRetentionLoss_;

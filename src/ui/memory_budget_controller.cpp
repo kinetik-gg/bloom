@@ -3,6 +3,7 @@
 
 #include <QPointer>
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -19,6 +20,7 @@ MemoryBudgetController::MemoryBudgetController(
     // Queue initial admission until application consumers have connected. This is not a result
     // poll; subsequent delivery comes exclusively through the runtime completion bridge.
     QTimer::singleShot(0, this, &MemoryBudgetController::requestSample);
+    reclaimRequest_->owner = this;
     if (pressure) {
         // The monitor thread never touches cache owners: it queues the sample to this object's
         // thread. beginShutdown() joins the monitor before this object dies, and Qt drops a
@@ -49,6 +51,44 @@ void MemoryBudgetController::applyPressure(const runtime::MachineMemorySample& s
     emit pressureApplied();
 }
 
+void MemoryBudgetController::reclaimForWork(const std::size_t bytes) {
+    queueReclaim(reclaimRequest_, bytes);
+}
+
+std::function<void(std::size_t)> MemoryBudgetController::workReclaimer() const {
+    return [request = reclaimRequest_](const std::size_t bytes) { queueReclaim(request, bytes); };
+}
+
+void MemoryBudgetController::queueReclaim(const std::shared_ptr<ReclaimRequest>& request,
+                                          const std::size_t bytes) {
+    const std::lock_guard lock(request->mutex);
+    if (request->owner == nullptr)
+        return;
+    request->bytes = std::max({request->bytes, bytes, kMinimumReclaimBytes});
+    if (request->queued)
+        return;
+    auto* const owner = request->owner;
+    request->queued = QMetaObject::invokeMethod(
+        owner,
+        [owner, request] {
+            std::size_t pending = 0;
+            {
+                const std::lock_guard held(request->mutex);
+                pending = std::exchange(request->bytes, 0);
+                request->queued = false;
+                if (request->owner == nullptr)
+                    return;
+            }
+            if (owner->closed_)
+                return;
+            static_cast<void>(owner->ledger_.reclaim(pending));
+            ++owner->reclaimApplied_;
+            // The waiting work retries on the next sample; take it now, not in five seconds.
+            owner->requestSample();
+        },
+        Qt::QueuedConnection);
+}
+
 void MemoryBudgetController::wakePressureMonitor() {
     if (pressureMonitor_)
         pressureMonitor_->wake();
@@ -60,6 +100,10 @@ void MemoryBudgetController::beginShutdown() {
     if (closed_)
         return;
     closed_ = true;
+    {
+        const std::lock_guard lock(reclaimRequest_->mutex);
+        reclaimRequest_->owner = nullptr;
+    }
     timer_.stop();
     if (pressureMonitor_)
         pressureMonitor_->stop();

@@ -1053,6 +1053,193 @@ void testKeyframeHandleAndValueOperations(TestContext& test) {
                 "the pasted key lands at its destination time with the handles it was copied with");
 }
 
+// Document 1.30: Blender's easing equations and their per-key parameters, through one undoable
+// batch, and After Effects' Easy Ease mapped onto Bloom's handle model.
+void testKeyframeEasingOperations(TestContext& test) {
+    Document document(makeSourceProject());
+    CommandStack stack(document);
+    const auto execute = [&]<typename OperationType, typename... Args>(Args&&... args) {
+        Transaction transaction("Ease keys", document.snapshot().revision());
+        transaction.emplace<OperationType>(kCompositionId, std::forward<Args>(args)...);
+        return stack.execute(std::move(transaction));
+    };
+    const std::vector<KeyframePaste> seed{
+        {kOpacityId, time(0, 1), 0.25},
+        {kOpacityId, time(1, 1), 0.5},
+        {kOpacityId, time(2, 1), 0.75},
+        {kFirstPositionId, time(0, 1), document::Vec2d{3, 4}},
+        {kFirstPositionId, time(1, 1), document::Vec2d{5, 6}},
+    };
+    test.expect(execute.template operator()<PasteKeyframes>(seed).changed(), "easing fixture");
+    const auto seeded = document.snapshot();
+    const auto opacity = animationSource(seeded, kOpacityId);
+    const auto position = animationSource(seeded, kFirstPositionId);
+    const auto keys = scalarCurve(seeded, opacity).keyframes;
+    const auto vectorKey = vec2Curve(seeded, position).components[0].keyframes.front().id;
+    if (keys.size() != 3)
+        return;
+
+    const std::vector<KeyframeAddress> addresses{
+        {opacity, keys[0].id}, {opacity, keys[2].id}, {position, vectorKey}};
+    const auto beforeEasing = stack.size();
+    test.expect(
+        execute.template operator()<SetKeyframesEasing>(
+                   addresses,
+                   KeyframeEasingEdit{document::KeyframeEasing::Out, std::nullopt, 2.5, 0.25},
+                   document::KeyframeInterpolation::Elastic)
+                .changed() &&
+            stack.size() == beforeEasing + 1,
+        "mode and easing parameters change in one undo step");
+    const auto eased = document.snapshot();
+    const auto& easedKeys = scalarCurve(eased, opacity).keyframes;
+    test.expect(easedKeys[0].outgoingInterpolation == document::KeyframeInterpolation::Elastic &&
+                    easedKeys[0].easing.easing == document::KeyframeEasing::Out &&
+                    easedKeys[0].easing.amplitude == 2.5 && easedKeys[0].easing.period == 0.25 &&
+                    easedKeys[0].easing.back == document::kDefaultKeyframeBack,
+                "addressed keys take the edit; an absent parameter keeps its value");
+    test.expect(easedKeys[1] == keys[1], "an unaddressed key is untouched");
+    test.expect(easedKeys[2].outgoingInterpolation == document::KeyframeInterpolation::Linear &&
+                    easedKeys[2].easing.easing == document::KeyframeEasing::Out,
+                "the final key keeps canonical Linear but still stores its parameters");
+    const auto& components = vec2Curve(eased, position).components;
+    test.expect(components[0].keyframes[0].outgoingInterpolation ==
+                        document::KeyframeInterpolation::Elastic &&
+                    components[1].keyframes[0].outgoingInterpolation ==
+                        document::KeyframeInterpolation::Elastic &&
+                    components[1].keyframes[0].easing.amplitude == 2.5,
+                "a component-less vector address eases every component's key at that time");
+    test.expect(stack.undo().changed() &&
+                    scalarCurve(document.snapshot(), opacity).keyframes == keys,
+                "one undo restores modes and parameters bit for bit");
+    test.expect(stack.redo().changed() &&
+                    scalarCurve(document.snapshot(), opacity).keyframes == easedKeys,
+                "redo restores them");
+
+    const auto beforeRefusal = document.snapshot();
+    test.expect(
+        execute.template operator()<SetKeyframesEasing>(
+                   addresses, KeyframeEasingEdit{std::nullopt, std::nullopt, -1.0, std::nullopt})
+                    .status == CommandStatus::Rejected &&
+            execute.template operator()<SetKeyframesEasing>(
+                       addresses, KeyframeEasingEdit{static_cast<document::KeyframeEasing>(9),
+                                                     std::nullopt, std::nullopt, std::nullopt})
+                    .status == CommandStatus::Rejected &&
+            document.snapshot().revision() == beforeRefusal.revision(),
+        "a negative amplitude or an unknown ease mode refuses the whole batch");
+
+    // Every equation is a valid batch interpolation.
+    for (const auto mode :
+         {document::KeyframeInterpolation::Sine, document::KeyframeInterpolation::Quad,
+          document::KeyframeInterpolation::Cubic, document::KeyframeInterpolation::Quart,
+          document::KeyframeInterpolation::Quint, document::KeyframeInterpolation::Expo,
+          document::KeyframeInterpolation::Circ, document::KeyframeInterpolation::Back,
+          document::KeyframeInterpolation::Bounce}) {
+        test.expect(
+            execute.template operator()<SetKeyframesInterpolation>(
+                       std::vector<KeyframeAddress>{{opacity, keys[0].id}}, mode)
+                    .changed() &&
+                scalarCurve(document.snapshot(), opacity).keyframes[0].outgoingInterpolation ==
+                    mode,
+            "each easing equation is a batch interpolation");
+    }
+}
+
+void testEasyEase(TestContext& test) {
+    Document document(makeSourceProject());
+    CommandStack stack(document);
+    const auto execute = [&]<typename OperationType, typename... Args>(Args&&... args) {
+        Transaction transaction("Easy Ease", document.snapshot().revision());
+        transaction.emplace<OperationType>(kCompositionId, std::forward<Args>(args)...);
+        return stack.execute(std::move(transaction));
+    };
+    const std::vector<KeyframePaste> seed{{kOpacityId, time(0, 1), 0.0},
+                                          {kOpacityId, time(1, 1), 0.75},
+                                          {kOpacityId, time(2, 1), 0.3}};
+    test.expect(execute.template operator()<PasteKeyframes>(seed).changed(), "Easy Ease fixture");
+    const auto opacity = animationSource(document.snapshot(), kOpacityId);
+    const auto keys = scalarCurve(document.snapshot(), opacity).keyframes;
+    if (keys.size() != 3)
+        return;
+    const auto ease = [](const document::ScalarKeyframe& key) {
+        return key.outgoingInterpolation == document::KeyframeInterpolation::EaseInOut;
+    };
+
+    // F9 on the middle key: both of its sides get zero speed at 1/3 influence; each far side,
+    // which was Linear, keeps linear speed.
+    test.expect(execute
+                    .template operator()<ApplyEasyEase>(
+                        std::vector<KeyframeAddress>{{opacity, keys[1].id}}, EasyEase::Both)
+                    .changed(),
+                "Easy Ease applies");
+    auto eased = scalarCurve(document.snapshot(), opacity).keyframes;
+    test.expect(ease(eased[0]) && ease(eased[1]) && !ease(eased[2]),
+                "both segments touching the key become Bezier");
+    test.expect(document::isDefaultKeyframeHandle(eased[1].incomingHandle) &&
+                    document::isDefaultKeyframeHandle(eased[1].outgoingHandle),
+                "the eased key's handles are exactly (1/3, 0): 33.33% influence, zero speed");
+    test.expect(
+        eased[0].outgoingHandle ==
+                document::KeyframeHandle{document::kDefaultKeyframeHandleTime, 0.75 / 3.0} &&
+            eased[2].incomingHandle ==
+                document::KeyframeHandle{document::kDefaultKeyframeHandleTime, (0.3 - 0.75) / -3.0},
+        "a far side that was Linear keeps linear speed");
+    test.expect(stack.undo().changed() &&
+                    scalarCurve(document.snapshot(), opacity).keyframes == keys,
+                "Easy Ease undoes exactly");
+
+    // Easy Ease on every key fully eases each segment: all handles default, so the segments
+    // sample through the exact Smoothstep path.
+    test.expect(execute
+                    .template operator()<ApplyEasyEase>(
+                        std::vector<KeyframeAddress>{
+                            {opacity, keys[0].id}, {opacity, keys[1].id}, {opacity, keys[2].id}},
+                        EasyEase::Both)
+                    .changed(),
+                "Easy Ease on all keys");
+    eased = scalarCurve(document.snapshot(), opacity).keyframes;
+    bool allDefault = ease(eased[0]) && ease(eased[1]);
+    for (const auto& key : eased)
+        allDefault = allDefault && document::isDefaultKeyframeHandle(key.outgoingHandle) &&
+                     document::isDefaultKeyframeHandle(key.incomingHandle);
+    test.expect(allDefault, "fully eased segments carry only default handles");
+    test.expect(stack.undo().changed(), "undo all-key Easy Ease");
+
+    // Easy Ease In eases only the incoming side; Out only the outgoing side.
+    test.expect(execute
+                    .template operator()<ApplyEasyEase>(
+                        std::vector<KeyframeAddress>{{opacity, keys[1].id}}, EasyEase::In)
+                    .changed(),
+                "Easy Ease In applies");
+    eased = scalarCurve(document.snapshot(), opacity).keyframes;
+    test.expect(ease(eased[0]) && !ease(eased[1]) &&
+                    document::isDefaultKeyframeHandle(eased[1].incomingHandle),
+                "Easy Ease In shapes only the segment arriving at the key");
+    test.expect(stack.undo().changed(), "undo Easy Ease In");
+    test.expect(execute
+                    .template operator()<ApplyEasyEase>(
+                        std::vector<KeyframeAddress>{{opacity, keys[1].id}}, EasyEase::Out)
+                    .changed(),
+                "Easy Ease Out applies");
+    eased = scalarCurve(document.snapshot(), opacity).keyframes;
+    test.expect(!ease(eased[0]) && ease(eased[1]) &&
+                    document::isDefaultKeyframeHandle(eased[1].outgoingHandle),
+                "Easy Ease Out shapes only the segment leaving the key");
+
+    // A far side that is already Bezier keeps its own handle.
+    const document::KeyframeHandle custom{0.6, 0.05};
+    test.expect(execute
+                    .template operator()<SetKeyframeHandles>(
+                        std::vector<KeyframeHandleEdit>{{{opacity, keys[2].id}, {}, custom}})
+                    .changed(),
+                "custom far handle");
+    test.expect(execute.template operator()<ApplyEasyEase>(
+                           std::vector<KeyframeAddress>{{opacity, keys[1].id}}, EasyEase::Out)
+                        .status == CommandStatus::NoChange,
+                "re-applying Easy Ease Out to an eased side is no change");
+    test.expect(scalarCurve(document.snapshot(), opacity).keyframes[2].incomingHandle == custom,
+                "an existing Bezier far side keeps its handle");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -1072,6 +1259,8 @@ int main() {
         bloom::commands::test::testTextSizeAnimationRespectsItsSchemaDomain(test);
         bloom::commands::test::testSetKeyframeInterpolation(test);
         bloom::commands::test::testKeyframeHandleAndValueOperations(test);
+        bloom::commands::test::testKeyframeEasingOperations(test);
+        bloom::commands::test::testEasyEase(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

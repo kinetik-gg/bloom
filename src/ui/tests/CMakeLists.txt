@@ -813,6 +813,17 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+add_executable(bloom_viewer_display_view_test viewer_display_view_tests.cpp)
+target_link_libraries(bloom_viewer_display_view_test PRIVATE bloom_ui)
+bloom_enable_warnings(bloom_viewer_display_view_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_display_view
+    COMMAND bloom_viewer_display_view_test
+    LABELS ui unit color
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 bloom_add_test(
     NAME bloom.ui.timeline_frame_math
     COMMAND bloom_timeline_frame_math_test
@@ -970,6 +981,15 @@ bloom_add_test(NAME bloom.ui.node-card COMMAND bloom_node_card_test LABELS ui in
 
 # Task S2 (issue #132): node group frames -- geometry, frame drag, membership by drop, inline title
 # rename, and the two menus. Its own executable for the same reason node_card_tests.cpp is.
+# Task N1: the node canvas -- cursor placement, overlap-free adds, the layer-stack Arrange and its
+# footer button, collapse, frame colour, constant-width links, Merge's per-slot sockets, source
+# cards without previews and the Nodes icon.
+add_executable(bloom_node_canvas_polish_test node_canvas_polish_tests.cpp)
+target_include_directories(bloom_node_canvas_polish_test PRIVATE ..)
+target_link_libraries(bloom_node_canvas_polish_test PRIVATE bloom_ui bloom_project Qt6::Test)
+bloom_enable_warnings(bloom_node_canvas_polish_test)
+bloom_add_test(NAME bloom.ui.node-canvas-polish COMMAND bloom_node_canvas_polish_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_group_test node_group_tests.cpp)
 target_include_directories(bloom_node_group_test PRIVATE ..)
 target_link_libraries(bloom_node_group_test PRIVATE bloom_ui bloom_project Qt6::Test)
@@ -1045,6 +1065,14 @@ target_include_directories(bloom_timeline_row_controls_test PRIVATE ..)
 target_link_libraries(bloom_timeline_row_controls_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
 bloom_enable_warnings(bloom_timeline_row_controls_test)
 bloom_add_test(NAME bloom.ui.timeline-row-controls COMMAND bloom_timeline_row_controls_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Lane T2: the Timeline layer table -- labels, switches, sizing, expanded rows, After Effects'
+# Timeline keys, names that follow their source, and #401's per-tick cost.
+add_executable(bloom_timeline_layer_table_test timeline_layer_table_tests.cpp)
+target_include_directories(bloom_timeline_layer_table_test PRIVATE ..)
+target_link_libraries(bloom_timeline_layer_table_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
+bloom_enable_warnings(bloom_timeline_layer_table_test)
+bloom_add_test(NAME bloom.ui.timeline-layer-table COMMAND bloom_timeline_layer_table_test LABELS ui integration kit TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Task FIX2, deliverable 1: the owner's "values in nodes parameters are not workable", driven
 # through real pointer and key events on the production canvas. Its own executable for the same
@@ -1341,6 +1369,15 @@ endif()
 # The maximized Viewer at a small and a large size, with and without a composition: captures for
 # review, plus the check that no hosted header or footer control lies outside its row.
 # The popup chin check: holds one dropdown popup or menu open for a compositor screenshot.
+# Task N1 review captures of the Node editor (a tool, not a test):
+# bloom_node_canvas_capture <directory> <1|1.5>.
+add_executable(bloom_node_canvas_capture node_canvas_capture.cpp)
+target_include_directories(bloom_node_canvas_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_node_canvas_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_compile_definitions(bloom_node_canvas_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_node_canvas_capture)
+
 # Lane C review captures of every dialog (a tool, not a test): bloom_dialog_capture <dir> <1|1.5>.
 add_executable(bloom_dialog_capture dialog_capture.cpp)
 target_include_directories(bloom_dialog_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -1356,6 +1393,16 @@ target_link_libraries(bloom_review_capture PRIVATE bloom_ui bloom_runtime_compil
 target_compile_definitions(bloom_review_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_review_capture)
+
+# Lane T1 Graph Editor review captures (a tool, not a test): bloom_timeline_graph_capture <dir>,
+# once per QT_SCALE_FACTOR.
+add_executable(bloom_timeline_graph_capture timeline_graph_capture.cpp)
+target_include_directories(bloom_timeline_graph_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_timeline_graph_capture PRIVATE bloom_ui bloom_runtime_compiler
+    Qt6::Test)
+target_compile_definitions(bloom_timeline_graph_capture PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_timeline_graph_capture)
 
 add_executable(bloom_popup_capture popup_capture.cpp)
 target_link_libraries(bloom_popup_capture PRIVATE bloom_ui_kit)
@@ -1478,6 +1525,13 @@ bloom_enable_warnings(bloom_audio_transport_test)
 add_test(NAME bloom.ui.audio-transport COMMAND bloom_audio_transport_test)
 set_tests_properties(bloom.ui.audio-transport PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
+
+# #400: looped playback keeps the mixer and the transport on one work-area period.
+add_executable(bloom_ui_audio_loop_transport_test audio_loop_transport_tests.cpp)
+target_link_libraries(bloom_ui_audio_loop_transport_test PRIVATE bloom_ui bloom_runtime_compiler)
+bloom_enable_warnings(bloom_ui_audio_loop_transport_test)
+bloom_add_test(NAME bloom.ui.audio-loop-transport COMMAND bloom_ui_audio_loop_transport_test
+    LABELS ui audio TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(bloom_ui_audio_device_control_test audio_device_control_tests.cpp)
 target_link_libraries(bloom_ui_audio_device_control_test PRIVATE bloom_ui)

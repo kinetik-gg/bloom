@@ -101,7 +101,7 @@ The exceptions are deliberate and closed:
 | --- | --- |
 | Panel menu titles (`KMenuButton`: View, Select, Add, the Timeline and Nodes menus) | Menus, like a menu bar's titles, not buttons: flat text with the `Accent` hover bar |
 | Text entry (`KValueField`, `KTextField`/`KLineEdit`, `KSearchField`, `KTextArea`, the Viewer frame field) | The one text-entry recipe, `kit::fieldColors()`: a `Field` well, so an editable value never reads as a button. A field standing in a chrome row or on a node card keeps a resting `Border` (`KValueField::setOutlinedAtRest`); a property cell (Properties, Timeline rows) rests borderless. A refused entry wears `Error` over every other state |
-| Timeline layer switches (eye, audio, solo, lock) | The glyph is the state (an eye that is there or not), so a switch never takes the Accent plate; its cell is the Secondary plate |
+| Timeline layer switches (eye, audio, solo, lock, shy) | The glyph is the state (an eye that is there or not), so a switch never takes the Accent plate; its cell is the Secondary plate. The Label cell is a `kit::KSwatchButton`: the Secondary plate carrying the label color as an `IconSmall` square with its edge-ink hairline, never tinted |
 | Ghost | Only where a control deliberately has no resting surface: disclosure carets (layer and property disclosure, the RGBA and multiline expanders) and the window title bar buttons |
 
 There is no Recessed recipe and no `ControlSurface` token any more: both existed only for the
@@ -577,24 +577,43 @@ parameters retain the existing hidden-editor/driver behavior. Ordered multi-inpu
 their segmented pill and insertion semantics; reroutes remain dots.
 
 `NodeCardWidth` is the normal floor. Content can require a wider minimum, and an authored
-resize remains authoritative above that minimum. `Arrange All` lays out the graph left to right:
-longest-path ranks place sources and value drivers before their consumers, and stable barycenter
-sweeps order each rank to reduce crossings. Each rank uses its maximum measured card width plus one
-`Spacing::L` gap; cards in a rank use their measured heights plus the same gap, and shorter ranks
-are vertically centered. Disconnected components stack below one another. Nodes in a group remain a
-contiguous rank block, and the frame is recomputed from its members after the transaction.
-`Arrange Selection` applies the same rule to the induced selection and preserves its bounding-box
-top-left. Both commands are one undoable `MoveNodes` transaction; Arrange All fits the canvas after
-publication.
+resize remains authoritative above that minimum. `Arrange All` reads the graph like the layer
+stack: Composition Output is the rightmost column, and each node sits further left the further
+upstream it is (its column is the longest path to the output side), so every Layer card shares one
+column and the sources the next. Rows follow the stack top to bottom, as the Timeline lists it:
+each node's upstream subtree owns a horizontal band, its inputs in their own order (Merge's slots
+top first, other ports in declaration order), and a node is centerd on its band. Columns use the
+widest measured card plus `NodeArrangeGap`, bands are `NodeArrangeGap` apart, and every position
+lands on the `NodeGrid` lattice. Disconnected graphs stack below the output's. Nodes in a group
+stay adjacent among their siblings, and the frame is recomputed from its members after the
+transaction. `Arrange Selection` applies the same rule to the induced selection and preserves its
+grid-aligned bounding-box top-left. Both commands are one undoable `MoveNodes` transaction from the
+View menu, the keys or the footer's Arrange button; Arrange All fits the canvas after publication.
+Scripts and agents run the same command (`bloom.node.arrange`) with the command-side card estimate
+in place of measured sizes.
 
-Authored positions are never rearranged by creation. A new card keeps its requested free position,
-or searches the nearest rank-grid slot around its connection (down, up, then the next column) using
-an indexed collision test against every card and a `Spacing::L` clearance. Structured layer
-creation puts the Layer card one gap left of Merge and its source one gap left of Layer. This rule
-also applies to Assets drops and viewer/timeline layer actions, so existing cards never move and a
-new card never touches another card. Links use the socket-kind palette and a horizontal-tangent
-cubic spline with `NodeLinkHandleMin`; existing straight/angled preferences remain available.
-Every selected card, including the primary selection, uses an Accent outline.
+Authored positions are never rearranged by creation. A card added from the canvas lands with its
+title band centered under the pointer (the Tab or right-click point; the header's Add uses the
+middle of the view). When that spot would touch another card, the new card alone moves to the
+nearest `NodeGrid` position `NodeArrangeGap` past its neighbour. A new layer's Layer card goes into
+the layer column at its stack position (above the layer under it) and its source on the same row
+to the left, each moved off any card it would touch. This rule also applies to Assets drops and
+viewer/timeline layer actions, so existing cards never move and a new card never touches another
+card. Links use the socket-kind palette and a horizontal-tangent cubic spline with
+`NodeLinkHandleMin`; existing straight/angled preferences remain available. A link and every line
+a gesture draws keep their screen width at any zoom (a cosmetic stroke). Every selected card,
+including the primary selection, uses an Accent outline.
+
+The title band starts with a `CaretDown` disclosure caret (`CaretRight` while collapsed); a click
+on it collapses or expands that card, the same `SetNodeCollapsed` Node > Collapse issues. A
+collapsed card is its header alone, as a folded Blender node: only its linked sockets stay, centered
+down its two edges, and it grows past `NodeTitleBand` only when those need the room. Source cards
+(Image, Video, Audio, Shape) carry no preview: their rows start under the title band, and a missing
+or unreadable asset shows a `Warn` badge at the right of the header. Merge's ordered multi-input
+gives each stack slot its own attach point, the middle of its pill segment.
+
+The footer's right edge holds the Arrange button: a labelled `KButton` with the `Arrange` glyph and
+an "Arrange" label (the Viewer footer's RAM Preview shape), running Arrange All.
 
 
 Keyframe diamonds have four forms: a muted outline for a constant, a gold outline for an animated
@@ -686,7 +705,9 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | Size token | Pixels | Owner |
 | --- | --- | --- |
 | `TimelineNameDefault` | 280 | Timeline default name column |
-| `TimelineLeftColumn` | 576 | Four 24px toggles + name + two 100px dropdown columns |
+| `TimelineToggleColumn` | 136 | Video, Audio, Solo, Lock and Label: five `ToggleCell`s with XS gaps |
+| `TimelineSwitchColumn` | 28 | The Shy switch after the name: one `ToggleCell` and its XS gap |
+| `TimelineLeftColumn` | 744 | Leading switches + default name + Shy + three 100px dropdown columns |
 | `GizmoHandle / GizmoRotateZone` | 8 / 16 | Viewer transform handles / outside-corner rotation radius |
 | `ViewerWorkPadding` | 48 | Padded image work area |
 | `StatusSeparatorHeight` | 12 | The hairline between two status bar segments. |
@@ -709,7 +730,7 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `NodeSocketDot / NodeRerouteDot` | 8 / 10 | Scene port geometry |
 | `NodeLinkHandleMin` | 32 | Minimum spline tangent |
 | `NodeColumnGap / NodeRowGap` | 80 / 24 | Legacy unplaced-node grid |
-| `NodeArrangeGap` | `Spacing::L` (16) | Rank, component and creation clearance |
+| `NodeArrangeGap` | 64 (four `NodeGrid` steps) | Column, band and creation clearance |
 | `GraphValueAxis / GraphHandleDot` | 48 / 6 | Graph editor value gutter / ease-handle dot |
 | `Hairline / SelectionEdge` | 1 / 2 | Pixel-edge arithmetic / scene selection outline |
 | `NodeGrid` | 16 | Node snap grid |
@@ -850,18 +871,32 @@ reverted in silence.
 
 The timeline's graph editor REPLACES the key lanes rather than sitting beside them: in graph mode
 the lane region paints only its Surface backdrop and the curve view covers it, because two views of
-the same keys at once only make an artist ask which one they are editing. Its left gutter is
-`Size::GraphValueAxis` wide and carries the ACTIVE curve's value ticks -- the curve of the primary
-keyframe selection, else the one on the selected row, else the first -- and the gutter is painted
-over the curves so a line running off the left edge slides under the axis instead of colliding with
-its labels. A scalar curve strokes in `Color::Keyframe`; a component curve takes
-`Color::ComponentX/Y/Z/W`, which R/G/B/A borrow unchanged so one hue always means "the first
-component"; selection is Accent, which none of the five is. Ease handles are drawn only for a
-SELECTED key on an eased segment, as a hairline to a `Size::GraphHandleDot` dot. The graph toggle
-persists under `timeline/graph-editor`. View exposes checkable Keyframes and Graph Editor choices;
-enabling either turns the other off, and both may be off to show plain layer lanes.
+the same keys at once only make an artist ask which one they are editing. A `Size::HeaderRow` graph
+header (`timelineGraphHeader`) over the canvas carries the segmented Value Graph / Speed Graph
+switch and the Normalize check box, persisted under `timeline/graph-type` and
+`timeline/graph-normalize`. The Value Graph plots the curve; the Speed Graph plots its speed (value
+units per second) read off the sampler, with After Effects' horizontal influence/speed handles.
+Normalize (Blender) draws every curve scaled to -1...1 in one shared window; edits are converted back
+and always write real values, and the scale holds still for the length of a drag. Below the header,
+the left gutter is `Size::GraphValueAxis` wide and carries the ACTIVE curve's value ticks -- the
+curve of the primary keyframe selection, else the one on the selected row, else the first -- and the
+gutter is painted over the curves so a line running off the left edge slides under the axis instead
+of colliding with its labels. While the graph is shown the shared time axis leads with the gutter's
+width (`TimelineRuler::setLeadingInset`), so the ruler, the work area and the graph move together
+and a key at frame 0 always sits clear of the gutter. The background grid is After Effects': `Border`
+hairlines at the gutter's value ticks and at the ruler's own labelled ticks. A component curve strokes
+in `Color::ComponentX/Y/Z/W` (X red, Y green, Z blue; R/G/B/A borrow them unchanged so one hue always
+means "the first component"); single-value curves take `Color::GraphCurve1..5` in curve order,
+cycling. The selected curve -- every curve carrying a selected key, else the selected row's -- is
+drawn brighter (`kit::emphasizedStrokeFor`) and on top. Selection is Accent, which none of the curve
+tokens is. Handles are drawn only for a SELECTED key on an eased segment: an arm in the curve's own
+ink to a `Size::GraphHandleDot` Accent dot. The graph toggle persists under `timeline/graph-editor`.
+View exposes checkable Keyframes and Graph Editor choices; enabling either turns the other off, and
+both may be off to show plain layer lanes. The one header tool button is the graph toggle
+(`timelineGraphToggle`, `IconId::GraphEditor`) at the right end of the layer-table header, beside
+Fullscreen: it and `Shift+F3` switch the right pane between the keyframes and the graph.
 `timeline/keyframes-visible` and `timeline/snapping` persist Keyframes and Snap to Frames.
-These controls appear only in View, with no header tool buttons. Header menu order is Add, View,
+Header menu order is Add, View,
 Select, with text-only menu buttons and no caret indicators; the composition dropdown is absent.
 These are the unchanged shared KMenuButton/EditorChromeRowSpec controls and application theme used
 by Assets, Viewer and Nodes: no Timeline-specific menu painting, stylesheet or background palette.
@@ -871,7 +906,8 @@ There are no View/Select wrapper submenus or selection-only layer commands; acti
 checked state are shared with the header. Opening the popup never changes the layer selection.
 Timeline's fullscreen button sits at the right edge of the layer-table header, beside the divider.
 Keys off hides both key lanes and collapsed summary
-glyphs. Empty key-lane labels paint no chip. Lane snapping is `snapping && !Shift`.
+glyphs. Empty key-lane labels paint no chip. Lane snapping is `snapping && !Shift`; in the graph,
+Shift is the axis lock and snapping follows Snap to Frames alone.
 
 Timeline lanes use `LanePadding` (12) on both sides of their time axis. The layer column/lanes split
 is a draggable `KSplitHandle` (`Size::SplitHandle`, 6, its hit zone; it paints one snapped
@@ -884,7 +920,18 @@ width; an existing `timeline/layer-column-width` pixel value wins, and a double-
 Workspace returns to the 37% ratio. All timeline rows share the ListRow pitch and a zero origin;
 the 28px KPropertyRow is centered within that pitch.
 Selected rows use the kit selected-row recipe: the Accent wash over the row in both halves, with
-the SelectionEdge Accent edge at the layer row's leading side. Every populated and empty row uses
+the SelectionEdge Accent edge at the layer row's leading side. Every row of the layer table --
+layer, group, parameter and component -- takes the list hover step (one surface rung up) under the
+pointer and is clickable; a clicked group or property row wears the same selected-row recipe
+(`KListSurface::setRowStates` under the rows that paint no background, `KRow::setHovered` on a layer
+row) and its key lane the same wash. The layer table's columns read, as in After Effects: Video,
+Audio, Solo and Lock, the Label square, the disclosure and name (which takes every extra pixel),
+the Shy switch (`KRow::setCells` switches after the name), then Blending, Parent and Matte. The
+column headings put the label filter (`timelineLabelFilterButton`, `IconId::LabelFilter`) over the
+Label squares and the Hide Shy Layers toggle (`timelineHideShyToggle`, `IconId::Shy`) over the Shy
+switches; both are plated `KIconToggle`s that wear the Accent plate while filtering or hiding. New
+names: `timelineLayerLabel`, `timelineLayerShy`, `timelineLayerLabelMenu`,
+`timelineSelectLabelGroupAction`, `timelineLabelFilterMenu`. Every populated and empty row uses
 one snapped Background hairline separator (`kit::paintRowSeparator`, the window color, never a
 lighter border), without alternating fills.
 The work-area slider occupies the lane half
@@ -1039,7 +1086,7 @@ color space by its plain name, then the alpha, then the color note once; a note,
 or an unshowable one turns that part Warn, with the detail in its tooltip
 (`Color: sRGB · Straight alpha · Color tags missing — assumed Rec.709 with the sRGB transfer.
 Change in Assets → Input Color`). Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene`
-is **Linear Rec.709**, `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space
+is **Linear Rec.709 (sRGB)** (the working-space label, `host::workingColorSpaceLabel`), `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space
 **Rec.709 video**); another config's spaces show the names the config gives them. A space Auto read
 from the file's own tags adds `(from the file)` in the tooltip; an assumed one is explained by the
 note alone. Several items: `3 items selected` and their kinds (`2 sequences · 1 composition`). None:

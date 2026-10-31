@@ -34,7 +34,7 @@ struct ToolFailure final : std::runtime_error {
                 std::string detailCode = {})
         : std::runtime_error(message), code(errorCode), detail(std::move(detailCode)) {}
     McpToolErrorCode code;
-    // The refusing collaborator's own code, e.g. the export queue's "PlatformNotSupported";
+    // The refusing collaborator's own code, e.g. the export queue's "PreflightBlocked";
     // published as diagnostic.detail when present.
     std::string detail;
     // A failed transient render, export or capture: its job id and the run's log (bounded),
@@ -140,6 +140,14 @@ struct McpServerCore::State {
 [[nodiscard]] yyjson_mut_val* commandResult(Json& out, const commands::CommandResult& result);
 [[nodiscard]] yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& value);
 [[nodiscard]] yyjson_mut_val* parameterSummary(Json& out, const document::ParameterRecord& value);
+// query kind=enums: the interpolation, ease and Easy Ease vocabularies with their stable ids.
+void appendAnimationEnums(Json& out, yyjson_mut_val* records);
+// query kind=layers: one composition's layers, including the 1.30 shy and nameFollowsSource flags.
+void appendLayerRecords(Json& out, yyjson_mut_val* records, const document::Project& project,
+                        const document::Composition& composition);
+// query kind=keyframes: one record per animation curve, its keys per component.
+void appendKeyframeRecords(Json& out, yyjson_mut_val* records,
+                           const document::Composition& composition);
 // An events-tool record for a notice: {kind, revision, message, composition?, subject?, path?,
 // projectName?}.
 [[nodiscard]] yyjson_mut_val* noticeValue(Json& out, const McpNotice& notice);

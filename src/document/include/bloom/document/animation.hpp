@@ -9,7 +9,9 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -27,11 +29,100 @@ namespace bloom::document {
 // eased factor is the closed-form polynomial 3t^2 - 2t^3 of the exact rational interval factor. A
 // key whose handles are both bitwise default therefore samples exactly as it always did. See
 // docs/architecture/animation-and-time.md, "Ease In-Out" and "Ease handles".
+//
+// The artist-facing names follow Blender: Hold is "Constant" and EaseInOut is "Bezier". Their
+// enumerator names and values are part of the persisted vocabulary and never move.
+//
+// Document 1.30 appends Blender's easing equations (Robert Penner's, in Blender's own forms,
+// including its exact-endpoint Expo and its blended Elastic). Each reads the segment's LEFT key's
+// KeyframeEasingParameters below: which end eases, Back's overshoot, and Elastic's amplitude and
+// period. See docs/architecture/animation-and-time.md, "Easing equations".
 enum class KeyframeInterpolation : std::uint8_t {
     Hold,
     Linear,
     EaseInOut,
+    Sine,
+    Quad,
+    Cubic,
+    Quart,
+    Quint,
+    Expo,
+    Circ,
+    Back,
+    Bounce,
+    Elastic,
 };
+
+[[nodiscard]] constexpr bool isValidKeyframeInterpolation(KeyframeInterpolation mode) noexcept {
+    return static_cast<std::uint8_t>(mode) <=
+           static_cast<std::uint8_t>(KeyframeInterpolation::Elastic);
+}
+
+// True for the ten easing equations, which read KeyframeEasingParameters; false for Hold, Linear
+// and the handle-driven Bezier.
+[[nodiscard]] constexpr bool isEasingInterpolation(KeyframeInterpolation mode) noexcept {
+    return mode >= KeyframeInterpolation::Sine && mode <= KeyframeInterpolation::Elastic;
+}
+
+// Which end of the segment an easing equation applies to. Auto is Blender's default: Out for the
+// "dynamic" equations (Back, Bounce, Elastic) and In for every other one.
+enum class KeyframeEasing : std::uint8_t {
+    Auto,
+    In,
+    Out,
+    InOut,
+};
+
+[[nodiscard]] constexpr bool isValidKeyframeEasingMode(KeyframeEasing easing) noexcept {
+    return static_cast<std::uint8_t>(easing) <= static_cast<std::uint8_t>(KeyframeEasing::InOut);
+}
+
+// Blender's defaults for a new key (BKE initialize_bezt). Back's overshoot is a factor of the
+// segment's change; Elastic's amplitude is in the curve's own value units (a Path key's progress
+// runs 0 -> 1). Elastic's period is in SECONDS, because Bloom key times are rational seconds and
+// a composition's frame rate can change under its keys: the default is Blender's 4.1 frames at
+// Blender's default 24 fps. A period of exactly zero is Blender's automatic period (0.3 of the
+// segment, 0.45 for In-Out).
+inline constexpr double kDefaultKeyframeBack = 1.70158;
+inline constexpr double kDefaultKeyframeAmplitude = 0.8;
+inline constexpr double kDefaultKeyframePeriod = 4.1 / 24.0;
+
+struct KeyframeEasingParameters {
+    KeyframeEasing easing = KeyframeEasing::Auto;
+    double back = kDefaultKeyframeBack;
+    double amplitude = kDefaultKeyframeAmplitude;
+    double period = kDefaultKeyframePeriod;
+
+    friend bool operator==(const KeyframeEasingParameters&,
+                           const KeyframeEasingParameters&) = default;
+};
+
+// Bitwise, like the handle test: the writer omits default parameters, and a merely-equal value
+// (a negative zero period) must still be written so it reopens with the same bits.
+[[nodiscard]] constexpr bool
+isDefaultKeyframeEasing(const KeyframeEasingParameters& parameters) noexcept {
+    return parameters.easing == KeyframeEasing::Auto &&
+           std::bit_cast<std::uint64_t>(parameters.back) ==
+               std::bit_cast<std::uint64_t>(kDefaultKeyframeBack) &&
+           std::bit_cast<std::uint64_t>(parameters.amplitude) ==
+               std::bit_cast<std::uint64_t>(kDefaultKeyframeAmplitude) &&
+           std::bit_cast<std::uint64_t>(parameters.period) ==
+               std::bit_cast<std::uint64_t>(kDefaultKeyframePeriod);
+}
+
+// Blender's own domain: the mode is known, every number finite, and the amplitude non-negative.
+// Back and period may be any finite value (Blender leaves both unbounded).
+[[nodiscard]] bool isValidKeyframeEasing(const KeyframeEasingParameters& parameters) noexcept;
+
+// The stable lowercase tokens shared by the project format, Python and MCP: "hold", "linear",
+// "ease-in-out" (Bezier), then "sine" ... "elastic"; and "auto", "in", "out", "in-out". An unknown
+// enumerator yields an empty view, an unknown token nullopt.
+[[nodiscard]] std::string_view keyframeInterpolationToken(KeyframeInterpolation mode) noexcept;
+[[nodiscard]] std::optional<KeyframeInterpolation>
+keyframeInterpolationFromToken(std::string_view token) noexcept;
+[[nodiscard]] std::string_view keyframeEasingToken(KeyframeEasing easing) noexcept;
+[[nodiscard]] std::optional<KeyframeEasing>
+keyframeEasingFromToken(std::string_view token) noexcept;
 
 // The default ease handle. `time` is a fraction of the segment's duration measured from the key
 // the handle belongs to; `value` is an offset from that key's own value. The defaults (1/3, 0)
@@ -79,6 +170,9 @@ struct ScalarKeyframe {
     // parameter hold ScalarKeyframes, and nothing else holds a key at all.
     KeyframeHandle outgoingHandle{};
     KeyframeHandle incomingHandle{};
+    // The easing equation's parameters for this key's OUTGOING segment (document 1.30). Kept on
+    // every key, like Blender's BezTriple, so switching a key between modes never loses them.
+    KeyframeEasingParameters easing{};
 
     friend bool operator==(const ScalarKeyframe&, const ScalarKeyframe&) = default;
 };
@@ -156,6 +250,7 @@ struct PathKeyframe {
     KeyframeInterpolation outgoingInterpolation = KeyframeInterpolation::Linear;
     KeyframeHandle outgoingHandle{};
     KeyframeHandle incomingHandle{};
+    KeyframeEasingParameters easing{};
 
     friend bool operator==(const PathKeyframe&, const PathKeyframe&) = default;
 };

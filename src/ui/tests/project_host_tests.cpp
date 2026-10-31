@@ -7,6 +7,7 @@
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/host/bloom_neutral_profile.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/canonical_manifest.hpp>
@@ -194,6 +195,13 @@ void testNewProjectConstruction(Expectations& expectations) {
     expectations.expect(host.canSave(),
                         "new-project construction: an editable, non-busy project can save");
     expectations.expect(!host.isBusy(), "new-project construction: the host starts idle");
+    // The application's startup project (and File > New, the same createNewBlank()) is Bloom
+    // Neutral v1, whose working space is lin_rec709_scene.
+    expectations.expect(host.colorSettings() != nullptr &&
+                            *host.colorSettings() ==
+                                bloom::document::makeBloomNeutralColorSettingsV1(
+                                    bloom::host::kBloomNeutralV1ConfigDigest),
+                        "new-project construction: a new project uses Bloom Neutral v1");
 }
 
 // ---------------------------------------------------------------------------------------------

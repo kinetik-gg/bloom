@@ -405,6 +405,8 @@ nb::dict NativeHost::setColorSettings(const std::string& config,
         row["config"] =
             std::string(host::projectColorConfigName(host::projectColorConfigOf(*result.settings)));
         row["working_space"] = result.settings->processColorSpaceId;
+        row["working_space_label"] =
+            std::string(host::workingColorSpaceLabel(result.settings->processColorSpaceId));
     }
     return row;
 }

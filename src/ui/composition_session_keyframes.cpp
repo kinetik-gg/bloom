@@ -114,7 +114,8 @@ std::vector<commands::KeyframePaste> CompositionSession::selectedKeyframeData() 
                             if (key.id == address.keyframeId)
                                 result.push_back({*parameter, key.time, key.value,
                                                   key.outgoingInterpolation, address.component,
-                                                  key.outgoingHandle, key.incomingHandle});
+                                                  key.outgoingHandle, key.incomingHandle,
+                                                  key.easing});
                     }
                     return;
                 }
@@ -123,7 +124,8 @@ std::vector<commands::KeyframePaste> CompositionSession::selectedKeyframeData() 
                         if (key.id == address.keyframeId)
                             result.push_back({*parameter, key.time, key.value,
                                               key.outgoingInterpolation, std::nullopt,
-                                              key.outgoingHandle, key.incomingHandle});
+                                              key.outgoingHandle, key.incomingHandle,
+                                              key.easing});
                 }
             },
             *record);
@@ -184,48 +186,112 @@ bool CompositionSession::setKeyframeHandles(std::vector<commands::KeyframeHandle
     transaction.emplace<commands::SetKeyframeHandles>(compositionId_, std::move(edits));
     return execute(std::move(transaction));
 }
-bool CompositionSession::resetSelectedKeyframeHandles() {
-    const auto* current = composition();
-    if (!current)
+bool CompositionSession::easeSelectedKeyframes(const bool easeIn, const bool easeOut) {
+    if (!composition() || (!easeIn && !easeOut) || selection_.keyframes.empty())
         return false;
-    std::vector<commands::KeyframeHandleEdit> edits;
-    for (const auto& address : selection_.keyframes) {
-        const auto* record = current->animationCurves().find(address.curveId);
-        if (record == nullptr)
-            continue;
-        const auto* keyframes = std::visit(
-            [&](const auto& curve) -> const std::vector<document::ScalarKeyframe>* {
-                using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
-                    return nullptr; // A Path key has no scalar value lane.
-                } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
-                    return address.component.has_value() ? nullptr : &curve.keyframes;
-                } else {
-                    if (!address.component.has_value())
-                        return nullptr;
-                    const auto* component = curve.component(*address.component);
-                    return component == nullptr ? nullptr : &component->keyframes;
-                }
-            },
-            *record);
-        if (keyframes == nullptr)
-            continue;
-        const auto at =
-            std::ranges::find(*keyframes, address.keyframeId, &document::ScalarKeyframe::id);
-        if (at == keyframes->end())
-            continue;
-        const auto index = static_cast<std::size_t>(at - keyframes->begin());
-        commands::KeyframeHandleEdit edit{{address.curveId, address.keyframeId, address.component}};
-        if (index + 1 < keyframes->size())
-            edit.outgoing = document::KeyframeHandle{};
-        if (index > 0)
-            edit.incoming = document::KeyframeHandle{};
-        if (edit.outgoing.has_value() || edit.incoming.has_value())
-            edits.push_back(edit);
+    std::vector<commands::KeyframeAddress> keys;
+    keys.reserve(selection_.keyframes.size());
+    for (const auto& key : selection_.keyframes) {
+        const auto parameter = parameterForCurve(key.curveId);
+        if (!parameter || !editableParameter(*this, *parameter)) {
+            reportUnavailable(tr("A keyframe target is missing or locked"));
+            return false;
+        }
+        keys.push_back({key.curveId, key.keyframeId, key.component});
     }
-    if (edits.empty())
+    const auto kind = easeIn && easeOut ? commands::EasyEase::Both
+                      : easeIn          ? commands::EasyEase::In
+                                        : commands::EasyEase::Out;
+    const char* label = easeIn && easeOut ? "Easy Ease" : easeIn ? "Easy Ease In" : "Easy Ease Out";
+    commands::Transaction transaction(label, snapshot_.revision());
+    transaction.emplace<commands::ApplyEasyEase>(compositionId_, std::move(keys), kind);
+    return execute(std::move(transaction));
+}
+bool CompositionSession::previewKeyframeTransaction(const commands::Transaction& transaction) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* current = composition();
+    if (current == nullptr || transaction.empty() || valueEdit_.has_value()) {
+        clearKeyframePreview();
         return false;
-    return setKeyframeHandles(std::move(edits), snapshot_.revision());
+    }
+    // The same operations the release will execute, on a scratch draft that no document owns and
+    // that therefore can never be committed (#357's probe pattern).
+    auto draft = document::Draft::isolatedFrom(snapshot_);
+    for (const auto& operation : transaction.operations())
+        if (operation->apply(draft).status == commands::OperationStatus::Rejected) {
+            clearKeyframePreview();
+            return false;
+        }
+    const auto* previewed = draft.valid() ? draft.project().findComposition(compositionId_)
+                                          : nullptr;
+    if (previewed == nullptr) {
+        clearKeyframePreview();
+        return false;
+    }
+    std::vector<document::AnimationCurveId> changed;
+    for (const auto& record : previewed->animationCurves().records()) {
+        const auto id = std::visit([](const auto& curve) { return curve.id; }, record);
+        const auto* live = current->animationCurves().find(id);
+        if (live != nullptr && *live == record)
+            continue;
+        const auto parameter = parameterForCurve(id);
+        if (!parameter || !editableParameter(*this, *parameter)) {
+            clearKeyframePreview();
+            return false;
+        }
+        changed.push_back(id);
+    }
+    // The Viewer's half: one override per previewed parameter at the playhead, at most the eight a
+    // compile request admits. A wider drag still previews every curve on the canvas; only the
+    // Viewer waits for the release.
+    std::vector<runtime::SnapshotParameterOverride> overrides;
+    constexpr std::size_t kOverrideAdmission = 8;
+    for (const auto curveId : changed) {
+        const auto parameterId = parameterForCurve(curveId);
+        const auto* parameter = parameterId ? current->parameters().find(*parameterId) : nullptr;
+        if (parameter == nullptr)
+            continue;
+        const auto sample = sampleParameterValueIn(previewed->animationCurves(), *parameter,
+                                                   keyTimeAtPlayhead(parameter->id));
+        if (!sample.has_value())
+            continue;
+        overrides.push_back(
+            {snapshot_.revision(), parameter->id,
+             std::visit([](const auto& value) -> decltype(runtime::SnapshotParameterOverride::value) {
+                 return value;
+             },
+                        *sample)});
+    }
+    if (overrides.size() > kOverrideAdmission)
+        overrides.clear();
+    keyframePreview_.reset();
+    keyframePreview_.emplace(KeyframePreview{snapshot_.revision(), currentTime_, std::move(draft),
+                                             std::move(changed), std::move(overrides)});
+    ++keyframePreviewGeneration_;
+    emit liveValueChanged();
+    return true;
+}
+void CompositionSession::clearKeyframePreview() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!keyframePreview_)
+        return;
+    keyframePreview_.reset();
+    ++keyframePreviewGeneration_;
+    emit liveValueChanged();
+}
+const document::AnimationCurveStore* CompositionSession::keyframePreviewCurves() const noexcept {
+    if (!keyframePreview_)
+        return nullptr;
+    const auto* previewed = keyframePreview_->draft.project().findComposition(compositionId_);
+    return previewed != nullptr ? &previewed->animationCurves() : nullptr;
+}
+const document::AnimationCurveRecord*
+CompositionSession::keyframePreviewCurve(const document::AnimationCurveId curveId) const noexcept {
+    if (!keyframePreview_ || std::ranges::find(keyframePreview_->curves, curveId) ==
+                                 keyframePreview_->curves.end())
+        return nullptr;
+    const auto* curves = keyframePreviewCurves();
+    return curves != nullptr ? curves->find(curveId) : nullptr;
 }
 bool CompositionSession::pasteKeyframes(const std::vector<commands::KeyframePaste>& keys,
                                         document::Revision revision) {

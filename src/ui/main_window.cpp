@@ -28,6 +28,7 @@
 #include <bloom/ui/h264_encoder_flow.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/licenses_window.hpp>
 #include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/playback_controller.hpp>
@@ -44,7 +45,15 @@
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDialog>
+#include <QAbstractSpinBox>
+#include <QGraphicsProxyWidget>
+#include <QGraphicsScene>
+#include <QGraphicsView>
+#include <QKeyEvent>
 #include <QKeySequence>
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QTextEdit>
 #include <QLabel>
 #include <QLatin1StringView>
 #include <QMenu>
@@ -1099,7 +1108,65 @@ ViewerEditor* MainWindow::displayedViewer() {
     return selected;
 }
 
+namespace {
+
+// True when the keypad 0 / keypad Insert key produced this press. Qt's Wayland/xkb path does not
+// reliably set KeypadModifier for KP_0 (it can arrive as plain Key_0, or as Key_Insert with Num
+// Lock off), so the declared KeypadModifier shortcuts never match there. On Linux the xkb keycode
+// 90 (evdev 82 + 8) is the physical keypad 0 key whatever Num Lock or the modifier says; elsewhere
+// KeypadModifier is reliable.
+bool isKeypadZeroPress(const QKeyEvent& key) {
+    if (key.isAutoRepeat() || (key.modifiers() & ~Qt::KeypadModifier) != Qt::NoModifier)
+        return false;
+#if defined(Q_OS_LINUX)
+    if (key.nativeScanCode() == 90)
+        return true;
+#endif
+    return (key.modifiers() & Qt::KeypadModifier) &&
+           (key.key() == Qt::Key_0 || key.key() == Qt::Key_Insert);
+}
+
+// Digits typed into a text-entry widget stay digits: a line edit, spin box, text area, anything
+// that takes input-method text, an editing KValueField, or a field proxied into a graphics scene
+// (the node canvas).
+bool textEntryHasFocus() {
+    const QWidget* focus = QApplication::focusWidget();
+    if (focus == nullptr)
+        return false;
+    if (const auto* view = qobject_cast<const QGraphicsView*>(focus)) {
+        if (view->scene() != nullptr &&
+            dynamic_cast<QGraphicsProxyWidget*>(view->scene()->focusItem()) != nullptr)
+            return true;
+    }
+    for (const QWidget* w = focus; w != nullptr; w = w->parentWidget()) {
+        if (const auto* value = qobject_cast<const kit::KValueField*>(w);
+            value != nullptr && value->isEditing())
+            return true;
+    }
+    return qobject_cast<const QLineEdit*>(focus) != nullptr ||
+           qobject_cast<const QAbstractSpinBox*>(focus) != nullptr ||
+           qobject_cast<const QTextEdit*>(focus) != nullptr ||
+           qobject_cast<const QPlainTextEdit*>(focus) != nullptr ||
+           focus->testAttribute(Qt::WA_InputMethodEnabled);
+}
+
+// Whether `widget` lives in `owner` or in a floating window owned by it.
+bool belongsToWindow(const QWidget* widget, const QWidget* owner) {
+    const QWidget* top = widget != nullptr ? widget->window() : nullptr;
+    while (top != nullptr && top != owner)
+        top = top->parentWidget() != nullptr ? top->parentWidget()->window() : nullptr;
+    return top == owner;
+}
+
+} // namespace
+
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::KeyPress && ramPreviewAction_ != nullptr &&
+        ramPreviewAction_->isEnabled() && isKeypadZeroPress(*static_cast<QKeyEvent*>(event)) &&
+        belongsToWindow(qobject_cast<QWidget*>(watched), this) && !textEntryHasFocus()) {
+        ramPreviewAction_->trigger();
+        return true;
+    }
     if (workspaceHost_ &&
         (event->type() == QEvent::Show || event->type() == QEvent::Hide ||
          event->type() == QEvent::ChildAdded || event->type() == QEvent::ChildRemoved)) {
