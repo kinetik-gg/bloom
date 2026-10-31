@@ -1,0 +1,80 @@
+Bloom: pad frames for Kvazaar to whole 8x8 blocks instead of refusing them.
+
+FFmpeg's libkvazaar wrapper refuses dimensions that are not multiples of eight, although
+Kvazaar codes any even extent: its own encoder pads the picture to whole blocks and writes the
+conformance window that crops the padding again (as kvazaar's command-line tool does). The
+wrapper now allocates the padded picture, repeats the last column and row into the padding, and
+accepts every even width and height.
+
+--- a/libavcodec/libkvazaar.c
++++ b/libavcodec/libkvazaar.c
+@@ -55,10 +55,11 @@
+     kvz_config *cfg = NULL;
+     kvz_encoder *enc = NULL;
+ 
+-    /* Kvazaar requires width and height to be multiples of eight. */
+-    if (avctx->width % 8 || avctx->height % 8) {
++    /* Kvazaar codes whole 8x8 blocks: frames are padded to a multiple of eight in
++     * libkvazaar_encode() and Kvazaar crops the padding with the conformance window. */
++    if (avctx->width % 2 || avctx->height % 2) {
+         av_log(avctx, AV_LOG_ERROR,
+-               "Video dimensions are not a multiple of 8 (%dx%d).\n",
++               "Video dimensions are not a multiple of 2 (%dx%d).\n",
+                avctx->width, avctx->height);
+         return AVERROR(ENOSYS);
+     }
+@@ -197,16 +198,20 @@
+             goto done;
+         }
+ 
+-        // Allocate input picture for kvazaar.
+-        input_pic = ctx->api->picture_alloc(frame->width, frame->height);
++        // Allocate input picture for kvazaar, padded to whole 8x8 blocks.
++        input_pic = ctx->api->picture_alloc(FFALIGN(frame->width, 8),
++                                            FFALIGN(frame->height, 8));
+         if (!input_pic) {
+             av_log(avctx, AV_LOG_ERROR, "Failed to allocate picture.\n");
+             retval = AVERROR(ENOMEM);
+             goto done;
+         }
+ 
+-        // Copy pixels from frame to input_pic.
++        // Copy pixels from frame to input_pic, then repeat the last column and row into the
++        // padding, which the conformance window crops but prediction still reads.
+         {
++            const int padded_width  = FFALIGN(frame->width, 8);
++            const int padded_height = FFALIGN(frame->height, 8);
+             uint8_t *dst[4] = {
+                 input_pic->data[0],
+                 input_pic->data[1],
+@@ -214,14 +219,27 @@
+                 NULL,
+             };
+             int dst_linesizes[4] = {
+-              frame->width,
+-              frame->width / 2,
+-              frame->width / 2,
++              padded_width,
++              padded_width / 2,
++              padded_width / 2,
+               0
+             };
+             av_image_copy2(dst, dst_linesizes,
+                            frame->data, frame->linesize,
+                            frame->format, frame->width, frame->height);
++            for (int plane = 0; plane < 3; plane++) {
++                const int shift  = plane ? 1 : 0;
++                const int width  = frame->width >> shift;
++                const int height = frame->height >> shift;
++                const int rows   = padded_height >> shift;
++                const int stride = dst_linesizes[plane];
++                for (int y = 0; y < height; y++)
++                    memset(dst[plane] + y * stride + width,
++                           dst[plane][y * stride + width - 1], stride - width);
++                for (int y = height; y < rows; y++)
++                    memcpy(dst[plane] + y * stride,
++                           dst[plane] + (height - 1) * stride, stride);
++            }
+         }
+ 
+         input_pic->pts = frame->pts;

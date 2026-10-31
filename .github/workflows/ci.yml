@@ -77,14 +77,13 @@ jobs:
       # rather than separately downloaded, so it contributes no line of its own; its bytes are
       # already covered by the openexr line. The key started as the yyjson archive digest alone
       # (the first locked component); imath, libdeflate, and openexr's intake extended it to six;
-      # opencolorio's intake (and its expat/yaml-cpp/pystring/minizip-ng transitives), plus the
-      # OpenH264 source archive, extends it to the current fourteen-line component set per this
-      # convention rather than embedding every raw digest in the key.
+      # later intakes extend it per this convention (the current component set, including the
+      # bundled codec archives) rather than embedding every raw digest in the key.
       - name: Cache dependency archives
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/bloom-dependency-downloads
-          key: bloom-dependency-archives-82571923722fa396b5d40449e487c86b8ab421e66581f34a0de828b9e13eb9e8
+          key: bloom-dependency-archives-a2d99365b485de495151d7a22d7490d8edfd2fff0f35a44bec7acb07f1272689
 
       - name: Cache dependency build
         id: cache-dependency-prefix
@@ -228,14 +227,13 @@ jobs:
       # rather than separately downloaded, so it contributes no line of its own; its bytes are
       # already covered by the openexr line. The key started as the yyjson archive digest alone
       # (the first locked component); imath, libdeflate, and openexr's intake extended it to six;
-      # opencolorio's intake (and its expat/yaml-cpp/pystring/minizip-ng transitives), plus the
-      # OpenH264 source archive, extends it to the current fourteen-line component set per this
-      # convention rather than embedding every raw digest in the key.
+      # later intakes extend it per this convention (the current component set, including the
+      # bundled codec archives) rather than embedding every raw digest in the key.
       - name: Cache dependency archives
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/bloom-dependency-downloads
-          key: bloom-dependency-archives-82571923722fa396b5d40449e487c86b8ab421e66581f34a0de828b9e13eb9e8
+          key: bloom-dependency-archives-a2d99365b485de495151d7a22d7490d8edfd2fff0f35a44bec7acb07f1272689
 
       - name: Cache dependency build
         id: cache-dependency-prefix

@@ -19,6 +19,7 @@ component, and its own records explain why the lock cannot represent it.
 | robin-map | 1.4.0 | MIT | Unmodified headers inside the nanobind archive and static core | `dependencies/licenses/robin_map/` |
 | FFmpeg | 8.1.2 | LGPL-2.1-or-later | Shared libraries private to `bloom-media-worker` on Linux, macOS and Windows; ProRes is non-authorized preview output | `dependencies/licenses/ffmpeg/`, `dependencies/dependencies.lock.json` |
 | OpenH264 | 2.6.0 | BSD-2-Clause | H.264 encoder built from source as a static archive inside the worker's `libavcodec`; ships with Bloom, nothing is downloaded | `dependencies/licenses/openh264/`, `dependencies/dependencies.lock.json` |
+| Kvazaar | 2.3.2 | BSD-3-Clause | HEVC encoder built from source as a static archive inside the worker's `libavcodec`; ships with Bloom | `dependencies/licenses/kvazaar/`, `dependencies/dependencies.lock.json` |
 | NASM | 2.16.03 | BSD-2-Clause | Build-host-only assembler for FFmpeg's x86 SIMD; installed outside the dependency prefix, never linked or shipped | `dependencies/licenses/nasm/`, `dependencies/dependencies.lock.json` |
 | glslang | 16.4.0 | BSD-3-Clause AND BSD-2-Clause AND MIT AND Apache-2.0 AND GPL-3.0-or-later WITH Bison-exception-2.2 | Runtime `glslangValidator` staged beside the desktop/CLI/MCP executables under the private `bloom-gpu-tools/` directory, with its full `LICENSES/` set | `dependencies/licenses/glslang/`, `dependencies/dependencies.lock.json` |
 | SPIRV-Tools | b707790a898e44038547df54580022fc1cf89c3d | Apache-2.0 | Runtime `spirv-val` staged beside the desktop/CLI/MCP executables under the private `bloom-gpu-tools/` directory, with the Apache-2.0 text | `dependencies/licenses/spirv-tools/`, `dependencies/dependencies.lock.json` |
@@ -30,12 +31,12 @@ generated digest inventory. The glslang Bison Exception 2.2 covers the Bison-gen
 `glslang_tab.cpp`/`.h` content; an independent counsel review of that exception remains a release
 gate and no approval is asserted here.
 
-FFmpeg's corresponding-source obligation is the exact locked official release archive. The lock,
-recipe, detached-signature evidence, and license/review/security records are the authority for the
-configuration and source offer; the desktop `bloom` target does not link FFmpeg.
+FFmpeg's corresponding-source obligation is the exact locked official release archive plus the
+reviewed patch under `dependencies/patches/ffmpeg/`. The lock, recipe, detached-signature evidence,
+and license/review/security records are the authority for the configuration and source offer; the desktop `bloom` target does not link FFmpeg.
 
-The bundled codec libraries (OpenH264) are compiled from their locked source archives into the
-worker's LGPL `libavcodec`; each archive is part of that library's corresponding source, and each
+The bundled codec libraries (OpenH264, Kvazaar) are compiled from their locked source archives into
+the worker's LGPL `libavcodec`; each archive is part of that library's corresponding source, and each
 licence text is part of Bloom's third-party licence catalogue. Bloom uses no Cisco-distributed
 binary.
 
@@ -44,6 +45,15 @@ binary.
 Copyright (c) 2013, Cisco Systems. All rights reserved. Redistribution and use in source and
 binary forms, with or without modification, are permitted under the BSD-2-Clause terms in
 `dependencies/licenses/openh264/LICENSE`.
+
+### Kvazaar
+
+Copyright (c) 2021, Tampere University, ITU/ISO/IEC, project contributors. All rights reserved.
+Redistribution and use in source and binary forms, with or without modification, are permitted
+under the BSD-3-Clause terms in `dependencies/licenses/kvazaar/LICENSE`. The compiled library
+includes Colin Plumb's public-domain MD5 implementation; Windows builds also include Kvazaar's
+thread wrapper (Copyright 2019 Tampere University, ISC licence) and NetBSD's `getopt` (Copyright
+(c) 2000 The NetBSD Foundation, Inc., BSD-2-Clause), whose texts are in the Kvazaar source archive.
 
 ## Vendored interface assets
 

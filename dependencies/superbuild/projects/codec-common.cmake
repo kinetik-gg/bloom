@@ -1,5 +1,5 @@
 # Shared build plumbing for the permissively licensed codec libraries that FFmpeg's LGPL wrappers
-# link (OpenH264 first). Each codec is built from its pinned source archive as a static,
+# link (OpenH264, Kvazaar). Each codec is built from its pinned source archive as a static,
 # position-independent library and linked into the worker's shared libavcodec, so the worker ships
 # no extra runtime files and nothing is fetched or installed by the user. The per-codec configure
 # vectors live in adjacent `<name>.configure-arguments` files that the dependency lock copies and

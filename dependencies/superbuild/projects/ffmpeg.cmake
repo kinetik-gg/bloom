@@ -51,10 +51,25 @@ else()
     endif()
 endif()
 
-# Bundled permissive codecs (codec-common.cmake): OpenH264 (H.264 encode) is a static archive
-# linked into libavcodec on every platform, so the worker ships no extra runtime file.
-# --pkg-config-flags=--static makes FFmpeg read its Libs.private runtime libraries.
-set(BLOOM_FFMPEG_DEPENDS bloom_dependency_openh264)
+# Bundled permissive codecs (codec-common.cmake): OpenH264 (H.264 encode) and Kvazaar (HEVC
+# encode) are static archives linked into libavcodec on every platform, so the worker ships no extra
+# runtime files. --pkg-config-flags=--static makes FFmpeg read their Libs.private runtime libraries.
+set(BLOOM_FFMPEG_DEPENDS
+    bloom_dependency_openh264
+    bloom_dependency_kvazaar)
+
+# Reviewed source patches (dependencies/patches/ffmpeg/, recorded in the lock with their digests and
+# apply order). The Windows build takes `patch` from the same MSYS2 installation as its shell.
+set(BLOOM_FFMPEG_PATCHES
+    "${CMAKE_CURRENT_LIST_DIR}/../../patches/ffmpeg/0001-libkvazaar-pad-frames-to-whole-blocks.patch")
+find_program(BLOOM_FFMPEG_PATCH_PROGRAM NAMES patch
+    HINTS "$ENV{MSYS2_ROOT}/usr/bin" "C:/msys64/usr/bin" REQUIRED)
+set(BLOOM_FFMPEG_PATCH_COMMAND)
+foreach(bloom_ffmpeg_patch IN LISTS BLOOM_FFMPEG_PATCHES)
+    list(APPEND BLOOM_FFMPEG_PATCH_COMMAND
+        COMMAND "${BLOOM_FFMPEG_PATCH_PROGRAM}" -p1 --forward --batch --input=${bloom_ffmpeg_patch})
+endforeach()
+list(POP_FRONT BLOOM_FFMPEG_PATCH_COMMAND)
 
 # x86 SIMD: FFmpeg's x86 assembly is built with the superbuild-private NASM (nasm.cmake). Other
 # targets use FFmpeg's inline/NEON assembly and need neither the tool nor the argument.
@@ -102,6 +117,7 @@ ExternalProject_Add(bloom_dependency_ffmpeg
     DOWNLOAD_NO_PROGRESS ON
     DOWNLOAD_EXTRACT_TIMESTAMP ON
     DEPENDS ${BLOOM_FFMPEG_DEPENDS}
+    PATCH_COMMAND ${BLOOM_FFMPEG_PATCH_COMMAND}
     BUILD_IN_SOURCE ON
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         CC=${CMAKE_C_COMPILER}

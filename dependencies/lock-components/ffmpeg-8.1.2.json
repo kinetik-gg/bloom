@@ -10,7 +10,7 @@
     "provenancePolicy": "required",
     "provenanceReview": {
       "path": "dependencies/licenses/ffmpeg/provenance.md",
-      "sha256": "sha256:9dc3f1a5345d8ab32c36bf8ace4bb983be839382483adea511d50a8659395316"
+      "sha256": "sha256:7fa736b52f541a1f61cd71810a2bf1ccfba8ac41834a2074911b65a7a6358155"
     },
     "provenance": [
       {
@@ -37,15 +37,26 @@
     "noticeFiles": [],
     "sourceObligation": "corresponding-source",
     "correspondingSourceArchiveSha256": "sha256:464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
-    "modified": false,
+    "modified": true,
     "reviewRecord": {
       "path": "dependencies/licenses/ffmpeg/review.md",
-      "sha256": "sha256:deda7bd1c1b620c5d69fa9167fd350ebec38f702b84f286d9fb928f9e7540a66"
+      "sha256": "sha256:f87c429bad56af0ead7415fb880b53fb5272604d859931dec8ec19723de0d7a1"
     },
     "reviewedAt": "2026-10-31"
   },
-  "patches": [],
+  "patches": [
+    {
+      "path": "dependencies/patches/ffmpeg/0001-libkvazaar-pad-frames-to-whole-blocks.patch",
+      "sha256": "sha256:bfc386833ef7ca6f878a8e0fb7769ed20fc7df9b597266a01f0e6c1a97969e9e",
+      "applyOrder": 0,
+      "reason": "libkvazaar: pad frames to whole 8x8 blocks so Kvazaar encodes every even extent and crops with its conformance window"
+    }
+  ],
   "dependencies": [
+    {
+      "name": "kvazaar",
+      "relationship": "link"
+    },
     {
       "name": "nasm",
       "relationship": "build"
@@ -65,6 +76,11 @@
           "id": "bloom.feature.ffmpeg-bwdif",
           "state": "enabled",
           "reason": "libavfilter bwdif with buffer/buffersink: field-aware deinterlacing of interlaced video in the worker"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-kvazaar",
+          "state": "enabled",
+          "reason": "HEVC software encode through the libkvazaar wrapper; Kvazaar 2.3.2 is a static archive linked into libavcodec"
         },
         {
           "id": "bloom.feature.ffmpeg-openh264",
@@ -88,6 +104,7 @@
         "bloom.capability.ffmpeg.encode",
         "bloom.capability.ffmpeg.h264-software-openh264",
         "bloom.capability.ffmpeg.h264-vaapi-encode",
+        "bloom.capability.ffmpeg.hevc-software-kvazaar",
         "bloom.capability.ffmpeg.hevc-vaapi-encode",
         "bloom.capability.ffmpeg.prores-preview",
         "bloom.capability.ffmpeg.vaapi"
