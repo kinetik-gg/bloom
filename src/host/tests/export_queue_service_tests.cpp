@@ -201,7 +201,7 @@ void testFormatTokens() {
     const auto catalogue = host::ExportPresetCatalogue::create(
         {.userDataDirectory = std::nullopt, .initialEncoders = linuxEncoders()});
     const auto snapshot = catalogue->snapshot();
-    expect(snapshot->formats == host::exportFormatDescriptions() && snapshot->formats.size() == 11,
+    expect(snapshot->formats == host::exportFormatDescriptions() && snapshot->formats.size() == 14,
            "the catalogue lists every format");
     for (const auto& format : snapshot->formats) {
         const auto profiles = document::exportCodecProfiles(format.format);
@@ -971,6 +971,16 @@ int main() {
         // in provenance, and the export still publishes.
         testVideoEndToEnd(document::ExportFormat::HevcMp4, linuxEncoders(), "hevc-mp4-main10",
                           "main10");
+        // ADR 0036: VP9 and AV1 with Opus in WebM and AV1 with AAC in MP4 on the bundled libvpx,
+        // SVT-AV1 and libopus, at 8 and 10 bits.
+        testVideoEndToEnd(document::ExportFormat::Vp9Webm, linuxEncoders(), "vp9-webm", "8bit",
+                          true);
+        testVideoEndToEnd(document::ExportFormat::Vp9Webm, linuxEncoders(), "vp9-webm-10bit",
+                          "10bit");
+        testVideoEndToEnd(document::ExportFormat::Av1Webm, linuxEncoders(), "av1-webm-10bit",
+                          "10bit", true);
+        testVideoEndToEnd(document::ExportFormat::Av1Mp4, linuxEncoders(), "av1-mp4", "8bit",
+                          true);
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

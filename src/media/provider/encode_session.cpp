@@ -173,6 +173,9 @@ struct EncodeSessionV1::State {
         // Issue #352: the export worker gets the address space its frame extent needs.
         launch.addressSpaceBytes = std::max(
             workerAddressSpaceBytes(settings.width, settings.height), route.addressSpaceFloor);
+        if (mediaCodecFamilyV1(settings.videoCodec) == "av1")
+            launch.addressSpaceBytes = std::max(
+                launch.addressSpaceBytes, av1EncodeAddressSpaceBytes(settings.width, settings.height));
         if (options.stagedOutput) {
             // Streaming into the staged artifact is an FFmpeg worker protocol (ADR 0033 section
             // 16); the caller expects the bytes there, so a platform route cannot serve it.

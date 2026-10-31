@@ -8,7 +8,7 @@ bool validCode(const std::int32_t code) { return code >= -1 && code <= 255; }
 } // namespace
 std::uint32_t containerChannelLimit(const std::string_view container,
                                     const std::string_view audioCodec) noexcept {
-    if (audioCodec == "aac")
+    if (audioCodec == "aac" || audioCodec == "opus")
         return 8;
     if (container == "wav")
         return Limits::channels;

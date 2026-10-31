@@ -178,8 +178,8 @@ need project schema 1.27, and older projects open with their compositions at the
 Choose **Import** in Assets and select an MP4, MOV, MKV, WebM, MXF, M4V or supported
 transport-stream file. Bloom probes the file in its media worker and lists it as a **Video** with
 its size, duration and frame rate. H.264, HEVC, VP9, AV1, ProRes, DNxHD/DNxHR and MJPEG video
-decode with the decoders that ship with Bloom; nothing needs to be installed. A malformed file
-produces a diagnostic.
+decode with the decoders that ship with Bloom, as do AAC, MP3, Opus and PCM audio; nothing needs
+to be installed. A malformed file produces a diagnostic.
 
 Drag the asset into the Timeline to create a Video source and Layer at the normal Arrange position,
 as long as the video and starting where you drop it.

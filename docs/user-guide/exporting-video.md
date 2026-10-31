@@ -63,7 +63,7 @@ An image output writes one file per frame, or a single still when the range is o
 Formats are listed in four groups:
 
 - **Video**: H.264 MP4 (default), H.264 MOV, Review H.264 (Rec.709, look on), HEVC MP4 and MOV,
-  ProRes 422 Proxy, LT, 422, HQ, 4444 and 4444 XQ MOV, DNxHR HQ MXF.
+  AV1 MP4, AV1 WebM, VP9 WebM, ProRes 422 Proxy, LT, 422, HQ, 4444 and 4444 XQ MOV, DNxHR HQ MXF.
 - **Image sequences**: VFX handoff EXR (ACES2065-1, PIZ, from 1001, `####`), OpenEXR, DPX, PNG
   and TIFF sequences.
 - **Audio**: PCM WAV/BWF (RF64 when large).
@@ -95,12 +95,17 @@ edit them.
   HEVC, and Bloom falls back to Kvazaar without asking. NVENC writes real 10-bit **Main 10**.
   Kvazaar writes 8-bit HEVC: a **Main 10** output with no 10-bit GPU encoder is written as
   **Main**, and the export's log and verification report say so.
+- **AV1** is encoded by SVT-AV1 and **VP9** by libvpx, both shipped with Bloom on Linux, macOS and
+  Windows. Each has an **8-bit** and a **10-bit** profile, and both write real 10-bit. They are
+  encoded on the processor at a fixed quality for web delivery; the bit rate and the encoder choice
+  do not apply to them.
 - **ProRes** is written by FFmpeg; it is not an Apple-authorized ProRes implementation.
 - The **VFX handoff** and **Review H.264** deliverables need the built-in ACES CG configuration
   with a pinned revision.
 - **DPX** sequences are listed but not available in this build; the preset says so.
 
-MP4 movies carry AAC audio; MOV and MXF carry PCM. Movie containers are tagged from the output's
+MP4 movies carry AAC audio; WebM movies carry Opus (shipped with Bloom) at 48 kHz, whatever the
+output's audio sample rate; MOV and MXF carry PCM. Movie containers are tagged from the output's
 color intent: an sRGB display is tagged with the sRGB transfer, a Rec.1886/Rec.709 display with
 BT.709, P3 and Rec.2100 displays with their own code points.
 

@@ -52,6 +52,12 @@ namespace {
         return F::HevcMov;
     case P::HevcMp4V1:
         return F::HevcMp4;
+    case P::Vp9WebmV1:
+        return F::Vp9Webm;
+    case P::Av1WebmV1:
+        return F::Av1Webm;
+    case P::Av1Mp4V1:
+        return F::Av1Mp4;
     }
     return std::nullopt;
 }

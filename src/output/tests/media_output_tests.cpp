@@ -7,6 +7,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 #include <vector>
 namespace {
 void check(bool condition, const char* message) {
@@ -213,6 +214,36 @@ int main() {
         check(std::holds_alternative<p::Unavailable>(
                   o::analyzeMediaOutputV1(o::OutputPresetV1::ProResMovV1, s)),
               "codec/preset mismatch refused");
+        // ADR 0036: VP9/AV1 with Opus in WebM and AV1 with AAC in MP4, 8 or 10 bits.
+        auto web = h264;
+        web.videoCodec = "vp9";
+        web.profile = "10bit";
+        web.container = "webm";
+        web.audioCodec = "opus";
+        const auto vp9 = analyze(o::OutputPresetV1::Vp9WebmV1, web);
+        check(vp9.determinism == p::MediaDeterminismV1::DecodedSemanticTolerance &&
+                  vp9.implementationNote.starts_with("VP9 web delivery — not for archival"),
+              "VP9 WebM analysis records lossy tolerance and archival warning");
+        auto av1 = web;
+        av1.videoCodec = "av1";
+        av1.container = "mp4";
+        av1.audioCodec = "aac";
+        (void)analyze(o::OutputPresetV1::Av1Mp4V1, av1);
+        for (const auto& [preset, settings, why] :
+             {std::tuple{o::OutputPresetV1::Av1Mp4V1, web, "AV1 MP4 refuses VP9 in WebM"},
+              std::tuple{o::OutputPresetV1::Av1WebmV1, av1, "AV1 WebM refuses an MP4 container"}}) {
+            check(std::holds_alternative<p::Unavailable>(o::analyzeMediaOutputV1(preset, settings)),
+                  why);
+        }
+        auto opusInMp4 = av1;
+        opusInMp4.audioCodec = "opus";
+        check(std::holds_alternative<p::Unavailable>(
+                  o::analyzeMediaOutputV1(o::OutputPresetV1::Av1Mp4V1, opusInMp4)),
+              "AV1 MP4 carries AAC, not Opus");
+        check(o::compositeFrameReuseEligibleV1(o::OutputPresetV1::Vp9WebmV1, "8bit") &&
+                  o::compositeFrameReuseEligibleV1(o::OutputPresetV1::Av1Mp4V1, "8bit") &&
+                  !o::compositeFrameReuseEligibleV1(o::OutputPresetV1::Av1WebmV1, "10bit"),
+              "8-bit VP9/AV1 may reuse cached frames; 10-bit renders fresh");
         testDisplayPayloadQuantizationMatchesReference();
         // Composite-cache reuse is limited to outputs coarser than half precision.
         check(o::compositeFrameReuseEligibleV1(o::OutputPresetV1::ProResMovV1, "hq") &&

@@ -29,6 +29,11 @@ enum class OutputPresetV1 : std::uint8_t {
     H264Mp4V1 = 8,
     HevcMovV1 = 9,
     HevcMp4V1 = 10,
+    // ADR 0036: VP9 and AV1 with Opus in WebM, AV1 with AAC in MP4 (bundled libvpx, SVT-AV1 and
+    // libopus).
+    Vp9WebmV1 = 11,
+    Av1WebmV1 = 12,
+    Av1Mp4V1 = 13,
 };
 
 enum class OutputFacetIdV1 : std::uint8_t {

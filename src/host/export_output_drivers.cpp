@@ -100,6 +100,12 @@ OutputPresetV1 mediaPreset(const ExportFormat format) {
         return OutputPresetV1::HevcMovV1;
     case ExportFormat::HevcMp4:
         return OutputPresetV1::HevcMp4V1;
+    case ExportFormat::Vp9Webm:
+        return OutputPresetV1::Vp9WebmV1;
+    case ExportFormat::Av1Webm:
+        return OutputPresetV1::Av1WebmV1;
+    case ExportFormat::Av1Mp4:
+        return OutputPresetV1::Av1Mp4V1;
     case ExportFormat::Wav:
         return OutputPresetV1::PcmWavV1;
     default:
@@ -1058,6 +1064,10 @@ std::string mediaProfile(const document::ExportOutputSettings& settings) {
     case ExportFormat::HevcMov:
     case ExportFormat::HevcMp4:
         return settings.codecProfile.empty() ? "main" : settings.codecProfile;
+    case ExportFormat::Vp9Webm:
+    case ExportFormat::Av1Webm:
+    case ExportFormat::Av1Mp4:
+        return settings.codecProfile == "10bit" ? "10bit" : "8bit";
     case ExportFormat::Wav:
         return settings.codecProfile == "s16" ? "pcm_s16le" : "pcm_s24le";
     default:
@@ -1131,11 +1141,15 @@ class MediaDriver final : public DriverBase {
         request.bypassLookNodes = !settings.bakeLook;
         request.videoBitrateKbps = settings.videoBitrateKbps;
         request.vaapiDevice = encoders.vaapiRenderNode;
-        const bool mp4 =
-            settings.format == ExportFormat::H264Mp4 || settings.format == ExportFormat::HevcMp4;
-        // MP4 carries AAC audio; MOV and MXF carry PCM.
+        const bool mp4 = settings.format == ExportFormat::H264Mp4 ||
+                         settings.format == ExportFormat::HevcMp4 ||
+                         settings.format == ExportFormat::Av1Mp4;
+        // MP4 carries AAC audio, WebM Opus at 48 kHz (the runner sets the rate); MOV and MXF carry
+        // PCM.
         if (mp4)
             request.pcmCodec = "aac";
+        if (settings.format == ExportFormat::Vp9Webm || settings.format == ExportFormat::Av1Webm)
+            request.pcmCodec = "opus";
         if (input_.output.artifactByteLimit)
             request.artifactByteLimit = input_.output.artifactByteLimit;
         request.gpuProvider = dependencies_.gpu;

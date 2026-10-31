@@ -147,18 +147,26 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
     const bool pcm = preset == OutputPresetV1::PcmWavV1;
     const bool h264 = preset == OutputPresetV1::H264MovV1 || preset == OutputPresetV1::H264Mp4V1;
     const bool hevc = preset == OutputPresetV1::HevcMovV1 || preset == OutputPresetV1::HevcMp4V1;
-    const bool mp4 = preset == OutputPresetV1::H264Mp4V1 || preset == OutputPresetV1::HevcMp4V1;
+    const bool vp9 = preset == OutputPresetV1::Vp9WebmV1;
+    const bool av1 = preset == OutputPresetV1::Av1WebmV1 || preset == OutputPresetV1::Av1Mp4V1;
+    const bool mp4 = preset == OutputPresetV1::H264Mp4V1 || preset == OutputPresetV1::HevcMp4V1 ||
+                     preset == OutputPresetV1::Av1Mp4V1;
     // The preset is ProRes whichever provider spelling the settings carry: VideoToolbox spells it
     // "prores", FFmpeg "prores_ks" (the shared EncodeSettingsV1 default). The encode session
     // translates to the serving provider's spelling (ADR 0035).
     const bool proresCodec = settings.videoCodec == "prores" || settings.videoCodec == "prores_ks";
-    if ((!prores && !dnx && !pcm && !h264 && !hevc) || !valid(settings) ||
+    if ((!prores && !dnx && !pcm && !h264 && !hevc && !vp9 && !av1) || !valid(settings) ||
         (prores && (!proresCodec || settings.container != "mov")) ||
         (dnx && (settings.videoCodec != "dnxhd" || settings.container != "mxf")) ||
         (h264 && (settings.videoCodec != "h264" || settings.container != (mp4 ? "mp4" : "mov") ||
                   settings.profile != "high")) ||
         (hevc && (settings.videoCodec != "hevc" || settings.container != (mp4 ? "mp4" : "mov") ||
                   (settings.profile != "main" && settings.profile != "main10"))) ||
+        ((vp9 || av1) &&
+         (settings.videoCodec != (vp9 ? "vp9" : "av1") ||
+          settings.container != (mp4 ? "mp4" : "webm") ||
+          (settings.profile != "8bit" && settings.profile != "10bit") ||
+          (!settings.audioCodec.empty() && settings.audioCodec != (mp4 ? "aac" : "opus")))) ||
         (pcm && (!settings.videoCodec.empty() || settings.container != "wav" ||
                  (settings.audioCodec != "pcm_s16le" && settings.audioCodec != "pcm_s24le"))))
         return Unavailable{Error::InvalidValue, "Preset and encode settings differ"};
@@ -176,6 +184,9 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
         result.implementationNote = "Review deliverable — not for archival";
     if (hevc)
         result.implementationNote = "HEVC delivery — not for archival";
+    if (vp9 || av1)
+        result.implementationNote =
+            std::string(vp9 ? "VP9" : "AV1") + " web delivery — not for archival";
     using F = OutputFacetIdV1;
     using S = OutputPreservationStateV1;
     const bool alpha =
@@ -302,6 +313,11 @@ bool compositeFrameReuseEligibleV1(const OutputPresetV1 preset,
     case OutputPresetV1::HevcMp4V1:
     case OutputPresetV1::PngRgba8SrgbV1:
         return true;
+    // 8-bit VP9 and AV1 quantize coarser than half precision; 10-bit renders fresh.
+    case OutputPresetV1::Vp9WebmV1:
+    case OutputPresetV1::Av1WebmV1:
+    case OutputPresetV1::Av1Mp4V1:
+        return profile == "8bit";
     case OutputPresetV1::ProResMovV1:
         return profile == "proxy" || profile == "lt" || profile == "standard" || profile == "hq";
     case OutputPresetV1::DnxhrMxfV1:

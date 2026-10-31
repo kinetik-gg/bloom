@@ -204,7 +204,8 @@ Import routes `.mp4 .mov .mkv .webm .mxf .m4v .mts .m2ts .ts` to this worker. A 
 codec the build does not decode is refused at probe as "Codec not available in this build: <codec>"
 (issue #398; an internal diagnostic, since VP9 and AV1 now decode: FFmpeg's native VP9 decoder and
 the bundled dav1d, ADR 0036), so such a file never falls through to the still-image
-reader or fails later at render.
+reader or fails later at render. Opus audio in WebM and Matroska decodes with FFmpeg's native Opus
+decoder.
 
 FFmpeg ProRes is a non-authorized preview/workflow capability only. It is not evidence of Apple
 authorization, certification, patent clearance, or delivery qualification. The worker resolves its
@@ -1814,10 +1815,12 @@ host. Strict delivery and Apple authorization remain gated by ADR 0020.
 | `DnxhrMxfV1` | DNxHR LB, SQ, HQ, HQX, 444; optional PCM | Intra-frame lossy video; dimensions, rate and audio layout must satisfy the muxer |
 | `PcmWavV1` | Signed little-endian PCM 16/24; BWF description when supplied | Byte-exact pinned worker; RF64 auto promotion; BW64 remains pending |
 | `TiffRgba16SrgbV1` | Single frames and numbered sequences | Exact decoded RGBA16 after the declared OCIO display/view conversion and quantization |
-| Worker-only capabilities | DNxHD; AAC; MOV, MXF, Matroska, WAV mux | Closed stream layouts; unsupported profiles or timing return typed failures |
+| Worker-only capabilities | DNxHD; AAC; Opus; MOV, MXF, Matroska, WebM, WAV mux | Closed stream layouts; unsupported profiles or timing return typed failures |
 | `H264MovV1` / `H264Mp4V1` | H.264 High MOV or MP4 via the bundled OpenH264 2.6.0 (`libopenh264`); MOV carries PCM, MP4 AAC; 30 Mbps default | 8-bit 4:2:0, one-second GOP, Rec.709 limited range; lossy `DecodedSemanticTolerance`; Review deliverable — not for archival |
 | NVENC encode | H.264 High, HEVC Main and Main 10 (P010) in MOV or MP4 via `h264_nvenc`/`hevc_nvenc` when the NVIDIA driver opens a session; the first hardware route (ADR 0036) | Hardware execution key `nvenc-runtime-unqualified`; no determinism claim; refusals fall through to VA-API, then software |
 | H.264 hardware encode | H.264 High MOV or MP4 via VA-API when the worker creates an encode context | Hardware execution key; no determinism claim; a refused or absent device falls back to OpenH264 inside the encode chain, recorded in provenance |
+| `Vp9WebmV1` | VP9 Profile 0 (8-bit) or Profile 2 (10-bit) via the bundled libvpx 1.17.0 (`libvpx-vp9`) with Opus via the bundled libopus 1.5.2 in WebM; constant quality (CRF 28) | 4:2:0, one-second keyframe interval, Rec.709 limited range; software only, never refused; Opus at 48 kHz; reopened on WebM's millisecond grid; lossy `DecodedSemanticTolerance`; not for archival |
+| `Av1WebmV1` / `Av1Mp4V1` | AV1 Main 8-bit or 10-bit via the bundled SVT-AV1 4.2.0 (`libsvtav1`, preset 8, CRF 28); WebM carries Opus, MP4 AAC; reopened through the bundled dav1d | As VP9; MP4 timing is exact |
 | `HevcMovV1` / `HevcMp4V1` | HEVC Main via the bundled Kvazaar 2.3.2 (`libkvazaar`, tagged `hvc1`), or VA-API HEVC Main/Main 10 when requested and a render node encodes; 20 Mbps default | 8-bit 4:2:0 in software (a Main 10 request without a 10-bit encoder is served as Main; the reopen QC, provenance, export log and evidence state the delivered profile and why); frames padded to whole 8x8 blocks and cropped by the conformance window; lossy `DecodedSemanticTolerance`; not for archival |
 
 The ProRes dialog, approval text, MOV comment and `MediaQcEvidenceV1` carry:

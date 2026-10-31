@@ -149,6 +149,14 @@ std::vector<BuiltIn> makeBuiltIns() {
     add("builtin:hevc-mp4", "HEVC MP4", "HEVC Main in MP4", C::Video, hevc);
     hevc.format = ExportFormat::HevcMov;
     add("builtin:hevc-mov", "HEVC MOV", "HEVC Main in QuickTime MOV", C::Video, hevc);
+    // AV1 (the bundled SVT-AV1) and VP9 (the bundled libvpx) for the web; WebM carries Opus audio
+    // (libopus), MP4 AAC (ADR 0036).
+    add("builtin:av1-mp4", "AV1 MP4", "AV1 8-bit in MP4", C::Video,
+        video(ExportFormat::Av1Mp4, "8bit"));
+    add("builtin:av1-webm", "AV1 WebM", "AV1 8-bit with Opus audio in WebM", C::Video,
+        video(ExportFormat::Av1Webm, "8bit"));
+    add("builtin:vp9-webm", "VP9 WebM", "VP9 8-bit with Opus audio in WebM", C::Video,
+        video(ExportFormat::Vp9Webm, "8bit"));
     add("builtin:prores-proxy-mov", "ProRes 422 Proxy MOV", "ProRes 422 Proxy", C::Video,
         video(ExportFormat::ProResMov, "proxy"));
     add("builtin:prores-lt-mov", "ProRes 422 LT MOV", "ProRes 422 LT", C::Video,
@@ -251,6 +259,7 @@ std::vector<ExportFormatDescription> makeFormatDescriptions() {
                                                {"444", "DNxHR 444"}};
     const std::vector<ExportFormatToken> h264{{"high", "High"}};
     const std::vector<ExportFormatToken> hevc{{"main", "Main"}, {"main10", "Main 10"}};
+    const std::vector<ExportFormatToken> depth{{"8bit", "8-bit"}, {"10bit", "10-bit"}};
     const std::vector<ExportFormatToken> exr{
         {"zip", "ZIP"}, {"piz", "PIZ"}, {"zips", "ZIPS"}, {"none", "Uncompressed"}};
     return {
@@ -264,6 +273,9 @@ std::vector<ExportFormatDescription> makeFormatDescriptions() {
         describe(ExportFormat::H264Mp4, "H.264 MP4", h264, "high"),
         describe(ExportFormat::HevcMov, "HEVC MOV", hevc, "main"),
         describe(ExportFormat::HevcMp4, "HEVC MP4", hevc, "main"),
+        describe(ExportFormat::Av1Mp4, "AV1 MP4", depth, "8bit"),
+        describe(ExportFormat::Av1Webm, "AV1 WebM", depth, "8bit"),
+        describe(ExportFormat::Vp9Webm, "VP9 WebM", depth, "8bit"),
         describe(ExportFormat::Wav, "WAV", {{"s16", "16-bit PCM"}, {"s24", "24-bit PCM"}}, "s24"),
     };
 }
@@ -347,6 +359,11 @@ std::string_view exportFormatShortName(const ExportFormat format) noexcept {
     case ExportFormat::HevcMov:
     case ExportFormat::HevcMp4:
         return "hevc";
+    case ExportFormat::Av1Mp4:
+    case ExportFormat::Av1Webm:
+        return "av1";
+    case ExportFormat::Vp9Webm:
+        return "vp9";
     default:
         return exportFormatExtension(format);
     }

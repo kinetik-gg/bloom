@@ -186,12 +186,51 @@ int videoProfile(const EncodeSettingsV1& s) {
                 Error::Unavailable);
         return s.profile == "main10" ? AV_PROFILE_HEVC_MAIN_10 : AV_PROFILE_HEVC_MAIN;
     }
+    // VP9 Profile 0 (8-bit) or 2 (10-bit) 4:2:0; AV1 Main carries both depths (ADR 0036).
+    if (s.videoCodec == "vp9" || s.videoCodec == "av1") {
+        require(s.profile == "8bit" || s.profile == "10bit", "VP9/AV1 profile unavailable",
+                Error::Unavailable);
+        if (s.videoCodec == "av1")
+            return AV_PROFILE_AV1_MAIN;
+        return s.profile == "10bit" ? AV_PROFILE_VP9_2 : AV_PROFILE_VP9_0;
+    }
     require(s.videoCodec == "tiff" && s.profile == "rgba16", "Video encoder unavailable",
             Error::Unavailable);
     return 0;
 }
 bool hardwareCodec(const EncodeSettingsV1& s) {
     return s.videoCodec == "h264" || s.videoCodec == "hevc";
+}
+// The bundled web encoders: libvpx (VP9) and SVT-AV1 (AV1), software only.
+bool webCodec(const EncodeSettingsV1& s) { return s.videoCodec == "vp9" || s.videoCodec == "av1"; }
+// The FFmpeg encoder that serves a provider-neutral codec name.
+std::string encoderName(const EncodeSettingsV1& s, const bool hardware, const bool nvenc) {
+    if (s.videoCodec == "h264")
+        return nvenc ? "h264_nvenc" : hardware ? "h264_vaapi" : "libopenh264";
+    if (s.videoCodec == "hevc")
+        return nvenc ? "hevc_nvenc" : hardware ? "hevc_vaapi" : "libkvazaar";
+    if (s.videoCodec == "vp9")
+        return "libvpx-vp9";
+    if (s.videoCodec == "av1")
+        return "libsvtav1";
+    return s.videoCodec;
+}
+// Lossy audio is encoded in whole codec frames and reopened against a float reference.
+bool lossyAudio(const std::string_view codec) { return codec == "aac" || codec == "opus"; }
+// Matroska and WebM store millisecond timestamps, so a reopened sample lands on that grid: the
+// expected time is rounded to the stream's time base there. MOV, MP4 and MXF stay exact.
+bool roundedTimeline(const EncodeSettingsV1& s) {
+    return s.container == "webm" || s.container == "matroska";
+}
+// Whether a reopened timestamp is `numerator / denominator` seconds: exactly, or on a rounded
+// timeline the nearest tick of the stream's time base.
+bool onTimeline(const std::int64_t value, const AVRational base, const std::int64_t numerator,
+                const std::int64_t denominator, const bool rounded) {
+    if (!rounded)
+        return timestamp(value, base) == rational(numerator, denominator);
+    return value == av_rescale_rnd(numerator, base.den,
+                                   denominator * static_cast<std::int64_t>(base.num),
+                                   AV_ROUND_NEAR_INF);
 }
 // The software sample layout uploaded to a VA-API encoder.
 AVPixelFormat hardwareSamples(const EncodeSettingsV1& s) {
@@ -208,6 +247,14 @@ std::string containerToken(const AVFormatContext& format, const AVCodecParameter
         container = "mxf";
     }
     return container + "/" + avcodec_get_name(codec.codec_id);
+}
+// The shared Matroska/WebM demuxer names both; the requested muxer wrote the document type.
+std::string containerToken(const AVFormatContext& format, const AVCodecParameters& codec,
+                           const EncodeSettingsV1& settings) {
+    auto token = containerToken(format, codec);
+    if (token.starts_with("matroska,webm/") && roundedTimeline(settings))
+        token = settings.container + token.substr(token.find('/'));
+    return token;
 }
 } // namespace
 struct Encoder::State {
@@ -253,6 +300,11 @@ struct Encoder::State {
                             track.packet->size,
                         "TIFF product exceeds limit", Error::Oversized);
             } else {
+                // libvpx and SVT-AV1 leave packet durations unset; one frame each keeps the MP4
+                // track's last sample, and so its duration, exact. Other encoders are untouched.
+                if (track.packet->duration == 0 && track.codec->codec_type == AVMEDIA_TYPE_VIDEO &&
+                    webCodec(settings))
+                    track.packet->duration = 1;
                 av_packet_rescale_ts(track.packet, track.codec->time_base, track.stream->time_base);
                 track.packet->stream_index = track.stream->index;
                 require(av_interleaved_write_frame(format, track.packet) >= 0,
@@ -285,7 +337,10 @@ struct Encoder::State {
                         : hardwareCodec(settings) && nvenc && settings.profile == "main10"
                             ? AV_PIX_FMT_P010LE
                         : hardwareCodec(settings) ? AV_PIX_FMT_YUV420P
-                                                  : AV_PIX_FMT_YUV422P10LE;
+                        : webCodec(settings)
+                            ? (settings.profile == "10bit" ? AV_PIX_FMT_YUV420P10LE
+                                                           : AV_PIX_FMT_YUV420P)
+                            : AV_PIX_FMT_YUV422P10LE;
             if (settings.videoCodec == "prores_ks" && c.profile >= 4)
                 c.pix_fmt = AV_PIX_FMT_YUVA444P10LE;
             if (settings.videoCodec == "dnxhd") {
@@ -329,6 +384,13 @@ struct Encoder::State {
                     c.hw_frames_ctx = av_buffer_ref(track.hardwareFrames);
                 }
             }
+            // VP9 and AV1 encode at constant quality with a one-second keyframe interval; the
+            // document's bit rate applies to H.264 and HEVC only.
+            if (webCodec(settings)) {
+                c.bit_rate = 0;
+                c.gop_size = static_cast<int>(
+                    std::max<std::int64_t>(1, settings.rate.numerator / settings.rate.denominator));
+            }
             // #369: tags from the output colour intent instead of a fixed BT.709.
             const auto tag = [](const std::int32_t code, const int unspecified) {
                 return code < 0 ? unspecified : code;
@@ -350,12 +412,14 @@ struct Encoder::State {
                                            : AVCHROMA_LOC_UNSPECIFIED;
             c.sample_aspect_ratio = {1, 1};
         } else {
-            require(name == "pcm_s16le" || name == "pcm_s24le" || name == "aac",
+            require(name == "pcm_s16le" || name == "pcm_s24le" || name == "aac" ||
+                        name == "libopus",
                     "Audio encoder unavailable", Error::Unavailable);
             c.sample_rate = static_cast<int>(settings.sampleRate);
             c.time_base = {1, c.sample_rate};
             av_channel_layout_default(&c.ch_layout, static_cast<int>(settings.channels));
             c.sample_fmt = name == "aac"         ? AV_SAMPLE_FMT_FLTP
+                           : name == "libopus"   ? AV_SAMPLE_FMT_FLT
                            : name == "pcm_s16le" ? AV_SAMPLE_FMT_S16
                                                  : AV_SAMPLE_FMT_S32;
             c.bit_rate = 192000;
@@ -382,6 +446,27 @@ struct Encoder::State {
                 "preset=fast,period=" + std::to_string(period) + ",threads=" +
                 (settings.threads == 0 ? std::string("auto") : std::to_string(settings.threads));
             av_dict_set(&options, "kvazaar-params", parameters.c_str(), 0);
+        }
+        if (video && name == "libsvtav1") {
+            // SVT-AV1's preset 8 (a fast delivery speed) at CRF 28. Constant quality also covers
+            // frames under 64 pixels, where SVT-AV1 refuses rate control without adaptive
+            // quantization.
+            av_dict_set(&options, "preset", "8", 0);
+            av_dict_set(&options, "crf", "28", 0);
+            // A fixed parallelism level instead of SVT-AV1's core-count default, so its buffer
+            // counts, and the worker address space they need, do not grow with the computer:
+            // level 2 up to 8K UHD, level 1 above it (av1EncodeAddressSpaceBytes).
+            const bool beyond8k = static_cast<std::uint64_t>(settings.width) * settings.height >
+                                  7680ULL * 4320ULL;
+            av_dict_set(&options, "svtav1-params", beyond8k ? "lp=1" : "lp=2", 0);
+        }
+        if (video && name == "libvpx-vp9") {
+            // libvpx's good-quality deadline at speed 4, row multithreading over the session's
+            // thread budget, constant quality (CRF 28 with no rate target).
+            av_dict_set(&options, "deadline", "good", 0);
+            av_dict_set(&options, "cpu-used", "4", 0);
+            av_dict_set(&options, "row-mt", "1", 0);
+            av_dict_set(&options, "crf", "28", 0);
         }
         if (settings.videoCodec == "tiff" && video)
             av_dict_set(&options, "compression_algo", "raw", 0);
@@ -442,8 +527,12 @@ struct Encoder::State {
         } else {
             require(settings.container == "mov" || settings.container == "mp4" ||
                         settings.container == "mxf" || settings.container == "matroska" ||
-                        settings.container == "wav",
+                        settings.container == "webm" || settings.container == "wav",
                     "Muxer unavailable", Error::Unavailable);
+            require(settings.container != "webm" ||
+                        ((settings.videoCodec.empty() || webCodec(settings)) &&
+                         (settings.audioCodec.empty() || settings.audioCodec == "opus")),
+                    "WebM carries only VP9, AV1 and Opus", Error::Unavailable);
             require(settings.container != "wav" || settings.videoCodec.empty(),
                     "WAV cannot carry video", Error::Unavailable);
             require(avformat_alloc_output_context2(&format, nullptr, settings.container.c_str(),
@@ -462,18 +551,12 @@ struct Encoder::State {
                 av_dict_set(&format->metadata, "description", settings.bwfDescription.c_str(), 0);
         }
         if (!settings.videoCodec.empty())
-            openTrack(videoTrack,
-                      settings.videoCodec == "h264"   ? (nvenc      ? "h264_nvenc"
-                                                         : hardware ? "h264_vaapi"
-                                                                    : "libopenh264")
-                      : settings.videoCodec == "hevc" ? (nvenc      ? "hevc_nvenc"
-                                                         : hardware ? "hevc_vaapi"
-                                                                    : "libkvazaar")
-                                                      : settings.videoCodec,
-                      true);
+            openTrack(videoTrack, encoderName(settings, hardware, nvenc), true);
         if (!settings.audioCodec.empty())
-            openTrack(audioTrack, settings.audioCodec, false);
-        if (settings.audioCodec == "aac") {
+            openTrack(audioTrack, settings.audioCodec == "opus" ? "libopus" : settings.audioCodec,
+                      false);
+        if (lossyAudio(settings.audioCodec)) {
+            require(audioTrack.codec->frame_size > 0, "Audio encoder frame size unavailable");
             aacReference = std::make_unique<PrivateMediaFile>(settings.byteLimit);
             pendingAudio.resize(settings.channels);
         }
@@ -527,7 +610,7 @@ struct Encoder::State {
                         rational(static_cast<std::int64_t>(sampleCount), settings.sampleRate) &&
                     product.channelLayout == channels(audioTrack.codec->ch_layout),
                 "Audio does not match frozen encode request", Error::IdentityMismatch);
-        if (settings.audioCodec == "aac") {
+        if (lossyAudio(settings.audioCodec)) {
             for (std::size_t i = 0; i < product.channels[0].size(); ++i) {
                 for (std::size_t c = 0; c < settings.channels; ++c) {
                     const auto sample = product.channels[c][i];
@@ -537,7 +620,8 @@ struct Encoder::State {
                             "AAC reference exceeds limit", Error::Oversized);
                     pendingAudio[c].push_back(sample);
                 }
-                if (pendingAudio[0].size() == 1024) {
+                if (pendingAudio[0].size() ==
+                    static_cast<std::size_t>(audioTrack.codec->frame_size)) {
                     encodeAudio(pendingAudio);
                     for (auto& channel : pendingAudio)
                         channel.clear();
@@ -693,7 +777,7 @@ struct Encoder::State {
         const auto& parameters = *stream.codecpar;
         qc.colour = {parameters.color_primaries, parameters.color_trc, parameters.color_space,
                      parameters.color_range};
-        qc.container = containerToken(*input.format, parameters);
+        qc.container = containerToken(*input.format, parameters, settings);
         if (const auto* name = avcodec_profile_name(parameters.codec_id, parameters.profile))
             qc.profile = name;
         if (const auto* layout = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(parameters.format)))
@@ -706,12 +790,11 @@ struct Encoder::State {
         decoder(input, stream, nullptr);
         bool eof = false;
         while (next(input, 0, eof)) {
-            require(
-                qc.frames < settings.frames &&
-                    timestamp(input.frame->best_effort_timestamp, stream.time_base) ==
-                        rational(static_cast<std::int64_t>(qc.frames) * settings.rate.denominator,
-                                 settings.rate.numerator),
-                "Reopened video timing differs");
+            require(qc.frames < settings.frames &&
+                        onTimeline(input.frame->best_effort_timestamp, stream.time_base,
+                                   static_cast<std::int64_t>(qc.frames) * settings.rate.denominator,
+                                   settings.rate.numerator, roundedTimeline(settings)),
+                    "Reopened video timing differs");
             if (qc.frames == 0 || qc.frames + 1 == settings.frames)
                 compare(*input.frame, qc.frames == 0 ? firstReference : lastReference, qc,
                         declared);
@@ -741,7 +824,7 @@ struct Encoder::State {
         const unsigned index = settings.videoCodec.empty() ? 0U : 1U;
         const auto& stream = *input.format->streams[index];
         if (settings.videoCodec.empty())
-            qc.container = containerToken(*input.format, *stream.codecpar);
+            qc.container = containerToken(*input.format, *stream.codecpar, settings);
         require(
             stream.codecpar->codec_id == audioTrack.codec->codec_id &&
                 stream.codecpar->sample_rate == static_cast<int>(settings.sampleRate) &&
@@ -771,18 +854,27 @@ struct Encoder::State {
             require(f.nb_samples > 0 && f.nb_samples <= static_cast<int>(Limits::audioSamples) &&
                         f.sample_rate == static_cast<int>(settings.sampleRate),
                     "Reopened audio format differs");
-            const auto begin = av_rescale_q(f.best_effort_timestamp, stream.time_base,
-                                            {1, static_cast<int>(settings.sampleRate)});
-            require(begin == static_cast<std::int64_t>(qc.audioSamples),
-                    "Reopened audio timing differs");
+            if (roundedTimeline(settings))
+                require(onTimeline(f.best_effort_timestamp, stream.time_base,
+                                   static_cast<std::int64_t>(qc.audioSamples),
+                                   static_cast<std::int64_t>(settings.sampleRate), true),
+                        ("Reopened audio timing differs: timestamp=" +
+                         std::to_string(f.best_effort_timestamp) + " after " +
+                         std::to_string(qc.audioSamples) + " samples")
+                            .c_str());
+            else
+                require(av_rescale_q(f.best_effort_timestamp, stream.time_base,
+                                     {1, static_cast<int>(settings.sampleRate)}) ==
+                            static_cast<std::int64_t>(qc.audioSamples),
+                        "Reopened audio timing differs");
             const auto count =
-                settings.audioCodec == "aac"
+                lossyAudio(settings.audioCodec)
                     ? std::min<std::uint64_t>(static_cast<unsigned>(f.nb_samples),
                                               settings.audioSamples -
                                                   std::min(qc.audioSamples, settings.audioSamples))
                     : static_cast<unsigned>(f.nb_samples);
-            if (settings.audioCodec == "aac") {
-                require(f.format == AV_SAMPLE_FMT_FLTP, "AAC reopen sample format differs");
+            if (lossyAudio(settings.audioCodec)) {
+                require(f.format == AV_SAMPLE_FMT_FLTP, "Lossy audio reopen sample format differs");
                 for (std::size_t i = 0; i < count; ++i)
                     for (std::size_t c = 0; c < settings.channels; ++c) {
                         float reference = 0;
@@ -814,10 +906,12 @@ struct Encoder::State {
             av_frame_unref(input.frame);
         }
         require(qc.audioSamples == settings.audioSamples, "Reopened audio sample count differs");
-        if (settings.audioCodec == "aac") {
+        if (lossyAudio(settings.audioCodec))
             require(comparedSamples > 0 &&
                         squaredError / static_cast<double>(comparedSamples) <= 0.0025,
-                    "AAC RMS exceeds tolerance");
+                    "Lossy audio RMS exceeds tolerance");
+        // WebM records no per-track duration for Opus; MP4 states AAC's exactly.
+        if (settings.audioCodec == "aac") {
             require(stream.duration != AV_NOPTS_VALUE &&
                         timestamp(stream.duration, stream.time_base) ==
                             rational(static_cast<std::int64_t>(settings.audioSamples),

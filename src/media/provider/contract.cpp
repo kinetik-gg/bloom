@@ -55,6 +55,15 @@ std::uint64_t workerAddressSpaceBytes(const std::uint32_t width,
     const auto rounded = (wanted + granule - 1) / granule * granule;
     return std::clamp<std::uint64_t>(rounded, kWorkerAddressSpaceFloor, kWorkerAddressSpaceCeiling);
 }
+std::uint64_t av1EncodeAddressSpaceBytes(const std::uint32_t width,
+                                         const std::uint32_t height) noexcept {
+    constexpr std::uint64_t granule = 256ULL << 20U;
+    const auto pixels = static_cast<std::uint64_t>(std::min(width, Limits::dimension)) *
+                        std::min(height, Limits::dimension);
+    const auto wanted = (2ULL << 30U) + std::min(pixels, Limits::pixels) * 256U;
+    const auto rounded = (wanted + granule - 1) / granule * granule;
+    return std::clamp<std::uint64_t>(rounded, kWorkerAddressSpaceFloor, kWorkerAddressSpaceCeiling);
+}
 namespace {
 bool extent(std::uint32_t w, std::uint32_t h) {
     return w > 0 && h > 0 && w <= Limits::dimension && h <= Limits::dimension &&

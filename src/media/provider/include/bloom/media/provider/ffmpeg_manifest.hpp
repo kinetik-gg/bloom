@@ -3,7 +3,8 @@
 namespace bloom::media::provider {
 // Codec-free declaration shared by the host and the isolated executable.
 // `hardware` selects the VA-API encode generation; the software generation always declares the
-// bundled OpenH264 (H.264) and Kvazaar (HEVC) encoders.
+// bundled OpenH264 (H.264), Kvazaar (HEVC), libvpx (VP9), SVT-AV1 (AV1) and libopus (Opus)
+// encoders.
 [[nodiscard]] Handshake ffmpegHandshake(bool hardware = false);
 // The NVIDIA NVENC encode generation (`--nvenc`): H.264 High and HEVC Main/Main 10 through
 // h264_nvenc/hevc_nvenc, with the driver loaded at run time. Hardware execution key, no

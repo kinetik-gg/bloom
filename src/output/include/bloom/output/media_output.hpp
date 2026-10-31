@@ -93,8 +93,9 @@ prepareMediaRgba16V1(const render::Rgba32fImage& image, media::provider::Rationa
 // Whether an export of `preset` with codec `profile` may reuse a composite-cache frame
 // (premultiplied RGBA half in the working space) instead of evaluating: only outputs whose
 // quantization is coarser than half precision's error. H.264, HEVC, ProRes 422 (proxy, LT,
-// standard, HQ), 8-bit DNxHR (LB, SQ, HQ) and 8-bit PNG qualify; 16-bit TIFF, float EXR, ProRes
-// 4444/4444 XQ, DNxHR HQX/444 and audio-only outputs always render fresh.
+// standard, HQ), 8-bit DNxHR (LB, SQ, HQ), 8-bit VP9/AV1 and 8-bit PNG qualify; 16-bit TIFF, float
+// EXR, ProRes 4444/4444 XQ, DNxHR HQX/444, 10-bit VP9/AV1 and audio-only outputs always render
+// fresh.
 [[nodiscard]] bool compositeFrameReuseEligibleV1(OutputPresetV1 preset,
                                                  std::string_view profile) noexcept;
 // The codec-boundary half of prepareMediaRgba16V1 for pixels the GPU already transformed to the

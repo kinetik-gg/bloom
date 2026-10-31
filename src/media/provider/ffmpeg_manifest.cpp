@@ -61,7 +61,7 @@ Handshake ffmpegHandshake(const bool hardware) {
             add(Role::VideoDecode, codec);
     if (!hardware)
         for (const auto* codec :
-             {"aac", "mp3", "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le",
+             {"aac", "mp3", "opus", "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le",
               "pcm_s32be", "pcm_f32le", "pcm_f32be", "pcm_f64le", "pcm_f64be", "pcm_u8", "pcm_s8"})
             add(Role::AudioDecode, codec);
     if (!hardware) {
@@ -86,7 +86,9 @@ Handshake ffmpegHandshake(const bool hardware) {
         encode(Role::VideoEncode, "tiff", "tiff", "rgba16");
         for (const auto* codec : {"pcm_s16le", "pcm_s24le", "aac"})
             encode(Role::AudioEncode, codec, "intake-muxers-v1", "source-rate");
-        for (const auto* container : {"mov", "mp4", "mxf", "matroska", "wav", "tiff"}) {
+        // Opus (the bundled libopus) is defined at 48 kHz and carried by WebM.
+        encode(Role::AudioEncode, "opus", "webm", "48000");
+        for (const auto* container : {"mov", "mp4", "mxf", "matroska", "webm", "wav", "tiff"}) {
             encode(Role::Mux, "intake-encoders-v1", container, "closed-stream-layout-v1");
             encode(Role::ReopenDecode, "intake-encoders-v1", container, "first-last-pcm-v1");
         }
@@ -100,6 +102,17 @@ Handshake ffmpegHandshake(const bool hardware) {
             d.capability.range = "limited";
             d.capability.colorFeatures = "rec709-display-referred";
         }
+        // VP9 (the bundled libvpx, Profile 0 or 2) and AV1 (the bundled SVT-AV1, Main), each
+        // 8-bit or 10-bit 4:2:0; software only (ADR 0036).
+        for (const auto* codec : {"vp9", "av1"})
+            for (const auto [profile, depth] : {std::pair{"8bit", 8U}, std::pair{"10bit", 10U}}) {
+                encode(Role::VideoEncode, codec, "webm", profile);
+                auto& d = h.declarations.back();
+                d.capability.bitDepth = depth;
+                d.capability.chroma = depth == 8U ? "yuv420p" : "yuv420p10";
+                d.capability.range = "limited";
+                d.capability.colorFeatures = "rec709-display-referred";
+            }
     } else {
         auto hardwareEncode = [&](const char* codec) {
             add(Role::VideoEncode, codec);

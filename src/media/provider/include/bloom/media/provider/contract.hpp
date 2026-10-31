@@ -262,6 +262,12 @@ inline constexpr std::uint64_t kWorkerAddressSpaceCeiling = 16ULL << 30U;
 inline constexpr std::uint64_t kNvencAddressSpaceFloor = 8ULL << 30U;
 [[nodiscard]] std::uint64_t workerAddressSpaceBytes(std::uint32_t width,
                                                     std::uint32_t height) noexcept;
+// The bundled SVT-AV1 encoder (ADR 0036) keeps more reference and look-ahead pictures than the
+// decoder sizing above covers. At the worker's fixed parallelism level it was measured at 1.8 GiB
+// of address space for 1080p and 7.6 GiB for 8K UHD 10-bit, so an AV1 encode gets 2 GiB plus
+// 256 bytes per pixel, inside the same floor and ceiling.
+[[nodiscard]] std::uint64_t av1EncodeAddressSpaceBytes(std::uint32_t width,
+                                                       std::uint32_t height) noexcept;
 // Domain string (u32 length + bytes), u16 schema=1, then declaration-order fields.
 // Integers are little-endian; enums/bools u8, counts/string lengths u32, digests 32 raw bytes.
 #define BLOOM_MEDIA_RECORD(Type)                                                                   \

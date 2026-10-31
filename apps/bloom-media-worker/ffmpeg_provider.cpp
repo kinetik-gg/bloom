@@ -393,6 +393,10 @@ void decoder(Input& input, const AVStream& stream, AVBufferRef* device) {
     // AV_EF_EXPLODE, including tags its own encoder writes; decoding errors still fail the frame.
     if (stream.codecpar->codec_id == AV_CODEC_ID_TIFF)
         input.codec->err_recognition &= ~AV_EF_EXPLODE;
+    // Opus streams start with encoder pre-skip; with the packet time base the decoder trims it and
+    // moves the first frame's timestamp to the presentation start instead of before it.
+    if (stream.codecpar->codec_id == AV_CODEC_ID_OPUS)
+        input.codec->pkt_timebase = stream.time_base;
     if (device) {
         input.codec->thread_count = 1;
         input.codec->hw_device_ctx = av_buffer_ref(device);

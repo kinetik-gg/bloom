@@ -69,7 +69,7 @@ AudioBlock sound(const EncodeSettingsV1& settings, std::uint64_t offset, std::ui
     for (unsigned i = 0; i < count; ++i)
         for (unsigned c = 0; c < 2; ++c)
             block.channels[c][i] =
-                settings.audioCodec == "aac"
+                settings.audioCodec == "aac" || settings.audioCodec == "opus"
                     ? static_cast<float>(0.2 * std::sin(static_cast<double>(offset + i + c) * 0.02))
                     : static_cast<float>(static_cast<int>((offset + i + c) % 997) - 498) / 1024.0F;
     return block;
@@ -306,6 +306,58 @@ void tests(const std::filesystem::path& directory) {
                         fell.fallbacks.front().provider == kFfmpegVaapiProviderId,
                     "HEVC falls back from VA-API to the bundled Kvazaar silently");
     }
+    // ADR 0036: VP9 (libvpx) and AV1 (SVT-AV1) with Opus (libopus) in WebM, and AV1 with AAC in
+    // MP4, at 8 and 10 bits, each delivering exactly the profile and depth requested. 64x48 is
+    // below SVT-AV1's 64-pixel rate-control floor, which constant quality covers; WebM's
+    // millisecond timestamps are checked on that grid. A 1918x1078 extent is odd in 8x8 blocks.
+    for (const auto* codec : {"vp9", "av1"})
+        for (const auto* depth : {"8bit", "10bit"}) {
+            auto web = settings;
+            web.videoCodec = codec;
+            web.profile = depth;
+            web.container = "webm";
+            web.audioCodec = "opus";
+            web.sampleRate = 48000;
+            web.audioSamples = 96000;
+            MediaProviderProvenanceV1 served;
+            EncodeQcV1 delivered;
+            const auto name = std::string("export-") + codec + "-" + depth;
+            (void)run(web, directory / (name + ".webm"), {}, &served, &delivered);
+            const bool ten = std::string_view(depth) == "10bit";
+            test::check(served.provider == kFfmpegProviderId && !served.fellBack() &&
+                            delivered.container == std::string("webm/") + codec &&
+                            delivered.bitDepth == (ten ? 10U : 8U) &&
+                            delivered.adjustment.empty() &&
+                            delivered.profile == (std::string_view(codec) == "av1" ? "Main"
+                                                  : ten                          ? "Profile 2"
+                                                                                 : "Profile 0"),
+                        "the bundled VP9/AV1 encoder delivers the requested depth in WebM with Opus");
+            if (std::string_view(codec) == "av1") {
+                auto mp4 = web;
+                mp4.container = "mp4";
+                mp4.audioCodec = "aac";
+                (void)run(mp4, directory / (name + ".mp4"), {}, nullptr, &delivered);
+                test::check(delivered.container == "mp4/av1" &&
+                                delivered.bitDepth == (ten ? 10U : 8U),
+                            "AV1 in MP4 with AAC reopens with its depth");
+            }
+            auto unaligned = web;
+            unaligned.width = 1918;
+            unaligned.height = 1078;
+            unaligned.frames = 6;
+            unaligned.audioCodec.clear();
+            unaligned.audioSamples = 0;
+            (void)run(unaligned, directory / (name + "-1918x1078.webm"));
+        }
+    // WebM carries only VP9, AV1 and Opus.
+    {
+        auto wrong = settings;
+        wrong.container = "webm";
+        wrong.audioCodec = "opus";
+        wrong.sampleRate = 48000;
+        EncodeSessionV1 session(EncodeSessionOptionsV1{});
+        test::check(session.begin(wrong).has_value(), "H.264 in WebM is refused at begin");
+    }
     if (std::filesystem::exists("/dev/dri/renderD128") ||
         std::filesystem::exists("/dev/dri/renderD129")) {
         auto vaapiSettings = settings;
@@ -396,6 +448,16 @@ void chromaSampling(const std::filesystem::path& directory) {
         hevc.width = 1920;
         hevc.height = 1080;
         (void)run(hevc, directory / "red-square-hevc-1080p.mov");
+    }
+    // The bundled libvpx and SVT-AV1 at 1920x1080 in 10 bits, inside the same ceiling.
+    for (const auto* codec : {"vp9", "av1"}) {
+        auto web = settings;
+        web.videoCodec = codec;
+        web.profile = "10bit";
+        web.container = "webm";
+        web.width = 1920;
+        web.height = 1080;
+        (void)run(web, directory / (std::string("red-square-") + codec + "-1080p.webm"));
     }
     if (!std::filesystem::exists("/dev/dri/renderD128") &&
         !std::filesystem::exists("/dev/dri/renderD129")) {

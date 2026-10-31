@@ -39,6 +39,12 @@ std::optional<OutputPresetIdentityV1> outputPresetIdentityV1(const OutputPresetV
         return OutputPresetIdentityV1{"HevcMovV1", 1, "bloom.output.hevc-mov-vaapi.v1"};
     case OutputPresetV1::HevcMp4V1:
         return OutputPresetIdentityV1{"HevcMp4V1", 1, "bloom.output.hevc-mp4-vaapi.v1"};
+    case OutputPresetV1::Vp9WebmV1:
+        return OutputPresetIdentityV1{"Vp9WebmV1", 1, "bloom.output.vp9-webm.v1"};
+    case OutputPresetV1::Av1WebmV1:
+        return OutputPresetIdentityV1{"Av1WebmV1", 1, "bloom.output.av1-webm.v1"};
+    case OutputPresetV1::Av1Mp4V1:
+        return OutputPresetIdentityV1{"Av1Mp4V1", 1, "bloom.output.av1-mp4.v1"};
     case OutputPresetV1::PngRgba8SrgbV1:
         return OutputPresetIdentityV1{"PngRgba8SrgbV1", kOutputPresetVersionV1,
                                       "bloom.output.png-rgba8-srgb.semantic.v1"};

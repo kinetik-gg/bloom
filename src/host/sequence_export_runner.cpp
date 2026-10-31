@@ -236,6 +236,21 @@ struct detail::SequenceExportWorkV1 {
             // OpenH264 silently when no device encodes (ADR 0035, ADR 0036).
             request.worker.nvenc = request.nvenc;
             request.worker.vaapi = request.hardware;
+        } else if (request.preset == output::OutputPresetV1::Vp9WebmV1 ||
+                   request.preset == output::OutputPresetV1::Av1WebmV1 ||
+                   request.preset == output::OutputPresetV1::Av1Mp4V1) {
+            // Software only: the bundled libvpx (VP9) and SVT-AV1 (AV1), 8-bit or 10-bit 4:2:0
+            // (ADR 0036). WebM carries Opus, which is defined at 48 kHz, so its mix renders there.
+            const bool webm = request.preset != output::OutputPresetV1::Av1Mp4V1;
+            s.videoCodec = request.preset == output::OutputPresetV1::Vp9WebmV1 ? "vp9" : "av1";
+            s.container = webm ? "webm" : "mp4";
+            s.profile = request.profile == "10bit" ? "10bit" : "8bit";
+            if (webm) {
+                request.pcmCodec = "opus";
+                s.sampleRate = 48000;
+            } else {
+                request.pcmCodec = "aac";
+            }
         } else if (request.preset == output::OutputPresetV1::DnxhrMxfV1) {
             s.videoCodec = "dnxhd";
             s.container = "mxf";
@@ -442,7 +457,8 @@ struct detail::SequenceExportWorkV1 {
                     ? "; encoder=vaapi vaapi-runtime-unqualified"
                     : "; encoder=openh264 2.6.0 bundled";
         if (!qc.profile.empty() &&
-            (settings().videoCodec == "h264" || settings().videoCodec == "hevc"))
+            (settings().videoCodec == "h264" || settings().videoCodec == "hevc" ||
+             settings().videoCodec == "vp9" || settings().videoCodec == "av1"))
             analysis->implementationNote += "; delivered=" + settings().videoCodec + " " +
                                             qc.profile + " " + std::to_string(qc.bitDepth) + "-bit";
         if (!qc.adjustment.empty())
