@@ -1,0 +1,85 @@
+{
+  "name": "dav1d",
+  "version": "1.5.4",
+  "source": {
+    "url": "https://downloads.videolan.org/pub/videolan/dav1d/1.5.4/dav1d-1.5.4.tar.xz",
+    "archiveSha256": "sha256:686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5",
+    "archiveSizeBytes": 1038852,
+    "retrievedAt": "2026-10-31",
+    "commit": null,
+    "provenancePolicy": "required",
+    "provenanceReview": {
+      "path": "dependencies/licenses/dav1d/provenance.md",
+      "sha256": "sha256:de1378d77b583869a4f96930de1f451cd646dcc7af0ec4995cff3635ce56269c"
+    },
+    "provenance": [
+      {
+        "kind": "detached-signature",
+        "evidence": {
+          "path": "dependencies/licenses/dav1d/dav1d-1.5.4.tar.xz.asc",
+          "sha256": "sha256:b7e9664c8d847b2e88b059843b9977a74df2a7c7d911b094821dc236671bf9fc"
+        },
+        "identity": "65F7C6B4206BD057A7EB73787180713BE58D1ADC",
+        "issuer": "VideoLAN Release Signing Key",
+        "policy": "Official dav1d release detached signature verified with the VideoLAN release signing key"
+      }
+    ]
+  },
+  "license": {
+    "spdxExpression": "BSD-2-Clause",
+    "licenseFiles": [
+      {
+        "path": "dependencies/licenses/dav1d/LICENSE",
+        "sha256": "sha256:dd92c3c2247c5651606fc23a5e2d6a1ebc5ace9a3e49cbde0e12f05ad1cb1ee5"
+      }
+    ],
+    "copyrightFiles": [],
+    "noticeFiles": [],
+    "sourceObligation": "corresponding-source",
+    "correspondingSourceArchiveSha256": "sha256:686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5",
+    "modified": false,
+    "reviewRecord": {
+      "path": "dependencies/licenses/dav1d/review.md",
+      "sha256": "sha256:be664daf57d5944d2dc497db2d08bad5409a1ab551a1bfa487508d32c2499380"
+    },
+    "reviewedAt": "2026-10-31"
+  },
+  "patches": [],
+  "dependencies": [
+    {
+      "name": "nasm",
+      "relationship": "build"
+    }
+  ],
+  "profileBuilds": [
+    {
+      "profileId": "bloom.linux-x86-64-clang-release",
+      "linkage": "static",
+      "cmakeOptions": [],
+      "featureDecisions": [
+        {
+          "id": "bloom.feature.dav1d.bundled-static",
+          "state": "enabled",
+          "reason": "Built from source as a static library-only archive linked into the worker's libavcodec on every platform; x86 assembly uses the superbuild-private NASM"
+        }
+      ],
+      "capabilities": [
+        "bloom.capability.dav1d.av1-decode"
+      ],
+      "shippingRoles": [
+        "library",
+        "license",
+        "source"
+      ],
+      "conformanceFixtureSets": []
+    }
+  ],
+  "securityReview": {
+    "reviewedAt": "2026-10-31",
+    "record": {
+      "path": "dependencies/licenses/dav1d/security.md",
+      "sha256": "sha256:1587742303e33679f3489a1a21665ac5f10b7aaa9f41fdc9846b3dd4538cf598"
+    },
+    "vulnerabilities": []
+  }
+}

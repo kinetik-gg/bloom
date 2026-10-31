@@ -1,0 +1,9 @@
+--buildtype=release
+--default-library=static
+--libdir=lib
+-Db_staticpic=true
+-Denable_asm=true
+-Denable_tools=false
+-Denable_tests=false
+-Denable_examples=false
+-Denable_docs=false

@@ -5,8 +5,8 @@
 The locked expression is `LGPL-2.1-or-later`. The recipe explicitly disables GPL, nonfree, and
 LGPLv3-only selections, builds shared libraries, disables static libraries and programs, and uses
 no crypto library. Its only external codec libraries are permissively licensed, source-built
-static archives linked into `libavcodec` (OpenH264 BSD-2-Clause, Kvazaar BSD-3-Clause; each has
-its own review beside this one); FFmpeg's version script keeps their symbols
+static archives linked into `libavcodec` (OpenH264 BSD-2-Clause, Kvazaar BSD-3-Clause, dav1d
+BSD-2-Clause; each has its own review beside this one); FFmpeg's version script keeps their symbols
 private, and their locked source archives complete `libavcodec`'s corresponding source. The
 selected source record includes FFmpeg’s upstream license summary; the corresponding source is the
 exact locked release archive plus the reviewed patch below.
@@ -36,8 +36,9 @@ The configure vector is checked byte-for-byte against
 
 - Containers: MOV, Matroska, MXF, MPEG-TS, WAV, MP3, and AAC demuxers; MOV, MP4, Matroska, MXF,
   and WAV muxers.
-- Decode: H.264, HEVC, ProRes, DNxHD, MJPEG, TIFF, AAC, MP3, and the explicitly enumerated native
-  PCM decoders.
+- Decode: H.264, HEVC, VP9 (FFmpeg's native decoder), AV1 (`libdav1d`), ProRes, DNxHD, MJPEG,
+  TIFF, AAC, MP3, and the explicitly enumerated native PCM decoders. WebM is read by the Matroska
+  demuxer.
 - Encode: `libopenh264` (H.264), `libkvazaar` (HEVC), `prores_ks`, DNxHD, TIFF, AAC, the NVIDIA
   NVENC (`h264_nvenc`, `hevc_nvenc`) and VA-API H.264/HEVC hardware encoders, and the explicitly
   enumerated native PCM encoders.
@@ -50,7 +51,7 @@ The configure vector is checked byte-for-byte against
   position-independent and shared-only.
 - Platform adjustments change the toolchain and loader naming only: macOS adds
   `--install-name-dir=@rpath`; Windows adds `--toolchain=msvc --target-os=win64` and an `--arch`.
-  The codec wrappers (`libopenh264`, `libkvazaar`) are enabled on every platform;
+  The codec wrappers (`libopenh264`, `libkvazaar`, `libdav1d`) are enabled on every platform;
   `--pkg-config-flags=--static` makes configure read the static archives' runtime libraries. No
   platform adds a GPL, nonfree or version-3 component.
 - NVENC (`--enable-ffnvcodec --enable-nvenc`) compiles against the MIT nv-codec-headers and loads

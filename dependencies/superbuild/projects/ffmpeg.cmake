@@ -51,12 +51,14 @@ else()
     endif()
 endif()
 
-# Bundled permissive codecs (codec-common.cmake): OpenH264 (H.264 encode) and Kvazaar (HEVC
-# encode) are static archives linked into libavcodec on every platform, so the worker ships no extra
-# runtime files. --pkg-config-flags=--static makes FFmpeg read their Libs.private runtime libraries.
+# Bundled permissive codecs (codec-common.cmake): OpenH264 (H.264 encode), Kvazaar (HEVC encode)
+# and dav1d (AV1 decode) are static archives linked into libavcodec on every platform, so the
+# worker ships no extra runtime files. --pkg-config-flags=--static makes FFmpeg read their
+# Libs.private runtime libraries.
 set(BLOOM_FFMPEG_DEPENDS
     bloom_dependency_openh264
-    bloom_dependency_kvazaar)
+    bloom_dependency_kvazaar
+    bloom_dependency_dav1d)
 
 # NVENC (nv-codec-headers.cmake): FFmpeg's h264_nvenc/hevc_nvenc compile against the MIT headers and
 # load the NVIDIA driver at run time. macOS has no NVENC, so its build omits them.

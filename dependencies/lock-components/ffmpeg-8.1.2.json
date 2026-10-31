@@ -40,7 +40,7 @@
     "modified": true,
     "reviewRecord": {
       "path": "dependencies/licenses/ffmpeg/review.md",
-      "sha256": "sha256:f3f413285a28b09e61818880d5ff4665482ef4e6694aa6599bd65738310680e0"
+      "sha256": "sha256:b0bef19055b3e2682b28fb3d8871ccfc4aac64b5d5e763bc60cef60e9671cce1"
     },
     "reviewedAt": "2026-10-31"
   },
@@ -53,6 +53,10 @@
     }
   ],
   "dependencies": [
+    {
+      "name": "dav1d",
+      "relationship": "link"
+    },
     {
       "name": "kvazaar",
       "relationship": "link"
@@ -82,6 +86,11 @@
           "reason": "libavfilter bwdif with buffer/buffersink: field-aware deinterlacing of interlaced video in the worker"
         },
         {
+          "id": "bloom.feature.ffmpeg-dav1d",
+          "state": "enabled",
+          "reason": "AV1 decode through the libdav1d wrapper; dav1d 1.5.4 is a static archive linked into libavcodec"
+        },
+        {
           "id": "bloom.feature.ffmpeg-kvazaar",
           "state": "enabled",
           "reason": "HEVC software encode through the libkvazaar wrapper; Kvazaar 2.3.2 is a static archive linked into libavcodec"
@@ -102,6 +111,11 @@
           "reason": "libva is present in the qualified Linux profile; the recipe has an explicit OFF fallback"
         },
         {
+          "id": "bloom.feature.ffmpeg-vp9-decode",
+          "state": "enabled",
+          "reason": "FFmpeg's native VP9 decoder and parser for WebM and Matroska sources"
+        },
+        {
           "id": "bloom.feature.ffmpeg-x86-simd",
           "state": "enabled",
           "reason": "x86 SIMD is assembled with the superbuild-private NASM 2.16.03 build tool, passed through --x86asmexe on x86 targets only"
@@ -109,6 +123,7 @@
       ],
       "capabilities": [
         "bloom.capability.ffmpeg",
+        "bloom.capability.ffmpeg.av1-decode-dav1d",
         "bloom.capability.ffmpeg.decode",
         "bloom.capability.ffmpeg.encode",
         "bloom.capability.ffmpeg.h264-nvenc-encode",
@@ -118,7 +133,8 @@
         "bloom.capability.ffmpeg.hevc-software-kvazaar",
         "bloom.capability.ffmpeg.hevc-vaapi-encode",
         "bloom.capability.ffmpeg.prores-preview",
-        "bloom.capability.ffmpeg.vaapi"
+        "bloom.capability.ffmpeg.vaapi",
+        "bloom.capability.ffmpeg.vp9-decode"
       ],
       "shippingRoles": [
         "library",
